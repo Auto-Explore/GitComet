@@ -753,66 +753,34 @@ impl SettingsWindowView {
         window.set_window_title(SETTINGS_WINDOW_TITLE);
 
         let ui_session = session::load();
+        let ui_preferences = UiPreferences::from_session(&ui_session);
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
-        let theme_mode = ui_session
-            .theme_mode
-            .as_deref()
-            .and_then(ThemeMode::from_key)
-            .unwrap_or_default();
-        let date_time_format = ui_session
-            .date_time_format
-            .as_deref()
-            .and_then(DateTimeFormat::from_key)
-            .unwrap_or(DateTimeFormat::YmdHm);
-        let timezone = ui_session
-            .timezone
-            .as_deref()
-            .and_then(Timezone::from_key)
-            .unwrap_or_default();
-        let show_timezone = ui_session.show_timezone.unwrap_or(true);
-        let change_tracking_view = ui_session
-            .change_tracking_view
-            .as_deref()
-            .and_then(ChangeTrackingView::from_key)
-            .unwrap_or_default();
-        let terminal_preferences = TerminalPreferences::from_ui_session(&ui_session);
-        let diff_scroll_sync = ui_session
-            .diff_scroll_sync
-            .as_deref()
-            .and_then(DiffScrollSync::from_key)
-            .unwrap_or_default();
-        let diff_content_mode = ui_session
-            .diff_content_mode
-            .as_deref()
-            .and_then(DiffContentMode::from_key)
-            .unwrap_or_default();
-        let diff_whitespace_mode = ui_session
-            .diff_whitespace_mode
-            .as_deref()
-            .and_then(DiffWhitespaceMode::from_key)
-            .unwrap_or_default();
-        let diff_view_mode = ui_session
-            .diff_view_mode
-            .as_deref()
-            .and_then(DiffViewMode::from_key)
-            .unwrap_or(DiffViewMode::Split);
-        let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
-        let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
-        let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
-        let auto_save_file_edits = ui_session.auto_save_file_edits.unwrap_or(false);
-        let history_show_graph = ui_session.history_show_graph.unwrap_or(true);
-        let history_show_author = ui_session.history_show_author.unwrap_or(true);
-        let history_show_date = ui_session.history_show_date.unwrap_or(true);
-        let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
-        let history_relative_dates = ui_session.history_relative_dates.unwrap_or(true);
-        let history_highlight_commit_chain =
-            ui_session.history_highlight_commit_chain.unwrap_or(true);
-        let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
-        let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
-        let default_history_mode = ui_session.default_history_mode.unwrap_or_default();
-        let default_tag_type = ui_session.default_tag_type.unwrap_or_default();
+        let theme_mode = ui_preferences.appearance.theme_mode.clone();
+        let date_time_format = ui_preferences.appearance.date_time_format;
+        let timezone = ui_preferences.appearance.timezone;
+        let show_timezone = ui_preferences.appearance.show_timezone;
+        let change_tracking_view = ui_preferences.change_tracking.view;
+        let terminal_preferences = ui_preferences.terminal.clone();
+        let diff_scroll_sync = ui_preferences.diff.scroll_sync;
+        let diff_content_mode = ui_preferences.diff.content_mode;
+        let diff_whitespace_mode = ui_preferences.diff.whitespace_mode;
+        let diff_view_mode = ui_preferences.diff.view_mode;
+        let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
+        let diff_word_wrap = ui_preferences.diff.word_wrap;
+        let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
+        let auto_save_file_edits = ui_preferences.file_editing.auto_save;
+        let history_show_graph = ui_preferences.history.show_graph;
+        let history_show_author = ui_preferences.history.show_author;
+        let history_show_date = ui_preferences.history.show_date;
+        let history_show_sha = ui_preferences.history.show_sha;
+        let history_relative_dates = ui_preferences.history.relative_dates;
+        let history_highlight_commit_chain = ui_preferences.history.highlight_commit_chain;
+        let history_show_tags = ui_preferences.history.show_tags;
+        let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
+        let default_history_mode = ui_preferences.history.default_mode;
+        let default_tag_type = ui_preferences.repository.default_tag_type;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
         let external_editor_options: Arc<[crate::external_editor::ExternalEditorOption]> =
             crate::external_editor::external_editor_options(external_editor_setting.as_ref())

@@ -16,10 +16,12 @@ runs:
     - name: Resolve dump_syms pins
       id: pins
       shell: bash
+      env:
+        TOOLING_ROOT: ${{ github.action_path }}/../../..
       run: |
-        echo "version=$(scripts/dump-syms-pins.sh --version)" >> "$GITHUB_OUTPUT"
-        echo "asset=$(scripts/dump-syms-pins.sh --asset "${{ inputs.triple }}")" >> "$GITHUB_OUTPUT"
-        echo "sha256=$(scripts/dump-syms-pins.sh --sha256 "${{ inputs.triple }}")" >> "$GITHUB_OUTPUT"
+        echo "version=$("${TOOLING_ROOT}/scripts/dump-syms-pins.sh" --version)" >> "$GITHUB_OUTPUT"
+        echo "asset=$("${TOOLING_ROOT}/scripts/dump-syms-pins.sh" --asset "${{ inputs.triple }}")" >> "$GITHUB_OUTPUT"
+        echo "sha256=$("${TOOLING_ROOT}/scripts/dump-syms-pins.sh" --sha256 "${{ inputs.triple }}")" >> "$GITHUB_OUTPUT"
 
     - name: Install dump_syms
       if: runner.os != 'Windows'
@@ -28,13 +30,14 @@ runs:
         VERSION: ${{ steps.pins.outputs.version }}
         ASSET: ${{ steps.pins.outputs.asset }}
         SHA256: ${{ steps.pins.outputs.sha256 }}
+        TOOLING_ROOT: ${{ github.action_path }}/../../..
       run: |
         bin_dir="${{ inputs.bin-dir }}"
         if [ -z "$bin_dir" ]; then
           bin_dir="${RUNNER_TEMP:-/tmp}/dump-syms-bin"
         fi
         mkdir -p "$bin_dir"
-        scripts/install-dump-syms.sh \
+        "${TOOLING_ROOT}/scripts/install-dump-syms.sh" \
           --version "$VERSION" \
           --asset "$ASSET" \
           --sha256 "$SHA256" \

@@ -44,13 +44,14 @@ impl GitCometView {
                 .repos
                 .iter()
                 .find(|r| r.id == next_repo.id)
-                .map(|r| (r.diagnostics.len(), r.command_log.len()))
+                .map(|r| (r.feedback.diagnostics.len(), r.feedback.command_log.len()))
                 .unwrap_or((0, 0));
 
             let new_diag_messages = next_repo
+                .feedback
                 .diagnostics
                 .iter()
-                .skip(old_diag_len.min(next_repo.diagnostics.len()))
+                .skip(old_diag_len.min(next_repo.feedback.diagnostics.len()))
                 .filter(|d| d.kind == DiagnosticKind::Error)
                 .map(|d| d.message.clone())
                 .collect::<Vec<_>>();
@@ -64,9 +65,10 @@ impl GitCometView {
             }
 
             let new_command_entries = next_repo
+                .feedback
                 .command_log
                 .iter()
-                .skip(old_cmd_len.min(next_repo.command_log.len()))
+                .skip(old_cmd_len.min(next_repo.feedback.command_log.len()))
                 .collect::<Vec<_>>();
             for entry in &new_command_entries {
                 if entry.command.starts_with("telemetry.") {

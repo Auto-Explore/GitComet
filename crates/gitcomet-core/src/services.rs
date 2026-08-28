@@ -546,6 +546,14 @@ pub trait GitRepository: Send + Sync {
         cancellation.check_cancelled()?;
         Ok(status)
     }
+    /// Whether `path` is a gitlink in the current HEAD tree.
+    ///
+    /// This is primarily needed for a staged deletion: the worktree marker is
+    /// already gone, so the old tree is the only reliable way to distinguish a
+    /// deleted submodule from a deleted regular file.
+    fn head_path_is_gitlink(&self, _path: &Path) -> Result<bool> {
+        Ok(false)
+    }
     fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
         Ok(None)
     }
@@ -1344,8 +1352,38 @@ pub enum PullMode {
     Rebase,
 }
 
+/// Filesystem kind supplied to a worktree ignore matcher.
+///
+/// Watcher events do not always carry a reliable kind, so callers can leave it
+/// unknown and let the concrete Git implementation use its normal fallback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorktreePathKind {
+    File,
+    Directory,
+    Unknown,
+}
+
+/// Stateful ignore matcher created by a concrete Git backend.
+///
+/// Keeping this narrow interface in core lets filesystem monitoring honor
+/// backend-specific ignore semantics without depending on the backend crate.
+pub trait WorktreeIgnoreMatcher: Send {
+    fn is_ignored(&mut self, relative_path: &Path, kind: WorktreePathKind) -> Result<bool>;
+}
+
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
+
+    /// Build a worktree ignore matcher when the backend supports one.
+    ///
+    /// Backends without ignore support return `None`; callers must then use a
+    /// safe not-ignored fallback so filesystem changes are never missed.
+    fn worktree_ignore_matcher(
+        &self,
+        _workdir: &Path,
+    ) -> Result<Option<Box<dyn WorktreeIgnoreMatcher>>> {
+        Ok(None)
+    }
 
     fn open_cancellable(
         &self,
@@ -1359,11 +1397,37 @@ pub trait GitBackend: Send + Sync {
     }
 }
 
+/// Backend used by builds that intentionally omit every concrete Git
+/// implementation. Keeping this alongside the service contract avoids a whole
+/// workspace crate whose only behavior was returning this error.
+#[derive(Clone, Copy, Debug)]
+pub struct UnavailableGitBackend {
+    reason: &'static str,
+}
+
+impl UnavailableGitBackend {
+    pub const fn new(reason: &'static str) -> Self {
+        Self { reason }
+    }
+}
+
+impl Default for UnavailableGitBackend {
+    fn default() -> Self {
+        Self::new("No Git backend enabled. Build with `--features gix`.")
+    }
+}
+
+impl GitBackend for UnavailableGitBackend {
+    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        Err(Error::new(ErrorKind::Unsupported(self.reason)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        BlameLine, CommandOutput, GitRepository, decode_utf8_optional,
-        validate_conflict_resolution_text,
+        BlameLine, CommandOutput, GitBackend, GitRepository, UnavailableGitBackend,
+        decode_utf8_optional, validate_conflict_resolution_text,
     };
     use crate::domain::{
         Branch, CommitDetails, CommitId, DiffTarget, HistoryMode, LogCursor, LogPage, ReflogEntry,
@@ -1372,6 +1436,15 @@ mod tests {
     use crate::error::{Error, ErrorKind};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn unavailable_backend_reports_unsupported() {
+        let error = match UnavailableGitBackend::default().open(Path::new(".")) {
+            Ok(_) => panic!("unavailable backend must reject repository opens"),
+            Err(error) => error,
+        };
+        assert!(matches!(error.kind(), ErrorKind::Unsupported(_)));
+    }
 
     fn unsupported<T>() -> super::Result<T> {
         Err(Error::new(ErrorKind::Unsupported(

@@ -98,8 +98,8 @@ impl ActionBarView {
             repo.file_browser.file_browser_rev.hash(&mut hasher);
             repo.loads_in_flight.any_in_flight().hash(&mut hasher);
             // Global back/forward buttons enable/disable with nav stack position.
-            repo.nav_history.cursor.hash(&mut hasher);
-            repo.nav_history.entries.len().hash(&mut hasher);
+            repo.navigation.main_history.cursor.hash(&mut hasher);
+            repo.navigation.main_history.entries.len().hash(&mut hasher);
         }
 
         hasher.finish()
@@ -383,7 +383,12 @@ impl Render for ActionBarView {
         // Alt+Left / Alt+Right (Option on macOS). Sits at the very start of the action bar.
         let (nav_can_back, nav_can_forward) = self
             .active_repo()
-            .map(|repo| (repo.nav_history.can_back(), repo.nav_history.can_forward()))
+            .map(|repo| {
+                (
+                    repo.navigation.main_history.can_back(),
+                    repo.navigation.main_history.can_forward(),
+                )
+            })
             .unwrap_or((false, false));
         let nav_back = components::Button::new("global_nav_back", "")
             .start_slot(icon(

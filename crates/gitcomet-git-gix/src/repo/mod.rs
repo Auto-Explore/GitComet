@@ -540,6 +540,10 @@ impl GitRepository for GixRepo {
         self.status_cancellable_impl(cancellation)
     }
 
+    fn head_path_is_gitlink(&self, path: &Path) -> Result<bool> {
+        self.head_path_is_gitlink_impl(path)
+    }
+
     fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
         self.upstream_divergence_impl()
     }

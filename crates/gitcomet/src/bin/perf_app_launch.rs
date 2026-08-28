@@ -682,18 +682,14 @@ fn run_child() -> Result<(), String> {
 }
 
 fn build_backend() -> Arc<dyn GitBackend> {
-    if cfg!(feature = "gix") {
-        #[cfg(feature = "gix")]
-        {
-            Arc::new(gitcomet_git_gix::GixBackend)
-        }
+    #[cfg(feature = "gix")]
+    {
+        Arc::new(gitcomet_git_gix::GixBackend)
+    }
 
-        #[cfg(not(feature = "gix"))]
-        {
-            gitcomet_git::default_backend()
-        }
-    } else {
-        gitcomet_git::default_backend()
+    #[cfg(not(feature = "gix"))]
+    {
+        Arc::new(gitcomet_core::services::UnavailableGitBackend::default())
     }
 }
 

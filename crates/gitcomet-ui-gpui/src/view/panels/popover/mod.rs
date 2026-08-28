@@ -357,6 +357,21 @@ pub(in super::super) struct PopoverHost {
     rebase_reword_description_scroll: ScrollHandle,
 }
 
+pub(in crate::view) struct PopoverHostInit {
+    pub(in crate::view) theme: AppTheme,
+    pub(in crate::view) root_view: WeakEntity<GitCometView>,
+    pub(in crate::view) root_view_mode: GitCometViewMode,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) main_pane: Entity<MainPaneView>,
+    pub(in crate::view) details_pane: Entity<DetailsPaneView>,
+    pub(in crate::view) reflog_pane: Entity<ReflogPaneView>,
+    pub(in crate::view) sidebar_pane: Entity<SidebarPaneView>,
+    pub(in crate::view) pinned_branches_by_repo:
+        std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
+    pub(in crate::view) collapsed_items_by_repo:
+        std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
+}
+
 /// Rows the branch badge's checkout picker would show for `query`, for the
 /// picker benchmarks. The builder is a pure function of the repository, so the
 /// benchmark measures exactly what a frame used to rebuild.

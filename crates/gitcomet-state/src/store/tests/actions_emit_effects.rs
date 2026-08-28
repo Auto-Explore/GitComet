@@ -35,7 +35,7 @@ fn repo_with_head_dependent_cached_state(repo_id: RepoId) -> RepoState {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.pending_force_push_lease = Some(test_force_push_lease());
+    repo_state.pending.force_push_lease = Some(test_force_push_lease());
     repo_state.set_recent_commit_messages(Loadable::Ready(vec![test_recent_commit_message()]));
     repo_state
 }
@@ -327,16 +327,19 @@ fn pull_error_is_formatted_as_command_and_output() {
     );
 
     let repo_state = &state.repos[0];
-    assert!(repo_state.diagnostics.is_empty());
-    assert_eq!(repo_state.command_log.len(), 1);
+    assert!(repo_state.feedback.diagnostics.is_empty());
+    assert_eq!(repo_state.feedback.command_log.len(), 1);
 
-    let summary = &repo_state.command_log[0].summary;
+    let summary = &repo_state.feedback.command_log[0].summary;
     assert!(summary.starts_with("Pull failed:\n\n    git pull --no-rebase origin main"));
     assert!(summary.contains(
         "\n\n    From https://example.com\n     * branch main -> FETCH_HEAD\n    fatal: refusing to merge unrelated histories"
     ));
     assert!(!summary.contains("\\n"));
-    assert_eq!(repo_state.last_error.as_deref(), Some(summary.as_str()));
+    assert_eq!(
+        repo_state.feedback.last_error.as_deref(),
+        Some(summary.as_str())
+    );
 }
 
 #[test]
@@ -2603,6 +2606,7 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
         );
 
         let summary = state.repos[0]
+            .feedback
             .command_log
             .last()
             .expect("command log entry")
@@ -2725,6 +2729,7 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
         );
 
         let summary = state.repos[0]
+            .feedback
             .command_log
             .last()
             .expect("command log entry")
@@ -3314,7 +3319,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
     let repo = &state.repos[0];
     assert_eq!(repo.local_actions_in_flight, 0);
     assert_eq!(repo.commit_in_flight, 0);
-    assert!(repo.last_error.is_none());
+    assert!(repo.feedback.last_error.is_none());
     assert!(repo.diff_state.diff_target.is_none());
     assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
@@ -3323,7 +3328,10 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         Loadable::NotLoaded
     ));
     assert_eq!(
-        repo.command_log.last().map(|entry| entry.summary.as_str()),
+        repo.feedback
+            .command_log
+            .last()
+            .map(|entry| entry.summary.as_str()),
         Some("Commit: Completed")
     );
 
@@ -3340,6 +3348,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
     );
     assert!(
         state.repos[0]
+            .feedback
             .last_error
             .as_deref()
             .unwrap_or_default()
@@ -3359,6 +3368,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
     );
     assert_eq!(
         state.repos[0]
+            .feedback
             .command_log
             .last()
             .map(|entry| entry.summary.as_str()),
@@ -3377,6 +3387,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
     );
     assert!(
         state.repos[0]
+            .feedback
             .last_error
             .as_deref()
             .unwrap_or_default()
@@ -3420,7 +3431,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
     ));
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].pending_commit_retry = Some(crate::model::PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
@@ -3450,12 +3461,12 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
                 && context.post_head.as_ref().is_some_and(|id| id.as_ref() == "2222222222222222222222222222222222222222")))
     );
     assert_eq!(state.repos[0].push_in_flight, 0);
-    assert!(state.repos[0].pending_commit_retry.is_none());
+    assert!(state.repos[0].pending.commit_retry.is_none());
 
     state.repos[0].push_in_flight = 0;
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].pending_commit_retry = Some(crate::model::PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
@@ -3635,9 +3646,10 @@ fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
         effect,
         Effect::Push { .. } | Effect::PushAfterCommit { .. } | Effect::PushSetUpstream { .. }
     )));
-    assert_eq!(state.repos[0].pending_force_push_lease, Some(lease));
+    assert_eq!(state.repos[0].pending.force_push_lease, Some(lease));
     assert!(
         state.repos[0]
+            .feedback
             .last_error
             .as_deref()
             .unwrap_or_default()
@@ -3698,7 +3710,7 @@ fn safe_push_after_commit_published_amend_lease_survives_followup_git_state_refr
         },
     );
 
-    assert_eq!(state.repos[0].pending_force_push_lease, Some(lease));
+    assert_eq!(state.repos[0].pending.force_push_lease, Some(lease));
 }
 
 #[test]
@@ -3729,7 +3741,7 @@ fn checkout_branch_clears_stale_force_push_lease_and_recent_messages() {
                 if *id == repo_id && name == "feature"
         )
     }));
-    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(state.repos[0].pending.force_push_lease, None);
     assert!(matches!(
         &state.repos[0].recent_commit_messages,
         Loadable::NotLoaded
@@ -3765,7 +3777,7 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
         &state.repos[0].recent_commit_messages,
         Loadable::NotLoaded
     ));
-    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(state.repos[0].pending.force_push_lease, None);
 }
 
 #[test]
@@ -3797,7 +3809,7 @@ fn interactive_cherry_pick_finished_clears_stale_force_push_lease() {
         }),
     );
 
-    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(state.repos[0].pending.force_push_lease, None);
 }
 
 #[test]
@@ -3825,7 +3837,7 @@ fn head_changing_repo_action_finish_invalidates_data_loaded_while_in_flight() {
         &state.repos[0].recent_commit_messages,
         Loadable::NotLoaded
     ));
-    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(state.repos[0].pending.force_push_lease, None);
     assert_eq!(state.repos[0].local_actions_in_flight, 0);
 }
 
@@ -3975,7 +3987,7 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
     assert!(!effects.is_empty());
     let repo = &state.repos[0];
     assert!(repo.diff_state.diff_target.is_none());
-    assert_eq!(repo.pending_force_push_lease, None);
+    assert_eq!(repo.pending.force_push_lease, None);
     assert!(matches!(&repo.recent_commit_messages, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
@@ -4029,12 +4041,13 @@ fn hunk_staging_is_logged_without_announcing_success() {
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     assert_eq!(
-        repo_state.command_log.len(),
+        repo_state.feedback.command_log.len(),
         2,
         "staging a hunk still belongs in the command log"
     );
     assert!(
         repo_state
+            .feedback
             .command_log
             .iter()
             .all(|entry| !entry.announce_success),
@@ -4055,7 +4068,7 @@ fn hunk_staging_is_logged_without_announcing_success() {
         }),
     );
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
-    let last = repo_state.command_log.last().unwrap();
+    let last = repo_state.feedback.command_log.last().unwrap();
     assert!(!last.ok, "the failure must be recorded as such");
 }
 

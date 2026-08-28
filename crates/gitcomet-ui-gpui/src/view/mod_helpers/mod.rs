@@ -755,7 +755,7 @@ pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
     pub(super) window_handle: gpui::AnyWindowHandle,
-    pub(super) _ui_model: Entity<AppUiModel>,
+    pub(super) ui_model: Entity<AppUiModel>,
     pub(super) _poller: Poller,
     pub(super) _ui_model_subscription: gpui::Subscription,
     pub(super) _activation_subscription: gpui::Subscription,

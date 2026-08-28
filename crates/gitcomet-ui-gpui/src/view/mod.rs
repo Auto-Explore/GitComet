@@ -181,6 +181,8 @@ mod perf;
 mod permalink;
 pub(super) mod platform_open;
 mod poller;
+mod preference_sync;
+mod preferences;
 mod reflog_panel;
 mod repo_open;
 pub(crate) mod rows;
@@ -219,6 +221,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
+use preferences::UiPreferences;
 pub(in crate::view) use terminal_preferences::{
     ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
     TerminalPreferences, parse_terminal_args_multiline, resolve_embedded_shell_program,
@@ -252,11 +255,15 @@ pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
-use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
+use panels::{
+    ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
+    action_bar_height,
+};
 pub(crate) use panes::MainPaneView;
 use panes::{
     CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryPrimarySelection,
-    HistoryView, ReflogPaneInit, ReflogPaneView, SidebarPaneView, history_primary_selection,
+    HistoryView, MainPaneInit, ReflogPaneInit, ReflogPaneView, SidebarPaneView,
+    history_primary_selection,
 };
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;

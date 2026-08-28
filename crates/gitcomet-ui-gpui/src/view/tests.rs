@@ -4235,8 +4235,9 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
             workdir: PathBuf::from("repo"),
         },
     );
-    repo.last_error = Some(error.clone());
-    repo.command_log
+    repo.feedback.last_error = Some(error.clone());
+    repo.feedback
+        .command_log
         .push(gitcomet_state::model::CommandLogEntry {
             time: std::time::SystemTime::now(),
             ok: false,

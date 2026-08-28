@@ -186,8 +186,8 @@ impl MainPaneView {
         }
         let repo = self.active_repo()?;
         let repo_id = repo.id;
-        let can_back = repo.view_history.can_back();
-        let can_forward = repo.view_history.can_forward();
+        let can_back = repo.navigation.view_history.can_back();
+        let can_forward = repo.navigation.view_history.can_forward();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let (badge_label, path): (SharedString, std::path::PathBuf) =

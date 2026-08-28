@@ -100,7 +100,7 @@ fn mark_repo_open_ready(
         .find(|repo| repo.id == repo_id)
         .expect("repo exists");
     repo_state.set_open(Loadable::Ready(()));
-    repo_state.missing_on_disk = false;
+    repo_state.feedback.missing_on_disk = false;
 }
 
 fn open_repo_ready(

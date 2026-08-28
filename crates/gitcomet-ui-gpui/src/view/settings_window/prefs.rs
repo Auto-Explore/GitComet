@@ -596,9 +596,7 @@ impl SettingsWindowView {
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
-            view.popover_host.update(cx, |host, cx| {
-                host.set_date_time_format(format, cx);
-            });
+            view.set_date_time_format_preference(format, cx);
         });
         cx.notify();
     }
@@ -612,9 +610,7 @@ impl SettingsWindowView {
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
-            view.popover_host.update(cx, |host, cx| {
-                host.set_timezone(timezone, cx);
-            });
+            view.set_timezone_preference(timezone, cx);
         });
         cx.notify();
     }
@@ -627,9 +623,7 @@ impl SettingsWindowView {
         self.show_timezone = enabled;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
-            view.popover_host.update(cx, |host, cx| {
-                host.set_show_timezone(enabled, cx);
-            });
+            view.set_show_timezone_preference(enabled, cx);
         });
         cx.notify();
     }
@@ -883,6 +877,9 @@ impl SettingsWindowView {
         self.default_history_mode = mode;
         self.expanded_section = None;
         self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_default_history_mode_preference(mode, cx);
+        });
         cx.notify();
     }
 

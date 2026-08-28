@@ -40,9 +40,12 @@ fn diagnostics_are_capped() {
         super::reducer::push_diagnostic(&mut repo_state, DiagnosticKind::Error, format!("err-{i}"));
     }
 
-    assert_eq!(repo_state.diagnostics.len(), 200);
-    assert_eq!(repo_state.diagnostics[0].message, "err-5");
-    assert_eq!(repo_state.diagnostics.last().unwrap().message, "err-204");
+    assert_eq!(repo_state.feedback.diagnostics.len(), 200);
+    assert_eq!(repo_state.feedback.diagnostics[0].message, "err-5");
+    assert_eq!(
+        repo_state.feedback.diagnostics.last().unwrap().message,
+        "err-204"
+    );
 }
 
 #[test]
@@ -79,6 +82,7 @@ fn session_persist_error_reports_notification_and_repo_diagnostic() {
     );
     assert!(
         state.repos[0]
+            .feedback
             .diagnostics
             .iter()
             .any(|d| d.message.contains("permission denied"))
@@ -143,6 +147,7 @@ fn session_persist_failed_msg_reports_notification_and_repo_diagnostic() {
     );
     assert!(
         state.repos[0]
+            .feedback
             .diagnostics
             .iter()
             .any(|d| d.message.contains("disk full"))

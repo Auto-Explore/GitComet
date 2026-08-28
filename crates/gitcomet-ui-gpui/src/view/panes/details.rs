@@ -112,14 +112,6 @@ pub(in super::super) struct DetailsPaneView {
 
 pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) theme: AppTheme,
-    pub(in super::super) change_tracking_view: ChangeTrackingView,
-    pub(in super::super) change_tracking_height: Option<u32>,
-    pub(in super::super) untracked_height: Option<u32>,
-    pub(in super::super) ui_scale_percent: u32,
-    pub(in super::super) commit_push_after_enabled: bool,
-    pub(in super::super) date_time_format: crate::view::date_time::DateTimeFormat,
-    pub(in super::super) timezone: crate::view::date_time::Timezone,
-    pub(in super::super) show_timezone: bool,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
 }
@@ -251,17 +243,18 @@ impl DetailsPaneView {
     ) -> Self {
         let DetailsPaneInit {
             theme,
-            change_tracking_view,
-            change_tracking_height,
-            untracked_height,
-            ui_scale_percent,
-            commit_push_after_enabled,
-            date_time_format,
-            timezone,
-            show_timezone,
             root_view,
             tooltip_host,
         } = init;
+        let preferences = ui_model.read(cx).preferences.clone();
+        let change_tracking_view = preferences.change_tracking.view;
+        let change_tracking_height = preferences.change_tracking.height;
+        let untracked_height = preferences.change_tracking.untracked_height;
+        let ui_scale_percent = preferences.appearance.ui_scale_percent;
+        let commit_push_after_enabled = preferences.repository.commit_push_after_enabled;
+        let date_time_format = preferences.appearance.date_time_format;
+        let timezone = preferences.appearance.timezone;
+        let show_timezone = preferences.appearance.show_timezone;
         let state = Arc::clone(&ui_model.read(cx).state);
         let initial_fingerprint = Self::notify_fingerprint(&state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
@@ -759,7 +752,8 @@ impl DetailsPaneView {
             .iter()
             .find(|repo| repo.id == repo_id)
             .is_some_and(|repo| {
-                repo.pending_commit_retry
+                repo.pending
+                    .commit_retry
                     .as_ref()
                     .is_some_and(|pending| pending.amend)
             });
@@ -782,7 +776,7 @@ impl DetailsPaneView {
             .repos
             .iter()
             .find(|repo| repo.id == repo_id)
-            .and_then(|repo| repo.command_log.last().cloned());
+            .and_then(|repo| repo.feedback.command_log.last().cloned());
         self.pending_commit_amend = Some(PendingCommitAmend {
             repo_id,
             last_command_log_entry,
@@ -797,13 +791,14 @@ impl DetailsPaneView {
             .last_command_log_entry
             .as_ref()
             .and_then(|last_seen| {
-                repo.command_log
+                repo.feedback
+                    .command_log
                     .iter()
                     .rposition(|entry| entry == last_seen)
                     .map(|index| index + 1)
             })
             .unwrap_or(0);
-        repo.command_log[start..]
+        repo.feedback.command_log[start..]
             .iter()
             .rfind(|entry| entry.command == "Amend")
     }
@@ -1459,7 +1454,7 @@ mod tests {
             last_command_log_entry: Some(old_entry.clone()),
         };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.command_log.push(old_entry);
+        repo.feedback.command_log.push(old_entry);
 
         assert!(DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo).is_none());
     }
@@ -1474,8 +1469,8 @@ mod tests {
             last_command_log_entry: Some(old_entry.clone()),
         };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.command_log.push(old_entry);
-        repo.command_log.push(new_entry);
+        repo.feedback.command_log.push(old_entry);
+        repo.feedback.command_log.push(new_entry);
 
         assert_eq!(
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
@@ -1495,9 +1490,9 @@ mod tests {
             last_command_log_entry: Some(old_entry.clone()),
         };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.command_log.push(old_entry);
-        repo.command_log.push(new_entry);
-        repo.command_log.push(push_entry);
+        repo.feedback.command_log.push(old_entry);
+        repo.feedback.command_log.push(new_entry);
+        repo.feedback.command_log.push(push_entry);
 
         assert_eq!(
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
@@ -1517,9 +1512,9 @@ mod tests {
             last_command_log_entry: Some(marker_entry.clone()),
         };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.command_log.push(marker_entry);
-        repo.command_log.push(failed_amend);
-        repo.command_log.push(successful_retry);
+        repo.feedback.command_log.push(marker_entry);
+        repo.feedback.command_log.push(failed_amend);
+        repo.feedback.command_log.push(successful_retry);
 
         let completed_entry =
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo);
@@ -1565,7 +1560,7 @@ mod tests {
     fn pending_amend_marker_survives_in_flight_auth_retry() {
         let repo_id = RepoId(1);
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.pending_commit_retry = Some(PendingCommitRetry {
+        repo.pending.commit_retry = Some(PendingCommitRetry {
             message: "message".into(),
             amend: true,
             push_after_commit: false,

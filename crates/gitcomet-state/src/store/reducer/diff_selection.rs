@@ -216,6 +216,7 @@ pub(super) fn open_file_content(
     };
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state
+            .navigation
             .view_history
             .record(ViewHistoryEntry { source, path });
     }
@@ -262,7 +263,7 @@ pub(super) fn open_file_editor(
         area: DiffArea::Unstaged,
     };
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.view_history.record(ViewHistoryEntry {
+        repo_state.navigation.view_history.record(ViewHistoryEntry {
             source: gitcomet_core::domain::FileSource::WorkingDirectory,
             path,
         });
@@ -315,7 +316,7 @@ pub(super) fn exit_diff_edit_mode(state: &mut AppState, repo_id: RepoId) -> Vec<
         && let Some(entry) = view_history_entry_for_target(&target)
         && let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
     {
-        repo_state.view_history.seek_or_record(entry);
+        repo_state.navigation.view_history.seek_or_record(entry);
     }
 
     let mut effects = SelectDiffEffects::new();
@@ -378,7 +379,7 @@ pub(super) fn viewer_nav(
         let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
             return Vec::new();
         };
-        let Some(entry) = repo_state.view_history.step(dir) else {
+        let Some(entry) = repo_state.navigation.view_history.step(dir) else {
             return Vec::new();
         };
         content_view_target(entry.source, entry.path)
@@ -409,7 +410,7 @@ pub(super) fn global_nav(
         let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
             return Vec::new();
         };
-        repo_state.nav_history.step(dir)
+        repo_state.navigation.main_history.step(dir)
     };
     let Some(snapshot) = snapshot else {
         return Vec::new();
@@ -516,7 +517,7 @@ pub(super) fn global_nav(
                 && let Some(entry) = view_history_entry_for_target(&target)
                 && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
             {
-                repo_state.view_history.seek_or_record(entry);
+                repo_state.navigation.view_history.seek_or_record(entry);
             }
             let mut inline = SelectDiffEffects::new();
             // Edit mode is part of the destination, so a step can land in the

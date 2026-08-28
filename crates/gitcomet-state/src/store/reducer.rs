@@ -47,6 +47,68 @@ fn normalize_repo_relative_path(
     util::canonicalize_path(path)
 }
 
+fn cache_selected_deleted_gitlink(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: &gitcomet_core::domain::DiffTarget,
+) {
+    let gitcomet_core::domain::DiffTarget::WorkingTree { path, area } = target else {
+        return;
+    };
+    let is_deleted = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.status_entry_for_path(*area, path))
+        .is_some_and(|entry| entry.kind == gitcomet_core::domain::FileStatusKind::Deleted);
+    if !is_deleted {
+        return;
+    }
+
+    refresh_head_gitlink_path(repos, state, repo_id, path);
+}
+
+fn refresh_head_gitlink_path(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: &std::path::Path,
+) {
+    let Some(is_gitlink) = repos
+        .get(&repo_id)
+        .and_then(|repo| repo.head_path_is_gitlink(path).ok())
+    else {
+        return;
+    };
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return;
+    };
+    if is_gitlink {
+        repo.head_gitlink_paths.insert(path.to_path_buf());
+    } else {
+        repo.head_gitlink_paths.remove(path);
+    }
+}
+
+fn refresh_selected_head_gitlink(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+) {
+    let selected_path = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| match repo.diff_state.diff_target.as_ref() {
+            Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, .. }) => Some(path.clone()),
+            _ => None,
+        });
+    if let Some(path) = selected_path {
+        refresh_head_gitlink_path(repos, state, repo_id, &path);
+    }
+}
+
 #[inline]
 fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -59,7 +121,7 @@ fn begin_commit_action(state: &mut AppState, repo_id: RepoId) {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
         repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_add(1);
-        repo_state.pending_force_push_lease = None;
+        repo_state.pending.force_push_lease = None;
         repo_state.bump_ops_rev();
     }
 }
@@ -584,6 +646,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
 }
 
 pub(crate) fn fill_set_active_repo_inline(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     effects: &mut SetActiveRepoEffects,
@@ -592,7 +655,7 @@ pub(crate) fn fill_set_active_repo_inline(
     // `reduce`, so bracket the mutation with the same navigation reconciliation
     // and state finalizers the ordinary reducer wrapper applies.
     reconcile_active_nav_history(state, false);
-    repo_management::fill_set_active_repo_inline(state, repo_id, effects);
+    repo_management::fill_set_active_repo_inline(repos, state, repo_id, effects);
     finalize_reduced_state(state, Some(false));
 }
 
@@ -814,14 +877,14 @@ fn reconcile_active_nav_history(state: &mut AppState, push: bool) {
     // matches the current entry and `reconcile` would no-op. Compare by borrow
     // first and bail before cloning a `MainViewSnapshot` (which owns a `PathBuf`)
     // — this runs twice per dispatched message.
-    let cursor = repo.nav_history.cursor;
-    if let Some(current) = repo.nav_history.entries.get(cursor)
+    let cursor = repo.navigation.main_history.cursor;
+    if let Some(current) = repo.navigation.main_history.entries.get(cursor)
         && repo.main_view_snapshot_matches(current)
     {
         return;
     }
     let cur = repo.main_view_snapshot();
-    repo.nav_history.reconcile(cur, push);
+    repo.navigation.main_history.reconcile(cur, push);
 }
 
 fn reduce_inner(
@@ -835,9 +898,9 @@ fn reduce_inner(
     }
 
     match msg {
-        Msg::OpenRepo(path) => repo_management::open_repo(id_alloc, state, path),
+        Msg::OpenRepo(path) => repo_management::open_repo(repos, id_alloc, state, path),
         Msg::OpenRepoFromExternalDrop(path) => {
-            repo_management::open_repo_from_external_drop(id_alloc, state, path)
+            repo_management::open_repo_from_external_drop(repos, id_alloc, state, path)
         }
         Msg::RestoreSession {
             open_repos,
@@ -860,7 +923,7 @@ fn reduce_inner(
         }
         Msg::DismissRepoError { repo_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.last_error = None;
+                repo_state.feedback.last_error = None;
             }
             util::clear_banner_error_for_repo(state, repo_id);
             Vec::new()
@@ -889,7 +952,7 @@ fn reduce_inner(
             state.default_tag_type = tag_type;
             Vec::new()
         }
-        Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(state, repo_id),
+        Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(repos, state, repo_id),
         Msg::ReorderRepoTabs {
             repo_id,
             insert_before,
@@ -907,10 +970,10 @@ fn reduce_inner(
             );
             Vec::new()
         }
-        Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(state, repo_id),
+        Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(repos, state, repo_id),
         Msg::RepoActivated { .. } => Vec::new(),
         Msg::RepoExternallyChanged { repo_id, change } => {
-            external_and_history::repo_externally_changed(state, repo_id, change)
+            external_and_history::repo_externally_changed(repos, state, repo_id, change)
         }
         Msg::RepoWatchDegraded { repo_id: _, reason } => {
             let message = match reason {
@@ -1001,7 +1064,10 @@ fn reduce_inner(
             label,
         } => effects::compare_with_marked(state, repo_id, commit_id, label),
         Msg::ClearComparisonMark { repo_id } => effects::clear_comparison_mark(state, repo_id),
-        Msg::SelectDiff { repo_id, target } => diff_selection::select_diff(state, repo_id, target),
+        Msg::SelectDiff { repo_id, target } => {
+            cache_selected_deleted_gitlink(repos, state, repo_id, &target);
+            diff_selection::select_diff(state, repo_id, target)
+        }
         Msg::OpenInlineSubmoduleDiff {
             repo_id,
             origin,
@@ -1464,7 +1530,7 @@ fn reduce_inner(
         } => {
             begin_commit_action(state, repo_id);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_commit_retry = Some(PendingCommitRetry {
+                repo_state.pending.commit_retry = Some(PendingCommitRetry {
                     message: message.clone(),
                     amend: false,
                     push_after_commit,
@@ -1479,7 +1545,7 @@ fn reduce_inner(
         } => {
             begin_commit_action(state, repo_id);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_commit_retry = Some(PendingCommitRetry {
+                repo_state.pending.commit_retry = Some(PendingCommitRetry {
                     message: message.clone(),
                     amend: true,
                     push_after_commit,
@@ -2215,13 +2281,13 @@ fn reduce_inner(
             repo_id,
             action,
             result,
-        }) => external_and_history::repo_action_finished(state, repo_id, action, result),
+        }) => external_and_history::repo_action_finished(repos, state, repo_id, action, result),
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
             let pending_commit = state
                 .repos
                 .iter()
                 .find(|r| r.id == repo_id)
-                .and_then(|r| r.pending_commit_retry.clone());
+                .and_then(|r| r.pending.commit_retry.clone());
             let outcome = result.as_ref().ok().cloned();
             let push_after_commit = outcome.is_some()
                 && pending_commit
@@ -2234,7 +2300,7 @@ fn reduce_inner(
             let commit_result = result.map(|_| ());
             let mut effects = actions_emit_effects::commit_finished(state, repo_id, commit_result);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_commit_retry = None;
+                repo_state.pending.commit_retry = None;
             }
             if let Some(prompt) = auth_prompt {
                 util::clear_staged_git_auth_env();
@@ -2260,7 +2326,7 @@ fn reduce_inner(
                 .repos
                 .iter()
                 .find(|r| r.id == repo_id)
-                .and_then(|r| r.pending_commit_retry.clone());
+                .and_then(|r| r.pending.commit_retry.clone());
             let outcome = result.as_ref().ok().cloned();
             let push_after_commit = outcome.is_some()
                 && pending_commit
@@ -2274,7 +2340,7 @@ fn reduce_inner(
             let mut effects =
                 actions_emit_effects::commit_amend_finished(state, repo_id, commit_result);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_commit_retry = None;
+                repo_state.pending.commit_retry = None;
             }
             if let Some(prompt) = auth_prompt {
                 util::clear_staged_git_auth_env();
@@ -2500,7 +2566,10 @@ mod nav_history_tests {
         );
         assert_eq!(repo(&state, repo_id).diff_state.diff_target, Some(target));
         // Origin (history log) seeded + the diff.
-        assert_eq!(repo(&state, repo_id).nav_history.entries.len(), 2);
+        assert_eq!(
+            repo(&state, repo_id).navigation.main_history.entries.len(),
+            2
+        );
 
         dispatch(&mut state, Msg::GlobalNavBack { repo_id });
         assert_eq!(
@@ -2552,7 +2621,7 @@ mod nav_history_tests {
             },
         );
 
-        let entries = &repo(&state, repo_id).nav_history.entries;
+        let entries = &repo(&state, repo_id).navigation.main_history.entries;
         assert!(entries.iter().any(|e| e.diff_target == Some(file1.clone())));
         assert!(entries.iter().any(|e| e.diff_target == Some(file2.clone())));
 
@@ -2653,8 +2722,11 @@ mod nav_history_tests {
                 target: target.clone(),
             },
         );
-        assert_eq!(repo(&state, repo_id).nav_history.entries.len(), 2);
-        assert_eq!(repo(&state, repo_id).nav_history.cursor, 1);
+        assert_eq!(
+            repo(&state, repo_id).navigation.main_history.entries.len(),
+            2
+        );
+        assert_eq!(repo(&state, repo_id).navigation.main_history.cursor, 1);
 
         // Open inline submodule diff.
         dispatch(
@@ -2672,12 +2744,12 @@ mod nav_history_tests {
         // Close inline submodule diff — must fold, not push.
         dispatch(&mut state, Msg::CloseInlineSubmoduleDiff { repo_id });
         assert_eq!(
-            repo(&state, repo_id).nav_history.entries.len(),
+            repo(&state, repo_id).navigation.main_history.entries.len(),
             2,
             "close must not add a new nav entry"
         );
         assert_eq!(
-            repo(&state, repo_id).nav_history.cursor,
+            repo(&state, repo_id).navigation.main_history.cursor,
             1,
             "cursor must not advance past the parent diff"
         );
@@ -2711,7 +2783,7 @@ mod nav_history_tests {
         // ClearDiffSelection to close the diff view.
         dispatch(&mut state, Msg::ClearDiffSelection { repo_id });
 
-        let entries = &repo(&state, repo_id).nav_history.entries;
+        let entries = &repo(&state, repo_id).navigation.main_history.entries;
         // After folding in-place, no duplicate entry remains—the file
         // diff entry is collapsed back into the commit-details entry.
         assert_eq!(
@@ -2720,7 +2792,7 @@ mod nav_history_tests {
             "fold-and-collapse must not create a new entry"
         );
         assert_eq!(
-            repo(&state, repo_id).nav_history.cursor,
+            repo(&state, repo_id).navigation.main_history.cursor,
             1,
             "cursor should be back at the commit-details step"
         );
@@ -2731,7 +2803,7 @@ mod nav_history_tests {
         let r = repo(&state, repo_id);
         assert_eq!(r.diff_state.diff_target, None);
         assert_eq!(r.history_state.selected_commit, None);
-        assert!(!r.nav_history.can_back());
+        assert!(!r.navigation.main_history.can_back());
     }
 
     #[test]
@@ -2771,11 +2843,11 @@ mod nav_history_tests {
 
         let r = repo(&state, repo_id);
         assert_eq!(
-            r.nav_history.entries.len(),
+            r.navigation.main_history.entries.len(),
             4,
             "select-commit pushes a new entry when the commit changes"
         );
-        assert_eq!(r.nav_history.cursor, 3);
+        assert_eq!(r.navigation.main_history.cursor, 3);
         assert_eq!(r.history_state.selected_commit.as_ref(), Some(&commit_b));
 
         dispatch(&mut state, Msg::GlobalNavBack { repo_id });
@@ -2838,11 +2910,11 @@ mod nav_history_tests {
         let r = repo(&state, repo_id);
         // Origin + commit details + three file diffs = 5 entries.
         assert_eq!(
-            r.nav_history.entries.len(),
+            r.navigation.main_history.entries.len(),
             5,
             "each file selection must push a distinct history entry"
         );
-        assert_eq!(r.nav_history.cursor, 4);
+        assert_eq!(r.navigation.main_history.cursor, 4);
         assert_eq!(r.diff_state.diff_target, Some(file_c.clone()));
 
         // ── Back 1: file_c → file_b ──
@@ -2858,7 +2930,7 @@ mod nav_history_tests {
             Some(&commit_a),
             "commit must remain selected while browsing files"
         );
-        assert_eq!(r.nav_history.cursor, 3);
+        assert_eq!(r.navigation.main_history.cursor, 3);
 
         // ── Back 2: file_b → file_a ──
         dispatch(&mut state, Msg::GlobalNavBack { repo_id });
@@ -2869,7 +2941,7 @@ mod nav_history_tests {
             "second back must return to the first opened file (a)"
         );
         assert_eq!(r.history_state.selected_commit.as_ref(), Some(&commit_a));
-        assert_eq!(r.nav_history.cursor, 2);
+        assert_eq!(r.navigation.main_history.cursor, 2);
 
         // ── Back 3: file_a → commit details (no diff, commit still selected) ──
         dispatch(&mut state, Msg::GlobalNavBack { repo_id });
@@ -2883,7 +2955,7 @@ mod nav_history_tests {
             Some(&commit_a),
             "commit must still be selected — back must not deselect the commit"
         );
-        assert_eq!(r.nav_history.cursor, 1);
+        assert_eq!(r.navigation.main_history.cursor, 1);
 
         // ── Back 4: commit details → history log ──
         dispatch(&mut state, Msg::GlobalNavBack { repo_id });
@@ -2893,8 +2965,8 @@ mod nav_history_tests {
             r.history_state.selected_commit, None,
             "only the fourth back returns to the history log"
         );
-        assert_eq!(r.nav_history.cursor, 0);
-        assert!(!r.nav_history.can_back());
+        assert_eq!(r.navigation.main_history.cursor, 0);
+        assert!(!r.navigation.main_history.can_back());
     }
 }
 

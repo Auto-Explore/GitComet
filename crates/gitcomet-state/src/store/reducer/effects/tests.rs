@@ -57,13 +57,13 @@ fn browse_history_pushes_dedups_and_go_live_clears() {
     browse_repository_at_commit(&mut state, RepoId(1), a.clone());
 
     let repo = &state.repos[0];
-    assert_eq!(repo.browse_history, vec![a.clone(), b.clone()]);
+    assert_eq!(repo.navigation.browse_history, vec![a.clone(), b.clone()]);
     assert_eq!(repo.browsing_commit(), Some(&a));
     assert_eq!(state.sidebar_mode, SidebarMode::Files);
 
     reset_browse_to_live(&mut state, RepoId(1));
     let repo = &state.repos[0];
-    assert!(repo.browse_history.is_empty());
+    assert!(repo.navigation.browse_history.is_empty());
     assert_eq!(repo.browsing_commit(), None);
     assert!(matches!(
         repo.file_browser.source,
@@ -246,7 +246,7 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
         repo.history_state.file_history,
         Loadable::Error(_)
     ));
-    assert_eq!(repo.diagnostics.len(), 1);
+    assert_eq!(repo.feedback.diagnostics.len(), 1);
 }
 
 #[test]
@@ -297,7 +297,7 @@ fn blame_loaded_requires_matching_path_and_source() {
     );
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(repo.history_state.blame, Loadable::Error(_)));
-    assert_eq!(repo.diagnostics.len(), 1);
+    assert_eq!(repo.feedback.diagnostics.len(), 1);
 }
 
 #[test]
@@ -423,7 +423,7 @@ fn conflict_file_loaded_prefers_provided_session_and_records_errors() {
         assert_eq!(session.strategy, provided.strategy);
         assert_eq!(session.ours.as_text(), provided.ours.as_text());
         assert_eq!(session.theirs.as_text(), provided.theirs.as_text());
-        assert_eq!(repo.diagnostics.len(), 1);
+        assert_eq!(repo.feedback.diagnostics.len(), 1);
     }
 
     conflict_file_loaded(
@@ -1495,7 +1495,7 @@ fn loaded_handler_error_paths_record_diagnostics() {
     ));
 
     let repo = repo_mut(&mut state, repo_id);
-    assert_eq!(repo.diagnostics.len(), 10);
+    assert_eq!(repo.feedback.diagnostics.len(), 10);
 }
 
 #[test]
@@ -1567,7 +1567,7 @@ fn status_loaded_clears_resolved_conflicts_and_preserves_unresolved_ones() {
     assert!(status_loaded(&mut state, repo_id, Err(backend_error("status"))).is_empty());
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(repo.status, Loadable::Error(_)));
-    assert!(!repo.diagnostics.is_empty());
+    assert!(!repo.feedback.diagnostics.is_empty());
 }
 
 #[test]
@@ -1580,14 +1580,14 @@ fn tags_and_remote_tags_handle_unsupported_as_empty_ready() {
         repo_mut(&mut state, repo_id).tags,
         Loadable::Ready(_)
     ));
-    assert_eq!(repo_mut(&mut state, repo_id).diagnostics.len(), 0);
+    assert_eq!(repo_mut(&mut state, repo_id).feedback.diagnostics.len(), 0);
 
     assert!(remote_tags_loaded(&mut state, repo_id, Err(unsupported_error())).is_empty());
     assert!(matches!(
         repo_mut(&mut state, repo_id).remote_tags,
         Loadable::Ready(_)
     ));
-    assert_eq!(repo_mut(&mut state, repo_id).diagnostics.len(), 0);
+    assert_eq!(repo_mut(&mut state, repo_id).feedback.diagnostics.len(), 0);
 
     assert!(tags_loaded(&mut state, repo_id, Err(backend_error("tags"))).is_empty());
     assert!(matches!(
@@ -1600,7 +1600,7 @@ fn tags_and_remote_tags_handle_unsupported_as_empty_ready() {
         repo_mut(&mut state, repo_id).remote_tags,
         Loadable::Error(_)
     ));
-    assert_eq!(repo_mut(&mut state, repo_id).diagnostics.len(), 2);
+    assert_eq!(repo_mut(&mut state, repo_id).feedback.diagnostics.len(), 2);
 }
 
 #[test]
@@ -1626,7 +1626,7 @@ fn cancelled_metadata_results_reset_to_not_loaded_without_diagnostics() {
         repo_mut(&mut state, repo_id).submodules,
         Loadable::NotLoaded
     ));
-    assert_eq!(repo_mut(&mut state, repo_id).diagnostics.len(), 0);
+    assert_eq!(repo_mut(&mut state, repo_id).feedback.diagnostics.len(), 0);
 }
 
 #[test]
@@ -1665,7 +1665,7 @@ fn commit_details_loaded_requires_selected_commit_match() {
         repo.history_state.commit_details,
         Loadable::Error(_)
     ));
-    assert_eq!(repo.diagnostics.len(), 1);
+    assert_eq!(repo.feedback.diagnostics.len(), 1);
 }
 
 #[test]
@@ -1701,7 +1701,7 @@ fn file_browser_loaded_updates_state_and_records_errors() {
     );
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(repo.file_browser.entries, Loadable::Error(_)));
-    assert_eq!(repo.diagnostics.len(), 1);
+    assert_eq!(repo.feedback.diagnostics.len(), 1);
 }
 
 #[test]
@@ -2120,13 +2120,13 @@ fn browse_history_evicts_oldest_when_exceeding_cap() {
     }
 
     let repo = repo_mut(&mut state, repo_id);
-    assert_eq!(repo.browse_history.len(), CAP);
+    assert_eq!(repo.navigation.browse_history.len(), CAP);
     assert_eq!(
-        repo.browse_history[0].0.as_ref(),
+        repo.navigation.browse_history[0].0.as_ref(),
         "commit00000003".to_string()
     );
     assert_eq!(
-        repo.browse_history[CAP - 1].0.as_ref(),
+        repo.navigation.browse_history[CAP - 1].0.as_ref(),
         format!("commit{:08}", CAP + 2)
     );
 }
@@ -2149,11 +2149,11 @@ fn browse_history_rebrowse_does_not_move_to_mru() {
     browse_repository_at_commit(&mut state, repo_id, a.clone());
 
     let repo = repo_mut(&mut state, repo_id);
-    assert_eq!(repo.browse_history.len(), 3);
+    assert_eq!(repo.navigation.browse_history.len(), 3);
     // a stays at position 0, not moved to end
-    assert_eq!(repo.browse_history[0], a);
-    assert_eq!(repo.browse_history[1], b);
-    assert_eq!(repo.browse_history[2], c);
+    assert_eq!(repo.navigation.browse_history[0], a);
+    assert_eq!(repo.navigation.browse_history[1], b);
+    assert_eq!(repo.navigation.browse_history[2], c);
 }
 
 #[test]
@@ -2399,5 +2399,5 @@ fn file_browser_loaded_cancelled_error_records_diagnostic() {
     assert!(effects.is_empty());
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(repo.file_browser.entries, Loadable::Error(_)));
-    assert_eq!(repo.diagnostics.len(), 1);
+    assert_eq!(repo.feedback.diagnostics.len(), 1);
 }

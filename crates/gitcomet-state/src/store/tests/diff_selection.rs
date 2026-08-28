@@ -382,13 +382,14 @@ fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_
     ));
 }
 
-#[test]
-fn select_diff_for_staged_deleted_head_gitlink_loads_submodule_summary() {
+fn staged_deleted_gitlink_fixture() -> (
+    tempfile::TempDir,
+    FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    AppState,
+    gitcomet_core::domain::DiffTarget,
+) {
     let dir = tempfile::tempdir().expect("tempdir");
-    run_git(dir.path(), &["init", "-q"]);
-    run_git(dir.path(), &["config", "commit.gpgsign", "false"]);
-    run_git(dir.path(), &["config", "user.name", "Test User"]);
-    run_git(dir.path(), &["config", "user.email", "test@example.com"]);
+    init_test_repository(dir.path());
     run_git(
         dir.path(),
         &[
@@ -401,7 +402,6 @@ fn select_diff_for_staged_deleted_head_gitlink_loads_submodule_summary() {
     run_git(dir.path(), &["commit", "-q", "-m", "add submodule gitlink"]);
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
@@ -414,7 +414,7 @@ fn select_diff_for_staged_deleted_head_gitlink_loads_submodule_summary() {
         path: submodule_path.clone(),
         area: gitcomet_core::domain::DiffArea::Staged,
     };
-    repo_state.set_submodules(Loadable::Ready(Vec::new()));
+    repo_state.set_open(Loadable::Ready(()));
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         staged: vec![FileStatus {
             path: submodule_path,
@@ -425,6 +425,29 @@ fn select_diff_for_staged_deleted_head_gitlink_loads_submodule_summary() {
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
+
+    let backend = gitcomet_git_gix::GixBackend;
+    repos.insert(
+        RepoId(1),
+        backend
+            .open(dir.path())
+            .expect("open repository through backend"),
+    );
+
+    (dir, repos, state, target)
+}
+
+fn init_test_repository(path: &Path) {
+    run_git(path, &["init", "-q"]);
+    run_git(path, &["config", "commit.gpgsign", "false"]);
+    run_git(path, &["config", "user.name", "Test User"]);
+    run_git(path, &["config", "user.email", "test@example.com"]);
+}
+
+#[test]
+fn select_diff_for_staged_deleted_head_gitlink_loads_submodule_summary() {
+    let (_dir, mut repos, mut state, target) = staged_deleted_gitlink_fixture();
+    let id_alloc = AtomicU64::new(2);
 
     let effects = reduce(
         &mut repos,
@@ -454,6 +477,321 @@ fn select_diff_for_staged_deleted_head_gitlink_loads_submodule_summary() {
             load_submodule_summary: true,
         }]
     ));
+}
+
+#[test]
+fn failed_head_change_rebuilds_selected_deleted_gitlink_before_reloading_diff() {
+    let (_dir, mut repos, mut state, target) = staged_deleted_gitlink_fixture();
+    let id_alloc = AtomicU64::new(2);
+    let submodule_path = PathBuf::from("vendor/submodule");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: target.clone(),
+        },
+    );
+    assert!(state.repos[0].head_gitlink_paths.contains(&submodule_path));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CheckoutBranch {
+            repo_id: RepoId(1),
+            name: "branch-that-will-fail".to_string(),
+        },
+    );
+    assert!(
+        !state.repos[0].head_gitlink_paths.contains(&submodule_path),
+        "starting a HEAD-changing action should invalidate the old classification"
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id: RepoId(1),
+            action: RepoActionKind::CheckoutBranch,
+            result: Err(Error::new(ErrorKind::Backend(
+                "checkout failed".to_string(),
+            ))),
+        }),
+    );
+
+    assert!(state.repos[0].head_gitlink_paths.contains(&submodule_path));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSubmoduleSummary {
+                repo_id: RepoId(1),
+                target: reloaded,
+            } if reloaded == &target
+        )),
+        "a failed HEAD change must reload the selected deletion as a submodule: {effects:?}"
+    );
+    assert!(
+        !effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadDiff {
+                repo_id: RepoId(1),
+                target: reloaded,
+            } if reloaded == &target
+        )),
+        "the deleted gitlink must not fall back to an ordinary patch diff: {effects:?}"
+    );
+}
+
+#[test]
+fn successful_head_change_rebuilds_selected_deleted_gitlink_before_reloading_diff() {
+    let (_dir, mut repos, mut state, target) = staged_deleted_gitlink_fixture();
+    let id_alloc = AtomicU64::new(2);
+    let submodule_path = PathBuf::from("vendor/submodule");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: target.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CheckoutBranch {
+            repo_id: RepoId(1),
+            name: "branch-that-keeps-the-gitlink".to_string(),
+        },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id: RepoId(1),
+            action: RepoActionKind::CheckoutBranch,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(state.repos[0].head_gitlink_paths.contains(&submodule_path));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSubmoduleSummary {
+                repo_id: RepoId(1),
+                target: reloaded,
+            } if reloaded == &target
+        )),
+        "a successful HEAD change must reload the retained deletion as a submodule: {effects:?}"
+    );
+    assert!(
+        !effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadDiff {
+                repo_id: RepoId(1),
+                target: reloaded,
+            } if reloaded == &target
+        )),
+        "the retained deleted gitlink must not fall back to an ordinary patch diff: {effects:?}"
+    );
+}
+
+#[test]
+fn reload_repo_rebuilds_retained_deleted_gitlink_classification() {
+    let (_dir, mut repos, mut state, target) = staged_deleted_gitlink_fixture();
+    let id_alloc = AtomicU64::new(2);
+    let submodule_path = PathBuf::from("vendor/submodule");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target,
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReloadRepo { repo_id: RepoId(1) },
+    );
+
+    assert!(
+        state.repos[0].head_gitlink_paths.contains(&submodule_path),
+        "reload retains the diff target, so it must rebuild the target's HEAD classification"
+    );
+}
+
+#[test]
+fn activating_repo_rebuilds_retained_deleted_gitlink_classification() {
+    let (_dir, mut repos, mut state, target) = staged_deleted_gitlink_fixture();
+    let id_alloc = AtomicU64::new(2);
+    let submodule_path = PathBuf::from("vendor/submodule");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target,
+        },
+    );
+    state.repos[0].head_gitlink_paths.clear();
+    state.active_repo = None;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: RepoId(1) },
+    );
+
+    assert!(state.repos[0].head_gitlink_paths.contains(&submodule_path));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSelectedDiff {
+                repo_id: RepoId(1),
+                load_patch_diff: false,
+                load_submodule_summary: true,
+                ..
+            }
+        )),
+        "tab activation must plan the retained deletion as a submodule: {effects:?}"
+    );
+}
+
+#[test]
+fn external_head_moves_reclassify_retained_deletion_in_both_directions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_test_repository(dir.path());
+    let path = PathBuf::from("vendor/item");
+    std::fs::create_dir_all(dir.path().join("vendor")).expect("vendor directory");
+    std::fs::write(dir.path().join(&path), "ordinary file\n").expect("ordinary file");
+    run_git(dir.path(), &["add", "vendor/item"]);
+    run_git(dir.path(), &["commit", "-q", "-m", "ordinary file"]);
+    run_git(dir.path(), &["branch", "ordinary-head"]);
+    run_git(dir.path(), &["rm", "-q", "vendor/item"]);
+    run_git(
+        dir.path(),
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000,1111111111111111111111111111111111111111,vendor/item",
+        ],
+    );
+    run_git(dir.path(), &["commit", "-q", "-m", "gitlink"]);
+    run_git(dir.path(), &["branch", "gitlink-head"]);
+    run_git(dir.path(), &["rm", "-q", "--cached", "vendor/item"]);
+
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let backend = gitcomet_git_gix::GixBackend;
+    repos.insert(
+        RepoId(1),
+        backend
+            .open(dir.path())
+            .expect("open repository through backend"),
+    );
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: dir.path().to_path_buf(),
+        },
+    );
+    repo_state.set_open(Loadable::Ready(()));
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        staged: vec![FileStatus {
+            path: path.clone(),
+            kind: FileStatusKind::Deleted,
+            conflict: None,
+        }],
+        unstaged: vec![],
+    })));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: gitcomet_core::domain::DiffArea::Staged,
+    };
+    let id_alloc = AtomicU64::new(2);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: target.clone(),
+        },
+    );
+    assert!(state.repos[0].head_gitlink_paths.contains(&path));
+
+    run_git(dir.path(), &["reset", "-q", "--soft", "ordinary-head"]);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+    assert!(!state.repos[0].head_gitlink_paths.contains(&path));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadDiffPreviewTextFile {
+            repo_id: RepoId(1),
+            target: reloaded,
+            side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+        } if reloaded == &target
+    )));
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadSubmoduleSummary {
+            repo_id: RepoId(1),
+            target: reloaded,
+        } if reloaded == &target
+    )));
+
+    run_git(dir.path(), &["reset", "-q", "--soft", "gitlink-head"]);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+    assert!(state.repos[0].head_gitlink_paths.contains(&path));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadSubmoduleSummary {
+            repo_id: RepoId(1),
+            target: reloaded,
+        } if reloaded == &target
+    )));
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadDiff {
+            repo_id: RepoId(1),
+            target: reloaded,
+        } if reloaded == &target
+    )));
 }
 
 #[test]
@@ -1604,6 +1942,7 @@ fn diff_loaded_err_records_diagnostic_when_target_matches() {
     assert!(matches!(repo_state.diff_state.diff, Loadable::Error(_)));
     assert!(
         repo_state
+            .feedback
             .diagnostics
             .iter()
             .any(|d| d.message.contains("diff failed"))
@@ -1897,7 +2236,7 @@ fn diff_loaded_ok_sets_ready_when_target_matches() {
 
     let repo_state = &state.repos[0];
     assert!(matches!(repo_state.diff_state.diff, Loadable::Ready(_)));
-    assert!(repo_state.diagnostics.is_empty());
+    assert!(repo_state.feedback.diagnostics.is_empty());
 }
 
 /// A repo with a working-tree diff and blame both loaded, ready to be fed a
@@ -2060,7 +2399,7 @@ fn diff_loaded_error_after_ready_still_bumps_revs() {
         repo_state.diff_state.diff_state_rev,
         diff_state_rev.wrapping_add(1)
     );
-    assert!(!repo_state.diagnostics.is_empty());
+    assert!(!repo_state.feedback.diagnostics.is_empty());
 }
 
 fn file_diff_text(line: &str) -> gitcomet_core::domain::FileDiffText {
@@ -2243,12 +2582,14 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
     ));
     assert!(
         state.repos[0]
+            .feedback
             .diagnostics
             .iter()
             .any(|d| d.message.contains("text side-by-side failed"))
     );
     assert!(
         state.repos[0]
+            .feedback
             .diagnostics
             .iter()
             .any(|d| d.message.contains("image preview failed"))
@@ -2705,7 +3046,7 @@ fn global_nav_realigns_viewer_history_onto_restored_file_view() {
             path: PathBuf::from("c.rs"),
         },
     );
-    assert_eq!(state.repos[0].view_history.cursor, 2);
+    assert_eq!(state.repos[0].navigation.view_history.cursor, 2);
 
     // Leave the viewer for a full-tree commit diff (not a file-content view): the
     // global stack records it, but view_history stops tracking and stays at c.
@@ -2722,7 +3063,7 @@ fn global_nav_realigns_viewer_history_onto_restored_file_view() {
         },
     );
     assert_eq!(
-        state.repos[0].view_history.cursor, 2,
+        state.repos[0].navigation.view_history.cursor, 2,
         "a non-content diff view must not record viewer history"
     );
 
@@ -2742,7 +3083,7 @@ fn global_nav_realigns_viewer_history_onto_restored_file_view() {
 
     // The viewer-history cursor now points at b (the file shown), not stale c, so
     // "previous version" would step to a and "next version" to c.
-    let view_history = &state.repos[0].view_history;
+    let view_history = &state.repos[0].navigation.view_history;
     assert_eq!(view_history.cursor, 1);
     let current = &view_history.entries[view_history.cursor];
     assert_eq!(current.source, FileSource::Commit(CommitId("c1".into())));
@@ -2785,9 +3126,10 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
         range_selection: None,
         worktree_selection: None,
     };
-    state.repos[0].nav_history.record(snap(None));
+    state.repos[0].navigation.main_history.record(snap(None));
     state.repos[0]
-        .nav_history
+        .navigation
+        .main_history
         .record(snap(Some(PathBuf::from("src/lib.rs"))));
     // Live view matches the nav tail; commit Y is selected but its details are
     // stuck Loading (the relevant load was cancelled / is for another commit).
@@ -2852,7 +3194,8 @@ fn global_nav_enters_and_leaves_a_range_comparison() {
 
     // Step 0: the history log. Step 1: a comparison (which clears the diff pane).
     state.repos[0]
-        .nav_history
+        .navigation
+        .main_history
         .record(crate::model::MainViewSnapshot {
             diff_target: None,
             content_preview: false,
@@ -2862,7 +3205,8 @@ fn global_nav_enters_and_leaves_a_range_comparison() {
             worktree_selection: None,
         });
     state.repos[0]
-        .nav_history
+        .navigation
+        .main_history
         .record(crate::model::MainViewSnapshot {
             diff_target: None,
             content_preview: false,

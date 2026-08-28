@@ -169,6 +169,20 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -234,7 +248,7 @@ jobs:
       # the x64 binary under emulation. dump_syms parses the .pdb as a file
       # format, so the host architecture does not have to match the target.
       - name: Install dump_syms
-        uses: ./.github/actions/setup-dump-syms
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
         with:
           triple: ${{ matrix.dump_syms_triple }}
 
@@ -443,6 +457,20 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
+
       - name: Install Linux UI native dependencies
         run: |
           sudo apt-get update
@@ -461,7 +489,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install dump_syms
-        uses: ./.github/actions/setup-dump-syms
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
         with:
           triple: ${{ matrix.dump_syms_triple }}
 
@@ -667,6 +695,20 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -676,7 +718,7 @@ jobs:
           cache-targets: false
 
       - name: Install dump_syms
-        uses: ./.github/actions/setup-dump-syms
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
         with:
           triple: ${{ matrix.dump_syms_triple }}
 

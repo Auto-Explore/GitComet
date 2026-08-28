@@ -1,7 +1,9 @@
 use crate::repo::GixRepo;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
-use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository, Result};
+use gitcomet_core::services::{
+    CancellationToken, GitBackend, GitRepository, Result, WorktreeIgnoreMatcher,
+};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -56,5 +58,13 @@ impl GitBackend for GixBackend {
         cancellation: &CancellationToken,
     ) -> Result<Arc<dyn GitRepository>> {
         self.open_impl(workdir, Some(cancellation))
+    }
+
+    fn worktree_ignore_matcher(
+        &self,
+        workdir: &Path,
+    ) -> Result<Option<Box<dyn WorktreeIgnoreMatcher>>> {
+        crate::ignore::GixWorktreeIgnoreMatcher::load(workdir)
+            .map(|matcher| Some(Box::new(matcher) as Box<dyn WorktreeIgnoreMatcher>))
     }
 }

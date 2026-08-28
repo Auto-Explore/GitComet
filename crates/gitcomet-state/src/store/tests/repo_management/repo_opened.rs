@@ -73,7 +73,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         &mut state,
         Msg::OpenRepo(PathBuf::from("/tmp/repo")),
     );
-    state.repos[0].missing_on_disk = true;
+    state.repos[0].feedback.missing_on_disk = true;
 
     let effects = reduce(
         &mut repos,
@@ -90,7 +90,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
 
     let repo_state = state.repos.first().unwrap();
     assert!(matches!(repo_state.open, Loadable::Ready(())));
-    assert!(!repo_state.missing_on_disk);
+    assert!(!repo_state.feedback.missing_on_disk);
     assert!(repo_state.head_branch.is_loading());
     assert!(repo_state.branches.is_loading());
     assert!(repo_state.tags.is_loading());
@@ -334,7 +334,7 @@ fn repo_action_finished_clears_error_and_refreshes() {
         },
     ));
     state.active_repo = Some(RepoId(1));
-    state.repos[0].last_error = Some("boom".to_string());
+    state.repos[0].feedback.last_error = Some("boom".to_string());
     state.banner_error = Some(crate::model::BannerErrorState {
         repo_id: Some(RepoId(1)),
         message: "boom".to_string(),
@@ -351,7 +351,7 @@ fn repo_action_finished_clears_error_and_refreshes() {
         }),
     );
 
-    assert!(state.repos[0].last_error.is_none());
+    assert!(state.repos[0].feedback.last_error.is_none());
     assert!(state.banner_error.is_none());
     assert!(has_status_refresh_effects(&effects, RepoId(1)));
 }
@@ -384,12 +384,14 @@ fn repo_action_finished_err_records_diagnostic() {
     let repo_state = &state.repos[0];
     assert!(
         repo_state
+            .feedback
             .last_error
             .as_deref()
             .is_some_and(|s| s.contains("boom"))
     );
     assert!(
         repo_state
+            .feedback
             .diagnostics
             .iter()
             .any(|d| d.message.contains("boom"))
@@ -425,6 +427,7 @@ fn cherry_pick_error_completion_refreshes_status_log_and_sequencer_state() {
     assert_eq!(state.repos[0].local_actions_in_flight, 0);
     assert!(
         state.repos[0]
+            .feedback
             .last_error
             .as_deref()
             .is_some_and(|error| error.contains("conflict"))
@@ -815,17 +818,19 @@ fn repo_opened_err_records_diagnostic() {
     let repo_state = &state.repos[0];
     assert!(
         repo_state
+            .feedback
             .last_error
             .as_deref()
             .is_some_and(|s| s.contains("nope"))
     );
     assert!(
         repo_state
+            .feedback
             .diagnostics
             .iter()
             .any(|d| d.message.contains("nope"))
     );
-    assert!(!repo_state.missing_on_disk);
+    assert!(!repo_state.feedback.missing_on_disk);
 }
 
 #[test]
@@ -856,9 +861,9 @@ fn repo_opened_err_not_found_marks_repo_missing_without_banner_error() {
     );
 
     let repo_state = &state.repos[0];
-    assert!(repo_state.missing_on_disk);
-    assert!(repo_state.last_error.is_none());
-    assert!(repo_state.diagnostics.is_empty());
+    assert!(repo_state.feedback.missing_on_disk);
+    assert!(repo_state.feedback.last_error.is_none());
+    assert!(repo_state.feedback.diagnostics.is_empty());
     assert!(matches!(repo_state.open, Loadable::Error(_)));
 }
 
