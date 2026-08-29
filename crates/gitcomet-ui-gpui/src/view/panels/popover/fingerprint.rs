@@ -200,7 +200,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::HistoryBranchFilter { repo_id }
         | PopoverKind::HistoryAuthorFilter { repo_id }
         | PopoverKind::CommitShaLinkMenu { repo_id, .. }
-        | PopoverKind::ReflogEntryMenu { repo_id, .. } => Some(*repo_id),
+        | PopoverKind::ReflogEntryMenu { repo_id, .. }
+        | PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
     }?;
 
     state.repos.iter().find(|r| r.id == repo_id)
@@ -357,6 +358,10 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.tags_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
             repo.remote_tags_rev.hash(hasher);
+        }
+
+        PopoverKind::HookActivity { .. } => {
+            repo.hook_activity_rev.hash(hasher);
         }
 
         // Most prompt-style popovers don't require live state updates.
@@ -876,6 +881,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             target.hash(hasher);
             selector.hash(hasher);
+        }
+        PopoverKind::HookActivity {
+            repo_id,
+            operation_id,
+        } => {
+            103u8.hash(hasher);
+            repo_id.hash(hasher);
+            operation_id.hash(hasher);
         }
     }
 }
