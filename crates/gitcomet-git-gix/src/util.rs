@@ -620,12 +620,84 @@ fn wait_for_output_workers(
     Ok(OutputDrainOutcome::default())
 }
 
+/// Report whether a process group still holds a member that can run.
+///
+/// `kill(-pgid, 0)` — what `test_kill_process_group` performs — also succeeds
+/// for zombies, and a descendant that outlives our leader is reparented to the
+/// init process, which in a container frequently never reaps (GitHub Actions
+/// runs job containers with `tail -f /dev/null` as init). Such a zombie answers
+/// the signal probe forever and would keep every cancellation waiting out the
+/// whole `GIT_PROCESS_TERMINATE_GRACE`. A zombie has already released its
+/// descriptors and cannot run a hook, so it must not count as a live member.
+#[cfg(unix)]
+fn process_group_has_live_member(pgid: rustix::process::Pid) -> bool {
+    if rustix::process::test_kill_process_group(pgid).is_err() {
+        return false;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Without `/proc` to separate zombies from running members, the signal
+        // probe is all we have.
+        proc_process_group_has_live_member(pgid.as_raw_nonzero().get()).unwrap_or(true)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
+/// Scan `/proc` for a member of `pgid` that has not exited yet. Returns `None`
+/// when the group is not represented in `/proc` at all, so the caller keeps
+/// trusting the signal probe rather than declaring a group finished that an
+/// unreadable, filtered, or racing `/proc` merely failed to show.
+#[cfg(target_os = "linux")]
+fn proc_process_group_has_live_member(pgid: i32) -> Option<bool> {
+    let mut saw_member = false;
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let Some((state, group)) = proc_process_state_and_group(pid) else {
+            // The process exited mid-scan, or its stat line is unreadable.
+            continue;
+        };
+        if group != pgid {
+            continue;
+        }
+        if state != 'Z' && state != 'X' {
+            return Some(true);
+        }
+        saw_member = true;
+    }
+    saw_member.then_some(false)
+}
+
+/// Read the process state and process-group id out of `/proc/<pid>/stat`.
+#[cfg(target_os = "linux")]
+fn proc_process_state_and_group(pid: i32) -> Option<(char, i32)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // `pid (comm) state ppid pgrp ...`, where `comm` may itself contain spaces
+    // and parentheses, so the fixed-width fields start after its final `)`.
+    let (_, fields) = stat.rsplit_once(')')?;
+    let mut fields = fields.split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    let _ppid = fields.next()?;
+    let group = fields.next()?.parse().ok()?;
+    Some((state, group))
+}
+
 fn terminate_process_tree_and_wait(
     child: &mut std::process::Child,
 ) -> io::Result<std::process::ExitStatus> {
     #[cfg(unix)]
     {
-        use rustix::process::{Pid, Signal, kill_process_group, test_kill_process_group};
+        use rustix::process::{Pid, Signal, kill_process_group};
 
         if let Some(pid) = Pid::from_raw(child.id() as i32) {
             let _ = kill_process_group(pid, Signal::TERM);
@@ -636,9 +708,9 @@ fn terminate_process_tree_and_wait(
                     leader_status = child.try_wait()?;
                 }
                 // The process-group leader can exit before a TERM-resistant
-                // hook descendant. Keep managing the group until it is truly
-                // empty instead of using the leader's status as a proxy.
-                if test_kill_process_group(pid).is_err() {
+                // hook descendant. Keep managing the group until nothing in it
+                // can run instead of using the leader's status as a proxy.
+                if !process_group_has_live_member(pid) {
                     return match leader_status {
                         Some(status) => Ok(status),
                         None => child.wait(),
@@ -2471,6 +2543,91 @@ mod tests {
             },
             Ok(_) => panic!("expected cancellation error, but command succeeded"),
         }
+    }
+
+    /// Spawn a member of `group_id` that exits immediately and is never
+    /// reaped, reproducing the orphan a container init such as
+    /// `tail -f /dev/null` adopts and then leaves as a permanent zombie.
+    #[cfg(target_os = "linux")]
+    fn spawn_unreaped_zombie_in_group(group_id: u32) -> std::process::Child {
+        use std::os::unix::process::CommandExt as _;
+
+        let mut cmd = shell_command("exit 0");
+        cmd.process_group(group_id as i32);
+        let mut child = cmd.spawn().expect("group member should start");
+
+        let pid = child.id() as i32;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if proc_process_state_and_group(pid).is_some_and(|(state, _)| state == 'Z') {
+                return child;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("group member {pid} never became a zombie");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_group_liveness_ignores_unreaped_zombies() {
+        use rustix::process::{Pid, Signal, kill_process_group, test_kill_process_group};
+
+        let mut cmd = shell_command("sleep 10");
+        configure_git_process_tree(&mut cmd);
+        let mut leader = cmd.spawn().expect("synthetic process group should start");
+        let group_id = leader.id();
+        let pid = Pid::from_raw(group_id as i32).expect("group id should be a valid pid");
+
+        let mut zombie = spawn_unreaped_zombie_in_group(group_id);
+        assert!(
+            process_group_has_live_member(pid),
+            "a running leader must count as a live group member"
+        );
+
+        let _ = kill_process_group(pid, Signal::KILL);
+        let _ = leader.wait();
+
+        // The zombie still answers the signal probe, which is exactly why the
+        // probe alone cannot decide when a process group is finished.
+        assert!(
+            test_kill_process_group(pid).is_ok(),
+            "the unreaped zombie should keep the process group addressable"
+        );
+        assert!(
+            !process_group_has_live_member(pid),
+            "a group holding only zombies has nothing left to terminate"
+        );
+
+        let _ = zombie.wait();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_tree_termination_returns_promptly_past_unreaped_zombies() {
+        use rustix::process::{Pid, Signal, kill_process_group};
+
+        let mut cmd = shell_command("sleep 10");
+        configure_git_process_tree(&mut cmd);
+        let mut child = cmd.spawn().expect("synthetic process group should start");
+        let group_id = child.id();
+        let mut zombie = spawn_unreaped_zombie_in_group(group_id);
+
+        let started = Instant::now();
+        let result = terminate_process_tree_and_wait(&mut child);
+        let elapsed = started.elapsed();
+
+        if let Some(pid) = Pid::from_raw(group_id as i32) {
+            let _ = kill_process_group(pid, Signal::KILL);
+        }
+        let _ = zombie.wait();
+        result.expect("process-group termination should reap the leader");
+
+        assert!(
+            elapsed < GIT_PROCESS_TERMINATE_GRACE,
+            "termination waited {elapsed:?} on a zombie that had already released its descriptors"
+        );
     }
 
     #[cfg(unix)]
