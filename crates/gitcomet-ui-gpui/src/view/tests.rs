@@ -4275,6 +4275,7 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
             stdout: String::new(),
             stderr: "fatal: test".to_string(),
             announce_success: true,
+            hook_operation_id: None,
         });
     next.active_repo = Some(repo_id);
     next.repos.push(repo);

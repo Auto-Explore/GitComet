@@ -1442,6 +1442,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             announce_success: true,
+            hook_operation_id: None,
         }
     }
 

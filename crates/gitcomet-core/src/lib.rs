@@ -6,6 +6,7 @@ pub mod diff;
 pub mod domain;
 pub mod error;
 pub mod file_diff;
+pub mod git_operation;
 pub mod git_ops_trace;
 pub mod gitignore;
 pub mod hex;

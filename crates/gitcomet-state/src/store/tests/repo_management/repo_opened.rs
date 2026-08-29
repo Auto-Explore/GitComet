@@ -399,6 +399,157 @@ fn repo_action_finished_err_records_diagnostic() {
 }
 
 #[test]
+fn hook_activity_owns_wrapped_repo_action_failure_diagnostic() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let operation_id = gitcomet_core::git_operation::GitOperationId(41);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::GitOperationStarted {
+            repo_id,
+            operation_id,
+            label: "Checkout branch".to_string(),
+            context: Some("feature/hooks".to_string()),
+            time: SystemTime::UNIX_EPOCH,
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::GitOperationEvent {
+            repo_id,
+            operation_id,
+            event: gitcomet_core::git_operation::GitOperationEvent::HookStarted {
+                id: gitcomet_core::git_operation::HookExecutionId {
+                    sid: Arc::from("diagnostic-test"),
+                    child_id: 1,
+                },
+                name: "post-checkout".to_string(),
+            },
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::GitOperationFinished {
+            repo_id,
+            operation_id,
+            outer_outcome: crate::model::GitOperationOuterOutcome::Failed,
+            duration: Duration::from_millis(20),
+            message: Box::new(crate::msg::InternalMsg::RepoActionFinished {
+                repo_id,
+                action: RepoActionKind::CheckoutBranch,
+                result: Err(Error::new(ErrorKind::Backend(
+                    "post-checkout failed".to_string(),
+                ))),
+            }),
+        }),
+    );
+
+    let repo = &state.repos[0];
+    assert_eq!(repo.feedback.hook_activity.len(), 1);
+    assert!(
+        repo.feedback.diagnostics.is_empty(),
+        "the Activity result should replace the generic RepoAction error diagnostic"
+    );
+}
+
+#[test]
+fn hooked_repo_action_preserves_diagnostic_when_hooks_pass_before_git_fails() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let operation_id = gitcomet_core::git_operation::GitOperationId(42);
+    let hook_id = gitcomet_core::git_operation::HookExecutionId {
+        sid: Arc::from("outer-failure-test"),
+        child_id: 1,
+    };
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    for message in [
+        crate::msg::InternalMsg::GitOperationStarted {
+            repo_id,
+            operation_id,
+            label: "Revert".to_string(),
+            context: Some("01234567".to_string()),
+            time: SystemTime::UNIX_EPOCH,
+        },
+        crate::msg::InternalMsg::GitOperationEvent {
+            repo_id,
+            operation_id,
+            event: gitcomet_core::git_operation::GitOperationEvent::HookStarted {
+                id: hook_id.clone(),
+                name: "reference-transaction".to_string(),
+            },
+        },
+        crate::msg::InternalMsg::GitOperationEvent {
+            repo_id,
+            operation_id,
+            event: gitcomet_core::git_operation::GitOperationEvent::HookFinished {
+                id: hook_id,
+                name: "reference-transaction".to_string(),
+                exit_code: Some(0),
+                duration: Duration::from_millis(5),
+            },
+        },
+    ] {
+        reduce(&mut repos, &id_alloc, &mut state, Msg::Internal(message));
+    }
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::GitOperationFinished {
+            repo_id,
+            operation_id,
+            outer_outcome: crate::model::GitOperationOuterOutcome::Failed,
+            duration: Duration::from_millis(20),
+            message: Box::new(crate::msg::InternalMsg::RepoActionFinished {
+                repo_id,
+                action: RepoActionKind::RevertCommit,
+                result: Err(Error::new(ErrorKind::Backend(
+                    "failed to update the ref after hooks passed".to_string(),
+                ))),
+            }),
+        }),
+    );
+
+    let repo = &state.repos[0];
+    assert_eq!(
+        repo.feedback.hook_activity[0].hooks[0].status,
+        crate::model::GitHookRunStatus::Succeeded
+    );
+    assert!(
+        repo.feedback
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("failed to update the ref")),
+        "the repo-action diagnostic is the only visible detail for an outer Git failure"
+    );
+}
+
+#[test]
 fn cherry_pick_error_completion_refreshes_status_log_and_sequencer_state() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);

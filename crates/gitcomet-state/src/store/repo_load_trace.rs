@@ -115,6 +115,9 @@ pub(super) fn msg_external_change(msg: &Msg) -> Option<crate::msg::RepoExternalC
 
 pub(super) fn internal_msg_name(msg: &InternalMsg) -> &'static str {
     match msg {
+        InternalMsg::GitOperationStarted { .. } => "GitOperationStarted",
+        InternalMsg::GitOperationEvent { .. } => "GitOperationEvent",
+        InternalMsg::GitOperationFinished { .. } => "GitOperationFinished",
         InternalMsg::RepoLoadFinished { .. } => "RepoLoadFinished",
         InternalMsg::RepoOpenedOk { .. } => "RepoOpenedOk",
         InternalMsg::RepoOpenedErr { .. } => "RepoOpenedErr",
@@ -144,6 +147,7 @@ pub(super) fn effect_name(effect: &Effect) -> &'static str {
     match effect {
         Effect::OpenRepo { .. } => "OpenRepo",
         Effect::CancelRepoLoads { .. } => "CancelRepoLoads",
+        Effect::CancelGitOperation { .. } => "CancelGitOperation",
         Effect::LoadBranches { .. } => "LoadBranches",
         Effect::LoadRemotes { .. } => "LoadRemotes",
         Effect::LoadRemoteBranches { .. } => "LoadRemoteBranches",
@@ -173,6 +177,7 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
     match effect {
         Effect::OpenRepo { repo_id, .. }
         | Effect::CancelRepoLoads { repo_id, .. }
+        | Effect::CancelGitOperation { repo_id, .. }
         | Effect::LoadBranches { repo_id }
         | Effect::LoadRemotes { repo_id }
         | Effect::LoadRemoteBranches { repo_id }

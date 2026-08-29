@@ -1,6 +1,7 @@
 use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
+use gitcomet_core::git_operation::GitOperationId;
 use gitcomet_core::services::{
     ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
     SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
@@ -44,6 +45,10 @@ pub enum Effect {
     CancelRepoLoads {
         repo_id: RepoId,
         load_epoch: u64,
+    },
+    CancelGitOperation {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
     },
     LoadBranches {
         repo_id: RepoId,

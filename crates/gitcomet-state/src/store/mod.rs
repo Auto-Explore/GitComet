@@ -63,6 +63,7 @@ fn is_control_msg(msg: &Msg) -> bool {
             | Msg::OpenRepoFromExternalDrop(_)
             | Msg::CloseRepo { .. }
             | Msg::CloseRepos { .. }
+            | Msg::CancelGitOperation { .. }
             | Msg::SetActiveRepo { .. }
             | Msg::ReorderRepoTabs { .. }
     )

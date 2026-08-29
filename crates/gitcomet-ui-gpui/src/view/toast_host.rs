@@ -1,6 +1,12 @@
 use super::*;
 use gitcomet_state::model::SubmoduleAddProgressState;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HookProgressToast {
+    repo_id: RepoId,
+    operation: GitHookOperation,
+}
+
 pub(super) struct ToastHost {
     theme: AppTheme,
     root_view: WeakEntity<GitCometView>,
@@ -16,11 +22,15 @@ pub(super) struct ToastHost {
     clone_progress_last_seq: u64,
     clone_progress_dest: Option<std::sync::Arc<std::path::PathBuf>>,
     submodule_add_progress: Vec<SubmoduleAddProgressState>,
+    hook_progress: Vec<HookProgressToast>,
+    /// Progress remains live while Activity is open, but compact progress for
+    /// the repository represented by that dialog must not render behind it.
+    hook_activity_dialog_repo: Option<RepoId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ToastViewportCorner {
-    BottomRight,
+    BottomLeft,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -44,7 +54,7 @@ fn clone_progress_shell_accent_color(theme: AppTheme) -> gpui::Rgba {
 }
 
 fn toast_viewport_corner() -> ToastViewportCorner {
-    ToastViewportCorner::BottomRight
+    ToastViewportCorner::BottomLeft
 }
 
 fn looks_like_code_message(message: &str) -> bool {
@@ -181,6 +191,8 @@ impl ToastHost {
             clone_progress_last_seq: 0,
             clone_progress_dest: None,
             submodule_add_progress: Vec::new(),
+            hook_progress: Vec::new(),
+            hook_activity_dialog_repo: None,
         }
     }
 
@@ -261,6 +273,51 @@ impl ToastHost {
             Some(ttl),
             cx,
         );
+    }
+
+    pub(super) fn push_hook_activity_toast(
+        &mut self,
+        kind: components::ToastKind,
+        message: String,
+        repo_id: RepoId,
+        operation_id: GitOperationId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let ttl = match kind {
+            components::ToastKind::Error => Duration::from_secs(15),
+            components::ToastKind::Warning => Duration::from_secs(10),
+            components::ToastKind::Success => Duration::from_secs(6),
+        };
+        let _ = self.push_toast_inner(
+            kind,
+            message,
+            vec![ToastAction::OpenHookActivity {
+                repo_id,
+                operation_id,
+                label: "View output".to_string(),
+            }],
+            ToastDismissBehavior::Remove,
+            Some(ttl),
+            cx,
+        );
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn hook_activity_notice_count_for_test(&self, repo_id: RepoId) -> usize {
+        self.toasts
+            .iter()
+            .filter(|toast| {
+                toast.actions.iter().any(|action| {
+                    matches!(
+                        action,
+                        ToastAction::OpenHookActivity {
+                            repo_id: action_repo_id,
+                            ..
+                        } if *action_repo_id == repo_id
+                    )
+                })
+            })
+            .count()
     }
 
     pub(super) fn push_survey_toast(
@@ -420,7 +477,13 @@ impl ToastHost {
         self.remove_toast(id, cx);
     }
 
-    fn handle_toast_action(&mut self, id: u64, action: ToastAction, cx: &mut gpui::Context<Self>) {
+    fn handle_toast_action(
+        &mut self,
+        id: u64,
+        action: ToastAction,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         match action {
             ToastAction::OpenUrl { url, .. } => {
                 // Keep the toast until the open succeeds: it carries the URL and
@@ -486,6 +549,29 @@ impl ToastHost {
                     cx,
                 );
             }
+            ToastAction::OpenHookActivity {
+                repo_id,
+                operation_id,
+                ..
+            } => {
+                let root_view = self.root_view.clone();
+                let window_handle = window.window_handle();
+                cx.defer(move |cx| {
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = root_view.update(cx, |root, cx| {
+                            root.open_popover_centered(
+                                PopoverKind::HookActivity {
+                                    repo_id,
+                                    operation_id: Some(operation_id),
+                                },
+                                window,
+                                cx,
+                            );
+                        });
+                    });
+                });
+                self.remove_toast(id, cx);
+            }
         }
     }
 
@@ -519,6 +605,33 @@ impl ToastHost {
         ) {
             cx.notify();
         }
+    }
+
+    pub(super) fn sync_hook_progress(
+        &mut self,
+        next: Vec<(RepoId, GitHookOperation)>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let next = next
+            .into_iter()
+            .map(|(repo_id, operation)| HookProgressToast { repo_id, operation })
+            .collect::<Vec<_>>();
+        if self.hook_progress != next {
+            self.hook_progress = next;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn set_hook_activity_dialog_repo(
+        &mut self,
+        repo_id: Option<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.hook_activity_dialog_repo == repo_id {
+            return;
+        }
+        self.hook_activity_dialog_repo = repo_id;
+        cx.notify();
     }
 
     fn render_progress_shell(&self, content: impl IntoElement) -> AnyElement {
@@ -726,13 +839,108 @@ impl ToastHost {
         );
         self.render_progress_shell(content)
     }
+
+    fn render_hook_progress_toast(
+        &self,
+        progress: &[HookProgressToast],
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let latest = progress
+            .iter()
+            .max_by_key(|progress| progress.operation.time)
+            .expect("hook progress renderer requires at least one operation");
+        let repo_id = latest.repo_id;
+        let operation_id = latest.operation.id;
+        let hook_name = latest.operation.active_hook_name().unwrap_or("Git");
+        let title = if progress.len() > 1 {
+            format!("{} Git hook runs active", progress.len())
+        } else if latest.operation.status == GitHookOperationStatus::Cancelling {
+            format!("Stopping {hook_name} hook…")
+        } else {
+            format!("Running {hook_name} hook…")
+        };
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+
+        let open_button =
+            components::Button::new(format!("hook_progress_open_{}", operation_id.0), "Open")
+                .style(components::ButtonStyle::Outlined)
+                .on_click(theme, cx, move |this, _e, window, cx| {
+                    let root_view = this.root_view.clone();
+                    let window_handle = window.window_handle();
+                    cx.defer(move |cx| {
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            let _ = root_view.update(cx, |root, cx| {
+                                root.open_popover_centered(
+                                    PopoverKind::HookActivity {
+                                        repo_id,
+                                        operation_id: None,
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            });
+                        });
+                    });
+                })
+                .debug_selector(|| "hook_progress_open".to_string());
+
+        let shell_bg = with_alpha(
+            theme.colors.surface.raised,
+            if theme.is_dark { 0.96 } else { 0.98 },
+        );
+        div()
+            .debug_selector(|| "hook_progress_toast".to_string())
+            .w(scaled_px(300.0))
+            .min_w(scaled_px(300.0))
+            .max_w(scaled_px(300.0))
+            .flex()
+            .items_center()
+            .gap(scaled_px(10.0))
+            .px(scaled_px(12.0))
+            .py(scaled_px(10.0))
+            .bg(shell_bg)
+            .border_1()
+            .border_color(clone_progress_shell_border_color(theme))
+            .rounded(px(theme.radii.popover))
+            .overflow_hidden()
+            .shadow(crate::theme::shadow_popover(theme))
+            .text_color(theme.colors.foreground.primary)
+            .child(svg_spinner(
+                ("hook_progress_spinner", operation_id.0),
+                theme.colors.accent.foreground,
+                scaled_px(16.0),
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .line_clamp(1)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .child(title),
+            )
+            .child(open_button)
+            .into_any_element()
+    }
 }
 
 impl Render for ToastHost {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let hook_progress = self
+            .hook_progress
+            .iter()
+            .filter(|progress| self.hook_activity_dialog_repo != Some(progress.repo_id))
+            .cloned()
+            .collect::<Vec<_>>();
         if self.toasts.is_empty()
             && self.clone_progress.is_none()
             && self.submodule_add_progress.is_empty()
+            && hook_progress.is_empty()
         {
             return div().into_any_element();
         }
@@ -751,6 +959,9 @@ impl Render for ToastHost {
                     self.render_submodule_add_progress_toast(ix as u64, progress)
                 }),
         );
+        if !hook_progress.is_empty() {
+            progress_toasts.push(self.render_hook_progress_toast(&hook_progress, cx));
+        }
         let has_progress = !progress_toasts.is_empty();
         let max_other = if has_progress { 2 } else { 3 };
         let mut displayed = self
@@ -820,13 +1031,16 @@ impl Render for ToastHost {
                             let label = match action {
                                 ToastAction::OpenUrl { label, .. }
                                 | ToastAction::OpenSurvey { label, .. }
-                                | ToastAction::PostponeSurvey { label, .. } => label.clone(),
+                                | ToastAction::PostponeSurvey { label, .. }
+                                | ToastAction::OpenHookActivity { label, .. } => label.clone(),
                             };
                             let style = match action {
                                 ToastAction::PostponeSurvey { .. } => {
                                     components::ButtonStyle::Transparent
                                 }
-                                ToastAction::OpenUrl { .. } | ToastAction::OpenSurvey { .. } => {
+                                ToastAction::OpenUrl { .. }
+                                | ToastAction::OpenSurvey { .. }
+                                | ToastAction::OpenHookActivity { .. } => {
                                     components::ButtonStyle::Outlined
                                 }
                             };
@@ -839,8 +1053,8 @@ impl Render for ToastHost {
                             .on_click(
                                 theme,
                                 cx,
-                                move |this, _e, _w, cx| {
-                                    this.handle_toast_action(toast_id, action.clone(), cx);
+                                move |this, _e, window, cx| {
+                                    this.handle_toast_action(toast_id, action.clone(), window, cx);
                                 },
                             )
                         }))
@@ -868,8 +1082,8 @@ impl Render for ToastHost {
                                 _ => 1.0,
                             };
                             let slide_x = match animation_ix {
-                                0 => (1.0 - delta) * TOAST_SLIDE_PX,
-                                2 => delta * TOAST_SLIDE_PX,
+                                0 => -(1.0 - delta) * TOAST_SLIDE_PX,
+                                2 => -delta * TOAST_SLIDE_PX,
                                 _ => 0.0,
                             };
                             toast.opacity(opacity).relative().left(px(slide_x))
@@ -895,13 +1109,13 @@ impl Render for ToastHost {
                     .occlude()
                     .flex()
                     .flex_col()
-                    .items_end()
+                    .items_start()
                     .gap(px(12.0))
                     .children(children),
             );
 
         match toast_viewport_corner() {
-            ToastViewportCorner::BottomRight => root.justify_end().items_end().into_any_element(),
+            ToastViewportCorner::BottomLeft => root.justify_start().items_end().into_any_element(),
         }
     }
 }
@@ -1306,7 +1520,7 @@ mod tests {
     }
 
     #[test]
-    fn toast_stack_anchor_is_bottom_right() {
-        assert_eq!(toast_viewport_corner(), ToastViewportCorner::BottomRight);
+    fn toast_stack_anchor_is_bottom_left() {
+        assert_eq!(toast_viewport_corner(), ToastViewportCorner::BottomLeft);
     }
 }

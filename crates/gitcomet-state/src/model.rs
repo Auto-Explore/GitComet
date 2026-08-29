@@ -5,6 +5,7 @@ use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictSession, ConflictStageParts, canonicalize_stage_parts,
 };
 use gitcomet_core::domain::*;
+use gitcomet_core::git_operation::{GitOperationId, GitOutputStream, HookExecutionId};
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::{
     BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext, SequencerState,
@@ -15,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 pub type Shared<T> = Arc<T>;
 
@@ -771,6 +772,104 @@ pub struct CommandLogEntry {
     /// a toast per staged line is noise — but they still belong in the log.
     /// Failures are always surfaced, whatever this says.
     pub announce_success: bool,
+    /// The hook-activity entry that owns user-facing reporting for this
+    /// command. When present, the UI does not also show the generic command
+    /// completion toast/banner.
+    pub hook_operation_id: Option<GitOperationId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitHookOperationStatus {
+    Running,
+    Cancelling,
+    Succeeded,
+    SucceededWithHookFailure,
+    Failed,
+    Cancelled,
+    TimedOut,
+}
+
+impl GitHookOperationStatus {
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Running | Self::Cancelling)
+    }
+
+    pub fn is_warning(self) -> bool {
+        matches!(self, Self::SucceededWithHookFailure | Self::Cancelled)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitHookRunStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitHookRun {
+    pub id: HookExecutionId,
+    pub name: String,
+    pub status: GitHookRunStatus,
+    pub exit_code: Option<i32>,
+    pub duration: Option<Duration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitHookOutputChunk {
+    pub stream: GitOutputStream,
+    pub text: Arc<str>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitHookOperation {
+    pub id: GitOperationId,
+    pub label: String,
+    /// Single-line, user-facing context for the operation that invoked these
+    /// hooks, such as a commit subject or branch/remote direction.
+    pub context: Option<String>,
+    pub time: SystemTime,
+    pub duration: Option<Duration>,
+    pub status: GitHookOperationStatus,
+    pub hooks: Vec<GitHookRun>,
+    pub output: Arc<VecDeque<GitHookOutputChunk>>,
+    pub output_bytes: usize,
+    pub output_truncated: bool,
+    pub latest_line: String,
+}
+
+impl GitHookOperation {
+    pub fn has_hooks(&self) -> bool {
+        !self.hooks.is_empty()
+    }
+
+    pub fn active_hook_name(&self) -> Option<&str> {
+        self.hooks
+            .iter()
+            .rev()
+            .find(|hook| hook.status == GitHookRunStatus::Running)
+            .map(|hook| hook.name.as_str())
+    }
+
+    pub fn combined_output(&self) -> String {
+        let mut output = String::new();
+        if self.output_truncated {
+            output.push_str("[Earlier hook output was truncated]\n");
+        }
+        for chunk in self.output.iter() {
+            output.push_str(&chunk.text);
+        }
+        output
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitOperationOuterOutcome {
+    Succeeded,
+    Failed,
+    Cancelled,
+    TimedOut,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1147,7 +1246,7 @@ pub struct InteractiveCherryPickSetup {
     pub full_messages: Loadable<()>,
 }
 
-/// Errors and bounded diagnostic history surfaced by repository views.
+/// User-visible repository feedback and bounded diagnostic/activity history.
 ///
 /// Keeping this together makes the lifecycle explicit: a successful reopen can
 /// reset repository feedback without touching loaded Git data or navigation.
@@ -1157,6 +1256,11 @@ pub struct RepoFeedbackState {
     pub last_error: Option<String>,
     pub diagnostics: Vec<DiagnosticEntry>,
     pub command_log: Vec<CommandLogEntry>,
+    pub hook_activity: Vec<GitHookOperation>,
+    pub hook_activity_rev: u64,
+    /// Set only while reducing the existing command completion nested inside a
+    /// `GitOperationFinished` message.
+    pub(crate) command_log_operation_id: Option<GitOperationId>,
 }
 
 /// Deferred operation context retained between an initial failure and the

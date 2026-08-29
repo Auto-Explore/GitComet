@@ -879,6 +879,18 @@ pub struct GitCometView {
         Option<gitcomet_state::model::SubmoduleTrustPromptState>,
     pub(super) pending_submodule_trust_check:
         Option<gitcomet_state::model::SubmoduleTrustCheckState>,
+    /// Hook chains queued to open once render has a `Window`. A chain is
+    /// identified by the outer Git operation, so pre- and post-hooks from one
+    /// command share the same presentation lifecycle.
+    pub(super) pending_hook_activity_open: Option<(RepoId, GitOperationId)>,
+    /// Active chains the user minimized, or that began behind another overlay.
+    /// They stay represented by the compact progress toast and must not
+    /// auto-open again when another hook in the same Git command starts.
+    pub(super) minimized_hook_activity_chains: FxHashSet<(RepoId, GitOperationId)>,
+    /// Repositories explicitly minimized by the user. Unlike the per-chain
+    /// suppression above, this remains set across operations until Activity is
+    /// opened again and closed with its X button.
+    pub(super) minimized_hook_activity_repos: FxHashSet<RepoId>,
     pub(super) pending_worktree_branch_removals: FxHashMap<(RepoId, std::path::PathBuf), String>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]

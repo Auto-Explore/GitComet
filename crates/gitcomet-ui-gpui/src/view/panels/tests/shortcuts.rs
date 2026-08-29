@@ -6116,4 +6116,5 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
     );
 }
 
+mod hook_activity;
 mod window_and_file_actions;

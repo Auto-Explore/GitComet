@@ -1,5 +1,60 @@
 use super::*;
 
+fn hook_completion_notice(operation: &GitHookOperation) -> (components::ToastKind, String) {
+    let failed_hook = operation
+        .hooks
+        .iter()
+        .rev()
+        .find(|hook| hook.status == GitHookRunStatus::Failed)
+        .map(|hook| hook.name.as_str());
+    match operation.status {
+        GitHookOperationStatus::Succeeded => (
+            components::ToastKind::Success,
+            format!("{}: Git hooks passed", operation.label),
+        ),
+        GitHookOperationStatus::SucceededWithHookFailure => {
+            let hook = failed_hook.unwrap_or("post-operation");
+            let message = if operation.label == "Commit" && hook == "post-commit" {
+                "Commit created, but post-commit hook failed".to_string()
+            } else {
+                format!("{} completed, but {hook} hook failed", operation.label)
+            };
+            (components::ToastKind::Warning, message)
+        }
+        GitHookOperationStatus::Failed => {
+            let hook = failed_hook.unwrap_or("Git");
+            let message = if operation.label == "Commit" && hook == "pre-commit" {
+                "Commit blocked by pre-commit hook".to_string()
+            } else {
+                format!("{} failed in {hook} hook", operation.label)
+            };
+            (components::ToastKind::Error, message)
+        }
+        GitHookOperationStatus::Cancelled => (
+            components::ToastKind::Warning,
+            format!(
+                "{} stopped; repository state was refreshed",
+                operation.label
+            ),
+        ),
+        GitHookOperationStatus::TimedOut => (
+            components::ToastKind::Error,
+            format!("{} timed out while running Git hooks", operation.label),
+        ),
+        GitHookOperationStatus::Running | GitHookOperationStatus::Cancelling => {
+            (components::ToastKind::Success, String::new())
+        }
+    }
+}
+
+fn outer_failure_after_hooks(operation: &GitHookOperation) -> bool {
+    operation.status == GitHookOperationStatus::Failed
+        && !operation
+            .hooks
+            .iter()
+            .any(|hook| hook.status == GitHookRunStatus::Failed)
+}
+
 impl GitCometView {
     pub(super) fn apply_state_snapshot(
         &mut self,
@@ -16,6 +71,9 @@ impl GitCometView {
         let next_banner_error = next.banner_error.clone();
         let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
         let mut follow_up_msgs = Vec::new();
+        let hook_activity_workflow_repo = self
+            .hook_activity_workflow_repo_id(cx)
+            .or_else(|| self.pending_hook_activity_open.map(|(repo_id, _)| repo_id));
 
         let old_notification_len = self.state.notifications.len();
         let new_notifications = next
@@ -105,6 +163,20 @@ impl GitCometView {
                     }
                 }
 
+                if let Some(operation_id) = entry.hook_operation_id {
+                    let outer_failure_after_hooks = !entry.ok
+                        && next_repo
+                            .feedback
+                            .hook_activity
+                            .iter()
+                            .find(|operation| operation.id == operation_id)
+                            .is_some_and(outer_failure_after_hooks);
+                    if outer_failure_after_hooks {
+                        self.show_error_banner(Some(next_repo.id), entry.summary.clone());
+                    }
+                    continue;
+                }
+
                 if entry.ok {
                     if entry.announce_success {
                         self.push_toast(components::ToastKind::Success, entry.summary.clone(), cx);
@@ -112,6 +184,42 @@ impl GitCometView {
                 } else {
                     self.show_error_banner(Some(next_repo.id), entry.summary.clone());
                 }
+            }
+
+            let previous_repo = self.state.repos.iter().find(|repo| repo.id == next_repo.id);
+            for operation in next_repo
+                .feedback
+                .hook_activity
+                .iter()
+                .filter(|operation| operation.has_hooks() && !operation.status.is_active())
+            {
+                let was_completed = previous_repo
+                    .and_then(|repo| {
+                        repo.feedback
+                            .hook_activity
+                            .iter()
+                            .find(|previous| previous.id == operation.id)
+                    })
+                    .is_some_and(|previous| !previous.status.is_active());
+                if was_completed {
+                    continue;
+                }
+                if outer_failure_after_hooks(operation) {
+                    // Git can fail after every hook passed (for example while
+                    // signing the commit). The ordinary command log owns that
+                    // banner because it retains the real Git error detail.
+                    continue;
+                }
+                if hook_activity_workflow_repo == Some(next_repo.id) {
+                    // The final state and output are already visible in the
+                    // Activity workflow; a second hook notification would
+                    // duplicate the same result behind the dialog.
+                    continue;
+                }
+                let (kind, message) = hook_completion_notice(operation);
+                self.toast_host.update(cx, |host, cx| {
+                    host.push_hook_activity_toast(kind, message, next_repo.id, operation.id, cx);
+                });
             }
 
             if self.pending_pull_reconcile_prompt.is_none()
@@ -141,9 +249,77 @@ impl GitCometView {
             .iter()
             .filter_map(|repo| repo.submodule_add_in_flight.clone())
             .collect::<Vec<_>>();
+        let next_hook_progress = next
+            .repos
+            .iter()
+            .flat_map(|repo| {
+                repo.feedback
+                    .hook_activity
+                    .iter()
+                    .filter(|operation| operation.has_hooks() && operation.status.is_active())
+                    .cloned()
+                    .map(move |operation| (repo.id, operation))
+            })
+            .collect::<Vec<_>>();
+
+        let active_hook_chains = next_hook_progress
+            .iter()
+            .map(|(repo_id, operation)| (*repo_id, operation.id))
+            .collect::<FxHashSet<_>>();
+        self.minimized_hook_activity_chains
+            .retain(|chain| active_hook_chains.contains(chain));
+        self.minimized_hook_activity_repos
+            .retain(|repo_id| next.repos.iter().any(|repo| repo.id == *repo_id));
+
+        let newly_started_hook_chains = next_hook_progress
+            .iter()
+            .filter(|(repo_id, operation)| {
+                !self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == *repo_id)
+                    .and_then(|repo| {
+                        repo.feedback
+                            .hook_activity
+                            .iter()
+                            .find(|previous| previous.id == operation.id)
+                    })
+                    .is_some_and(|previous| previous.has_hooks() && previous.status.is_active())
+            })
+            .map(|(repo_id, operation)| (*repo_id, operation.id, operation.time))
+            .collect::<Vec<_>>();
+
+        if !newly_started_hook_chains.is_empty() && !self.hook_activity_workflow_is_open(cx) {
+            let another_overlay_is_open = self.is_overlay_open(cx) || self.command_palette_open;
+            if another_overlay_is_open {
+                self.minimized_hook_activity_chains.extend(
+                    newly_started_hook_chains
+                        .iter()
+                        .map(|(repo_id, operation_id, _)| (*repo_id, *operation_id)),
+                );
+            } else if let Some((repo_id, operation_id, _)) = newly_started_hook_chains
+                .into_iter()
+                .filter(|(repo_id, operation_id, _)| {
+                    !self.minimized_hook_activity_repos.contains(repo_id)
+                        && !self
+                            .minimized_hook_activity_chains
+                            .contains(&(*repo_id, *operation_id))
+                })
+                .max_by_key(|(_, _, time)| *time)
+            {
+                self.pending_hook_activity_open = Some((repo_id, operation_id));
+            }
+        }
+
+        let hook_activity_workflow_repo = self
+            .hook_activity_workflow_repo_id(cx)
+            .or_else(|| self.pending_hook_activity_open.map(|(repo_id, _)| repo_id));
         self.toast_host.update(cx, |host, cx| {
             host.sync_clone_progress(next.clone.as_ref(), cx);
             host.sync_submodule_add_progress(&next_submodule_add_progress, cx);
+            host.sync_hook_progress(next_hook_progress, cx);
+            host.set_hook_activity_dialog_repo(hook_activity_workflow_repo, cx);
         });
 
         #[cfg(target_os = "macos")]
@@ -300,7 +476,38 @@ fn parse_worktree_remove_path_from_command(command: &str) -> Option<std::path::P
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::git_operation::{GitOperationId, HookExecutionId};
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
+
+    fn completed_hook_operation(
+        status: GitHookOperationStatus,
+        hook_name: &str,
+    ) -> GitHookOperation {
+        GitHookOperation {
+            id: GitOperationId(1),
+            label: "Commit".to_string(),
+            context: Some("Exercise hook reporting".to_string()),
+            time: SystemTime::UNIX_EPOCH,
+            duration: Some(Duration::from_millis(50)),
+            status,
+            hooks: vec![gitcomet_state::model::GitHookRun {
+                id: HookExecutionId {
+                    sid: Arc::from("test-session"),
+                    child_id: 1,
+                },
+                name: hook_name.to_string(),
+                status: GitHookRunStatus::Failed,
+                exit_code: Some(7),
+                duration: Some(Duration::from_millis(20)),
+            }],
+            output: Default::default(),
+            output_bytes: 0,
+            output_truncated: false,
+            latest_line: String::new(),
+        }
+    }
 
     #[cfg(target_os = "macos")]
     fn repo_with_open_state(repo_id: RepoId, path: &str, ready: bool) -> RepoState {
@@ -360,6 +567,36 @@ mod tests {
             parse_worktree_remove_path_from_command("git worktree remove --force /tmp/worktree"),
             Some(PathBuf::from("/tmp/worktree"))
         );
+    }
+
+    #[test]
+    fn hook_completion_notice_distinguishes_blocking_and_ignored_failures() {
+        let (kind, message) = hook_completion_notice(&completed_hook_operation(
+            GitHookOperationStatus::Failed,
+            "pre-commit",
+        ));
+        assert!(matches!(kind, components::ToastKind::Error));
+        assert_eq!(message, "Commit blocked by pre-commit hook");
+
+        let (kind, message) = hook_completion_notice(&completed_hook_operation(
+            GitHookOperationStatus::SucceededWithHookFailure,
+            "post-commit",
+        ));
+        assert!(matches!(kind, components::ToastKind::Warning));
+        assert_eq!(message, "Commit created, but post-commit hook failed");
+    }
+
+    #[test]
+    fn outer_failure_after_passed_hooks_keeps_the_original_git_error_path() {
+        let mut operation = completed_hook_operation(GitHookOperationStatus::Failed, "pre-commit");
+        operation.hooks[0].status = GitHookRunStatus::Succeeded;
+        operation.hooks[0].exit_code = Some(0);
+
+        assert!(outer_failure_after_hooks(&operation));
+
+        operation.hooks[0].status = GitHookRunStatus::Failed;
+        operation.hooks[0].exit_code = Some(1);
+        assert!(!outer_failure_after_hooks(&operation));
     }
 
     #[cfg(target_os = "macos")]
