@@ -563,18 +563,14 @@ fn print_startup_crash_report_hint(report: &crashlog::StartupCrashReport) {
 
 #[cfg(feature = "ui-gpui-runtime")]
 fn build_backend() -> std::sync::Arc<dyn gitcomet_core::services::GitBackend> {
-    if cfg!(feature = "gix") {
-        #[cfg(feature = "gix")]
-        {
-            std::sync::Arc::new(gitcomet_git_gix::GixBackend)
-        }
+    #[cfg(feature = "gix")]
+    {
+        std::sync::Arc::new(gitcomet_git_gix::GixBackend)
+    }
 
-        #[cfg(not(feature = "gix"))]
-        {
-            gitcomet_git::default_backend()
-        }
-    } else {
-        gitcomet_git::default_backend()
+    #[cfg(not(feature = "gix"))]
+    {
+        std::sync::Arc::new(gitcomet_core::services::UnavailableGitBackend)
     }
 }
 

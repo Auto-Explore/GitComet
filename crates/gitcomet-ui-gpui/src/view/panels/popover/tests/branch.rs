@@ -1625,7 +1625,7 @@ mod checkout_picker {
             .repos
             .iter()
             .find(|r| r.id == repo_id)
-            .map(|r| r.diagnostics.len())
+            .map(|r| r.feedback.diagnostics.len())
             .unwrap_or(0);
 
         cx.update(|window, app| {
@@ -1656,7 +1656,7 @@ mod checkout_picker {
             .find(|r| r.id == repo_id)
             .expect("repo state");
         assert_eq!(
-            repo_state.diagnostics.len(),
+            repo_state.feedback.diagnostics.len(),
             diagnostics_before,
             "an unsupported metadata backend must not push a diagnostic"
         );
@@ -1986,7 +1986,7 @@ fn branch_group_menu_model_filtered(
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             this.popover_host.update(cx, |host, cx| {
                 host.set_branch_filter_query(filter.to_string(), cx);
@@ -2080,7 +2080,7 @@ fn branch_group_delete_confirm_names_with_head(
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             this.popover_host.update(cx, |host, cx| {
                 host.set_branch_filter_query(filter.to_string(), cx);
@@ -2371,7 +2371,7 @@ fn pinned_section_menu_model(
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             this.popover_host.update(cx, |host, cx| {
                 host.set_pinned_branches(
@@ -2490,7 +2490,7 @@ fn activate_sidebar_action_with(
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -2796,7 +2796,7 @@ fn pinned_section_menu_reports_expanded_while_a_filter_is_live(cx: &mut gpui::Te
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             this.popover_host.update(cx, |host, cx| {
                 // Persisted as collapsed…

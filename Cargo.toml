@@ -3,7 +3,6 @@ resolver = "3"
 members = [
   "crates/gitcomet",
   "crates/gitcomet-core",
-  "crates/gitcomet-git",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-tree-sitter-alloc",
@@ -52,7 +51,6 @@ exclude = [
 default-members = [
   "crates/gitcomet",
   "crates/gitcomet-core",
-  "crates/gitcomet-git",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-ui-gpui",
@@ -69,7 +67,6 @@ rust-version = "1.98.0"
 [workspace.dependencies]
 # Internal crates
 gitcomet-core = { path = "crates/gitcomet-core" }
-gitcomet-git = { path = "crates/gitcomet-git" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }

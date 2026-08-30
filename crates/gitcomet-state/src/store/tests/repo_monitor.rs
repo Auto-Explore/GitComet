@@ -249,6 +249,7 @@ fn repo_monitor_start_failures_are_recorded_for_missing_workdir() {
         missing_workdir,
         msg_tx,
         std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
+        std::sync::Arc::new(FailingBackend),
     );
 
     wait_for_monitor_failure_count(monitor_impl::MonitorFailureKind::Start, before + 1);

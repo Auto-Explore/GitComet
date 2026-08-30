@@ -35,6 +35,8 @@ jobs:
       uses: Swatinem/rust-cache@v2
     - name: Check formatting
       run: cargo fmt --all --check
+    - name: Check Rust source module sizes
+      run: bash scripts/check-rust-source-size.sh
 
   audit:
     name: Dependency audit (cargo-audit)
@@ -66,8 +68,8 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
     - name: Cache Rust artifacts
       uses: Swatinem/rust-cache@v2
-    - name: Clippy (core + state + git backends + tree-sitter allocator)
-      run: cargo clippy -p gitcomet-core -p gitcomet-state -p gitcomet-git -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
+    - name: Clippy (core + state + git backend + tree-sitter allocator)
+      run: cargo clippy -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
     - name: Clippy (GPUI UI crate -- intentionally skipped on headless CI)
       run: |
         echo "Skipping cargo clippy -p gitcomet-ui-gpui in this job."

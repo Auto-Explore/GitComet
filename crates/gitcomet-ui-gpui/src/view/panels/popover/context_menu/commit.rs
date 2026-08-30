@@ -284,7 +284,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.comparison_mark.clone());
+        .and_then(|repo| repo.navigation.comparison_mark.clone());
     items.push(ContextMenuItem::Entry {
         label: format!("Mark {short} for comparison").into(),
         icon: Some("icons/git_commit.svg".into()),

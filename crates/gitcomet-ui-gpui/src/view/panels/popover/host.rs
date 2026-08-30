@@ -92,40 +92,37 @@ impl PopoverHost {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::view) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        theme: AppTheme,
-        theme_mode: ThemeMode,
-        date_time_format: DateTimeFormat,
-        timezone: Timezone,
-        show_timezone: bool,
-        change_tracking_view: ChangeTrackingView,
-        commit_push_after_enabled: bool,
-        diff_content_mode: DiffContentMode,
-        diff_whitespace_mode: DiffWhitespaceMode,
-        diff_reveal_whitespace_chars: bool,
-        diff_word_wrap: bool,
-        diff_show_line_numbers: bool,
-        root_view: WeakEntity<GitCometView>,
-        root_view_mode: GitCometViewMode,
-        tooltip_host: WeakEntity<TooltipHost>,
-        main_pane: Entity<MainPaneView>,
-        details_pane: Entity<DetailsPaneView>,
-        reflog_pane: Entity<ReflogPaneView>,
-        sidebar_pane: Entity<SidebarPaneView>,
-        pinned_branches_by_repo: std::collections::BTreeMap<
-            std::path::PathBuf,
-            std::collections::BTreeSet<String>,
-        >,
-        collapsed_items_by_repo: std::collections::BTreeMap<
-            std::path::PathBuf,
-            std::collections::BTreeSet<String>,
-        >,
+        init: PopoverHostInit,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
+        let PopoverHostInit {
+            theme,
+            root_view,
+            root_view_mode,
+            tooltip_host,
+            main_pane,
+            details_pane,
+            reflog_pane,
+            sidebar_pane,
+            pinned_branches_by_repo,
+            collapsed_items_by_repo,
+        } = init;
+        let preferences = ui_model.read(cx).preferences.clone();
+        let theme_mode = preferences.appearance.theme_mode;
+        let date_time_format = preferences.appearance.date_time_format;
+        let timezone = preferences.appearance.timezone;
+        let show_timezone = preferences.appearance.show_timezone;
+        let change_tracking_view = preferences.change_tracking.view;
+        let commit_push_after_enabled = preferences.repository.commit_push_after_enabled;
+        let diff_content_mode = preferences.diff.content_mode;
+        let diff_whitespace_mode = preferences.diff.whitespace_mode;
+        let diff_reveal_whitespace_chars = preferences.diff.reveal_whitespace_chars;
+        let diff_word_wrap = preferences.diff.word_wrap;
+        let diff_show_line_numbers = preferences.diff.show_line_numbers;
         let state = Arc::clone(&ui_model.read(cx).state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let hook_activity_repo_id = match this.popover.as_ref() {
@@ -137,7 +134,7 @@ impl PopoverHost {
                     .repos
                     .iter()
                     .find(|repo| repo.id == repo_id)
-                    .map(|repo| repo.hook_activity_rev)
+                    .map(|repo| repo.feedback.hook_activity_rev)
             });
             let follow_hook_output = hook_activity_repo_id.is_some()
                 && scroll_is_near_bottom(&this.hook_activity_output_scroll, px(24.0));
@@ -150,7 +147,7 @@ impl PopoverHost {
                     .repos
                     .iter()
                     .find(|repo| repo.id == repo_id)
-                    .map(|repo| repo.hook_activity_rev)
+                    .map(|repo| repo.feedback.hook_activity_rev)
             });
             this.state = next_state;
             if follow_hook_output
@@ -962,7 +959,7 @@ impl PopoverHost {
             .iter()
             .find(|repo| repo.id == repo_id)
             .into_iter()
-            .flat_map(|repo| repo.hook_activity.iter())
+            .flat_map(|repo| repo.feedback.hook_activity.iter())
             .filter(|operation| operation.has_hooks() && operation.status.is_active())
             .map(|operation| (repo_id, operation.id))
             .collect::<Vec<_>>();
@@ -2225,7 +2222,7 @@ impl PopoverHost {
                         .repos
                         .iter()
                         .find(|repo| repo.id == *repo_id)
-                        .map(|repo| repo.hook_activity.as_slice())
+                        .map(|repo| repo.feedback.hook_activity.as_slice())
                         .unwrap_or_default();
                     let selected = operation_id
                         .filter(|requested| {

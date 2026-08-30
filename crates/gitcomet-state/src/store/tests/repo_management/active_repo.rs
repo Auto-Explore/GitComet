@@ -618,7 +618,7 @@ fn ref_metadata_load_failure_records_no_diagnostic() {
         Msg::OpenRepo(PathBuf::from("/tmp/repo")),
     );
     let repo_id = RepoId(1);
-    let diagnostics_before = state.repos[0].diagnostics.len();
+    let diagnostics_before = state.repos[0].feedback.diagnostics.len();
 
     reduce(
         &mut repos,
@@ -633,7 +633,10 @@ fn ref_metadata_load_failure_records_no_diagnostic() {
     );
 
     assert!(matches!(state.repos[0].ref_metadata, Loadable::Error(_)));
-    assert_eq!(state.repos[0].diagnostics.len(), diagnostics_before);
+    assert_eq!(
+        state.repos[0].feedback.diagnostics.len(),
+        diagnostics_before
+    );
 }
 
 #[test]
@@ -1361,7 +1364,12 @@ fn set_active_repo_inline_retires_the_activated_worktrees_orphaned_diff() {
     });
 
     let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
-    crate::store::reducer::fill_set_active_repo_inline(&mut state, target_repo, &mut effects);
+    crate::store::reducer::fill_set_active_repo_inline(
+        &repos,
+        &mut state,
+        target_repo,
+        &mut effects,
+    );
 
     let target = state
         .repos
@@ -1393,16 +1401,23 @@ fn set_active_repo_inline_folds_the_reset_selection_into_navigation_tail() {
         .find(|repo| repo.id == target_repo)
         .expect("target repo exists");
     target.history_state.selected_commit = Some(stale_commit.clone());
-    target.nav_history.clear();
+    target.navigation.main_history.clear();
     target
-        .nav_history
+        .navigation
+        .main_history
         .record(snapshot(Some(older_commit.clone())));
     target
-        .nav_history
+        .navigation
+        .main_history
         .record(snapshot(Some(stale_commit.clone())));
 
     let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
-    crate::store::reducer::fill_set_active_repo_inline(&mut state, target_repo, &mut effects);
+    crate::store::reducer::fill_set_active_repo_inline(
+        &repos,
+        &mut state,
+        target_repo,
+        &mut effects,
+    );
 
     let target = state
         .repos
@@ -1410,9 +1425,9 @@ fn set_active_repo_inline_folds_the_reset_selection_into_navigation_tail() {
         .find(|repo| repo.id == target_repo)
         .expect("target repo exists");
     assert!(target.history_state.selected_commit.is_none());
-    assert_eq!(target.nav_history.cursor, 1);
+    assert_eq!(target.navigation.main_history.cursor, 1);
     assert_eq!(
-        target.nav_history.entries.get(1),
+        target.navigation.main_history.entries.get(1),
         Some(&snapshot(None)),
         "activation must replace the stale live tail with the reset workspace view"
     );
@@ -1479,23 +1494,31 @@ fn set_active_repo_inline_realigns_a_mid_stack_reset_before_new_navigation() {
         .find(|repo| repo.id == target_repo)
         .expect("target repo exists");
     target.history_state.selected_commit = Some(stale_commit.clone());
-    target.nav_history.clear();
+    target.navigation.main_history.clear();
     target
-        .nav_history
+        .navigation
+        .main_history
         .record(snapshot(Some(older_commit.clone())));
     target
-        .nav_history
+        .navigation
+        .main_history
         .record(snapshot(Some(stale_commit.clone())));
     target
-        .nav_history
+        .navigation
+        .main_history
         .record(snapshot(Some(forward_commit.clone())));
     assert_eq!(
-        target.nav_history.step(ViewNavDir::Back),
+        target.navigation.main_history.step(ViewNavDir::Back),
         Some(snapshot(Some(stale_commit.clone())))
     );
 
     let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
-    crate::store::reducer::fill_set_active_repo_inline(&mut state, target_repo, &mut effects);
+    crate::store::reducer::fill_set_active_repo_inline(
+        &repos,
+        &mut state,
+        target_repo,
+        &mut effects,
+    );
 
     let target = state
         .repos
@@ -1503,10 +1526,13 @@ fn set_active_repo_inline_realigns_a_mid_stack_reset_before_new_navigation() {
         .find(|repo| repo.id == target_repo)
         .expect("target repo exists");
     assert!(target.history_state.selected_commit.is_none());
-    assert_eq!(target.nav_history.cursor, 1);
-    assert_eq!(target.nav_history.entries.get(1), Some(&snapshot(None)));
+    assert_eq!(target.navigation.main_history.cursor, 1);
     assert_eq!(
-        target.nav_history.entries.get(2),
+        target.navigation.main_history.entries.get(1),
+        Some(&snapshot(None))
+    );
+    assert_eq!(
+        target.navigation.main_history.entries.get(2),
         Some(&snapshot(Some(forward_commit))),
         "activation must preserve forward history while replacing the stale current entry"
     );

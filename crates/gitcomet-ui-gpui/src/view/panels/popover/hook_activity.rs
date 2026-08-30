@@ -600,7 +600,8 @@ pub(super) fn panel(
             (
                 crate::view::path_display::repo_path_name(&repo.spec.workdir),
                 crate::view::path_display::path_display_shared(&repo.spec.workdir),
-                repo.hook_activity
+                repo.feedback
+                    .hook_activity
                     .iter()
                     .filter(|operation| operation.has_hooks())
                     .rev()

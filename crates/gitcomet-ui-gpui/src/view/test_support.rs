@@ -6,7 +6,7 @@ pub(crate) fn push_test_state(
     state: Arc<AppState>,
     cx: &mut impl gpui::AppContext,
 ) {
-    view._ui_model.update(cx, |model, cx| {
+    view.ui_model.update(cx, |model, cx| {
         model.set_state(state, cx);
     });
 }

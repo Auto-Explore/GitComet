@@ -362,7 +362,7 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
             }
 
             if entry.kind == FileStatusKind::Deleted {
-                return head_path_is_gitlink(&repo_state.spec.workdir, path);
+                return repo_state.head_gitlink_paths.contains(path);
             }
 
             let dot_git = repo_state.spec.workdir.join(path).join(".git");
@@ -386,34 +386,6 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
         }
         DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => false,
     }
-}
-
-fn head_path_is_gitlink(workdir: &Path, path: &Path) -> bool {
-    let path = if path.is_absolute() {
-        match path.strip_prefix(workdir) {
-            Ok(path) => path,
-            Err(_) => return false,
-        }
-    } else {
-        path
-    };
-
-    let Ok(repo) = crate::store::open_worktree_repo(workdir) else {
-        return false;
-    };
-    let Ok(head_id) = repo.head_id() else {
-        return false;
-    };
-    let Ok(object) = repo.find_object(head_id.detach()) else {
-        return false;
-    };
-    let Ok(tree) = object.peel_to_tree() else {
-        return false;
-    };
-    let Ok(Some(entry)) = tree.lookup_entry_by_path(path) else {
-        return false;
-    };
-    entry.mode().is_commit()
 }
 
 pub(super) fn selected_conflict_target<'a>(
@@ -917,14 +889,14 @@ pub(super) fn clear_banner_error_for_repo(state: &mut AppState, repo_id: RepoId)
 
 pub(super) fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: String) {
     const MAX_DIAGNOSTICS: usize = 200;
-    repo_state.diagnostics.push(DiagnosticEntry {
+    repo_state.feedback.diagnostics.push(DiagnosticEntry {
         time: SystemTime::now(),
         kind,
         message,
     });
-    if repo_state.diagnostics.len() > MAX_DIAGNOSTICS {
-        let extra = repo_state.diagnostics.len() - MAX_DIAGNOSTICS;
-        repo_state.diagnostics.drain(0..extra);
+    if repo_state.feedback.diagnostics.len() > MAX_DIAGNOSTICS {
+        let extra = repo_state.feedback.diagnostics.len() - MAX_DIAGNOSTICS;
+        repo_state.feedback.diagnostics.drain(0..extra);
     }
 }
 
@@ -967,7 +939,7 @@ pub(super) fn push_command_log(
 
     let (command_text, summary) = summarize_command(command, output, ok, error);
 
-    repo_state.command_log.push(CommandLogEntry {
+    repo_state.feedback.command_log.push(CommandLogEntry {
         time: SystemTime::now(),
         ok,
         command: command_text,
@@ -979,11 +951,11 @@ pub(super) fn push_command_log(
             output.stderr.clone()
         },
         announce_success: command_success_is_worth_announcing(command),
-        hook_operation_id: repo_state.command_log_operation_id,
+        hook_operation_id: repo_state.feedback.command_log_operation_id,
     });
-    if repo_state.command_log.len() > MAX_COMMAND_LOG {
-        let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
-        repo_state.command_log.drain(0..extra);
+    if repo_state.feedback.command_log.len() > MAX_COMMAND_LOG {
+        let extra = repo_state.feedback.command_log.len() - MAX_COMMAND_LOG;
+        repo_state.feedback.command_log.drain(0..extra);
     }
 }
 
@@ -996,7 +968,7 @@ pub(super) fn push_action_log(
 ) {
     const MAX_COMMAND_LOG: usize = 200;
 
-    repo_state.command_log.push(CommandLogEntry {
+    repo_state.feedback.command_log.push(CommandLogEntry {
         time: SystemTime::now(),
         ok,
         command,
@@ -1004,11 +976,11 @@ pub(super) fn push_action_log(
         stdout: String::new(),
         stderr: error.map(format_error_for_user).unwrap_or_default(),
         announce_success: true,
-        hook_operation_id: repo_state.command_log_operation_id,
+        hook_operation_id: repo_state.feedback.command_log_operation_id,
     });
-    if repo_state.command_log.len() > MAX_COMMAND_LOG {
-        let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
-        repo_state.command_log.drain(0..extra);
+    if repo_state.feedback.command_log.len() > MAX_COMMAND_LOG {
+        let extra = repo_state.feedback.command_log.len() - MAX_COMMAND_LOG;
+        repo_state.feedback.command_log.drain(0..extra);
     }
 }
 
@@ -2011,14 +1983,14 @@ mod tests {
         for ix in 0..205 {
             push_diagnostic(&mut repo, DiagnosticKind::Info, format!("diagnostic-{ix}"));
         }
-        assert_eq!(repo.diagnostics.len(), 200);
-        assert_eq!(repo.diagnostics[0].message, "diagnostic-5");
+        assert_eq!(repo.feedback.diagnostics.len(), 200);
+        assert_eq!(repo.feedback.diagnostics[0].message, "diagnostic-5");
     }
 
     #[test]
     fn command_and_action_logs_use_expected_stderr_and_trim_history() {
         let mut repo = repo_state(4);
-        repo.command_log = (0..200).map(dummy_log_entry).collect();
+        repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
         push_command_log(
             &mut repo,
             true,
@@ -2026,17 +1998,18 @@ mod tests {
             &command_output("git fetch", "", "stderr from git"),
             None,
         );
-        assert_eq!(repo.command_log.len(), 200);
-        assert_eq!(repo.command_log[0].command, "cmd-1");
+        assert_eq!(repo.feedback.command_log.len(), 200);
+        assert_eq!(repo.feedback.command_log[0].command, "cmd-1");
         assert_eq!(
-            repo.command_log
+            repo.feedback
+                .command_log
                 .last()
                 .expect("last command log entry")
                 .stderr,
             "stderr from git"
         );
 
-        repo.command_log = (0..200).map(dummy_log_entry).collect();
+        repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
         push_action_log(
             &mut repo,
             false,
@@ -2046,8 +2019,8 @@ mod tests {
                 "backend failure".to_string(),
             ))),
         );
-        assert_eq!(repo.command_log.len(), 200);
-        assert_eq!(repo.command_log[0].command, "cmd-1");
+        assert_eq!(repo.feedback.command_log.len(), 200);
+        assert_eq!(repo.feedback.command_log[0].command, "cmd-1");
     }
 
     #[test]

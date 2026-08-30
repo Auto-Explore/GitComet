@@ -350,19 +350,32 @@ pub(in crate::store::reducer) fn append_selected_history_reload_effects(
     }
 }
 
-pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBuf) -> Vec<Effect> {
-    open_repo_with_mode(id_alloc, state, path, OpenRepoMode::Standard)
-}
-
-pub(super) fn open_repo_from_external_drop(
+pub(super) fn open_repo(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     path: PathBuf,
 ) -> Vec<Effect> {
-    open_repo_with_mode(id_alloc, state, path, OpenRepoMode::ProvisionalExternalDrop)
+    open_repo_with_mode(repos, id_alloc, state, path, OpenRepoMode::Standard)
+}
+
+pub(super) fn open_repo_from_external_drop(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    path: PathBuf,
+) -> Vec<Effect> {
+    open_repo_with_mode(
+        repos,
+        id_alloc,
+        state,
+        path,
+        OpenRepoMode::ProvisionalExternalDrop,
+    )
 }
 
 fn open_repo_with_mode(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     path: PathBuf,
@@ -378,7 +391,7 @@ fn open_repo_with_mode(
     {
         // Re-opening an already open repository should still refresh primary state, so stale
         // status/diff data gets reconciled immediately.
-        let mut effects = set_active_repo(state, repo_id);
+        let mut effects = set_active_repo(repos, state, repo_id);
         if mode == OpenRepoMode::Standard || !existing_is_provisional_drop {
             effects.push(persist_recent_repo_effect(Some(repo_id), path));
         }
@@ -605,7 +618,13 @@ pub(super) fn close_repo(
         };
         if let Some(active_repo_id) = next_active_repo {
             let mut activation_effects = SetActiveRepoEffects::new();
-            fill_set_active_repo_inline_impl(state, active_repo_id, &mut activation_effects, false);
+            fill_set_active_repo_inline_impl(
+                repos,
+                state,
+                active_repo_id,
+                &mut activation_effects,
+                false,
+            );
             effects.extend(activation_effects);
         } else {
             state.active_repo = None;
@@ -702,7 +721,13 @@ pub(super) fn close_repos(
     if let Some(active_repo_id) = next_active_repo {
         if state.active_repo != Some(active_repo_id) {
             let mut activation_effects = SetActiveRepoEffects::new();
-            fill_set_active_repo_inline_impl(state, active_repo_id, &mut activation_effects, false);
+            fill_set_active_repo_inline_impl(
+                repos,
+                state,
+                active_repo_id,
+                &mut activation_effects,
+                false,
+            );
             effects.extend(activation_effects);
         } else {
             state.active_repo = Some(active_repo_id);
@@ -719,9 +744,13 @@ pub(super) fn close_repos(
     effects
 }
 
-pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+pub(super) fn set_active_repo(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
     let mut effects = SetActiveRepoEffects::new();
-    fill_set_active_repo_inline(state, repo_id, &mut effects);
+    fill_set_active_repo_inline(repos, state, repo_id, &mut effects);
     effects.into_vec()
 }
 
@@ -742,14 +771,16 @@ fn file_browser_load_for_active_files_mode(
 }
 
 pub(super) fn fill_set_active_repo_inline(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     effects: &mut SetActiveRepoEffects,
 ) {
-    fill_set_active_repo_inline_impl(state, repo_id, effects, true);
+    fill_set_active_repo_inline_impl(repos, state, repo_id, effects, true);
 }
 
 fn fill_set_active_repo_inline_impl(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     effects: &mut SetActiveRepoEffects,
@@ -770,6 +801,12 @@ fn fill_set_active_repo_inline_impl(
     let now = SystemTime::now();
     let previous_active = state.active_repo;
     let changed = previous_active != Some(repo_id);
+    if changed {
+        // The inactive tab may have observed a HEAD move while no monitor was
+        // attached to it. Refresh its retained path before capturing the diff
+        // reload plan below.
+        super::refresh_selected_head_gitlink(repos, state, repo_id);
+    }
     if changed {
         append_cancel_repo_loads_effect_for_repo(state, previous_active, effects);
     }
@@ -816,7 +853,7 @@ fn fill_set_active_repo_inline_impl(
         // required when the tab was parked mid-stack: ordinary non-push
         // reconciliation intentionally leaves such entries untouched.
         let snapshot = repo_state.main_view_snapshot();
-        repo_state.nav_history.replace_current(snapshot);
+        repo_state.navigation.main_history.replace_current(snapshot);
     }
 
     // Session-restore placeholders and repos still opening do not have a backend handle yet.
@@ -1174,10 +1211,10 @@ pub(super) fn repo_opened_ok(
             ));
         }
         repo_state.set_open(Loadable::Ready(()));
-        repo_state.missing_on_disk = false;
+        repo_state.feedback.missing_on_disk = false;
         if !should_refresh_worktrees {
             clear_cancelled_repo_loading(repo_state);
-            repo_state.last_error = None;
+            repo_state.feedback.last_error = None;
             clear_banner = true;
         } else {
             repo_state.set_head_branch(Loadable::Loading);
@@ -1214,12 +1251,12 @@ pub(super) fn repo_opened_ok(
             repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
-            repo_state.last_error = None;
+            repo_state.feedback.last_error = None;
             // Reopening resets the whole repo view; saved back/forward snapshots
             // may reference commits or file revisions from before the reopen, so
             // start the navigation stacks fresh.
-            repo_state.nav_history.clear();
-            repo_state.view_history.clear();
+            repo_state.navigation.main_history.clear();
+            repo_state.navigation.view_history.clear();
             clear_banner = true;
         }
     }
@@ -1327,6 +1364,7 @@ fn discard_failed_repo_open(
                 // with status/log/branch fields stuck at NotLoaded.
                 let mut activation_effects = SetActiveRepoEffects::new();
                 fill_set_active_repo_inline_impl(
+                    repos,
                     state,
                     active_repo_id,
                     &mut activation_effects,
@@ -1404,12 +1442,12 @@ pub(super) fn repo_opened_err(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.set_open(Loadable::Error(error.to_string()));
-        repo_state.missing_on_disk = is_missing_repo_error(&error);
-        if repo_state.missing_on_disk {
-            repo_state.last_error = None;
+        repo_state.feedback.missing_on_disk = is_missing_repo_error(&error);
+        if repo_state.feedback.missing_on_disk {
+            repo_state.feedback.last_error = None;
             clear_banner = true;
         } else {
-            repo_state.last_error = Some(error.to_string());
+            repo_state.feedback.last_error = Some(error.to_string());
             push_diagnostic(repo_state, DiagnosticKind::Error, error.to_string());
         }
     }

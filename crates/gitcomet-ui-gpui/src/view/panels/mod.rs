@@ -604,7 +604,7 @@ mod repo_tabs_bar;
 
 pub(super) use action_bar::{ActionBarView, action_bar_height};
 pub(super) use bottom_status_bar::BottomStatusBarView;
-pub(super) use popover::PopoverHost;
+pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use popover::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
 /// Layout guards outside this module assert against the tab padding, so they

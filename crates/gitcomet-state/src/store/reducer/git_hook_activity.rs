@@ -20,13 +20,14 @@ pub(super) fn started(
     time: SystemTime,
 ) {
     if repo
+        .feedback
         .hook_activity
         .iter()
         .any(|entry| entry.id == operation_id)
     {
         return;
     }
-    repo.hook_activity.push(GitHookOperation {
+    repo.feedback.hook_activity.push(GitHookOperation {
         id: operation_id,
         label,
         context,
@@ -39,7 +40,7 @@ pub(super) fn started(
         output_truncated: false,
         latest_line: String::new(),
     });
-    repo.hook_activity_rev = repo.hook_activity_rev.wrapping_add(1);
+    repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
 }
 
 pub(super) fn apply_event(
@@ -48,6 +49,7 @@ pub(super) fn apply_event(
     event: GitOperationEvent,
 ) {
     let Some(operation) = repo
+        .feedback
         .hook_activity
         .iter_mut()
         .find(|operation| operation.id == operation_id)
@@ -114,11 +116,12 @@ pub(super) fn apply_event(
         trim_metadata(repo);
     }
     enforce_repo_output_budget(repo);
-    repo.hook_activity_rev = repo.hook_activity_rev.wrapping_add(1);
+    repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
 }
 
 pub(super) fn request_cancel(repo: &mut RepoState, operation_id: GitOperationId) -> bool {
     let Some(operation) = repo
+        .feedback
         .hook_activity
         .iter_mut()
         .find(|operation| operation.id == operation_id && operation.status.is_active())
@@ -126,7 +129,7 @@ pub(super) fn request_cancel(repo: &mut RepoState, operation_id: GitOperationId)
         return false;
     };
     operation.status = GitHookOperationStatus::Cancelling;
-    repo.hook_activity_rev = repo.hook_activity_rev.wrapping_add(1);
+    repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
     true
 }
 
@@ -137,6 +140,7 @@ pub(super) fn finished(
     duration: Duration,
 ) {
     let Some(index) = repo
+        .feedback
         .hook_activity
         .iter()
         .position(|operation| operation.id == operation_id)
@@ -144,13 +148,13 @@ pub(super) fn finished(
         return;
     };
 
-    if !repo.hook_activity[index].has_hooks() {
-        repo.hook_activity.remove(index);
-        repo.hook_activity_rev = repo.hook_activity_rev.wrapping_add(1);
+    if !repo.feedback.hook_activity[index].has_hooks() {
+        repo.feedback.hook_activity.remove(index);
+        repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
         return;
     }
 
-    let operation = &mut repo.hook_activity[index];
+    let operation = &mut repo.feedback.hook_activity[index];
     operation.duration = Some(duration);
     for hook in &mut operation.hooks {
         if hook.status == GitHookRunStatus::Running {
@@ -188,11 +192,12 @@ pub(super) fn finished(
     };
     trim_metadata(repo);
     enforce_repo_output_budget(repo);
-    repo.hook_activity_rev = repo.hook_activity_rev.wrapping_add(1);
+    repo.feedback.hook_activity_rev = repo.feedback.hook_activity_rev.wrapping_add(1);
 }
 
 fn trim_metadata(repo: &mut RepoState) {
     while repo
+        .feedback
         .hook_activity
         .iter()
         .filter(|operation| operation.has_hooks())
@@ -200,13 +205,14 @@ fn trim_metadata(repo: &mut RepoState) {
         > MAX_ACTIVITY_ENTRIES
     {
         let Some(index) = repo
+            .feedback
             .hook_activity
             .iter()
             .position(|operation| operation.has_hooks() && !operation.status.is_active())
         else {
             break;
         };
-        repo.hook_activity.remove(index);
+        repo.feedback.hook_activity.remove(index);
     }
 }
 
@@ -239,6 +245,7 @@ fn trim_operation_output_to(operation: &mut GitHookOperation, max_bytes: usize) 
 
 fn enforce_repo_output_budget(repo: &mut RepoState) {
     let mut total = repo
+        .feedback
         .hook_activity
         .iter()
         .filter(|operation| operation.has_hooks())
@@ -247,7 +254,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
     if total <= MAX_REPO_OUTPUT_BYTES {
         return;
     }
-    for operation in &mut repo.hook_activity {
+    for operation in &mut repo.feedback.hook_activity {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }
@@ -262,7 +269,7 @@ fn enforce_repo_output_budget(repo: &mut RepoState) {
     if total <= MAX_REPO_OUTPUT_BYTES {
         return;
     }
-    for operation in &mut repo.hook_activity {
+    for operation in &mut repo.feedback.hook_activity {
         if total <= MAX_REPO_OUTPUT_BYTES {
             break;
         }
@@ -395,7 +402,7 @@ mod tests {
             Duration::from_millis(10),
         );
 
-        assert!(repo.hook_activity.is_empty());
+        assert!(repo.feedback.hook_activity.is_empty());
     }
 
     #[test]
@@ -431,7 +438,7 @@ mod tests {
             Duration::from_millis(40),
         );
 
-        let operation = &repo.hook_activity[0];
+        let operation = &repo.feedback.hook_activity[0];
         assert_eq!(
             operation.status,
             GitHookOperationStatus::SucceededWithHookFailure
@@ -480,7 +487,7 @@ mod tests {
         );
 
         assert_eq!(
-            repo.hook_activity[0].status,
+            repo.feedback.hook_activity[0].status,
             GitHookOperationStatus::SucceededWithHookFailure,
             "post-checkout cannot roll back the checkout, so its failure is non-blocking"
         );
@@ -503,10 +510,14 @@ mod tests {
         );
 
         let cloned = repo.clone();
-        let original_queue_ptr = repo.hook_activity[0].output.as_slices().0.as_ptr();
-        let cloned_queue_ptr = cloned.hook_activity[0].output.as_slices().0.as_ptr();
-        let original_text_ptr = repo.hook_activity[0].output[0].text.as_ptr();
-        let cloned_text_ptr = cloned.hook_activity[0].output[0].text.as_ptr();
+        let original_queue_ptr = repo.feedback.hook_activity[0].output.as_slices().0.as_ptr();
+        let cloned_queue_ptr = cloned.feedback.hook_activity[0]
+            .output
+            .as_slices()
+            .0
+            .as_ptr();
+        let original_text_ptr = repo.feedback.hook_activity[0].output[0].text.as_ptr();
+        let cloned_text_ptr = cloned.feedback.hook_activity[0].output[0].text.as_ptr();
 
         assert_eq!(
             original_queue_ptr, cloned_queue_ptr,
@@ -526,7 +537,7 @@ mod tests {
 
         assert!(request_cancel(&mut repo, operation_id));
         assert_eq!(
-            repo.hook_activity[0].status,
+            repo.feedback.hook_activity[0].status,
             GitHookOperationStatus::Cancelling
         );
         finished(
@@ -537,11 +548,11 @@ mod tests {
         );
 
         assert_eq!(
-            repo.hook_activity[0].status,
+            repo.feedback.hook_activity[0].status,
             GitHookOperationStatus::Cancelled
         );
         assert_eq!(
-            repo.hook_activity[0].hooks[0].status,
+            repo.feedback.hook_activity[0].hooks[0].status,
             GitHookRunStatus::Cancelled
         );
     }
@@ -560,8 +571,8 @@ mod tests {
             );
         }
 
-        assert_eq!(repo.hook_activity.len(), MAX_ACTIVITY_ENTRIES);
-        assert_eq!(repo.hook_activity[0].id, GitOperationId(2));
+        assert_eq!(repo.feedback.hook_activity.len(), MAX_ACTIVITY_ENTRIES);
+        assert_eq!(repo.feedback.hook_activity[0].id, GitOperationId(2));
     }
 
     #[test]
@@ -588,7 +599,8 @@ mod tests {
         );
 
         assert!(
-            repo.hook_activity
+            repo.feedback
+                .hook_activity
                 .iter()
                 .any(|operation| operation.id == GitOperationId(1)),
             "a hookless operation must not consume the retained-activity budget"
@@ -599,8 +611,8 @@ mod tests {
             GitOperationOuterOutcome::Succeeded,
             Duration::from_millis(1),
         );
-        assert_eq!(repo.hook_activity.len(), MAX_ACTIVITY_ENTRIES);
-        assert_eq!(repo.hook_activity[0].id, GitOperationId(1));
+        assert_eq!(repo.feedback.hook_activity.len(), MAX_ACTIVITY_ENTRIES);
+        assert_eq!(repo.feedback.hook_activity[0].id, GitOperationId(1));
     }
 
     #[test]
@@ -647,6 +659,7 @@ mod tests {
         );
 
         let retained_hook_output = repo
+            .feedback
             .hook_activity
             .iter()
             .filter(|operation| operation.has_hooks())
@@ -657,7 +670,8 @@ mod tests {
             "provisional output must not consume the saved hook-log budget"
         );
         assert_eq!(
-            repo.hook_activity
+            repo.feedback
+                .hook_activity
                 .iter()
                 .find(|operation| operation.id == GitOperationId(1))
                 .expect("oldest retained hook run")
@@ -691,16 +705,18 @@ mod tests {
         }
 
         assert!(
-            repo.hook_activity
+            repo.feedback
+                .hook_activity
                 .iter()
                 .all(|operation| operation.output_bytes <= MAX_OPERATION_OUTPUT_BYTES)
         );
         assert!(
-            repo.hook_activity
+            repo.feedback
+                .hook_activity
                 .iter()
                 .all(|operation| operation.latest_line.len() <= MAX_LATEST_LINE_BYTES)
         );
-        assert!(repo.hook_activity.iter().all(|operation| {
+        assert!(repo.feedback.hook_activity.iter().all(|operation| {
             operation.output.is_empty()
                 || operation
                     .output
@@ -708,7 +724,8 @@ mod tests {
                     .all(|chunk| chunk.text.starts_with('é'))
         }));
         assert!(
-            repo.hook_activity
+            repo.feedback
+                .hook_activity
                 .iter()
                 .map(|operation| operation.output_bytes)
                 .sum::<usize>()
@@ -735,12 +752,13 @@ mod tests {
         }
 
         assert!(
-            repo.hook_activity
+            repo.feedback
+                .hook_activity
                 .iter()
                 .map(|operation| operation.output_bytes)
                 .sum::<usize>()
                 <= MAX_REPO_OUTPUT_BYTES
         );
-        assert!(repo.hook_activity[0].output_truncated);
+        assert!(repo.feedback.hook_activity[0].output_truncated);
     }
 }

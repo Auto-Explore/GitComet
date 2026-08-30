@@ -855,7 +855,7 @@ fn commit_completion_finished(
     repo_state.bump_ops_rev();
     match result {
         Ok(()) => {
-            repo_state.last_error = None;
+            repo_state.feedback.last_error = None;
             clear_banner = true;
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
@@ -877,7 +877,7 @@ fn commit_completion_finished(
         }
         Err(e) => {
             let summary = format_failure_summary(label, &e);
-            repo_state.last_error = Some(summary.clone());
+            repo_state.feedback.last_error = Some(summary.clone());
             push_action_log(repo_state, false, label.to_string(), summary, Some(&e));
         }
     }
@@ -905,13 +905,13 @@ pub(super) fn safe_push_after_commit_finished(
     match result {
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push { target }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_force_push_lease = None;
+                repo_state.pending.force_push_lease = None;
             }
             push_after_commit_with_auth(repos, state, repo_id, target, false, auth)
         }
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream { target }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_force_push_lease = None;
+                repo_state.pending.force_push_lease = None;
             }
             push_after_commit_with_auth(repos, state, repo_id, target, true, auth)
         }
@@ -921,8 +921,8 @@ pub(super) fn safe_push_after_commit_finished(
                 return Vec::new();
             };
             let full_summary = format!("Push after commit blocked: {summary}");
-            repo_state.pending_force_push_lease = lease;
-            repo_state.last_error = Some(full_summary.clone());
+            repo_state.pending.force_push_lease = lease;
+            repo_state.feedback.last_error = Some(full_summary.clone());
             push_action_log(
                 repo_state,
                 false,
@@ -937,9 +937,9 @@ pub(super) fn safe_push_after_commit_finished(
             let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
                 return Vec::new();
             };
-            repo_state.pending_force_push_lease = None;
+            repo_state.pending.force_push_lease = None;
             let summary = format_failure_summary("Push after commit", &e);
-            repo_state.last_error = Some(summary.clone());
+            repo_state.feedback.last_error = Some(summary.clone());
             push_action_log(
                 repo_state,
                 false,
@@ -1119,10 +1119,10 @@ pub(super) fn repo_command_finished(
 
     match result {
         Ok(output) => {
-            repo_state.last_error = None;
+            repo_state.feedback.last_error = None;
             clear_banner = true;
             if command_clears_pending_force_push_lease(&command) {
-                repo_state.pending_force_push_lease = None;
+                repo_state.pending.force_push_lease = None;
             }
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             if matches!(
@@ -1169,7 +1169,8 @@ pub(super) fn repo_command_finished(
                 &CommandOutput::default(),
                 Some(&e),
             );
-            repo_state.last_error = repo_state
+            repo_state.feedback.last_error = repo_state
+                .feedback
                 .command_log
                 .last()
                 .map(|entry| entry.summary.clone());

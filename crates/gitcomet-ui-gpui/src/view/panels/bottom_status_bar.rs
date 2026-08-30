@@ -71,11 +71,12 @@ impl BottomStatusBarView {
             .and_then(|repo_id| state.repos.iter().find(|repo| repo.id == repo_id))
             .map(|repo| {
                 (
-                    repo.hook_activity
+                    repo.feedback
+                        .hook_activity
                         .iter()
                         .filter(|operation| operation.has_hooks() && operation.status.is_active())
                         .count(),
-                    repo.hook_activity.iter().rev().any(|operation| {
+                    repo.feedback.hook_activity.iter().rev().any(|operation| {
                         matches!(
                             operation.status,
                             GitHookOperationStatus::SucceededWithHookFailure

@@ -135,7 +135,8 @@ impl Render for GitCometView {
                 .iter()
                 .find(|repo| repo.id == repo_id)
                 .and_then(|repo| {
-                    repo.hook_activity
+                    repo.feedback
+                        .hook_activity
                         .iter()
                         .find(|operation| operation.id == operation_id)
                 })

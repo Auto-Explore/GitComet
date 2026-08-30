@@ -20,7 +20,7 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
-use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
+use gitcomet_core::services::{GitRepository, InteractiveRebaseAction, InteractiveRebaseEntry};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1067,14 +1067,15 @@ pub(super) fn mark_for_comparison(
     label: String,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.comparison_mark = Some(crate::model::ComparisonMark { commit_id, label });
+        repo_state.navigation.comparison_mark =
+            Some(crate::model::ComparisonMark { commit_id, label });
     }
     Vec::new()
 }
 
 pub(super) fn clear_comparison_mark(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.comparison_mark = None;
+        repo_state.navigation.comparison_mark = None;
     }
     Vec::new()
 }
@@ -1091,7 +1092,7 @@ pub(super) fn compare_with_marked(
         let Some(repo_state) = state.repos.iter().find(|r| r.id == repo_id) else {
             return Vec::new();
         };
-        match &repo_state.comparison_mark {
+        match &repo_state.navigation.comparison_mark {
             Some(mark) if mark.commit_id != commit_id => mark.clone(),
             _ => return Vec::new(),
         }
@@ -1961,6 +1962,7 @@ pub(super) fn set_sidebar_mode(state: &mut AppState, mode: SidebarMode) -> Vec<E
 }
 
 pub(super) fn browse_repository_at_commit(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     commit_id: CommitId,
@@ -1969,11 +1971,11 @@ pub(super) fn browse_repository_at_commit(
     // Capture the open file (if any) before re-targeting it to the new point.
     let reopen_path = browse_open_content_path(state, repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && !repo_state.browse_history.contains(&commit_id)
+        && !repo_state.navigation.browse_history.contains(&commit_id)
     {
-        repo_state.browse_history.push(commit_id.clone());
-        if repo_state.browse_history.len() > BROWSE_HISTORY_CAP {
-            repo_state.browse_history.remove(0);
+        repo_state.navigation.browse_history.push(commit_id.clone());
+        if repo_state.navigation.browse_history.len() > BROWSE_HISTORY_CAP {
+            repo_state.navigation.browse_history.remove(0);
         }
     }
     state.sidebar_mode = SidebarMode::Files;
@@ -1985,6 +1987,7 @@ pub(super) fn browse_repository_at_commit(
             .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
     {
         effects.extend(super::diff_selection::open_file_content(
+            repos,
             state,
             repo_id,
             FileSource::Commit(commit_id),
@@ -1994,10 +1997,14 @@ pub(super) fn browse_repository_at_commit(
     effects
 }
 
-pub(super) fn reset_browse_to_live(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+pub(super) fn reset_browse_to_live(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
     let reopen_path = browse_open_content_path(state, repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.browse_history.clear();
+        repo_state.navigation.browse_history.clear();
     }
     let mut effects = set_file_browser_source(state, repo_id, FileSource::WorkingDirectory);
     if let Some(path) = reopen_path
@@ -2006,6 +2013,7 @@ pub(super) fn reset_browse_to_live(state: &mut AppState, repo_id: RepoId) -> Vec
             .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
     {
         effects.extend(super::diff_selection::open_file_content(
+            repos,
             state,
             repo_id,
             FileSource::WorkingDirectory,

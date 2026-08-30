@@ -11,6 +11,7 @@ on:
       - ".github/workflows/deploy-windows-installer.yml"
       - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
+      - ".github/actions/setup-dump-syms/action.yml"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
@@ -19,6 +20,9 @@ on:
       - "scripts/build-apt-repo.sh"
       - "scripts/emit-breakpad-symbols.sh"
       - "scripts/install-dump-syms.sh"
+      - "scripts/dump-syms-pins.sh"
+      - "scripts/lib/cli.sh"
+      - "scripts/lib/macos-symbols.sh"
       - "scripts/symbolicate-minidump.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
       - "scripts/microsoft-store-fetch-listings.sh"
@@ -40,6 +44,7 @@ on:
       - ".github/workflows/deploy-windows-installer.yml"
       - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
+      - ".github/actions/setup-dump-syms/action.yml"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
@@ -48,6 +53,9 @@ on:
       - "scripts/build-apt-repo.sh"
       - "scripts/emit-breakpad-symbols.sh"
       - "scripts/install-dump-syms.sh"
+      - "scripts/dump-syms-pins.sh"
+      - "scripts/lib/cli.sh"
+      - "scripts/lib/macos-symbols.sh"
       - "scripts/symbolicate-minidump.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
       - "scripts/microsoft-store-fetch-listings.sh"
@@ -104,6 +112,7 @@ jobs:
           bash -n scripts/install-dump-syms.sh
           bash -n scripts/dump-syms-pins.sh
           bash -n scripts/lib/cli.sh
+          bash -n scripts/lib/macos-symbols.sh
           bash -n scripts/symbolicate-minidump.sh
           bash -n scripts/microsoft-store-fetch-listings.sh
           bash -n scripts/microsoft-store-listing-languages.sh
@@ -411,6 +420,41 @@ jobs:
             exit 1
           fi
           popd >/dev/null
+
+  release-tooling-backfill-smoke:
+    name: Validate old-tag release tooling backfill
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      # This source revision has the release workflow but predates both the
+      # setup-dump-syms action and its centralized pin resolver.
+      - name: Check out pre-tooling release source
+        uses: actions/checkout@v7
+        with:
+          ref: 379fc57563ac788969223db9ea2d4d8a5679c94d
+          fetch-depth: 1
+
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Install dump_syms from workflow tooling
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
+        with:
+          triple: x86_64-unknown-linux-gnu
+
+      - name: Verify dump_syms is runnable
+        run: dump_syms --version
 
   aur-metadata-smoke:
     name: Validate AUR metadata update script

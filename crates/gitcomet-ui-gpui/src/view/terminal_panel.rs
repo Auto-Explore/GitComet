@@ -181,7 +181,10 @@ impl GitCometView {
         if self.terminal_preferences == next {
             return;
         }
-        self.terminal_preferences = next;
+        self.terminal_preferences = next.clone();
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.terminal = next;
+        });
         self.sync_action_bar_terminal_target(cx);
         cx.notify();
     }

@@ -1246,6 +1246,44 @@ pub struct InteractiveCherryPickSetup {
     pub full_messages: Loadable<()>,
 }
 
+/// User-visible repository feedback and bounded diagnostic/activity history.
+///
+/// Keeping this together makes the lifecycle explicit: a successful reopen can
+/// reset repository feedback without touching loaded Git data or navigation.
+#[derive(Clone, Debug, Default)]
+pub struct RepoFeedbackState {
+    pub missing_on_disk: bool,
+    pub last_error: Option<String>,
+    pub diagnostics: Vec<DiagnosticEntry>,
+    pub command_log: Vec<CommandLogEntry>,
+    pub hook_activity: Vec<GitHookOperation>,
+    pub hook_activity_rev: u64,
+    /// Set only while reducing the existing command completion nested inside a
+    /// `GitOperationFinished` message.
+    pub(crate) command_log_operation_id: Option<GitOperationId>,
+}
+
+/// Deferred operation context retained between an initial failure and the
+/// user's follow-up action (authentication retry or confirmed force-push).
+#[derive(Clone, Debug, Default)]
+pub struct RepoPendingState {
+    pub commit_retry: Option<PendingCommitRetry>,
+    pub force_push_lease: Option<ForcePushLease>,
+}
+
+/// The three related navigation mechanisms owned by one repository.
+#[derive(Clone, Debug, Default)]
+pub struct RepoNavigationState {
+    /// Commits browsed through the file browser during this session.
+    pub browse_history: Vec<CommitId>,
+    /// Back/forward history within the file viewer.
+    pub view_history: NavStack<ViewHistoryEntry>,
+    /// Back/forward history across the entire main content view.
+    pub main_history: NavStack<MainViewSnapshot>,
+    /// A commit, branch, or tag waiting to be compared with another target.
+    pub comparison_mark: Option<ComparisonMark>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
@@ -1290,6 +1328,10 @@ pub struct RepoState {
     pub staged_status_rev: u64,
     pub status: Loadable<Shared<RepoStatus>>,
     pub status_rev: u64,
+    /// Paths confirmed as gitlinks in the current HEAD tree. This small cache
+    /// preserves the classification of staged submodule deletions across view
+    /// navigation without leaking backend-specific tree objects into state.
+    pub head_gitlink_paths: FxHashSet<PathBuf>,
     /// Cached flag: true when the current unstaged/worktree lane contains at
     /// least one `FileStatusKind::Conflicted` entry. Recomputed in
     /// `set_worktree_status` and `set_status`.
@@ -1332,17 +1374,7 @@ pub struct RepoState {
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
     pub branch_sidebar_rev: u64,
     pub file_browser: FileBrowserState,
-    /// Commits the user has browsed this session (file directory pinned to a
-    /// historical point). The current point is `file_browser.source`; this is the
-    /// stack the badge dropdown lists. Cleared by "Go live".
-    pub browse_history: Vec<CommitId>,
-    /// Browser-style back/forward stack of opened file-content views, shared
-    /// across files. Drives the viewer header's back/forward controls.
-    pub view_history: NavStack<ViewHistoryEntry>,
-    /// Broader, global back/forward stack of main-content-view snapshots
-    /// (diffs, file content, the history log, commit selections). Drives the
-    /// mouse side buttons.
-    pub nav_history: NavStack<MainViewSnapshot>,
+    pub navigation: RepoNavigationState,
 
     pub diff_state: DiffState,
     pub conflict_state: ConflictState,
@@ -1351,24 +1383,9 @@ pub struct RepoState {
     pub ops_rev: u64,
     pub last_active_at: Option<SystemTime>,
 
-    pub missing_on_disk: bool,
-    pub last_error: Option<String>,
-    pub diagnostics: Vec<DiagnosticEntry>,
-
-    pub command_log: Vec<CommandLogEntry>,
-    pub hook_activity: Vec<GitHookOperation>,
-    pub hook_activity_rev: u64,
-    /// Set only while reducing the existing command completion nested inside a
-    /// `GitOperationFinished` message.
-    pub(crate) command_log_operation_id: Option<GitOperationId>,
-    pub pending_commit_retry: Option<PendingCommitRetry>,
+    pub feedback: RepoFeedbackState,
+    pub pending: RepoPendingState,
     pub load_epoch: u64,
-    pub pending_force_push_lease: Option<ForcePushLease>,
-    /// A commit/branch/tag the user "marked for comparison" via the context
-    /// menu. The next "Compare with marked" resolves the target's commit and
-    /// starts a range comparison (mark = base, target = tip). `None` when
-    /// nothing is marked.
-    pub comparison_mark: Option<ComparisonMark>,
 }
 
 /// A point marked for comparison via the "Mark for comparison" context-menu
@@ -1419,6 +1436,7 @@ impl RepoState {
             staged_status_rev: 0,
             status: Loadable::NotLoaded,
             status_rev: 0,
+            head_gitlink_paths: FxHashSet::default(),
             has_unstaged_conflicts: false,
             log: Loadable::NotLoaded,
             log_loading_more: false,
@@ -1448,25 +1466,15 @@ impl RepoState {
             sidebar_data_request: SidebarDataRequest::default(),
             branch_sidebar_rev: 0,
             file_browser: FileBrowserState::default(),
-            browse_history: Vec::new(),
-            view_history: NavStack::default(),
-            nav_history: NavStack::default(),
+            navigation: RepoNavigationState::default(),
             diff_state: DiffState::default(),
             conflict_state: ConflictState::default(),
             open_rev: 0,
             ops_rev: 0,
             last_active_at: None,
-            missing_on_disk: false,
-            last_error: None,
-            diagnostics: Vec::new(),
-            command_log: Vec::new(),
-            hook_activity: Vec::new(),
-            hook_activity_rev: 0,
-            command_log_operation_id: None,
-            pending_commit_retry: None,
+            feedback: RepoFeedbackState::default(),
+            pending: RepoPendingState::default(),
             load_epoch: 0,
-            pending_force_push_lease: None,
-            comparison_mark: None,
         }
     }
 
@@ -1612,7 +1620,8 @@ impl RepoState {
     }
 
     pub(crate) fn clear_head_dependent_cached_state(&mut self) {
-        self.pending_force_push_lease = None;
+        self.pending.force_push_lease = None;
+        self.head_gitlink_paths.clear();
         self.set_recent_commit_messages(Loadable::NotLoaded);
     }
 

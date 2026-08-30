@@ -1,6 +1,6 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{Msg, RepoExternalChange, StoreEvent};
-use gitcomet_core::path_utils::{canonicalize_or_original, git_dir_for_workdir};
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
@@ -42,18 +42,6 @@ pub use reducer_diagnostics::StoreReducerDiagnostics;
 
 fn canonicalize_path(path: PathBuf) -> PathBuf {
     canonicalize_or_original(path)
-}
-
-/// Open the repository backing `workdir` for read-only inspection, routing
-/// through [`git_dir_for_workdir`] so worktrees whose directory ends in `.git`
-/// are opened correctly. Single entry point for gix opens in this crate.
-// Thin forwarder over `gix::open`, whose large `gix::open::Error` we surface
-// as-is; both callers immediately discard it via `.ok()`/`let-else`.
-#[allow(clippy::result_large_err)]
-pub(crate) fn open_worktree_repo(
-    workdir: &std::path::Path,
-) -> Result<gix::Repository, gix::open::Error> {
-    gix::open(git_dir_for_workdir(workdir))
 }
 
 fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {
@@ -257,6 +245,7 @@ impl WorkerLoopContext<'_> {
                 workdir,
                 self.thread_msg_tx.clone(),
                 Arc::clone(self.active_repo_id),
+                Arc::clone(self.backend),
             );
         }
 
@@ -504,11 +493,20 @@ impl AppStore {
 
                 match msg {
                     Msg::SetActiveRepo { repo_id } => {
-                        worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
-                            let mut effects = reducer::SetActiveRepoEffects::new();
-                            fill_set_active_repo_inline(app_state, repo_id, &mut effects);
-                            effects
-                        });
+                        worker_ctx.reduce_and_handle(
+                            &mut repos,
+                            &id_alloc,
+                            |app_state, repos, _| {
+                                let mut effects = reducer::SetActiveRepoEffects::new();
+                                fill_set_active_repo_inline(
+                                    repos,
+                                    app_state,
+                                    repo_id,
+                                    &mut effects,
+                                );
+                                effects
+                            },
+                        );
                     }
                     Msg::ReorderRepoTabs {
                         repo_id,
@@ -666,8 +664,9 @@ pub(crate) fn with_set_active_repo_inline_for_bench<T>(
     repo_id: RepoId,
     f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
 ) -> T {
+    let repos = FxHashMap::default();
     let mut effects = reducer::SetActiveRepoEffects::new();
-    fill_set_active_repo_inline(state, repo_id, &mut effects);
+    fill_set_active_repo_inline(&repos, state, repo_id, &mut effects);
     f(state, &effects)
 }
 
@@ -690,8 +689,9 @@ pub(crate) fn with_select_diff_inline_for_bench<T>(
     target: gitcomet_core::domain::DiffTarget,
     f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
 ) -> T {
+    let repos = FxHashMap::default();
     let mut effects = reducer::SelectDiffEffects::new();
-    fill_select_diff_inline(state, repo_id, target, false, &mut effects);
+    fill_select_diff_inline(&repos, state, repo_id, target, false, &mut effects);
     f(state, &effects)
 }
 

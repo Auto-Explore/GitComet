@@ -1,4 +1,5 @@
 mod backend;
+mod ignore;
 mod open;
 mod repo;
 mod util;

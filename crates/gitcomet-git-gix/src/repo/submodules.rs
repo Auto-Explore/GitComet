@@ -38,6 +38,22 @@ fn allow_file_submodule_transport(cmd: &mut Command) {
 }
 
 impl GixRepo {
+    pub(super) fn head_path_is_gitlink_impl(&self, path: &Path) -> Result<bool> {
+        let path = if path.is_absolute() {
+            path.strip_prefix(&self.spec.workdir).map_err(|_| {
+                Error::new(ErrorKind::Backend(format!(
+                    "submodule path '{}' is outside repository '{}'",
+                    path.display(),
+                    self.spec.workdir.display()
+                )))
+            })?
+        } else {
+            path
+        };
+        let repo = self.reopen_repo()?;
+        Ok(head_gitlink_commit_id(&repo, path)?.is_some())
+    }
+
     pub(super) fn list_submodules_impl(&self) -> Result<Vec<Submodule>> {
         self.list_submodules_cancellable_impl(&CancellationToken::new())
     }

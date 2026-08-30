@@ -102,13 +102,14 @@ impl GitCometView {
                 .repos
                 .iter()
                 .find(|r| r.id == next_repo.id)
-                .map(|r| (r.diagnostics.len(), r.command_log.len()))
+                .map(|r| (r.feedback.diagnostics.len(), r.feedback.command_log.len()))
                 .unwrap_or((0, 0));
 
             let new_diag_messages = next_repo
+                .feedback
                 .diagnostics
                 .iter()
-                .skip(old_diag_len.min(next_repo.diagnostics.len()))
+                .skip(old_diag_len.min(next_repo.feedback.diagnostics.len()))
                 .filter(|d| d.kind == DiagnosticKind::Error)
                 .map(|d| d.message.clone())
                 .collect::<Vec<_>>();
@@ -122,9 +123,10 @@ impl GitCometView {
             }
 
             let new_command_entries = next_repo
+                .feedback
                 .command_log
                 .iter()
-                .skip(old_cmd_len.min(next_repo.command_log.len()))
+                .skip(old_cmd_len.min(next_repo.feedback.command_log.len()))
                 .collect::<Vec<_>>();
             for entry in &new_command_entries {
                 if entry.command.starts_with("telemetry.") {
@@ -164,6 +166,7 @@ impl GitCometView {
                 if let Some(operation_id) = entry.hook_operation_id {
                     let outer_failure_after_hooks = !entry.ok
                         && next_repo
+                            .feedback
                             .hook_activity
                             .iter()
                             .find(|operation| operation.id == operation_id)
@@ -185,13 +188,15 @@ impl GitCometView {
 
             let previous_repo = self.state.repos.iter().find(|repo| repo.id == next_repo.id);
             for operation in next_repo
+                .feedback
                 .hook_activity
                 .iter()
                 .filter(|operation| operation.has_hooks() && !operation.status.is_active())
             {
                 let was_completed = previous_repo
                     .and_then(|repo| {
-                        repo.hook_activity
+                        repo.feedback
+                            .hook_activity
                             .iter()
                             .find(|previous| previous.id == operation.id)
                     })
@@ -248,7 +253,8 @@ impl GitCometView {
             .repos
             .iter()
             .flat_map(|repo| {
-                repo.hook_activity
+                repo.feedback
+                    .hook_activity
                     .iter()
                     .filter(|operation| operation.has_hooks() && operation.status.is_active())
                     .cloned()
@@ -274,7 +280,8 @@ impl GitCometView {
                     .iter()
                     .find(|repo| repo.id == *repo_id)
                     .and_then(|repo| {
-                        repo.hook_activity
+                        repo.feedback
+                            .hook_activity
                             .iter()
                             .find(|previous| previous.id == operation.id)
                     })

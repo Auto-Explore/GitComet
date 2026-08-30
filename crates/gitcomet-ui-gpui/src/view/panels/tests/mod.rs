@@ -990,7 +990,7 @@ pub(super) fn push_test_state(
     cx: &mut impl gpui::AppContext,
 ) {
     this.store.replace_snapshot_for_test(Arc::clone(&state));
-    this._ui_model.update(cx, |model, cx| {
+    this.ui_model.update(cx, |model, cx| {
         model.set_state(state, cx);
     });
 }
