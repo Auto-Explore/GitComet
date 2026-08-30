@@ -830,6 +830,7 @@ fn reduce_inner(
             active_repo,
         } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
         Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
+        Msg::MoveRepoOut { repo_id } => repo_management::move_repo_out(repos, state, repo_id),
         Msg::CloseRepos {
             repo_ids,
             activate_after,
@@ -2304,6 +2305,16 @@ fn reduce_inner(
             command,
             result,
         }) => {
+            if let RepoCommandKind::SaveWorktreeFile { path, .. } = &command
+                && result.is_err()
+                && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+            {
+                let failures = repo
+                    .worktree_file_save_failures
+                    .entry(path.clone())
+                    .or_default();
+                *failures = failures.wrapping_add(1);
+            }
             let auth_prompt = result
                 .as_ref()
                 .err()

@@ -335,7 +335,8 @@ fn repo_picker_sort_menu_reorders_rows_subprocess(cx: &mut gpui::TestAppContext)
                             .unwrap_or_default()
                             .to_string(),
                     ),
-                    repo_picker::RepoPickerEntry::Open(_) => None,
+                    repo_picker::RepoPickerEntry::WindowGroup(_)
+                    | repo_picker::RepoPickerEntry::Open(_) => None,
                 })
                 .collect::<Vec<_>>()
         })
@@ -955,6 +956,85 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
     assert!(
         cx.update(|_window, app| popover_host.read(app).is_open()),
         "dismissing the row menu must not also close the picker"
+    );
+}
+
+#[gpui::test]
+fn review_regression_window_group_row_opens_title_bar_color_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut group = session::SavedWindowGroup::new(vec!["/tmp/window-group-color".into()]);
+    group.custom_name = Some("Work".into());
+    let group_id = group.id;
+    cx.cx.update(|app| {
+        crate::window_groups::initialize_for_test(app, vec![group]);
+    });
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let entry = repo_picker::RepoPickerEntry::WindowGroup(group_id);
+    cx.update(|_window, app| {
+        assert_eq!(
+            as_str_pairs(&row_menu_labels(popover_host.read(app), &entry)),
+            vec![
+                ("Default", false),
+                ("Gray", false),
+                ("Red", false),
+                ("Orange", false),
+                ("Yellow", false),
+                ("Green", false),
+                ("Blue", false),
+                ("Purple", false),
+                ("Pink", false),
+            ],
+            "the row settings menu should expose every persisted title-bar color"
+        );
+    });
+    let row = cx
+        .debug_bounds("picker_prompt_item_0")
+        .expect("expected the saved window group row");
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: row.center(),
+        modifiers: gpui::Modifiers::default(),
+        button: MouseButton::Right,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.debug_bounds("picker_row_menu")
+        .expect("right-clicking a saved window group should open its settings menu");
+
+    cx.update(|window, app| {
+        popover_host.update(app, |host, cx| {
+            picker_row_menu::activate(
+                host,
+                ContextMenuAction::SetWindowGroupColor {
+                    group_id,
+                    color: Some(session::WindowGroupColor::Blue),
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        cx.cx.update(|app| {
+            crate::window_groups::group(app, group_id).and_then(|group| group.color)
+        }),
+        Some(session::WindowGroupColor::Blue),
+        "the context-menu choice should persist on the selected window group"
+    );
+    assert!(
+        cx.update(|_window, app| popover_host.read(app).is_open()),
+        "changing a color should leave the repository picker open"
     );
 }
 
@@ -1711,12 +1791,13 @@ fn sectioned_row_names(
         let host = popover_host.read(app);
         repo_picker::entries(host)
             .into_iter()
-            .map(|(entry, item)| {
+            .filter_map(|(entry, item)| {
                 let section = item
                     .section_label()
                     .map(ToString::to_string)
                     .unwrap_or_default();
                 let workdir = match entry {
+                    repo_picker::RepoPickerEntry::WindowGroup(_) => return None,
                     repo_picker::RepoPickerEntry::Open(repo_id) => host
                         .state
                         .repos
@@ -1726,7 +1807,7 @@ fn sectioned_row_names(
                         .unwrap_or_default(),
                     repo_picker::RepoPickerEntry::Closed(path) => path,
                 };
-                (section, open_repo_name(&workdir))
+                Some((section, open_repo_name(&workdir)))
             })
             .collect()
     })

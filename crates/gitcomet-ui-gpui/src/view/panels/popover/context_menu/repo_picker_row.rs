@@ -7,7 +7,46 @@
 
 use super::*;
 
+const WINDOW_GROUP_COLORS: [(Option<session::WindowGroupColor>, &str); 9] = [
+    (None, "Default"),
+    (Some(session::WindowGroupColor::Gray), "Gray"),
+    (Some(session::WindowGroupColor::Red), "Red"),
+    (Some(session::WindowGroupColor::Orange), "Orange"),
+    (Some(session::WindowGroupColor::Yellow), "Yellow"),
+    (Some(session::WindowGroupColor::Green), "Green"),
+    (Some(session::WindowGroupColor::Blue), "Blue"),
+    (Some(session::WindowGroupColor::Purple), "Purple"),
+    (Some(session::WindowGroupColor::Pink), "Pink"),
+];
+
 pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) -> ContextMenuModel {
+    if let repo_picker::RepoPickerEntry::WindowGroup(group_id) = entry {
+        let Some(group) = host
+            .cached_window_groups
+            .iter()
+            .find(|group| group.id == *group_id)
+        else {
+            return ContextMenuModel::new(Vec::new());
+        };
+        let mut items = vec![
+            ContextMenuItem::Header(group.display_name().into()),
+            ContextMenuItem::Label("Title bar color".into()),
+        ];
+        items.extend(WINDOW_GROUP_COLORS.into_iter().map(|(color, label)| {
+            ContextMenuItem::Entry {
+                label: label.into(),
+                icon: (group.color == color).then(|| "icons/check.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::SetWindowGroupColor {
+                    group_id: *group_id,
+                    color,
+                }),
+            }
+        }));
+        return ContextMenuModel::new(items);
+    }
+
     let workdir = entry.workdir(host);
     let pinned = workdir
         .as_ref()
@@ -36,6 +75,7 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
     }
 
     match entry {
+        repo_picker::RepoPickerEntry::WindowGroup(_) => {}
         repo_picker::RepoPickerEntry::Open(repo_id) => items.push(ContextMenuItem::Entry {
             label: "Activate".into(),
             icon: Some("icons/check.svg".into()),
@@ -98,6 +138,7 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
     // is pinned would leave the row exactly where it was — the pinned closed row
     // is the one case with nothing to put here at all.
     let destructive = match entry {
+        repo_picker::RepoPickerEntry::WindowGroup(_) => None,
         repo_picker::RepoPickerEntry::Open(repo_id) => Some(ContextMenuItem::Entry {
             label: "Close repository".into(),
             icon: Some("icons/repo_tab_close.svg".into()),

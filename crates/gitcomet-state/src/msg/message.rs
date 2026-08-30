@@ -156,6 +156,12 @@ pub enum Msg {
     CloseRepo {
         repo_id: RepoId,
     },
+    /// Remove a repository from this store because ownership moved to another
+    /// window. Unlike a close, this must not add the still-open repository to
+    /// the Recently Closed list.
+    MoveRepoOut {
+        repo_id: RepoId,
+    },
     CloseRepos {
         repo_ids: Vec<RepoId>,
         activate_after: Option<RepoId>,

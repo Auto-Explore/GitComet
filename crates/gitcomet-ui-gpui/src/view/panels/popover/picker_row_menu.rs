@@ -118,7 +118,7 @@ impl PickerRowMenuTarget {
     /// the right-click rather than opening an empty one.
     pub(super) fn has_menu(&self, this: &PopoverHost) -> bool {
         match self {
-            Self::Repo(_) => true,
+            Self::Repo(entry) => !this.repo_picker_row_menu_model(entry).items.is_empty(),
             Self::Branch { .. } | Self::Worktree { .. } => self.popover_kind(this).is_some(),
         }
     }
@@ -152,6 +152,7 @@ impl PickerRowMenuTarget {
                     | ContextMenuAction::UnpinRepository { .. }
                     | ContextMenuAction::ForgetRecentRepository { .. }
                     | ContextMenuAction::CloseRepo { .. }
+                    | ContextMenuAction::SetWindowGroupColor { .. }
             ),
             // Every branch and worktree action either navigates away or opens a
             // prompt of its own, and the picker has nothing left to offer once

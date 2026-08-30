@@ -1,7 +1,6 @@
 use super::send_diagnostics::{SendFailureKind, send_or_log};
 use gitcomet_core::mergetool_trace;
 use std::panic::{self, AssertUnwindSafe};
-#[cfg(any(test, feature = "test-support"))]
 use std::sync::OnceLock;
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -22,7 +21,6 @@ pub(super) fn metadata_worker_threads() -> usize {
     2
 }
 
-#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy)]
 pub(super) enum StoreExecutorPool {
     Primary,
@@ -73,7 +71,6 @@ impl TaskExecutor {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn shared_for_store(pool: StoreExecutorPool, threads: usize) -> Self {
         fn sender_for(
             cell: &'static OnceLock<mpsc::Sender<Task>>,
@@ -100,20 +97,16 @@ impl TaskExecutor {
         static SESSION_PERSIST: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
 
         let tx = match pool {
-            StoreExecutorPool::Primary => {
-                sender_for(&PRIMARY, "gitcomet-test-store-primary", threads)
-            }
+            StoreExecutorPool::Primary => sender_for(&PRIMARY, "gitcomet-store-primary", threads),
             StoreExecutorPool::RepoLoad => {
-                sender_for(&REPO_LOAD, "gitcomet-test-store-repo-load", threads)
+                sender_for(&REPO_LOAD, "gitcomet-store-repo-load", threads)
             }
             StoreExecutorPool::Metadata => {
-                sender_for(&METADATA, "gitcomet-test-store-metadata", threads)
+                sender_for(&METADATA, "gitcomet-store-metadata", threads)
             }
-            StoreExecutorPool::SessionPersist => sender_for(
-                &SESSION_PERSIST,
-                "gitcomet-test-store-session-persist",
-                threads,
-            ),
+            StoreExecutorPool::SessionPersist => {
+                sender_for(&SESSION_PERSIST, "gitcomet-store-session-persist", threads)
+            }
         };
 
         Self {
@@ -157,5 +150,13 @@ mod tests {
     #[test]
     fn metadata_pool_supports_parallel_metadata_tasks() {
         assert!(metadata_worker_threads() >= 2);
+    }
+
+    #[test]
+    fn review_regression_followup_production_stores_share_worker_pools() {
+        assert!(
+            super::super::should_share_store_executor_pools(false, false),
+            "production AppStore instances must reuse process-wide worker pools"
+        );
     }
 }

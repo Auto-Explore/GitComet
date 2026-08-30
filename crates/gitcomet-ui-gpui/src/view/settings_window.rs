@@ -172,6 +172,8 @@ const DIFF_VIEW_MODE_OPTIONS: &[(&str, DiffViewMode, &str)] = &[
 enum SettingsSection {
     Theme,
     UiScale,
+    WindowControls,
+    BrowserOpenTarget,
     UiFont,
     EditorFont,
     ExternalCodeEditor,
@@ -196,6 +198,8 @@ impl SettingsSection {
         match self {
             Self::Theme
             | Self::UiScale
+            | Self::WindowControls
+            | Self::BrowserOpenTarget
             | Self::UiFont
             | Self::EditorFont
             | Self::ExternalCodeEditor
@@ -292,7 +296,8 @@ impl SettingsCategory {
         match self {
             Self::General => {
                 "general theme date format ui scale ui font editor font ligatures \
-                 external code editor date timezone appearance"
+                 external code editor date timezone appearance window controls title bar \
+                 minimize maximize tiling command line cli gitcomet open repository window"
             }
             Self::Terminal => "terminal external terminal action bar terminal button opens",
             Self::ChangeTracking => "change tracking untracked files",
@@ -391,6 +396,8 @@ pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
     ui_scale_percent: u32,
+    window_controls_mode: crate::window_controls::WindowControlsMode,
+    browser_open_target: crate::app::BrowserOpenTarget,
     ui_font_family: String,
     editor_font_family: String,
     use_font_ligatures: bool,
@@ -794,6 +801,13 @@ impl SettingsWindowView {
 
         let ui_session = session::load();
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+        let window_controls =
+            crate::window_controls::current_or_initialize_from_session(&ui_session, cx);
+        let browser_open_target = ui_session
+            .browser_open_target
+            .as_deref()
+            .and_then(crate::app::BrowserOpenTarget::from_key)
+            .unwrap_or_default();
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
         let theme_mode = ui_session
@@ -1044,6 +1058,8 @@ impl SettingsWindowView {
             theme_mode,
             theme,
             ui_scale_percent: ui_scale.percent,
+            window_controls_mode: window_controls.mode,
+            browser_open_target,
             ui_font_family: font_preferences.ui_font_family,
             editor_font_family: font_preferences.editor_font_family,
             use_font_ligatures: font_preferences.use_font_ligatures,
@@ -1163,6 +1179,8 @@ impl SettingsWindowView {
             repo_sidebar_pinned_branches: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
             ui_scale_percent: Some(self.ui_scale_percent),
+            window_controls_mode: Some(self.window_controls_mode.key().to_string()),
+            browser_open_target: Some(self.browser_open_target.key().to_string()),
             ui_font_family: Some(self.ui_font_family.clone()),
             editor_font_family: Some(self.editor_font_family.clone()),
             use_font_ligatures: Some(self.use_font_ligatures),
@@ -1682,6 +1700,38 @@ impl SettingsWindowView {
         self.update_main_windows(cx, move |view, root_window, cx| {
             view.apply_ui_scale_percent(percent, root_window, cx);
         });
+        cx.notify();
+    }
+
+    fn set_window_controls_mode(
+        &mut self,
+        mode: crate::window_controls::WindowControlsMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.window_controls_mode == mode {
+            return;
+        }
+
+        self.window_controls_mode = mode;
+        self.expanded_section = None;
+        crate::window_controls::set_current(cx, mode);
+        self.persist_preferences(cx);
+        cx.defer(|cx| cx.refresh_windows());
+        cx.notify();
+    }
+
+    fn set_browser_open_target(
+        &mut self,
+        target: crate::app::BrowserOpenTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.browser_open_target == target {
+            return;
+        }
+
+        self.browser_open_target = target;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
         cx.notify();
     }
 
@@ -3317,6 +3367,68 @@ impl SettingsWindowView {
     }
 }
 
+fn settings_window_control(
+    button: gpui::WindowButton,
+    ui_scale_percent: u32,
+    is_maximized: bool,
+    theme: AppTheme,
+    cx: &mut gpui::Context<SettingsWindowView>,
+) -> AnyElement {
+    match button {
+        gpui::WindowButton::Minimize => chrome::titlebar_control_button(
+            ui_scale_percent,
+            "settings_window_min_btn",
+            "icons/generic_minimize.svg",
+            theme.colors.foreground.secondary,
+            theme.colors.foreground.primary,
+        )
+        .id("settings_window_min")
+        .debug_selector(|| "settings_window_min".to_string())
+        .window_control_area(WindowControlArea::Min)
+        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            window.minimize_window();
+        }))
+        .into_any_element(),
+        gpui::WindowButton::Maximize => chrome::titlebar_control_button(
+            ui_scale_percent,
+            "settings_window_max_btn",
+            if is_maximized {
+                "icons/generic_restore.svg"
+            } else {
+                "icons/generic_maximize.svg"
+            },
+            theme.colors.foreground.secondary,
+            theme.colors.foreground.primary,
+        )
+        .id("settings_window_max")
+        .debug_selector(|| "settings_window_max".to_string())
+        .window_control_area(WindowControlArea::Max)
+        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            crate::app::toggle_window_zoom(window);
+            cx.notify();
+        }))
+        .into_any_element(),
+        gpui::WindowButton::Close => chrome::titlebar_control_button(
+            ui_scale_percent,
+            "settings_window_close_btn",
+            "icons/generic_close.svg",
+            theme.colors.foreground.secondary,
+            theme.colors.status.danger.foreground,
+        )
+        .id("settings_window_close_btn")
+        .debug_selector(|| "settings_window_close".to_string())
+        .window_control_area(WindowControlArea::Close)
+        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
+            window.remove_window();
+        }))
+        .into_any_element(),
+    }
+}
+
 impl Render for SettingsWindowView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
@@ -3425,57 +3537,40 @@ impl Render for SettingsWindowView {
                     .child(SETTINGS_WINDOW_TITLE),
             );
 
-        let min = chrome::titlebar_control_button(
-            self.ui_scale_percent,
-            "settings_window_min_btn",
-            "icons/generic_minimize.svg",
-            theme.colors.foreground.secondary,
-            theme.colors.foreground.primary,
-        )
-        .id("settings_window_min")
-        .debug_selector(|| "settings_window_min".to_string())
-        .window_control_area(WindowControlArea::Min)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            window.minimize_window();
-        }));
-
-        let max_icon = if window.is_maximized() {
-            "icons/generic_restore.svg"
+        let control_layout = crate::window_controls::resolve_visibility(
+            self.window_controls_mode,
+            cx.button_layout(),
+            cfg!(any(target_os = "linux", target_os = "freebsd")),
+            matches!(
+                window.window_decorations(),
+                Decorations::Client { tiling }
+                    if tiling.top || tiling.bottom || tiling.left || tiling.right
+            ),
+        );
+        let is_maximized = window.is_maximized();
+        let (left_controls, right_controls) = if is_macos {
+            (Vec::new(), Vec::new())
         } else {
-            "icons/generic_maximize.svg"
+            let mut render = |button| {
+                settings_window_control(button, self.ui_scale_percent, is_maximized, theme, cx)
+            };
+            (
+                control_layout
+                    .left
+                    .into_iter()
+                    .flatten()
+                    .map(&mut render)
+                    .collect::<Vec<_>>(),
+                control_layout
+                    .right
+                    .into_iter()
+                    .flatten()
+                    .map(render)
+                    .collect::<Vec<_>>(),
+            )
         };
-        let max = chrome::titlebar_control_button(
-            self.ui_scale_percent,
-            "settings_window_max_btn",
-            max_icon,
-            theme.colors.foreground.secondary,
-            theme.colors.foreground.primary,
-        )
-        .id("settings_window_max")
-        .debug_selector(|| "settings_window_max".to_string())
-        .window_control_area(WindowControlArea::Max)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            crate::app::toggle_window_zoom(window);
-            cx.notify();
-        }));
-
-        let close = chrome::titlebar_control_button(
-            self.ui_scale_percent,
-            "settings_window_close_btn",
-            "icons/generic_close.svg",
-            theme.colors.foreground.secondary,
-            theme.colors.status.danger.foreground,
-        )
-        .id("settings_window_close_btn")
-        .debug_selector(|| "settings_window_close".to_string())
-        .window_control_area(WindowControlArea::Close)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
-            window.remove_window();
-        }));
+        let has_left_controls = !left_controls.is_empty();
+        let has_right_controls = !right_controls.is_empty();
 
         let frame_rounding = chrome::client_frame_corner_rounding(theme, window);
         let header = div()
@@ -3494,17 +3589,25 @@ impl Render for SettingsWindowView {
                         .when(rounding.top_right, |d| d.rounded_tr(rounding.radius))
                 },
             )
+            .when(has_left_controls, |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .pl_2()
+                        .children(left_controls),
+                )
+            })
             .child(drag_region)
-            .when(!is_macos, |this| {
+            .when(has_right_controls, |this| {
                 this.child(
                     div()
                         .flex()
                         .items_center()
                         .gap_1()
                         .pr_2()
-                        .child(min)
-                        .child(max)
-                        .child(close),
+                        .children(right_controls),
                 )
             });
 
@@ -3563,6 +3666,30 @@ impl Render for SettingsWindowView {
                         )
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::UiScale, cx);
+                        }));
+
+                    let window_controls_row = self
+                        .summary_row(
+                            "settings_window_window_controls",
+                            "Window controls",
+                            self.window_controls_mode.label().into(),
+                            self.expanded_section == Some(SettingsSection::WindowControls),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::WindowControls, cx);
+                        }));
+
+                    let browser_open_target_row = self
+                        .summary_row(
+                            "settings_window_browser_open_target",
+                            "Command-line repository opens",
+                            self.browser_open_target.label().into(),
+                            self.expanded_section == Some(SettingsSection::BrowserOpenTarget),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::BrowserOpenTarget, cx);
                         }));
 
                     let ui_font_row = self
@@ -3958,6 +4085,59 @@ impl Render for SettingsWindowView {
                                     .child("Shortcut: Ctrl/Cmd +, -, and 0."),
                             ),
                         );
+                    }
+
+                    general_card = general_card.child(window_controls_row);
+                    if self.expanded_section == Some(SettingsSection::WindowControls) {
+                        let mut detail = self.detail_container(
+                            "settings_window_window_controls_container",
+                            theme,
+                        );
+                        for mode in crate::window_controls::WindowControlsMode::ALL {
+                            detail = detail.child(
+                                self.option_row(
+                                    format!("settings_window_window_controls_{}", mode.key()),
+                                    mode.label(),
+                                    Some(mode.detail().into()),
+                                    self.window_controls_mode == mode,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_window_controls_mode(mode, cx);
+                                    },
+                                )),
+                            );
+                        }
+                        general_card = general_card.child(detail);
+                    }
+
+                    general_card = general_card.child(browser_open_target_row);
+                    if self.expanded_section == Some(SettingsSection::BrowserOpenTarget) {
+                        let mut detail = self.detail_container(
+                            "settings_window_browser_open_target_container",
+                            theme,
+                        );
+                        for target in crate::app::BrowserOpenTarget::ALL {
+                            detail = detail.child(
+                                self.option_row(
+                                    format!(
+                                        "settings_window_browser_open_target_{}",
+                                        target.key()
+                                    ),
+                                    target.label(),
+                                    Some(target.detail().into()),
+                                    self.browser_open_target == target,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_browser_open_target(target, cx);
+                                    },
+                                )),
+                            );
+                        }
+                        general_card = general_card.child(detail);
                     }
 
                     general_card = general_card.child(ui_font_row);
@@ -7232,6 +7412,43 @@ mod tests {
     }
 
     #[gpui::test]
+    fn hidden_window_controls_keep_only_close_in_settings_chrome(cx: &mut gpui::TestAppContext) {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            crate::window_controls::set_current(
+                app,
+                crate::window_controls::WindowControlsMode::Hide,
+            );
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(settings_cx.debug_bounds("settings_window_min").is_none());
+        assert!(settings_cx.debug_bounds("settings_window_max").is_none());
+        assert!(settings_cx.debug_bounds("settings_window_close").is_some());
+    }
+
+    #[gpui::test]
     fn linux_settings_window_close_button_closes_only_the_settings_window(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -8270,9 +8487,30 @@ mod tests {
             let _ = window.draw(app);
         });
 
-        let list_bounds = settings_cx
+        let initial_list_bounds = settings_cx
             .debug_bounds("settings_window_ui_font_list_container")
             .expect("expected UI font list bounds");
+        let scroll_bounds = settings_cx
+            .debug_bounds("settings_window_scroll")
+            .expect("expected settings scroll bounds");
+        let list_center = initial_list_bounds.center();
+        if list_center.y >= scroll_bounds.bottom() {
+            let scroll_delta = list_center.y - scroll_bounds.bottom() + px(24.0);
+            let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+                let current = settings.settings_window_scroll.offset();
+                settings
+                    .settings_window_scroll
+                    .set_offset(point(current.x, current.y - scroll_delta));
+                cx.notify();
+            });
+            settings_cx.run_until_parked();
+            settings_cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+        }
+        let list_bounds = settings_cx
+            .debug_bounds("settings_window_ui_font_list_container")
+            .expect("expected visible UI font list bounds");
 
         let (outer_before, inner_before, outer_max, inner_max) = settings_window
             .update(&mut settings_cx, |settings, _window, _cx| {

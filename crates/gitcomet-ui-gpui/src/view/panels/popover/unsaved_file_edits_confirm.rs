@@ -11,9 +11,10 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let (title, discard_label) = match prompt.action {
+    let (title, discard_label) = match &prompt.action {
         UnsavedFileEditsAction::CloseWindow(_) => ("Close window?", "Discard and close"),
         UnsavedFileEditsAction::QuitApp => ("Quit GitComet?", "Discard and quit"),
+        UnsavedFileEditsAction::MoveRepo { .. } => ("Move repository?", "Discard and move"),
     };
     let detail = if prompt.files.len() == 1 {
         "1 edited file has not been saved.".to_string()
@@ -21,7 +22,8 @@ pub(super) fn panel(
         format!("{} edited files have not been saved.", prompt.files.len())
     };
 
-    let action = prompt.action;
+    let discard_action = prompt.action.clone();
+    let save_action = prompt.action;
     let dialog = ConfirmDialog::new(title, DIALOG_440_WIDTH)
         .text(
             theme,
@@ -78,7 +80,8 @@ pub(super) fn panel(
                     .style(components::ButtonStyle::Danger)
                     .on_click(theme, cx, move |this, _e, _window, cx| {
                         let root_view = this.root_view.clone();
-                        let _ = root_view.update(cx, |root, cx| {
+                        let action = discard_action.clone();
+                        let _ = root_view.update(cx, move |root, cx| {
                             root.resolve_unsaved_file_edits(action, false, cx);
                         });
                         this.close_popover(cx);
@@ -89,7 +92,8 @@ pub(super) fn panel(
                     .style(components::ButtonStyle::Filled)
                     .on_click(theme, cx, move |this, _e, _window, cx| {
                         let root_view = this.root_view.clone();
-                        let _ = root_view.update(cx, |root, cx| {
+                        let action = save_action.clone();
+                        let _ = root_view.update(cx, move |root, cx| {
                             root.resolve_unsaved_file_edits(action, true, cx);
                         });
                         this.close_popover(cx);

@@ -1,6 +1,91 @@
 use super::*;
 
 impl GitCometView {
+    pub(super) fn sync_window_group_and_registry(&mut self, cx: &mut gpui::Context<Self>) {
+        let session_repos = session::snapshot_repos_from_state(self.state.as_ref());
+        let live_repo_paths = session_repos
+            .open_repos
+            .iter()
+            .map(|path| session::path_from_storage_key(path))
+            .collect::<Vec<_>>();
+        let live_active_repository = session_repos
+            .active_repo_index
+            .and_then(|index| live_repo_paths.get(index).cloned());
+
+        self.pending_repo_open_reservations
+            .retain(|path, failure_revision| {
+                !live_repo_paths.contains(path)
+                    && self
+                        .state
+                        .repo_open_failures
+                        .get(path)
+                        .copied()
+                        .unwrap_or_default()
+                        == *failure_revision
+            });
+        if self
+            .pending_repo_open_active
+            .as_ref()
+            .is_some_and(|path| !self.pending_repo_open_reservations.contains_key(path))
+        {
+            self.pending_repo_open_active =
+                self.pending_repo_open_reservations.keys().next().cloned();
+        }
+
+        // Use the same filtered snapshot as session persistence so provisional
+        // external drops never become durable group members. A restored
+        // repository may still be loading (or temporarily unavailable), so
+        // retain its saved membership until bootstrap resolves.
+        if !live_repo_paths.is_empty() || !self.startup_repo_bootstrap_pending {
+            self.persisted_group_repo_paths = live_repo_paths;
+            self.persisted_group_active_repository = live_active_repository;
+        }
+
+        let mut synchronized_repo_paths = self.persisted_group_repo_paths.clone();
+        for path in self.pending_repo_open_reservations.keys() {
+            if !synchronized_repo_paths.contains(path) {
+                synchronized_repo_paths.push(path.clone());
+            }
+        }
+        let synchronized_active_repository = self
+            .pending_repo_open_active
+            .clone()
+            .or_else(|| self.persisted_group_active_repository.clone());
+
+        self.window_group_id = crate::app::sync_gitcomet_window_state(
+            cx,
+            self.window_handle,
+            cx.weak_entity(),
+            self.main_pane.downgrade(),
+            self.view_mode,
+            self.window_group_id,
+            synchronized_repo_paths,
+            synchronized_active_repository,
+        );
+        if let Some(placement) = self.window_placement.clone() {
+            crate::window_groups::record_window_placement(
+                cx,
+                self.window_handle.window_id(),
+                placement,
+            );
+        }
+
+        if self.view_mode == GitCometViewMode::Normal {
+            let title = crate::window_groups::group_for_window(cx, self.window_handle.window_id())
+                .map(|group| format!("{} — GitComet", group.display_name()))
+                .unwrap_or_else(|| "GitComet".to_string());
+            if self.native_window_title != title {
+                self.native_window_title.clone_from(&title);
+                let window_handle = self.window_handle;
+                cx.defer(move |cx| {
+                    let _ = window_handle.update(cx, |_root, window, _cx| {
+                        window.set_window_title(&title);
+                    });
+                });
+            }
+        }
+    }
+
     pub(super) fn apply_state_snapshot(
         &mut self,
         next: Arc<AppState>,
@@ -209,18 +294,7 @@ impl GitCometView {
         self.drive_focused_mergetool_bootstrap();
         self.drive_submodule_diff_bootstrap();
 
-        crate::app::sync_gitcomet_window_state(
-            cx,
-            self.window_handle,
-            cx.weak_entity(),
-            self.main_pane.downgrade(),
-            self.view_mode,
-            self.state
-                .repos
-                .iter()
-                .map(|repo| repo.spec.workdir.clone())
-                .collect(),
-        );
+        self.sync_window_group_and_registry(cx);
 
         git_runtime_changed
             || prev_banner_error != next_banner_error

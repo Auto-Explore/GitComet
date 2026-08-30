@@ -579,6 +579,10 @@ impl<T: Clone + PartialEq> NavStack<T> {
 pub struct AppState {
     pub repos: Vec<RepoState>,
     pub active_repo: Option<RepoId>,
+    /// Monotonic per-path counters for repository open attempts that failed.
+    /// Window routing uses these to release ownership reserved before an
+    /// asynchronous `OpenRepo` message is reduced.
+    pub repo_open_failures: FxHashMap<PathBuf, u64>,
     pub clone: Option<CloneOpState>,
     pub notifications: Vec<AppNotification>,
     pub banner_error: Option<BannerErrorState>,
@@ -1148,6 +1152,10 @@ pub struct RepoState {
     pub push_in_flight: u32,
     pub worktrees_in_flight: u32,
     pub local_actions_in_flight: u32,
+    /// Monotonic per-path counters for failed editor writes. The UI snapshots
+    /// these before a save-and-close/move operation so a drained command queue
+    /// cannot be mistaken for a successful save.
+    pub worktree_file_save_failures: FxHashMap<PathBuf, u64>,
     pub commit_in_flight: u32,
 
     pub open: Loadable<()>,
@@ -1273,6 +1281,7 @@ impl RepoState {
             push_in_flight: 0,
             worktrees_in_flight: 0,
             local_actions_in_flight: 0,
+            worktree_file_save_failures: FxHashMap::default(),
             commit_in_flight: 0,
             open: Loadable::Loading,
             history_state: HistoryState::default(),

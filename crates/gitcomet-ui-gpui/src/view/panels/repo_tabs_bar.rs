@@ -738,7 +738,14 @@ impl Render for RepoTabsBarView {
         // Tabs are transparent, so a label fading out has to land on whatever
         // is actually behind it: the bar for an idle tab, the content strip
         // for the active one.
-        let strip_bg = crate::view::chrome::title_bar_background(theme, window.is_window_active());
+        let group_color =
+            crate::window_groups::group_for_window(cx, window.window_handle().window_id())
+                .and_then(|group| group.color);
+        let strip_bg = crate::view::chrome::title_bar_background(
+            theme,
+            window.is_window_active(),
+            group_color,
+        );
         let hovered_tab_bg =
             crate::theme::composite_over(strip_bg, components::Tab::hover_overlay(theme));
 

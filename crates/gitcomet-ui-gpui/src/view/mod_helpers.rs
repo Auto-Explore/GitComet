@@ -4793,7 +4793,6 @@ pub(super) enum PopoverKind {
     },
     DiffContentModeSettings,
     ChangeTrackingSettings,
-    UiScalePicker,
     RebaseOntoConfirm {
         repo_id: RepoId,
         onto: String,
@@ -4924,6 +4923,16 @@ pub enum InitialRepositoryLaunchMode {
 }
 
 #[derive(Clone, Debug, Default)]
+pub enum WindowGroupBootstrap {
+    /// Compatibility path for focused tools and directly-constructed test
+    /// views. Normal application windows always choose Empty or Saved.
+    #[default]
+    LegacySession,
+    Empty,
+    Saved(Box<gitcomet_state::session::SavedWindowGroup>),
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct GitCometViewConfig {
     pub initial_path: Option<std::path::PathBuf>,
     pub initial_repository_launch_mode: InitialRepositoryLaunchMode,
@@ -4931,6 +4940,7 @@ pub struct GitCometViewConfig {
     pub focused_mergetool: Option<FocusedMergetoolViewConfig>,
     pub focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
     pub startup_crash_report: Option<StartupCrashReport>,
+    pub window_group: WindowGroupBootstrap,
 }
 
 impl GitCometViewConfig {
@@ -4942,6 +4952,7 @@ impl GitCometViewConfig {
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
             startup_crash_report,
+            window_group: WindowGroupBootstrap::LegacySession,
         }
     }
 
@@ -4956,6 +4967,7 @@ impl GitCometViewConfig {
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
             startup_crash_report,
+            window_group: WindowGroupBootstrap::Empty,
         }
     }
 }
@@ -5019,7 +5031,7 @@ pub(super) enum DeferredRepoBootstrap {
         open_repos: Vec<std::path::PathBuf>,
         active_repo: Option<std::path::PathBuf>,
     },
-    OpenRepo(std::path::PathBuf),
+    OpenRepos(Vec<std::path::PathBuf>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5262,9 +5274,21 @@ pub(crate) struct TerminalShutdownSummary {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) enum TerminalShutdownAction {
-    CloseRepo { repo_id: RepoId },
-    CloseTerminalForRepo { repo_id: RepoId },
-    CloseTerminalTab { repo_id: RepoId, index: usize },
+    CloseRepo {
+        repo_id: RepoId,
+    },
+    MoveRepo {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        target_group: Option<gitcomet_state::session::WindowGroupId>,
+    },
+    CloseTerminalForRepo {
+        repo_id: RepoId,
+    },
+    CloseTerminalTab {
+        repo_id: RepoId,
+        index: usize,
+    },
     CloseWindow,
     QuitApp,
 }
@@ -5279,12 +5303,18 @@ pub(in crate::view) struct TerminalShutdownPrompt {
 ///
 /// Only the two irreversible ones: switching files keeps the buffer, so it
 /// needs no prompt.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) enum UnsavedFileEditsAction {
     /// Carries the window that asked: the retry can run seconds later, after a
     /// slow write drains, by which time "the active window" may be another one.
     CloseWindow(gpui::WindowId),
     QuitApp,
+    MoveRepo {
+        window_id: gpui::WindowId,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        target_group: Option<gitcomet_state::session::WindowGroupId>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5681,12 +5711,18 @@ pub struct GitCometView {
     pub(super) _poller: Poller,
     pub(super) _ui_model_subscription: gpui::Subscription,
     pub(super) _activation_subscription: gpui::Subscription,
+    pub(super) _window_bounds_subscription: gpui::Subscription,
     pub(super) _appearance_subscription: gpui::Subscription,
     pub(super) _terminal_keystroke_interceptor: gpui::Subscription,
     pub(super) _auth_prompt_username_input_subscription: gpui::Subscription,
     pub(super) _auth_prompt_secret_input_subscription: gpui::Subscription,
     pub(super) _open_repo_input_subscription: gpui::Subscription,
     pub(super) view_mode: GitCometViewMode,
+    pub(super) window_group_id: Option<gitcomet_state::session::WindowGroupId>,
+    pub(super) persisted_group_repo_paths: Vec<std::path::PathBuf>,
+    pub(super) persisted_group_active_repository: Option<std::path::PathBuf>,
+    pub(super) window_placement: Option<gitcomet_state::session::PortableWindowPlacement>,
+    pub(super) native_window_title: String,
     pub(super) theme_mode: ThemeMode,
     pub(super) theme: AppTheme,
     pub(super) title_bar: Entity<TitleBarView>,
@@ -5707,12 +5743,17 @@ pub struct GitCometView {
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
+    pub(super) pending_repo_open_reservations: FxHashMap<std::path::PathBuf, u64>,
+    pub(super) pending_repo_open_active: Option<std::path::PathBuf>,
     pub(super) startup_repo_bootstrap_pending: bool,
     pub(super) splash_backdrop_image: Arc<gpui::Image>,
 
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,
     pub(super) ui_settings_persist_seq: u64,
+    pub(super) window_group_persist_seq: u64,
+    #[cfg(test)]
+    pub(super) ui_settings_persist_requests_for_test: u64,
     pub(super) last_repo_activation_dispatch_at: FxHashMap<RepoId, Instant>,
     /// Set when a deactivation was caused by a move/resize grab we requested, so
     /// the matching re-activation does not trigger a repo refresh.

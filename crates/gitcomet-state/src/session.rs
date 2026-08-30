@@ -10,9 +10,147 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::{env, fs, io};
+use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct WindowGroupId(Uuid);
+
+impl WindowGroupId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    pub const fn from_u128(value: u128) -> Self {
+        Self(Uuid::from_u128(value))
+    }
+
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl Default for WindowGroupId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Display for WindowGroupId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowGroupColor {
+    Gray,
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Blue,
+    Purple,
+    Pink,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedWindowState {
+    #[default]
+    Windowed,
+    Maximized,
+    Fullscreen,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct SavedWindowFrame {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct PortableWindowPlacement {
+    pub normal_frame: Option<SavedWindowFrame>,
+    pub captured_visible_frame: Option<SavedWindowFrame>,
+    pub display_id: Option<String>,
+    pub state: SavedWindowState,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct WindowGroupLayout {
+    pub sidebar_width: Option<u32>,
+    pub details_width: Option<u32>,
+    pub sidebar_collapsed: bool,
+    pub change_tracking_height: Option<u32>,
+    pub untracked_height: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub struct SavedWindowGroup {
+    pub id: WindowGroupId,
+    pub custom_name: Option<String>,
+    pub color: Option<WindowGroupColor>,
+    pub repositories: Vec<PathBuf>,
+    pub active_repository: Option<PathBuf>,
+    pub restore_on_launch: bool,
+    pub last_activation_order: u64,
+    pub layout: WindowGroupLayout,
+    pub placement: PortableWindowPlacement,
+}
+
+impl SavedWindowGroup {
+    pub fn new(repositories: Vec<PathBuf>) -> Self {
+        let active_repository = repositories.first().cloned();
+        Self {
+            id: WindowGroupId::new(),
+            custom_name: None,
+            color: None,
+            repositories,
+            active_repository,
+            restore_on_launch: true,
+            last_activation_order: 0,
+            layout: WindowGroupLayout::default(),
+            placement: PortableWindowPlacement::default(),
+        }
+    }
+
+    pub fn display_name(&self) -> String {
+        if let Some(name) = self
+            .custom_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            return name.to_string();
+        }
+
+        let active = self
+            .active_repository
+            .as_ref()
+            .filter(|active| self.repositories.contains(active))
+            .or_else(|| self.repositories.first());
+        let base = active
+            .and_then(|path| path.file_name())
+            .and_then(OsStr::to_str)
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| "Window Group".to_string());
+        let other_count = self.repositories.len().saturating_sub(1);
+        if other_count == 0 {
+            base
+        } else {
+            format!("{base} +{other_count}")
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct UiSession {
+    pub window_groups: Vec<SavedWindowGroup>,
     pub open_repos: Vec<PathBuf>,
     pub active_repo: Option<PathBuf>,
     pub recent_repos: Vec<PathBuf>,
@@ -33,6 +171,8 @@ pub struct UiSession {
     pub sidebar_collapsed: Option<bool>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
+    pub window_controls_mode: Option<String>,
+    pub browser_open_target: Option<String>,
     pub ui_font_family: Option<String>,
     pub editor_font_family: Option<String>,
     pub use_font_ligatures: Option<bool>,
@@ -156,9 +296,23 @@ struct UiSessionFileV1 {
     active_repo: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct SavedWindowGroupFile {
+    id: WindowGroupId,
+    custom_name: Option<String>,
+    color: Option<WindowGroupColor>,
+    repositories: Vec<String>,
+    active_repository: Option<String>,
+    restore_on_launch: bool,
+    last_activation_order: u64,
+    layout: WindowGroupLayout,
+    placement: PortableWindowPlacement,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct UiSessionFile {
     version: u32,
+    window_groups: Option<Vec<SavedWindowGroupFile>>,
     open_repos: Vec<String>,
     active_repo: Option<String>,
     recent_repos: Option<Vec<String>>,
@@ -174,6 +328,8 @@ struct UiSessionFile {
     sidebar_collapsed: Option<bool>,
     theme_mode: Option<String>,
     ui_scale_percent: Option<u32>,
+    window_controls_mode: Option<String>,
+    browser_open_target: Option<String>,
     ui_font_family: Option<String>,
     editor_font_family: Option<String>,
     use_font_ligatures: Option<bool>,
@@ -247,7 +403,10 @@ struct SurveyPromptSession {
 const SESSION_FILE_VERSION_V1: u32 = 1;
 const SESSION_FILE_VERSION_V2: u32 = 2;
 const SESSION_FILE_VERSION_V3: u32 = 3;
-const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V3;
+const SESSION_FILE_VERSION_V4: u32 = 4;
+const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V4;
+const LEGACY_WINDOW_GROUP_ID: WindowGroupId =
+    WindowGroupId::from_u128(0x4749_5443_4f4d_4554_0000_0000_0000_0001);
 const MAX_RECENT_REPOS: usize = 15;
 const DEFAULT_UI_SCALE_PERCENT: u32 = 100;
 const MIN_UI_SCALE_PERCENT: u32 = 80;
@@ -273,7 +432,24 @@ pub fn load_from_path(path: &Path) -> UiSession {
         return UiSession::default();
     };
 
-    let (open_repos, active_repo) = parse_repos(file.open_repos, file.active_repo);
+    let window_groups = parse_window_groups(file.window_groups.unwrap_or_default());
+    let (legacy_open_repos, legacy_active_repo) = parse_repos(file.open_repos, file.active_repo);
+    let restored_group = window_groups
+        .iter()
+        .filter(|group| group.restore_on_launch)
+        .max_by_key(|group| group.last_activation_order);
+    let (open_repos, active_repo) = restored_group.map_or_else(
+        || {
+            if window_groups.is_empty() {
+                (legacy_open_repos, legacy_active_repo)
+            } else {
+                (Vec::new(), None)
+            }
+        },
+        |group| (group.repositories.clone(), group.active_repository.clone()),
+    );
+    let restored_layout = restored_group.map(|group| group.layout.clone());
+    let restored_frame = restored_group.and_then(|group| group.placement.normal_frame);
     let recent_repos = parse_path_list(file.recent_repos.unwrap_or_default());
     let pinned_repos = parse_path_list(file.pinned_repos.unwrap_or_default());
     let repo_sidebar_collapsed_items =
@@ -281,6 +457,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
     let repo_sidebar_pinned_branches =
         parse_path_keyed_string_sets(file.repo_sidebar_pinned_branches.unwrap_or_default());
     UiSession {
+        window_groups,
         open_repos,
         active_repo,
         recent_repos,
@@ -289,13 +466,28 @@ pub fn load_from_path(path: &Path) -> UiSession {
         repo_picker_collapsed_sections: file.repo_picker_collapsed_sections.unwrap_or_default(),
         repo_sidebar_collapsed_items,
         repo_sidebar_pinned_branches,
-        window_width: file.window_width,
-        window_height: file.window_height,
-        sidebar_width: file.sidebar_width,
-        details_width: file.details_width,
-        sidebar_collapsed: file.sidebar_collapsed,
+        window_width: restored_frame
+            .map(|frame| frame.width)
+            .or(file.window_width),
+        window_height: restored_frame
+            .map(|frame| frame.height)
+            .or(file.window_height),
+        sidebar_width: restored_layout
+            .as_ref()
+            .and_then(|layout| layout.sidebar_width)
+            .or(file.sidebar_width),
+        details_width: restored_layout
+            .as_ref()
+            .and_then(|layout| layout.details_width)
+            .or(file.details_width),
+        sidebar_collapsed: restored_layout
+            .as_ref()
+            .map(|layout| layout.sidebar_collapsed)
+            .or(file.sidebar_collapsed),
         theme_mode: file.theme_mode,
         ui_scale_percent: file.ui_scale_percent,
+        window_controls_mode: file.window_controls_mode,
+        browser_open_target: file.browser_open_target,
         ui_font_family: file.ui_font_family,
         editor_font_family: file.editor_font_family,
         use_font_ligatures: file.use_font_ligatures,
@@ -317,8 +509,14 @@ pub fn load_from_path(path: &Path) -> UiSession {
         mergetool_output_scroll_sync: file.mergetool_output_scroll_sync,
         mergetool_show_line_numbers: file.mergetool_show_line_numbers,
         mergetool_view_three_way: file.mergetool_view_three_way,
-        change_tracking_height: file.change_tracking_height,
-        untracked_height: file.untracked_height,
+        change_tracking_height: restored_layout
+            .as_ref()
+            .and_then(|layout| layout.change_tracking_height)
+            .or(file.change_tracking_height),
+        untracked_height: restored_layout
+            .as_ref()
+            .and_then(|layout| layout.untracked_height)
+            .or(file.untracked_height),
         history_show_graph: file.history_show_graph,
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
@@ -623,6 +821,50 @@ pub fn persist_repos_snapshot_to_path(
             .active_repo_index
             .and_then(|ix| snapshot.open_repos.get(ix))
             .map(|path| path.to_string());
+        sync_legacy_window_group_from_projection(&mut file);
+
+        persist_to_path(path, &file)
+    })
+}
+
+pub fn persist_window_groups(groups: &[SavedWindowGroup]) -> io::Result<()> {
+    let Some(path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_window_groups_to_path(groups, &path)
+}
+
+pub fn persist_window_groups_to_path(groups: &[SavedWindowGroup], path: &Path) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        let stored_groups = window_groups_to_file(groups);
+
+        // Keep the legacy projection coherent while the UI transition is in
+        // progress and for diagnostics/performance tooling that still reads
+        // the old single-window fields. Closed groups must not leak into this
+        // projection or they would be restored by an older launch path.
+        let projected = stored_groups
+            .iter()
+            .filter(|group| group.restore_on_launch)
+            .max_by_key(|group| group.last_activation_order);
+        if let Some(group) = projected {
+            file.open_repos.clone_from(&group.repositories);
+            file.active_repo.clone_from(&group.active_repository);
+            file.sidebar_width = group.layout.sidebar_width;
+            file.details_width = group.layout.details_width;
+            file.sidebar_collapsed = Some(group.layout.sidebar_collapsed);
+            file.change_tracking_height = group.layout.change_tracking_height;
+            file.untracked_height = group.layout.untracked_height;
+            if let Some(frame) = group.placement.normal_frame {
+                file.window_width = Some(frame.width);
+                file.window_height = Some(frame.height);
+            }
+        } else {
+            file.open_repos.clear();
+            file.active_repo = None;
+        }
+        file.window_groups = Some(stored_groups);
 
         persist_to_path(path, &file)
     })
@@ -812,6 +1054,8 @@ pub struct UiSettings {
     pub repo_sidebar_pinned_branches: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
+    pub window_controls_mode: Option<String>,
+    pub browser_open_target: Option<String>,
     pub ui_font_family: Option<String>,
     pub editor_font_family: Option<String>,
     pub use_font_ligatures: Option<bool>,
@@ -895,6 +1139,12 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(percent) = settings.ui_scale_percent {
             file.ui_scale_percent = Some(percent);
+        }
+        if let Some(mode) = settings.window_controls_mode {
+            file.window_controls_mode = Some(mode);
+        }
+        if let Some(target) = settings.browser_open_target {
+            file.browser_open_target = Some(target);
         }
         if let Some(font_family) = settings.ui_font_family {
             file.ui_font_family = Some(font_family);
@@ -1478,6 +1728,79 @@ fn parse_repos(
     (open_repos, active_repo)
 }
 
+fn parse_window_groups(groups: Vec<SavedWindowGroupFile>) -> Vec<SavedWindowGroup> {
+    let mut parsed = Vec::with_capacity(groups.len());
+    let mut seen_ids = FxHashSet::default();
+    for group in groups {
+        if !seen_ids.insert(group.id) {
+            continue;
+        }
+        let repositories = parse_path_list(group.repositories);
+        if repositories.is_empty() {
+            continue;
+        }
+        let active_repository = group
+            .active_repository
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(path_from_storage_key)
+            .filter(|path| repositories.contains(path));
+        parsed.push(SavedWindowGroup {
+            id: group.id,
+            custom_name: group.custom_name.and_then(non_empty_string),
+            color: group.color,
+            repositories,
+            active_repository,
+            restore_on_launch: group.restore_on_launch,
+            last_activation_order: group.last_activation_order,
+            layout: group.layout,
+            placement: group.placement,
+        });
+    }
+    parsed
+}
+
+fn window_groups_to_file(groups: &[SavedWindowGroup]) -> Vec<SavedWindowGroupFile> {
+    let mut stored = Vec::with_capacity(groups.len());
+    let mut seen_ids = FxHashSet::default();
+    for group in groups {
+        if !seen_ids.insert(group.id) {
+            continue;
+        }
+        let repositories = parse_path_list(
+            group
+                .repositories
+                .iter()
+                .map(|path| path_storage_key(path))
+                .collect(),
+        );
+        if repositories.is_empty() {
+            continue;
+        }
+        let active_repository = group
+            .active_repository
+            .as_ref()
+            .filter(|active| repositories.contains(active))
+            .map(|path| path_storage_key(path));
+        stored.push(SavedWindowGroupFile {
+            id: group.id,
+            custom_name: group.custom_name.clone().and_then(non_empty_string),
+            color: group.color,
+            repositories: repositories
+                .iter()
+                .map(|path| path_storage_key(path))
+                .collect(),
+            active_repository,
+            restore_on_launch: group.restore_on_launch,
+            last_activation_order: group.last_activation_order,
+            layout: group.layout.clone(),
+            placement: group.placement.clone(),
+        });
+    }
+    stored
+}
+
 fn parse_path_list(paths_raw: Vec<String>) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = Vec::with_capacity(paths_raw.len());
     let mut seen: FxHashSet<PathBuf> = FxHashSet::default();
@@ -1619,6 +1942,56 @@ fn migrate_v2_file(mut file: UiSessionFile) -> UiSessionFile {
     file
 }
 
+fn legacy_window_group_from_projection(file: &UiSessionFile) -> Option<SavedWindowGroupFile> {
+    if file.open_repos.iter().all(|path| path.trim().is_empty()) {
+        return None;
+    }
+    Some(SavedWindowGroupFile {
+        id: LEGACY_WINDOW_GROUP_ID,
+        custom_name: None,
+        color: None,
+        repositories: file.open_repos.clone(),
+        active_repository: file.active_repo.clone(),
+        restore_on_launch: true,
+        last_activation_order: 1,
+        layout: WindowGroupLayout {
+            sidebar_width: file.sidebar_width,
+            details_width: file.details_width,
+            sidebar_collapsed: file.sidebar_collapsed.unwrap_or(false),
+            change_tracking_height: file.change_tracking_height,
+            untracked_height: file.untracked_height,
+        },
+        placement: PortableWindowPlacement::default(),
+    })
+}
+
+fn sync_legacy_window_group_from_projection(file: &mut UiSessionFile) {
+    let replacement = legacy_window_group_from_projection(file);
+    let Some(groups) = file.window_groups.as_mut() else {
+        file.window_groups = replacement.map(|group| vec![group]);
+        return;
+    };
+    if groups.len() != 1 || groups[0].id != LEGACY_WINDOW_GROUP_ID || !groups[0].restore_on_launch {
+        return;
+    }
+    if let Some(replacement) = replacement {
+        groups[0].repositories = replacement.repositories;
+        groups[0].active_repository = replacement.active_repository;
+    } else {
+        groups.clear();
+    }
+}
+
+fn migrate_v3_file(mut file: UiSessionFile) -> UiSessionFile {
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    if file.window_groups.is_some() {
+        return file;
+    }
+
+    file.window_groups = legacy_window_group_from_projection(&file).map(|group| vec![group]);
+    file
+}
+
 fn load_file(path: &Path) -> Option<UiSessionFile> {
     let Ok(contents) = fs::read_to_string(path) else {
         return None;
@@ -1633,18 +2006,23 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
     match version {
         SESSION_FILE_VERSION_V1 => {
             let file: UiSessionFileV1 = serde_json::from_value(value).ok()?;
-            Some(UiSessionFile {
+            Some(migrate_v3_file(UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
                 open_repos: file.open_repos,
                 active_repo: file.active_repo,
                 ..UiSessionFile::default()
-            })
+            }))
         }
         SESSION_FILE_VERSION_V2 => {
             let file = serde_json::from_value::<UiSessionFile>(value).ok()?;
-            Some(migrate_v2_file(file))
+            Some(migrate_v3_file(migrate_v2_file(file)))
         }
-        SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value).ok(),
+        SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value)
+            .ok()
+            .map(migrate_v3_file),
+        SESSION_FILE_VERSION_V4 => serde_json::from_value::<UiSessionFile>(value)
+            .ok()
+            .map(migrate_v3_file),
         _ => None,
     }
 }
@@ -1764,12 +2142,41 @@ fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
     fs::create_dir_all(parent)?;
 
     let contents = serde_json::to_vec(session).expect("serializing session file should succeed");
+    preserve_pre_v4_session_backup(path, &contents)?;
 
     let mut tmp_file = tempfile::NamedTempFile::new_in(parent)?;
     tmp_file.write_all(&contents)?;
     tmp_file.flush()?;
 
     tmp_file.persist(path).map(|_| ()).map_err(|err| err.error)
+}
+
+fn preserve_pre_v4_session_backup(path: &Path, replacement: &[u8]) -> io::Result<()> {
+    let replacement_version = serde_json::from_slice::<serde_json::Value>(replacement)
+        .ok()
+        .and_then(|value| value.get("version").and_then(|version| version.as_u64()));
+    if replacement_version != Some(SESSION_FILE_VERSION_V4 as u64) {
+        return Ok(());
+    }
+
+    let Ok(previous) = fs::read(path) else {
+        return Ok(());
+    };
+    let previous_version = serde_json::from_slice::<serde_json::Value>(&previous)
+        .ok()
+        .and_then(|value| value.get("version").and_then(|version| version.as_u64()))
+        .unwrap_or(SESSION_FILE_VERSION_V1 as u64);
+    if previous_version >= SESSION_FILE_VERSION_V4 as u64 {
+        return Ok(());
+    }
+
+    let mut backup_name = path.as_os_str().to_os_string();
+    backup_name.push(".v3.bak");
+    let backup_path = PathBuf::from(backup_name);
+    if backup_path.exists() {
+        return Ok(());
+    }
+    fs::copy(path, backup_path).map(|_| ())
 }
 
 fn default_session_file_path() -> Option<PathBuf> {
@@ -1796,6 +2203,16 @@ fn default_session_file_path() -> Option<PathBuf> {
     }
 
     Some(app_state_dir()?.join("session.json"))
+}
+
+/// Per-user rendezvous file used by the browser-process broker. Test binaries
+/// intentionally receive no path so they cannot touch a developer's live app
+/// state; broker unit tests inject an explicit temporary path instead.
+pub fn browser_instance_file_path() -> Option<PathBuf> {
+    if cfg!(test) || running_under_test_harness() {
+        return None;
+    }
+    Some(app_state_dir()?.join("browser-instance.json"))
 }
 
 pub(crate) fn default_session_file_path_for_effect() -> Option<PathBuf> {
@@ -4389,6 +4806,34 @@ mod tests {
     }
 
     #[test]
+    fn persist_ui_settings_round_trips_window_controls_mode() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-window-controls-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_controls_mode: Some("hide".to_string()),
+                browser_open_target: Some("new_window".to_string()),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist window controls mode");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.window_controls_mode.as_deref(), Some("hide"));
+        assert_eq!(loaded.browser_open_target.as_deref(), Some("new_window"));
+    }
+
+    #[test]
     fn persist_ui_settings_round_trips_terminal_preferences() {
         let dir = env::temp_dir().join(format!(
             "gitcomet-ui-settings-test-{}-{}",
@@ -4661,5 +5106,149 @@ mod tests {
                 "unchanged history scope should not rewrite the session file"
             );
         }
+    }
+
+    #[test]
+    fn saved_window_group_automatic_name_uses_active_repository_and_count() {
+        let mut group = SavedWindowGroup::new(vec![
+            PathBuf::from("/work/alpha"),
+            PathBuf::from("/work/beta"),
+            PathBuf::from("/work/gamma"),
+        ]);
+        group.active_repository = Some(PathBuf::from("/work/beta"));
+        assert_eq!(group.display_name(), "beta +2");
+
+        group.custom_name = Some("  Client work  ".to_string());
+        assert_eq!(group.display_name(), "Client work");
+    }
+
+    #[test]
+    fn v3_open_repositories_migrate_to_one_restorable_window_group() {
+        let path = unique_session_test_dir("window-group-v3-migration").join("session.json");
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: SESSION_FILE_VERSION_V3,
+                open_repos: vec!["/work/alpha".to_string(), "/work/beta".to_string()],
+                active_repo: Some("/work/beta".to_string()),
+                sidebar_width: Some(280),
+                details_width: Some(360),
+                sidebar_collapsed: Some(true),
+                change_tracking_height: Some(180),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed v3 session");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.window_groups.len(), 1);
+        let group = &loaded.window_groups[0];
+        assert_eq!(group.id, LEGACY_WINDOW_GROUP_ID);
+        assert_eq!(
+            group.repositories,
+            vec![PathBuf::from("/work/alpha"), PathBuf::from("/work/beta")]
+        );
+        assert_eq!(group.active_repository, Some(PathBuf::from("/work/beta")));
+        assert!(group.restore_on_launch);
+        assert_eq!(group.layout.sidebar_width, Some(280));
+        assert_eq!(group.layout.details_width, Some(360));
+        assert!(group.layout.sidebar_collapsed);
+        assert_eq!(group.layout.change_tracking_height, Some(180));
+    }
+
+    #[test]
+    fn multiple_window_groups_round_trip_without_last_writer_loss() {
+        let path = unique_session_test_dir("window-group-round-trip").join("session.json");
+        let mut group_a =
+            SavedWindowGroup::new(vec![PathBuf::from("/work/a"), PathBuf::from("/work/b")]);
+        group_a.id = WindowGroupId::from_u128(10);
+        group_a.custom_name = Some("  Backend  ".to_string());
+        group_a.color = Some(WindowGroupColor::Blue);
+        group_a.last_activation_order = 7;
+        group_a.layout.sidebar_width = Some(260);
+        group_a.placement.normal_frame = Some(SavedWindowFrame {
+            x: 20,
+            y: 30,
+            width: 1200,
+            height: 800,
+        });
+
+        let mut group_b = SavedWindowGroup::new(vec![PathBuf::from("/work/c")]);
+        group_b.id = WindowGroupId::from_u128(11);
+        group_b.restore_on_launch = false;
+        group_b.last_activation_order = 9;
+
+        persist_window_groups_to_path(&[group_a.clone(), group_b.clone()], &path)
+            .expect("persist groups");
+        let loaded = load_from_path(&path);
+
+        assert_eq!(loaded.window_groups.len(), 2);
+        assert_eq!(
+            loaded.window_groups[0].custom_name.as_deref(),
+            Some("Backend")
+        );
+        assert_eq!(loaded.window_groups[0].color, Some(WindowGroupColor::Blue));
+        assert_eq!(loaded.window_groups[0].placement, group_a.placement);
+        assert_eq!(loaded.window_groups[1], group_b);
+        assert_eq!(loaded.open_repos, group_a.repositories);
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                theme_mode: Some("dark".to_string()),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist unrelated global preference");
+        assert_eq!(load_from_path(&path).window_groups, loaded.window_groups);
+
+        persist_repos_snapshot_to_path(
+            &SessionReposSnapshot {
+                open_repos: Arc::from([Arc::<str>::from("/work/legacy-writer")]),
+                active_repo_index: None,
+            },
+            &path,
+        )
+        .expect("persist legacy repository projection");
+        assert_eq!(load_from_path(&path).window_groups, loaded.window_groups);
+    }
+
+    #[test]
+    fn closed_groups_remain_saved_but_do_not_project_as_open_repositories() {
+        let path = unique_session_test_dir("closed-window-groups").join("session.json");
+        let mut group = SavedWindowGroup::new(vec![PathBuf::from("/work/closed")]);
+        group.restore_on_launch = false;
+        persist_window_groups_to_path(&[group.clone()], &path).expect("persist closed group");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.window_groups, vec![group]);
+        assert!(loaded.open_repos.is_empty());
+        assert!(loaded.active_repo.is_none());
+    }
+
+    #[test]
+    fn first_v4_write_preserves_one_v3_backup() {
+        let path = unique_session_test_dir("window-group-v3-backup").join("session.json");
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: SESSION_FILE_VERSION_V3,
+                open_repos: vec!["/work/legacy".to_string()],
+                active_repo: Some("/work/legacy".to_string()),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed v3 session");
+        let original = fs::read(&path).expect("read v3 session");
+
+        let group = SavedWindowGroup::new(vec![PathBuf::from("/work/legacy")]);
+        persist_window_groups_to_path(&[group], &path).expect("persist v4 groups");
+
+        let mut backup_name = path.as_os_str().to_os_string();
+        backup_name.push(".v3.bak");
+        assert_eq!(
+            fs::read(PathBuf::from(backup_name)).expect("read v3 backup"),
+            original
+        );
     }
 }

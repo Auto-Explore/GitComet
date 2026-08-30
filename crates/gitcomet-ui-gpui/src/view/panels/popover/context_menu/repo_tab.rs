@@ -9,13 +9,21 @@ pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
         .iter()
         .find(|repo| repo.id == repo_id)
         .map(|repo| repo.spec.workdir.clone());
-    model_for_state(host.state.as_ref(), repo_id, workdir)
+    model_for_state(
+        host.state.as_ref(),
+        repo_id,
+        workdir,
+        &host.cached_window_groups,
+        host.cached_window_group_id,
+    )
 }
 
 fn model_for_state(
     state: &AppState,
     repo_id: RepoId,
     workdir: Option<std::path::PathBuf>,
+    window_groups: &[session::SavedWindowGroup],
+    current_window_group: Option<session::WindowGroupId>,
 ) -> ContextMenuModel {
     let Some(repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
         return ContextMenuModel::new(Vec::new());
@@ -71,6 +79,40 @@ fn model_for_state(
                 path: workdir.clone(),
             }),
         });
+    }
+
+    if let Some(ref workdir) = workdir {
+        items.push(ContextMenuItem::Separator);
+        items.push(ContextMenuItem::Entry {
+            label: "Move to new window".into(),
+            icon: Some("icons/swap.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::MoveRepoToWindowGroup {
+                repo_id,
+                path: workdir.clone(),
+                target_group: None,
+            }),
+        });
+
+        let mut other_groups = window_groups
+            .iter()
+            .filter(|group| Some(group.id) != current_window_group)
+            .collect::<Vec<_>>();
+        other_groups.sort_by_key(|group| std::cmp::Reverse(group.last_activation_order));
+        for group in other_groups {
+            items.push(ContextMenuItem::Entry {
+                label: format!("Move to {}", group.display_name()).into(),
+                icon: Some("icons/swap.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::MoveRepoToWindowGroup {
+                    repo_id,
+                    path: workdir.clone(),
+                    target_group: Some(group.id),
+                }),
+            });
+        }
     }
 
     items.push(ContextMenuItem::Separator);
@@ -156,10 +198,14 @@ mod tests {
         (*disabled, action.as_ref())
     }
 
+    fn test_model(state: &AppState, repo_id: RepoId, workdir: Option<PathBuf>) -> ContextMenuModel {
+        model_for_state(state, repo_id, workdir, &[], None)
+    }
+
     #[test]
     fn activate_entry_activates_inactive_repo_tab() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(&state, RepoId(2), None);
+        let model = test_model(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Activate");
 
@@ -173,7 +219,7 @@ mod tests {
     #[test]
     fn activate_entry_is_disabled_for_active_repo_tab() {
         let state = state_with_repo_tabs(RepoId(2), 3);
-        let model = model_for_state(&state, RepoId(2), None);
+        let model = test_model(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Activate");
 
@@ -187,7 +233,7 @@ mod tests {
     #[test]
     fn close_repo_entry_uses_repo_tab_close_icon() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(&state, RepoId(2), None);
+        let model = test_model(&state, RepoId(2), None);
 
         let ContextMenuItem::Entry {
             icon,
@@ -214,7 +260,7 @@ mod tests {
     fn open_repository_location_entry_targets_the_repository_workdir() {
         let state = state_with_repo_tabs(RepoId(1), 3);
         let workdir = PathBuf::from("/tmp/repo-tab-menu-2");
-        let model = model_for_state(&state, RepoId(2), Some(workdir.clone()));
+        let model = test_model(&state, RepoId(2), Some(workdir.clone()));
 
         let (disabled, action) = entry_action(&model, "Open repository location");
 
@@ -228,7 +274,7 @@ mod tests {
     #[test]
     fn repo_tab_menu_uses_shared_shortcut_keycaps() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(
+        let model = test_model(
             &state,
             RepoId(2),
             Some(PathBuf::from("/tmp/repo-tab-menu-2")),
@@ -240,7 +286,7 @@ mod tests {
     #[test]
     fn close_right_entry_targets_only_repos_to_the_right() {
         let state = state_with_repo_tabs(RepoId(3), 3);
-        let model = model_for_state(&state, RepoId(2), None);
+        let model = test_model(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Close repositories to the right");
 
@@ -259,7 +305,7 @@ mod tests {
     #[test]
     fn close_right_entry_is_disabled_for_last_repo_tab() {
         let state = state_with_repo_tabs(RepoId(2), 3);
-        let model = model_for_state(&state, RepoId(3), None);
+        let model = test_model(&state, RepoId(3), None);
 
         let (disabled, action) = entry_action(&model, "Close repositories to the right");
 
@@ -278,7 +324,7 @@ mod tests {
     #[test]
     fn close_other_repositories_entry_targets_every_repo_except_selected() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(&state, RepoId(2), None);
+        let model = test_model(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Close other repositories");
 
@@ -297,7 +343,7 @@ mod tests {
     #[test]
     fn close_other_repositories_entry_is_disabled_for_single_repo_tab() {
         let state = state_with_repo_tabs(RepoId(1), 1);
-        let model = model_for_state(&state, RepoId(1), None);
+        let model = test_model(&state, RepoId(1), None);
 
         let (disabled, action) = entry_action(&model, "Close other repositories");
 
@@ -317,6 +363,6 @@ mod tests {
     fn missing_repo_tab_returns_empty_menu_model() {
         let state = state_with_repo_tabs(RepoId(1), 3);
 
-        assert!(model_for_state(&state, RepoId(99), None).items.is_empty());
+        assert!(test_model(&state, RepoId(99), None).items.is_empty());
     }
 }

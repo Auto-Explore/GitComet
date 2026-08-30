@@ -565,6 +565,23 @@ pub(super) fn close_repo(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
+    remove_repo(repos, state, repo_id, true)
+}
+
+pub(super) fn move_repo_out(
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
+    remove_repo(repos, state, repo_id, false)
+}
+
+fn remove_repo(
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    record_recent: bool,
+) -> Vec<Effect> {
     clear_banner_error_for_repo(state, repo_id);
     let mut effects = Vec::with_capacity(3 + SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY);
     let Some(removed_repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
@@ -592,7 +609,7 @@ pub(super) fn close_repo(
     // repo is gone rather than merely idle -- `CancelRepoLoads` also fires on tab
     // switches and reloads, where the handles are still worth keeping.
     crate::store::effects::release_worktree_scan_handles(repo_id);
-    if persist_closed_recent {
+    if record_recent && persist_closed_recent {
         effects.push(persist_recent_repo_effect(Some(repo_id), closed_workdir));
     }
     if was_active {
@@ -1352,6 +1369,11 @@ pub(super) fn repo_opened_err(
     let spec = RepoSpec {
         workdir: normalize_repo_path(spec.workdir),
     };
+    let failures = state
+        .repo_open_failures
+        .entry(spec.workdir.clone())
+        .or_default();
+    *failures = failures.wrapping_add(1);
     let not_a_repository = matches!(error.kind(), ErrorKind::NotARepository);
     if not_a_repository || provisional_external_drop {
         let message = if not_a_repository {

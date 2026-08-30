@@ -182,6 +182,73 @@ pub(super) fn titlebar_control_button(
         )
 }
 
+fn main_window_control(
+    button: gpui::WindowButton,
+    ui_scale_percent: u32,
+    is_maximized: bool,
+    theme: AppTheme,
+    cx: &mut gpui::Context<TitleBarView>,
+) -> AnyElement {
+    match button {
+        gpui::WindowButton::Minimize => titlebar_control_button(
+            ui_scale_percent,
+            "win_min_btn",
+            "icons/generic_minimize.svg",
+            theme.colors.foreground.secondary,
+            theme.colors.foreground.primary,
+        )
+        .id("win_min")
+        .debug_selector(|| "titlebar_win_min".to_string())
+        .window_control_area(WindowControlArea::Min)
+        .gitcomet_tooltip(theme, SharedString::from("Minimize window"))
+        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            window.minimize_window();
+        }))
+        .into_any_element(),
+        gpui::WindowButton::Maximize => {
+            let (icon, tooltip) = if is_maximized {
+                ("icons/generic_restore.svg", "Restore window")
+            } else {
+                ("icons/generic_maximize.svg", "Maximize window")
+            };
+            titlebar_control_button(
+                ui_scale_percent,
+                "win_max_btn",
+                icon,
+                theme.colors.foreground.secondary,
+                theme.colors.foreground.primary,
+            )
+            .id("win_max")
+            .debug_selector(|| "titlebar_win_max".to_string())
+            .window_control_area(WindowControlArea::Max)
+            .gitcomet_tooltip(theme, SharedString::from(tooltip))
+            .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                crate::app::toggle_window_zoom(window);
+                cx.notify();
+            }))
+            .into_any_element()
+        }
+        gpui::WindowButton::Close => titlebar_control_button(
+            ui_scale_percent,
+            "win_close_btn",
+            "icons/generic_close.svg",
+            theme.colors.foreground.secondary,
+            theme.colors.status.danger.foreground,
+        )
+        .id("win_close")
+        .debug_selector(|| "titlebar_win_close".to_string())
+        .window_control_area(WindowControlArea::Close)
+        .gitcomet_tooltip(theme, SharedString::from("Close window"))
+        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            crate::app::close_window_or_warn(window, cx);
+        }))
+        .into_any_element(),
+    }
+}
+
 fn mix(mut a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
     let t = t.clamp(0.0, 1.0);
     a.red = a.red + (b.red - a.red) * t;
@@ -195,18 +262,52 @@ fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
     mix(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
+fn window_group_color(
+    color: Option<gitcomet_state::session::WindowGroupColor>,
+    theme: AppTheme,
+) -> gpui::Rgba {
+    use gitcomet_state::session::WindowGroupColor;
+    match color {
+        Some(WindowGroupColor::Gray) => theme.colors.foreground.secondary,
+        Some(WindowGroupColor::Red) => gpui::rgba(0xE05252FF),
+        Some(WindowGroupColor::Orange) => gpui::rgba(0xE08A3EFF),
+        Some(WindowGroupColor::Yellow) => gpui::rgba(0xD2A83AFF),
+        Some(WindowGroupColor::Green) => gpui::rgba(0x48A868FF),
+        Some(WindowGroupColor::Blue) => gpui::rgba(0x4B8DDBFF),
+        Some(WindowGroupColor::Purple) => gpui::rgba(0x956EDBFF),
+        Some(WindowGroupColor::Pink) => gpui::rgba(0xD866A4FF),
+        None => theme.colors.accent.foreground,
+    }
+}
+
 /// The title bar's fill. The active window lifts it off the workspace surface;
 /// an inactive one drops back to it. Repo tabs sit on this color, so anything
 /// that has to blend into the bar (the label fade, for one) asks here.
-pub(in crate::view) fn title_bar_background(theme: AppTheme, window_is_active: bool) -> gpui::Rgba {
-    if window_is_active {
+pub(in crate::view) fn title_bar_background(
+    theme: AppTheme,
+    window_is_active: bool,
+    group_color: Option<gitcomet_state::session::WindowGroupColor>,
+) -> gpui::Rgba {
+    let base = if window_is_active {
         lighten(
             theme.colors.surface.panel,
             if theme.is_dark { 0.06 } else { 0.03 },
         )
     } else {
         theme.colors.surface.panel
-    }
+    };
+    let Some(group_color) = group_color else {
+        return base;
+    };
+
+    // Keep text, tabs and window controls in the theme's contrast system while
+    // making groups visibly distinct. Active windows carry a little more tint;
+    // inactive ones remain identifiable without competing for attention.
+    mix(
+        base,
+        window_group_color(Some(group_color), theme),
+        if window_is_active { 0.18 } else { 0.12 },
+    )
 }
 
 fn window_frame_visual_inset(ui_scale_percent: u32) -> Pixels {
@@ -464,7 +565,13 @@ impl Render for TitleBarView {
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.40 } else { 0.30 },
         );
-        let bar_bg = title_bar_background(theme, window.is_window_active());
+        let window_group =
+            crate::window_groups::group_for_window(cx, window.window_handle().window_id());
+        let bar_bg = title_bar_background(
+            theme,
+            window.is_window_active(),
+            window_group.as_ref().and_then(|group| group.color),
+        );
         let app_menu_focus_handle = self.app_menu_focus_handle.clone();
 
         let menu_toggle = div()
@@ -504,6 +611,15 @@ impl Render for TitleBarView {
         // (and the repo tabs) that opens the repository picker. Replaces the old
         // labelled "Repositories" button that used to sit in the action bar.
         let repo_picker_open = self.repo_picker_open;
+        let window_group_label: SharedString = window_group
+            .as_ref()
+            .map(|group| group.display_name())
+            .unwrap_or_else(|| "Window Group".to_string())
+            .into();
+        let window_group_dot =
+            window_group_color(window_group.as_ref().and_then(|group| group.color), theme);
+        let window_group_tooltip: SharedString =
+            format!("Window group: {window_group_label}").into();
         let repo_picker_toggle_bounds_for_prepaint = Rc::clone(&self.repo_picker_toggle_bounds);
         let repo_picker_toggle_bounds_for_click = Rc::clone(&self.repo_picker_toggle_bounds);
         let repo_picker_toggle = div()
@@ -518,10 +634,12 @@ impl Render for TitleBarView {
                     .id("repo_picker_btn")
                     .debug_selector(|| "repo_picker_toggle".to_string())
                     .h(scaled_px(26.0))
-                    .w(scaled_px(32.0))
+                    .max_w(scaled_px(190.0))
+                    .px(scaled_px(8.0))
                     .flex()
                     .items_center()
                     .justify_center()
+                    .gap(scaled_px(6.0))
                     .cursor(CursorStyle::PointingHand)
                     .rounded(px(theme.radii.control))
                     // Reserved at rest so gaining the hover outline does not
@@ -546,6 +664,23 @@ impl Render for TitleBarView {
                             s.bg(app_menu_active_bg)
                         }
                     })
+                    .child(
+                        div()
+                            .size(scaled_px(8.0))
+                            .flex_none()
+                            .rounded_full()
+                            .bg(window_group_dot),
+                    )
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_size(scaled_px(12.0))
+                            .text_color(theme.colors.foreground.secondary)
+                            .child(window_group_label),
+                    )
                     .child(svg_icon(
                         "icons/chevron_down.svg",
                         theme.colors.foreground.primary,
@@ -565,7 +700,7 @@ impl Render for TitleBarView {
                             cx,
                         );
                     }))
-                    .gitcomet_tooltip(theme, "Switch repository".into()),
+                    .gitcomet_tooltip(theme, window_group_tooltip),
             );
 
         // One drag surface spans the title bar underneath its controls. Each
@@ -637,66 +772,39 @@ impl Render for TitleBarView {
                 }
             }));
 
-        let min_tooltip: SharedString = "Minimize window".into();
-        let min = titlebar_control_button(
-            ui_scale_percent,
-            "win_min_btn",
-            "icons/generic_minimize.svg",
-            theme.colors.foreground.secondary,
-            theme.colors.foreground.primary,
-        )
-        .id("win_min")
-        .debug_selector(|| "titlebar_win_min".to_string())
-        .window_control_area(WindowControlArea::Min)
-        .gitcomet_tooltip(theme, min_tooltip)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            window.minimize_window();
-        }));
-
-        let max_icon = if window.is_maximized() {
-            "icons/generic_restore.svg"
+        let control_layout = crate::window_controls::resolve_visibility(
+            crate::window_controls::current(cx).mode,
+            cx.button_layout(),
+            cfg!(any(target_os = "linux", target_os = "freebsd")),
+            matches!(
+                window.window_decorations(),
+                Decorations::Client { tiling }
+                    if tiling.top || tiling.bottom || tiling.left || tiling.right
+            ),
+        );
+        let is_maximized = window.is_maximized();
+        let (left_controls, right_controls) = if is_macos {
+            (Vec::new(), Vec::new())
         } else {
-            "icons/generic_maximize.svg"
+            let mut render =
+                |button| main_window_control(button, ui_scale_percent, is_maximized, theme, cx);
+            (
+                control_layout
+                    .left
+                    .into_iter()
+                    .flatten()
+                    .map(&mut render)
+                    .collect::<Vec<_>>(),
+                control_layout
+                    .right
+                    .into_iter()
+                    .flatten()
+                    .map(render)
+                    .collect::<Vec<_>>(),
+            )
         };
-        let max_tooltip: SharedString = if window.is_maximized() {
-            "Restore window".into()
-        } else {
-            "Maximize window".into()
-        };
-        let max = titlebar_control_button(
-            ui_scale_percent,
-            "win_max_btn",
-            max_icon,
-            theme.colors.foreground.secondary,
-            theme.colors.foreground.primary,
-        )
-        .id("win_max")
-        .debug_selector(|| "titlebar_win_max".to_string())
-        .window_control_area(WindowControlArea::Max)
-        .gitcomet_tooltip(theme, max_tooltip)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            crate::app::toggle_window_zoom(window);
-            cx.notify();
-        }));
-
-        let close_tooltip: SharedString = "Close window".into();
-        let close = titlebar_control_button(
-            ui_scale_percent,
-            "win_close_btn",
-            "icons/generic_close.svg",
-            theme.colors.foreground.secondary,
-            theme.colors.status.danger.foreground,
-        )
-        .id("win_close")
-        .debug_selector(|| "titlebar_win_close".to_string())
-        .window_control_area(WindowControlArea::Close)
-        .gitcomet_tooltip(theme, close_tooltip)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            crate::app::close_window_or_warn(window, cx);
-        }));
+        let has_left_controls = !left_controls.is_empty();
+        let has_right_controls = !right_controls.is_empty();
 
         // Leading and trailing clusters center on the full bar height; tab
         // labels compensate for their bottom fusion (see `Tab::render`) so
@@ -708,6 +816,17 @@ impl Render for TitleBarView {
             .gap(scaled_px(2.0))
             .when(is_macos, |d| {
                 d.pl(macos_traffic_lights_safe_inset(ui_scale_percent))
+            })
+            .when(has_left_controls, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .h_full()
+                        .gap(scaled_px(4.0))
+                        .pl(scaled_px(8.0))
+                        .children(left_controls),
+                )
             })
             .when(!is_macos && workspace_actions_enabled, |d| {
                 d.child(menu_toggle)
@@ -787,8 +906,8 @@ impl Render for TitleBarView {
                     .items_center()
                     .h_full()
                     .gap(scaled_px(4.0))
-                    .when(!is_macos, |d| d.child(min).child(max).child(close))
-                    .pr(scaled_px(8.0)),
+                    .children(right_controls)
+                    .when(has_right_controls, |d| d.pr(scaled_px(8.0))),
             )
             .into_any_element()
     }
@@ -891,6 +1010,34 @@ mod tests {
             window_frame_visual_inset(ui_scale::DEFAULT_UI_SCALE_PERCENT),
             CLIENT_SIDE_DECORATION_INSET
         );
+    }
+
+    #[test]
+    fn configured_window_group_color_tints_the_title_bar_without_replacing_the_theme() {
+        let distance = |a: gpui::Rgba, b: gpui::Rgba| {
+            (a.red - b.red).abs() + (a.green - b.green).abs() + (a.blue - b.blue).abs()
+        };
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let base = title_bar_background(theme, true, None);
+            let blue =
+                window_group_color(Some(gitcomet_state::session::WindowGroupColor::Blue), theme);
+            let tinted = title_bar_background(
+                theme,
+                true,
+                Some(gitcomet_state::session::WindowGroupColor::Blue),
+            );
+
+            assert_ne!(tinted, base, "a configured group color must be visible");
+            assert!(
+                distance(tinted, blue) < distance(base, blue),
+                "the configured title bar should move toward the selected color"
+            );
+            assert_eq!(
+                title_bar_background(theme, true, None),
+                base,
+                "Default must preserve the existing theme-derived title bar"
+            );
+        }
     }
 
     #[test]

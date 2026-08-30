@@ -35,7 +35,6 @@ mod submodule_inner_diff;
 mod submodule_section;
 mod tag;
 mod terminal;
-mod ui_scale_picker;
 mod web_link;
 mod worktree;
 mod worktree_section;
@@ -592,7 +591,6 @@ impl PopoverHost {
             PopoverKind::MergetoolSettingsMenu => Some(mergetool_settings::model(self, cx)),
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
-            PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             PopoverKind::InteractiveRebaseActionMenu {
                 ix,
                 can_squash,
@@ -815,7 +813,9 @@ impl PopoverHost {
                 });
             }
             ContextMenuAction::OpenRepo { path } => {
-                self.store.dispatch(Msg::OpenRepo(path));
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.open_repo_path(path, cx);
+                });
             }
             ContextMenuAction::ActivateRepo { repo_id } => {
                 if !self.repo_is_open(repo_id) {
@@ -839,6 +839,38 @@ impl PopoverHost {
                     session::promote_recent_repo(&mut self.cached_recent_repos, &workdir);
                 }
                 self.store.dispatch(Msg::CloseRepo { repo_id });
+            }
+            ContextMenuAction::MoveRepoToWindowGroup {
+                repo_id,
+                path,
+                target_group,
+            } => {
+                // This action runs inside a `PopoverHost` update. The move
+                // workflow checks whether that same host is already showing an
+                // unsaved-edits dialog, so entering it synchronously would read
+                // an entity while GPUI still holds its update guard. Let this
+                // menu close first, then start the guarded move.
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.request_move_repo_to_window_group(repo_id, path, target_group, cx);
+                    });
+                });
+            }
+            ContextMenuAction::SetWindowGroupColor { group_id, color } => {
+                if crate::window_groups::set_group_color(cx, group_id, color) {
+                    if let Some(group) = self
+                        .cached_window_groups
+                        .iter_mut()
+                        .find(|group| group.id == group_id)
+                    {
+                        group.color = color;
+                    }
+                    crate::app::notify_window_group_color_changed_from_view(cx, group_id);
+                }
+                // This is an in-place setting over the repository picker. Keep
+                // the picker available so another group can be styled next.
+                close_after_action = false;
             }
             ContextMenuAction::PinRepository { path } => {
                 let _ = session::persist_pinned_repo(&path);
@@ -1296,11 +1328,6 @@ impl PopoverHost {
             ContextMenuAction::UnsetUpstreamBranch { repo_id, branch } => {
                 self.store
                     .dispatch(Msg::UnsetUpstreamBranch { repo_id, branch });
-            }
-            ContextMenuAction::SetUiScale { percent } => {
-                cx.defer(move |cx| {
-                    crate::app::set_app_ui_scale_percent(cx, percent);
-                });
             }
             ContextMenuAction::LoadInteractiveRebaseSetup { repo_id, base } => {
                 self.store

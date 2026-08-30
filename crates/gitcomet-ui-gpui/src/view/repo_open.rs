@@ -162,6 +162,22 @@ impl GitCometView {
         true
     }
 
+    /// Select a repository known to belong to this window, even if its saved
+    /// tabs have not reached the view snapshot yet. `OpenRepo` is idempotent at
+    /// the store: queued behind `RestoreSession` it selects the restored tab,
+    /// and after restoration it selects the already-open repository.
+    pub(crate) fn activate_or_open_repo_path(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.repo_id_for_path(&path).is_some() {
+            self.activate_repo_path(&path, cx);
+        } else {
+            self.open_repo_path_locally(path, cx);
+        }
+    }
+
     pub(crate) fn close_active_repo_tab(&mut self, cx: &mut gpui::Context<Self>) -> bool {
         let Some(repo_id) = self.active_repo_id() else {
             return false;
@@ -175,6 +191,52 @@ impl GitCometView {
         self.store.dispatch(Msg::CloseRepo { repo_id });
         cx.notify();
         true
+    }
+
+    pub(crate) fn request_move_repo_to_window_group(
+        &mut self,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        target_group: Option<gitcomet_state::session::WindowGroupId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if crate::app::repository_move_target_is_noop(
+            cx,
+            self.window_handle.window_id(),
+            target_group,
+        ) {
+            return;
+        }
+        let unsaved_action = UnsavedFileEditsAction::MoveRepo {
+            window_id: self.window_handle.window_id(),
+            repo_id,
+            path: path.clone(),
+            target_group,
+        };
+        if self.request_unsaved_file_edits_prompt(unsaved_action, cx) {
+            return;
+        }
+
+        let action = TerminalShutdownAction::MoveRepo {
+            repo_id,
+            path: path.clone(),
+            target_group,
+        };
+        if self.request_terminal_shutdown_action(action, cx) {
+            return;
+        }
+        crate::app::move_repository_to_window_group_from_view(
+            cx,
+            self.window_handle.window_id(),
+            repo_id,
+            path,
+            target_group,
+        );
+    }
+
+    pub(crate) fn detach_repo_for_move(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
+        self.store.dispatch(Msg::MoveRepoOut { repo_id });
+        cx.notify();
     }
 
     pub(crate) fn activate_previous_repo_tab(&mut self, cx: &mut gpui::Context<Self>) -> bool {
@@ -220,9 +282,59 @@ impl GitCometView {
         path: std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.store.dispatch(Msg::OpenRepo(path));
+        crate::app::open_repository_from_view(cx, self.window_handle.window_id(), path);
         self.open_repo_panel = false;
         cx.notify();
+    }
+
+    pub(crate) fn open_repo_path_locally(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.store.snapshot().git_runtime.is_available() {
+            self.store.dispatch(Msg::OpenRepo(path));
+        } else {
+            self.queue_repo_open_until_git_recovers(path);
+        }
+        self.open_repo_panel = false;
+        cx.notify();
+    }
+
+    pub(crate) fn reserve_pending_repo_open(&mut self, path: &std::path::Path) {
+        let failure_revision = self
+            .store
+            .snapshot()
+            .repo_open_failures
+            .get(path)
+            .copied()
+            .unwrap_or_default();
+        self.pending_repo_open_reservations
+            .entry(path.to_path_buf())
+            .or_insert(failure_revision);
+        self.pending_repo_open_active = Some(path.to_path_buf());
+    }
+
+    fn queue_repo_open_until_git_recovers(&mut self, path: std::path::PathBuf) {
+        let push_unique = |paths: &mut Vec<std::path::PathBuf>, path: std::path::PathBuf| {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        };
+        match self.deferred_repo_bootstrap.as_mut() {
+            Some(DeferredRepoBootstrap::RestoreSession {
+                open_repos,
+                active_repo,
+            }) => {
+                push_unique(open_repos, path.clone());
+                *active_repo = Some(path);
+            }
+            Some(DeferredRepoBootstrap::OpenRepos(paths)) => push_unique(paths, path),
+            None => {
+                self.deferred_repo_bootstrap = Some(DeferredRepoBootstrap::OpenRepos(vec![path]));
+            }
+        }
+        self.startup_repo_bootstrap_pending = true;
     }
 
     #[cfg(target_os = "macos")]

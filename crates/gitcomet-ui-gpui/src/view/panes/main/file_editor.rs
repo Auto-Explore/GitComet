@@ -1112,8 +1112,82 @@ impl MainPaneView {
             .collect()
     }
 
+    /// Display labels for dirty buffers that belong to one repository. A move
+    /// only detaches that repository, so unrelated tabs must neither block the
+    /// move nor be discarded by its confirmation dialog.
+    pub(in crate::view) fn unsaved_file_edit_labels_for_repo(
+        &self,
+        repo_id: RepoId,
+    ) -> Vec<SharedString> {
+        self.unsaved_file_edit_paths(repo_id)
+            .into_iter()
+            .map(|path| SharedString::from(path.display().to_string()))
+            .collect()
+    }
+
     /// Write every unsaved buffer, on screen or stashed.
     pub(in crate::view) fn save_all_file_edits(&mut self, cx: &mut gpui::Context<Self>) {
+        self.save_file_edits_scoped_to(None, cx);
+    }
+
+    /// Write only the unsaved buffers owned by `repo_id`.
+    pub(in crate::view) fn save_file_edits_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.save_file_edits_scoped_to(Some(repo_id), cx);
+    }
+
+    /// Turn optimistic clean recovery copies back into visible unsaved edits
+    /// after the store reports that their writes failed. `paths == None` is the
+    /// conservative timeout case: no close/move is retried, and every recovery
+    /// copy in scope is kept dirty until the user saves again.
+    pub(in crate::view) fn restore_failed_file_edit_recovery(
+        &mut self,
+        repo_id: RepoId,
+        paths: Option<&[PathBuf]>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let includes = |path: &Path| paths.is_none_or(|paths| paths.iter().any(|p| p == path));
+        for ((stashed_repo_id, path), stashed) in &mut self.file_editor_stash {
+            if *stashed_repo_id != repo_id || !includes(path) {
+                continue;
+            }
+            if !stashed.is_dirty() {
+                stashed.saved_fingerprint = stashed.text_fingerprint.wrapping_add(1);
+            }
+            stashed.first_dirty_line = Some(0);
+        }
+
+        let Some((current_repo_id, current_path)) = self.file_editor_key.as_ref() else {
+            cx.notify();
+            return;
+        };
+        if *current_repo_id != repo_id || !includes(current_path) {
+            cx.notify();
+            return;
+        }
+        let baseline = self
+            .file_editor_stash
+            .get(&(repo_id, current_path.clone()))
+            .map(|stashed| stashed.saved_fingerprint)
+            .unwrap_or_else(|| {
+                self.file_editor_input.read_with(cx, |input, _| {
+                    file_editor_text_fingerprint(&input.text_snapshot()).wrapping_add(1)
+                })
+            });
+        self.file_editor_saved_fingerprint = Some(baseline);
+        self.file_editor_dirty = true;
+        self.file_editor_first_dirty_line = Some(0);
+        cx.notify();
+    }
+
+    fn save_file_edits_scoped_to(
+        &mut self,
+        only_repo: Option<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
         // `mem::take` empties the map, so the clean recovery entry a previous
         // save left behind would be dropped along with the dirty ones. Put it
         // back afterwards — it is the only copy of text whose write may not have
@@ -1121,6 +1195,10 @@ impl MainPaneView {
         let current = self.file_editor_key.clone();
         let mut clean: Vec<((RepoId, PathBuf), StashedFileEdit)> = Vec::new();
         for ((repo_id, path), stashed) in std::mem::take(&mut self.file_editor_stash) {
+            if only_repo.is_some_and(|only_repo| only_repo != repo_id) {
+                clean.push(((repo_id, path), stashed));
+                continue;
+            }
             // The buffer on screen is saved below, from the live text rather
             // than from whatever was stashed for it earlier.
             if current.as_ref() == Some(&(repo_id, path.clone())) {
@@ -1161,7 +1239,12 @@ impl MainPaneView {
         // Saved *before* the recovery copies go back: `save_file_editor_buffer`
         // prunes clean entries to keep the stash bounded, and running it after
         // would delete the very copies this just made.
-        self.save_file_editor_buffer(cx);
+        if current
+            .as_ref()
+            .is_some_and(|(repo_id, _)| only_repo.is_none_or(|only_repo| only_repo == *repo_id))
+        {
+            self.save_file_editor_buffer(cx);
+        }
         self.file_editor_stash.extend(clean);
     }
 
@@ -1170,6 +1253,18 @@ impl MainPaneView {
         self.file_editor_stash.clear();
         if self.file_editor_dirty {
             self.discard_file_editor_buffer(cx);
+        }
+    }
+
+    /// Throw away only the dirty buffers owned by `repo_id`.
+    pub(in crate::view) fn discard_file_edits_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let paths = self.unsaved_file_edit_paths(repo_id);
+        for path in paths {
+            self.discard_file_edits_for(repo_id, &path, cx);
         }
     }
 

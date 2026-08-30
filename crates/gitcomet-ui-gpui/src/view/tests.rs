@@ -10,7 +10,7 @@ use gitcomet_state::model::{AppState, AuthPromptState, AuthRetryOperation, RepoI
 use gitcomet_state::store::AppStore;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 struct TestBackend;
@@ -35,6 +35,23 @@ impl GitBackend for RecordingFailingBackend {
             .push(workdir.to_path_buf());
         Err(Error::new(ErrorKind::Unsupported(
             "Recording backend does not open repositories",
+        )))
+    }
+}
+
+struct BlockingFailingBackend {
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl GitBackend for BlockingFailingBackend {
+    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        let (released, wake) = self.release.as_ref();
+        let mut released = released.lock().expect("blocking backend gate lock");
+        while !*released {
+            released = wake.wait(released).expect("blocking backend gate wait");
+        }
+        Err(Error::new(ErrorKind::Unsupported(
+            "Blocking backend does not open repositories",
         )))
     }
 }
@@ -377,6 +394,120 @@ fn dropping_one_folder_on_repository_bar_dispatches_external_repo_open(
             app
         ));
     });
+}
+
+#[gpui::test]
+fn review_regression_lifecycle_provisional_external_drop_is_not_added_to_a_window_group(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(BlockingFailingBackend {
+        release: Arc::clone(&release),
+    });
+    let (store, events) = AppStore::new(backend);
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    cx.cx
+        .update(|app| crate::window_groups::initialize_for_test(app, Vec::new()));
+
+    let dropped = std::env::temp_dir().join("gitcomet-provisional-invalid-drop");
+    store.dispatch(Msg::OpenRepoFromExternalDrop(dropped.clone()));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let snapshot = store.snapshot();
+        if snapshot
+            .repos
+            .iter()
+            .any(|repo| repo.spec.workdir == dropped)
+            && gitcomet_state::session::snapshot_repos_from_state(snapshot.as_ref())
+                .open_repos
+                .is_empty()
+        {
+            break;
+        }
+        if Instant::now() >= deadline {
+            let (released, wake) = release.as_ref();
+            *released.lock().expect("release blocking backend") = true;
+            wake.notify_all();
+            panic!("timed out waiting for the provisional external-drop tab");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let provisional_snapshot = store.snapshot();
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            test_support::apply_state_snapshot_for_test(view, provisional_snapshot, cx);
+        });
+    });
+    let persisted_paths = cx.cx.update(|app| {
+        crate::window_groups::groups(app)
+            .into_iter()
+            .flat_map(|group| group.repositories)
+            .collect::<Vec<_>>()
+    });
+    let (released, wake) = release.as_ref();
+    *released.lock().expect("release blocking backend") = true;
+    wake.notify_all();
+
+    assert!(
+        !persisted_paths.contains(&dropped),
+        "an unvalidated external drop must not become durable group membership"
+    );
+}
+
+#[gpui::test]
+fn review_regression_followup_window_bounds_do_not_schedule_global_settings_persistence(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let before = cx.update(|_window, app| view.read(app).ui_settings_persist_requests_for_test);
+
+    cx.simulate_resize(gpui::size(gpui::px(913.0), gpui::px(677.0)));
+
+    let after = cx.update(|_window, app| view.read(app).ui_settings_persist_requests_for_test);
+    assert_eq!(
+        after, before,
+        "a window-local bounds update must not enqueue a stale full UiSettings snapshot"
+    );
+}
+
+#[gpui::test]
+fn review_regression_confirmed_focused_mergetool_bounds_persist_legacy_size(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let config = GitCometViewConfig {
+        view_mode: GitCometViewMode::FocusedMergetool,
+        focused_mergetool: Some(FocusedMergetoolViewConfig {
+            repo_path: PathBuf::from("/tmp/gitcomet-focused-bounds-repo"),
+            conflicted_file_path: PathBuf::from("conflicted.txt"),
+            labels: FocusedMergetoolLabels {
+                local: "LOCAL".to_string(),
+                remote: "REMOTE".to_string(),
+                base: "BASE".to_string(),
+            },
+        }),
+        ..GitCometViewConfig::default()
+    };
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(store, events, config, window, cx)
+    });
+    let before = cx.update(|_window, app| view.read(app).ui_settings_persist_requests_for_test);
+
+    cx.simulate_resize(gpui::size(gpui::px(911.0), gpui::px(673.0)));
+
+    let after = cx.update(|_window, app| view.read(app).ui_settings_persist_requests_for_test);
+    assert!(
+        after > before,
+        "focused mergetool bounds must persist through the legacy UiSettings dimensions"
+    );
 }
 
 #[gpui::test]
@@ -3998,6 +4129,8 @@ fn repo_tab_context_menu_renders_requested_actions(cx: &mut gpui::TestAppContext
         .expect("expected Activate menu item");
     cx.debug_bounds("context_menu_open_repository_location")
         .expect("expected Open repository location menu item");
+    cx.debug_bounds("context_menu_move_to_new_window")
+        .expect("expected Move to new window menu item");
     cx.debug_bounds("context_menu_close")
         .expect("expected Close menu item");
     cx.debug_bounds("context_menu_close_repositories_to_the_right")
@@ -4012,6 +4145,26 @@ fn repo_tab_context_menu_renders_requested_actions(cx: &mut gpui::TestAppContext
             >= px(360.0),
         "expected repository tab context menu to use its wider layout"
     );
+}
+
+#[gpui::test]
+fn review_regression_repo_tab_move_to_new_window_does_not_reenter_popover_host(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_repo_tab_test_state_with_count(&store, &view, cx, RepoId(1), 1);
+    open_repo_tab_context_menu(cx, "repo_tab_1");
+
+    // The click is delivered while `PopoverHost` is being updated. The move
+    // workflow must not synchronously read that same entity while GPUI still
+    // holds its update guard.
+    click_debug_selector(cx, "context_menu_move_to_new_window");
+    cx.run_until_parked();
 }
 
 #[gpui::test]

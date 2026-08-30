@@ -22,7 +22,6 @@ mod worker_channel;
 
 use effects::RepoTaskToken;
 use effects::{EffectExecutors, schedule_effect};
-#[cfg(any(test, feature = "test-support"))]
 use executor::StoreExecutorPool;
 use executor::{
     TaskExecutor, default_worker_threads, metadata_worker_threads, repo_load_worker_threads,
@@ -37,6 +36,13 @@ use reducer::{
 use repo_monitor::RepoMonitorManager;
 use send_diagnostics::try_send_state_changed_or_log;
 use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
+
+const fn should_share_store_executor_pools(_test_build: bool, _test_support: bool) -> bool {
+    // Stores keep independent reducers and state, while their bounded effect
+    // workers are process infrastructure. Sharing prevents each restored
+    // window from multiplying the primary/load/metadata/persistence pools.
+    true
+}
 
 pub use reducer_diagnostics::StoreReducerDiagnostics;
 
@@ -74,6 +80,7 @@ fn is_control_msg(msg: &Msg) -> bool {
         Msg::OpenRepo(_)
             | Msg::OpenRepoFromExternalDrop(_)
             | Msg::CloseRepo { .. }
+            | Msg::MoveRepoOut { .. }
             | Msg::CloseRepos { .. }
             | Msg::SetActiveRepo { .. }
             | Msg::ReorderRepoTabs { .. }
@@ -318,35 +325,34 @@ impl AppStore {
         let thread_msg_tx = msg_tx.clone();
 
         thread::spawn(move || {
-            #[cfg(any(test, feature = "test-support"))]
-            let executor = TaskExecutor::shared_for_store(
-                StoreExecutorPool::Primary,
-                default_worker_threads(),
-            );
-            #[cfg(not(any(test, feature = "test-support")))]
-            let executor = TaskExecutor::new(default_worker_threads());
-
-            #[cfg(any(test, feature = "test-support"))]
-            let repo_load_executor = TaskExecutor::shared_for_store(
-                StoreExecutorPool::RepoLoad,
-                repo_load_worker_threads(),
-            );
-            #[cfg(not(any(test, feature = "test-support")))]
-            let repo_load_executor = TaskExecutor::new(repo_load_worker_threads());
-
-            #[cfg(any(test, feature = "test-support"))]
-            let metadata_executor = TaskExecutor::shared_for_store(
-                StoreExecutorPool::Metadata,
-                metadata_worker_threads(),
-            );
-            #[cfg(not(any(test, feature = "test-support")))]
-            let metadata_executor = TaskExecutor::new(metadata_worker_threads());
-
-            #[cfg(any(test, feature = "test-support"))]
-            let session_persist_executor =
-                TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
-            #[cfg(not(any(test, feature = "test-support")))]
-            let session_persist_executor = TaskExecutor::new(1);
+            let share_executor_pools =
+                should_share_store_executor_pools(cfg!(test), cfg!(feature = "test-support"));
+            let executor = if share_executor_pools {
+                TaskExecutor::shared_for_store(StoreExecutorPool::Primary, default_worker_threads())
+            } else {
+                TaskExecutor::new(default_worker_threads())
+            };
+            let repo_load_executor = if share_executor_pools {
+                TaskExecutor::shared_for_store(
+                    StoreExecutorPool::RepoLoad,
+                    repo_load_worker_threads(),
+                )
+            } else {
+                TaskExecutor::new(repo_load_worker_threads())
+            };
+            let metadata_executor = if share_executor_pools {
+                TaskExecutor::shared_for_store(
+                    StoreExecutorPool::Metadata,
+                    metadata_worker_threads(),
+                )
+            } else {
+                TaskExecutor::new(metadata_worker_threads())
+            };
+            let session_persist_executor = if share_executor_pools {
+                TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1)
+            } else {
+                TaskExecutor::new(1)
+            };
             let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
             let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
@@ -402,7 +408,7 @@ impl AppStore {
                         }
                         repo_task_tokens.clear();
                     }
-                    Msg::CloseRepo { repo_id } => {
+                    Msg::CloseRepo { repo_id } | Msg::MoveRepoOut { repo_id } => {
                         repo_monitors.stop(*repo_id);
                         if let Some(token) = repo_task_tokens.remove(repo_id) {
                             repo_load_trace::trace!(

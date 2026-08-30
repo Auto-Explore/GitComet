@@ -56,7 +56,6 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::UiScalePicker
         | PopoverKind::AppMenu
         | PopoverKind::AddRepoMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
@@ -133,8 +132,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
-        | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::UiScalePicker => None,
+        | PopoverKind::ChangeTrackingSettings => None,
 
         // Popovers that implicitly use the currently active repo.
         PopoverKind::BranchPicker { .. }
@@ -391,7 +389,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::UiScalePicker
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
@@ -485,7 +482,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::CloneRepo => 4u8.hash(hasher),
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
-        PopoverKind::UiScalePicker => 68u8.hash(hasher),
         PopoverKind::WebLinkMenu { url } => {
             96u8.hash(hasher);
             url.hash(hasher);

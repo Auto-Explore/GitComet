@@ -248,7 +248,7 @@ pub(crate) use mod_helpers::TerminalPanelResizeState;
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
+    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport, WindowGroupBootstrap,
 };
 use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
 pub(crate) use panes::MainPaneView;
@@ -1335,6 +1335,7 @@ impl GitCometView {
             focused_mergetool,
             focused_mergetool_exit_code,
             startup_crash_report,
+            window_group,
         } = config;
         if initial_path.is_none() {
             initial_path = focused_mergetool.as_ref().map(|cfg| cfg.repo_path.clone());
@@ -1350,6 +1351,40 @@ impl GitCometView {
         let store = Arc::new(store);
 
         let mut ui_session = session::load();
+        let (
+            window_group_id,
+            persisted_group_repo_paths,
+            persisted_group_active_repository,
+            initial_window_placement,
+        ) = match window_group {
+            WindowGroupBootstrap::LegacySession => (None, Vec::new(), None, None),
+            WindowGroupBootstrap::Empty => {
+                ui_session.open_repos.clear();
+                ui_session.active_repo = None;
+                ui_session.sidebar_width = None;
+                ui_session.details_width = None;
+                ui_session.sidebar_collapsed = Some(false);
+                ui_session.change_tracking_height = None;
+                ui_session.untracked_height = None;
+                (None, Vec::new(), None, None)
+            }
+            WindowGroupBootstrap::Saved(group) => {
+                let group = *group;
+                ui_session.open_repos.clone_from(&group.repositories);
+                ui_session.active_repo.clone_from(&group.active_repository);
+                ui_session.sidebar_width = group.layout.sidebar_width;
+                ui_session.details_width = group.layout.details_width;
+                ui_session.sidebar_collapsed = Some(group.layout.sidebar_collapsed);
+                ui_session.change_tracking_height = group.layout.change_tracking_height;
+                ui_session.untracked_height = group.layout.untracked_height;
+                (
+                    Some(group.id),
+                    group.repositories,
+                    group.active_repository,
+                    Some(group.placement),
+                )
+            }
+        };
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let _font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
@@ -1448,6 +1483,19 @@ impl GitCometView {
         let initial_store_state = store.snapshot();
         let store_preloaded = !initial_store_state.repos.is_empty();
         let git_runtime_available = initial_store_state.git_runtime.is_available();
+        let mut pending_repo_open_reservations = FxHashMap::default();
+        let mut pending_repo_open_active = None;
+        if initial_repository_launch_mode == InitialRepositoryLaunchMode::OpenExplicitly
+            && let Some(path) = initial_path.as_ref()
+        {
+            let failure_revision = initial_store_state
+                .repo_open_failures
+                .get(path)
+                .copied()
+                .unwrap_or_default();
+            pending_repo_open_reservations.insert(path.clone(), failure_revision);
+            pending_repo_open_active = Some(path.clone());
+        }
         let should_auto_restore = !crate::startup_probe::disable_auto_restore()
             && view_mode != GitCometViewMode::FocusedMergetool
             && crate::ui_runtime::current().auto_restores_session()
@@ -1473,7 +1521,8 @@ impl GitCometView {
                 if git_runtime_available {
                     store.dispatch(Msg::OpenRepo(path.clone()));
                 } else {
-                    deferred_repo_bootstrap = Some(DeferredRepoBootstrap::OpenRepo(path.clone()));
+                    deferred_repo_bootstrap =
+                        Some(DeferredRepoBootstrap::OpenRepos(vec![path.clone()]));
                 }
             }
         } else if let Some(path) = initial_path.as_ref() {
@@ -1481,8 +1530,13 @@ impl GitCometView {
                 store.dispatch(Msg::OpenRepo(path.clone()));
                 startup_repo_bootstrap_pending = true;
             } else {
-                deferred_repo_bootstrap = Some(DeferredRepoBootstrap::OpenRepo(path.clone()));
+                deferred_repo_bootstrap =
+                    Some(DeferredRepoBootstrap::OpenRepos(vec![path.clone()]));
             }
+        }
+
+        if deferred_repo_bootstrap.is_some() {
+            startup_repo_bootstrap_pending = true;
         }
 
         let initial_state = store.snapshot();
@@ -1702,6 +1756,8 @@ impl GitCometView {
                         .then_some(now);
                 return;
             }
+            crate::app::mark_gitcomet_window_focused(cx, this.window_handle.window_id());
+            crate::window_groups::mark_window_active(cx, this.window_handle.window_id());
             let self_initiated_grab =
                 consume_window_grab_activation(&mut this.window_grab_activation_suppressed_at, now);
             let runtime = refresh_git_runtime();
@@ -1726,6 +1782,26 @@ impl GitCometView {
                     this.store.dispatch(Msg::LoadWorktreeDirty { repo_id });
                 }
                 this.store.dispatch(msg);
+            }
+        });
+
+        let window_bounds_subscription = cx.observe_window_bounds(window, |this, window, cx| {
+            this.window_placement = Some(crate::app::capture_window_placement(
+                window,
+                cx,
+                this.window_placement.as_ref(),
+            ));
+            if let Some(placement) = this.window_placement.clone() {
+                crate::window_groups::record_window_placement(
+                    cx,
+                    this.window_handle.window_id(),
+                    placement,
+                );
+            }
+            if this.view_mode == GitCometViewMode::FocusedMergetool {
+                this.schedule_legacy_window_bounds_persist(cx);
+            } else {
+                this.schedule_window_group_persist(cx);
             }
         });
 
@@ -1879,12 +1955,22 @@ impl GitCometView {
             _poller: poller,
             _ui_model_subscription: ui_model_subscription,
             _activation_subscription: activation_subscription,
+            _window_bounds_subscription: window_bounds_subscription,
             _appearance_subscription: appearance_subscription,
             _terminal_keystroke_interceptor: terminal_keystroke_interceptor,
             _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
             _open_repo_input_subscription: open_repo_input_subscription,
             _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
             view_mode,
+            window_group_id,
+            persisted_group_repo_paths,
+            persisted_group_active_repository,
+            window_placement: Some(crate::app::capture_window_placement(
+                window,
+                cx,
+                initial_window_placement.as_ref(),
+            )),
+            native_window_title: "GitComet".to_string(),
             theme_mode,
             theme: initial_theme,
             title_bar,
@@ -1905,11 +1991,16 @@ impl GitCometView {
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
+            pending_repo_open_reservations,
+            pending_repo_open_active,
             startup_repo_bootstrap_pending,
             splash_backdrop_image: splash::load_splash_backdrop_image(),
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             ui_settings_persist_seq: 0,
+            window_group_persist_seq: 0,
+            #[cfg(test)]
+            ui_settings_persist_requests_for_test: 0,
             last_repo_activation_dispatch_at: FxHashMap::default(),
             window_grab_activation_suppressed_at: None,
             date_time_format,
@@ -1993,23 +2084,17 @@ impl GitCometView {
 
         view.drive_focused_mergetool_bootstrap();
         view.drive_submodule_diff_bootstrap();
-        view.maybe_show_user_survey_on_startup(cx);
-        view.maybe_check_for_updates_on_startup(cx);
 
-        crate::app::sync_gitcomet_window_state(
-            cx,
-            view.window_handle,
-            cx.weak_entity(),
-            view.main_pane.downgrade(),
-            view.view_mode,
-            view.state
-                .repos
-                .iter()
-                .map(|repo| repo.spec.workdir.clone())
-                .collect(),
-        );
+        view.sync_window_group_and_registry(cx);
 
         view
+    }
+
+    pub(crate) fn run_process_startup_hooks(&mut self, cx: &mut gpui::Context<Self>) {
+        #[cfg(test)]
+        crate::app::record_startup_hook_invocation_for_test(cx);
+        self.maybe_show_user_survey_on_startup(cx);
+        self.maybe_check_for_updates_on_startup(cx);
     }
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -2086,6 +2171,15 @@ impl GitCometView {
             .update(cx, |_input, cx| cx.notify());
         self.auth_prompt_secret_input
             .update(cx, |_input, cx| cx.notify());
+        cx.notify();
+    }
+
+    pub(crate) fn notify_window_group_color_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        // Both entities paint against the title-bar fill: the title bar owns
+        // the chrome and the tab strip owns transparent labels and hover
+        // overlays that must composite over the same color.
+        self.title_bar.update(cx, |_bar, cx| cx.notify());
+        self.repo_tabs_bar.update(cx, |_bar, cx| cx.notify());
         cx.notify();
     }
 
@@ -3581,9 +3675,11 @@ impl GitCometView {
                         active_repo,
                     });
                 }
-                DeferredRepoBootstrap::OpenRepo(path) => {
+                DeferredRepoBootstrap::OpenRepos(paths) => {
                     self.startup_repo_bootstrap_pending = true;
-                    self.store.dispatch(Msg::OpenRepo(path));
+                    for path in paths {
+                        self.store.dispatch(Msg::OpenRepo(path));
+                    }
                 }
             }
             return;
@@ -3759,7 +3855,6 @@ impl Render for GitCometView {
         self.clamp_pane_widths_to_window();
         if self.last_window_size != self.ui_window_size_last_seen {
             self.ui_window_size_last_seen = self.last_window_size;
-            self.schedule_ui_settings_persist(cx);
         }
 
         if let Some(repo_id) = self.pending_pull_reconcile_prompt.take()

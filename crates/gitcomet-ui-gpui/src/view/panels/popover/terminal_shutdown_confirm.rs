@@ -14,6 +14,7 @@ pub(super) fn panel(
     let title = match prompt.action {
         TerminalShutdownAction::QuitApp => "Quit GitComet?",
         TerminalShutdownAction::CloseWindow => "Close window?",
+        TerminalShutdownAction::MoveRepo { .. } => "Move repository?",
         TerminalShutdownAction::CloseRepo { .. }
         | TerminalShutdownAction::CloseTerminalForRepo { .. }
         | TerminalShutdownAction::CloseTerminalTab { .. } => "Close terminal?",
@@ -21,6 +22,7 @@ pub(super) fn panel(
     let confirm_label = match prompt.action {
         TerminalShutdownAction::QuitApp => "Terminate and quit",
         TerminalShutdownAction::CloseWindow => "Terminate and close",
+        TerminalShutdownAction::MoveRepo { .. } => "Terminate and move",
         TerminalShutdownAction::CloseRepo { .. }
         | TerminalShutdownAction::CloseTerminalForRepo { .. }
         | TerminalShutdownAction::CloseTerminalTab { .. } => "Terminate and close",

@@ -171,6 +171,14 @@ jobs:
           cargo test -p gitcomet $APP_FEATURES --test difftool_git_integration gui_default --verbose
       - name: Run UI smoke test under selected profile
         run: cargo test -p gitcomet-ui-gpui smoke_tests::smoke_view_renders_without_panicking -- --exact
+      - name: Run multi-window portability regressions
+        run: |
+          cargo test --locked -p gitcomet --bin gitcomet browser_instance::tests
+          cargo test --locked -p gitcomet-ui-gpui --lib window_groups::tests
+          cargo test --locked -p gitcomet-ui-gpui --lib window_controls::tests
+          cargo test --locked -p gitcomet-ui-gpui --lib review_regression -- --test-threads=1
+          cargo test --locked -p gitcomet-ui-gpui --lib app::tests::new_window_shortcuts_open_new_windows
+          cargo test --locked -p gitcomet-ui-gpui --lib app::tests::moving_the_only_repository_to_a_new_window_closes_the_source
 
   macos-tests:
     name: macOS Tests (${{ matrix.name }})
@@ -213,6 +221,14 @@ jobs:
             $APP_FEATURES \
             --locked \
             --verbose
+      - name: Run multi-window portability regressions
+        run: |
+          cargo test --locked -p gitcomet --bin gitcomet browser_instance::tests
+          cargo test --locked -p gitcomet-ui-gpui --lib window_groups::tests
+          cargo test --locked -p gitcomet-ui-gpui --lib window_controls::tests
+          cargo test --locked -p gitcomet-ui-gpui --lib review_regression -- --test-threads=1
+          cargo test --locked -p gitcomet-ui-gpui --lib app::tests::new_window_shortcuts_open_new_windows
+          cargo test --locked -p gitcomet-ui-gpui --lib app::tests::moving_the_only_repository_to_a_new_window_closes_the_source
       - name: Gatekeeper and code-signing check (informational)
         run: |
           set -euo pipefail
@@ -264,6 +280,15 @@ jobs:
             --features gix `
             --locked `
             --verbose
+      - name: Run multi-window portability regressions
+        shell: pwsh
+        run: |
+          cargo test --locked -p gitcomet --bin gitcomet browser_instance::tests
+          cargo test --locked -p gitcomet-ui-gpui --lib window_groups::tests
+          cargo test --locked -p gitcomet-ui-gpui --lib window_controls::tests
+          cargo test --locked -p gitcomet-ui-gpui --lib review_regression -- --test-threads=1
+          cargo test --locked -p gitcomet-ui-gpui --lib app::tests::new_window_shortcuts_open_new_windows
+          cargo test --locked -p gitcomet-ui-gpui --lib app::tests::moving_the_only_repository_to_a_new_window_closes_the_source
       - name: Run standalone smoke test in CMD
         shell: cmd
         run: cargo test -p gitcomet --no-default-features --features gix --test standalone_tool_mode_integration help_flag_exits_zero -- --exact

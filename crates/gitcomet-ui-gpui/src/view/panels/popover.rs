@@ -226,6 +226,10 @@ pub(in super::super) struct PopoverHost {
     /// Session pins snapshotted alongside `cached_recent_repos`. Held apart from
     /// the recents so a pin outlives the recents cap.
     cached_pinned_repos: Vec<std::path::PathBuf>,
+    /// Durable window groups snapshotted with the repository picker so its
+    /// rows remain stable for the duration of one keyboard interaction.
+    cached_window_groups: Vec<session::SavedWindowGroup>,
+    cached_window_group_id: Option<session::WindowGroupId>,
     /// Storage keys of the repository picker sections the user folded away.
     cached_collapsed_picker_sections: std::collections::BTreeSet<String>,
     repo_picker_sort: repo_picker::RepoPickerSort,
@@ -468,7 +472,6 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
-            | PopoverKind::UiScalePicker
             | PopoverKind::TerminalMenu { .. }
             | PopoverKind::DiffHunkMenu { .. }
             | PopoverKind::DiffEditorMenu { .. }
@@ -817,8 +820,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::HistoryAuthorFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::TerminalMenu { .. }
-        | PopoverKind::UiScalePicker => Anchor::TopRight,
+        | PopoverKind::TerminalMenu { .. } => Anchor::TopRight,
         _ => Anchor::TopLeft,
     }
 }
@@ -970,7 +972,6 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
-        | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryAuthorFilter { .. } => Some(HISTORY_AUTHOR_FILTER_WIDTH),
         PopoverKind::ChangeTrackingSettings => Some(CHANGE_TRACKING_MENU_WIDTH),
@@ -1717,6 +1718,8 @@ impl PopoverHost {
             repo_picker_search_query: String::new(),
             cached_recent_repos: Vec::new(),
             cached_pinned_repos: Vec::new(),
+            cached_window_groups: Vec::new(),
+            cached_window_group_id: None,
             cached_collapsed_picker_sections: std::collections::BTreeSet::new(),
             repo_picker_sort: repo_picker::RepoPickerSort::default(),
             repo_picker_sort_menu_open: false,
@@ -1911,6 +1914,15 @@ impl PopoverHost {
     /// dismissal wedged the window shut for the rest of the session.
     pub(in super::super) fn showing_unsaved_file_edits_prompt(&self) -> bool {
         matches!(self.popover, Some(PopoverKind::UnsavedFileEditsConfirm(_)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn activate_closed_repo_picker_entry_for_test(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        repo_picker::activate(self, repo_picker::RepoPickerEntry::Closed(path), cx);
     }
 
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
@@ -2996,6 +3008,18 @@ impl PopoverHost {
         // tooltip from re-showing on top of the popover.
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(true, cx);
         self.request_lazy_popover_repo_data(&kind);
+        if matches!(
+            kind,
+            PopoverKind::RepoPicker | PopoverKind::RepoTabMenu { .. }
+        ) {
+            self.cached_window_groups = crate::window_groups::groups(cx);
+            // This method can run from a listener owned by the root view, so
+            // reading that entity here would re-enter an in-progress update.
+            // The group manager already owns the same window-to-group mapping.
+            self.cached_window_group_id =
+                crate::window_groups::group_for_window(cx, window.window_handle().window_id())
+                    .map(|group| group.id);
+        }
         if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
             self.cherry_pick_mainline = None;
         }
@@ -4189,7 +4213,6 @@ impl PopoverHost {
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
             }
-            PopoverKind::UiScalePicker => self.context_menu_view(PopoverKind::UiScalePicker, cx),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
             PopoverKind::CommitOptionsMenu { repo_id } => {

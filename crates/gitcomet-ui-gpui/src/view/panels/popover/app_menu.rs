@@ -223,11 +223,17 @@ pub(super) fn activate(
         }
         AppMenuAction::Quit => {
             this.close_popover_and_restore_focus(window, cx);
-            crate::app::quit_app_or_warn(cx);
+            // The quit scan asks every root view whether its unsaved-edits
+            // dialog is open. This callback still owns PopoverHost's update
+            // lease, so let it unwind before the scan can read this host.
+            cx.defer(crate::app::quit_app_or_warn);
         }
         AppMenuAction::CloseWindow => {
             this.close_popover_and_restore_focus(window, cx);
-            crate::app::close_window_or_warn(window, cx);
+            // Closing performs the same unsaved-edits query as quitting and
+            // therefore must also run after this PopoverHost update finishes.
+            let window_id = window.window_handle().window_id();
+            cx.defer(move |cx| crate::app::close_window_by_id_or_warn(cx, window_id));
         }
     }
 }
