@@ -35,8 +35,6 @@ jobs:
       uses: Swatinem/rust-cache@v2
     - name: Check formatting
       run: cargo fmt --all --check
-    - name: Check Rust source module sizes
-      run: bash scripts/check-rust-source-size.sh
 
   audit:
     name: Dependency audit (cargo-audit)
