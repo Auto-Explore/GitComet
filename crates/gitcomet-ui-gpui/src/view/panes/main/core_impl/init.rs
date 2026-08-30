@@ -384,6 +384,7 @@ impl MainPaneView {
             diff_text_last_mouse_pos: point(px(0.0), px(0.0)),
             diff_suppress_clicks_remaining: 0,
             diff_text_hitboxes: FxHashMap::default(),
+            diff_text_motion_targets: Vec::new(),
             diff_search_horizontal_reveal: None,
             diff_text_pair_match: None,
             diff_text_occurrences: FxHashMap::default(),

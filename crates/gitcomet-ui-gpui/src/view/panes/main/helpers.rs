@@ -3149,6 +3149,9 @@ pub(crate) struct MainPaneView {
     /// replay stale coordinates.
     pub(in crate::view) diff_text_pending_syntax_click: Option<(DiffTextPos, DiffTextRegion)>,
     pub(in crate::view) diff_text_hitboxes: FxHashMap<(usize, DiffTextRegion), DiffTextHitbox>,
+    /// Non-text Markdown blocks that still carry logical copy text. Rebuilt
+    /// every frame alongside `diff_text_hitboxes`.
+    pub(in crate::view) diff_text_motion_targets: Vec<DiffTextMotionTarget>,
     /// A search match whose row still has to be brought into view sideways, and
     /// how many more frames to keep trying for.
     ///

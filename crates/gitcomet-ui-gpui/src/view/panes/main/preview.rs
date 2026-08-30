@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::markdown_preview::{
-    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewVisualRow,
+    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownPreviewVisualRow,
 };
 #[cfg(test)]
 use std::borrow::Cow;
@@ -772,6 +772,50 @@ impl MainPaneView {
             });
         }
         None
+    }
+
+    /// Logical EOF of one Markdown region as `(visual row, byte offset)`.
+    ///
+    /// Split preview documents are padded with `Spacer` rows to align additions
+    /// and deletions. Their wrap plans can add more empty continuations when
+    /// the opposite column wraps farther. Neither kind of padding is part of
+    /// this side's document, so EOF stays on the last non-spacer source row and
+    /// its last content-bearing visual slice. A genuinely empty final row still
+    /// owns its first visual slice.
+    pub(in crate::view) fn markdown_preview_region_eof(
+        &self,
+        region: DiffTextRegion,
+    ) -> Option<(usize, usize)> {
+        let (list, document) = self.markdown_preview_list_for_region(region)?;
+        let source_row_ix = document
+            .rows
+            .iter()
+            .rposition(|row| !matches!(row.kind, MarkdownPreviewRowKind::Spacer))?;
+        let row = document.rows.get(source_row_ix)?;
+
+        let Some(plan) = self.markdown_preview_wrap_plan(list) else {
+            return Some((source_row_ix, row.text.len()));
+        };
+
+        let first_visual_ix = plan.visual_ix_for_row(source_row_ix);
+        let after_visual_ix = plan
+            .visual_ix_for_row(source_row_ix.saturating_add(1))
+            .min(plan.len());
+        if first_visual_ix >= after_visual_ix {
+            return None;
+        }
+
+        let last_content_visual_ix = (first_visual_ix..after_visual_ix)
+            .rev()
+            .find(|&visual_ix| {
+                plan.get(visual_ix)
+                    .is_some_and(|visual| !visual.byte_range.is_empty())
+            })
+            .unwrap_or(first_visual_ix);
+        Some((
+            last_content_visual_ix,
+            self.markdown_preview_row_text_len(last_content_visual_ix, region),
+        ))
     }
 
     /// Returns the text painted by the markdown preview row at `visible_ix`

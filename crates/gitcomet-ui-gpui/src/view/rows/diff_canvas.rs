@@ -3722,6 +3722,21 @@ fn paint_selectable_diff_text(
         }
     };
 
+    // Styled run backgrounds (including rendered Markdown's inline-code wash)
+    // go below interactive overlays. Painting them after selection would mask
+    // that part of the selection completely; this order intentionally blends
+    // the translucent selection with the run background instead.
+    if !paint_text.is_empty() && !paint_highlights.is_empty() {
+        let _ = layout.paint_background(
+            point(paint_x, y),
+            metrics.line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+    }
+
     // Occurrences go down first, then the pair, then the selection. One click
     // produces both a pair and a set of occurrences, and the clicked name is in
     // both: painting the pair second means the delimiters stay legible where
@@ -3807,14 +3822,6 @@ fn paint_selectable_diff_text(
         return;
     }
 
-    let _ = layout.paint_background(
-        point(paint_x, y),
-        metrics.line_height,
-        gpui::TextAlign::Left,
-        None,
-        window,
-        cx,
-    );
     let _ = layout.paint(
         point(paint_x, y),
         metrics.line_height,

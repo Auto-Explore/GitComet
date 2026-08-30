@@ -683,6 +683,20 @@ pub(super) struct DiffTextHitbox {
     pub(super) wrapped: Option<DiffTextWrappedHit>,
 }
 
+/// A selectable document range painted by something other than text.
+///
+/// Flowing Markdown pictures and thematic breaks intentionally have no
+/// [`DiffTextHitbox`]: their accessible copy text is not a run of glyphs that
+/// can be mapped to an x coordinate. They still need a geometric target while
+/// a drag crosses them, so this records the logical boundaries of the block
+/// without making its invisible text directly clickable.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DiffTextMotionTarget {
+    pub(super) bounds: Bounds<Pixels>,
+    pub(super) start: DiffTextPos,
+    pub(super) end: DiffTextPos,
+}
+
 /// Where one merge-tool column row painted its text, and the line it shaped.
 ///
 /// The conflict columns are their own canvases and register nothing in

@@ -485,7 +485,9 @@ pub(in crate::view) use self::markdown_document::{
 };
 #[cfg(test)]
 pub(in crate::view) use self::markdown_flow_text::{
-    clear_markdown_selection_paint_log_for_tests, markdown_selection_paint_log_for_tests,
+    MarkdownFlowPaintPhase, begin_markdown_flow_paint_phase_capture_for_tests,
+    clear_markdown_selection_paint_log_for_tests, markdown_flow_paint_phases_for_tests,
+    markdown_selection_paint_log_for_tests,
 };
 pub(in crate::view) use self::markdown_flow_text::{
     markdown_flow_painted_offset, markdown_flow_row_offset,
