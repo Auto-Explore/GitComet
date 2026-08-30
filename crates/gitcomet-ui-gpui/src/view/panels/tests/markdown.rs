@@ -246,6 +246,92 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
 }
 
 #[gpui::test]
+fn split_markdown_diff_keeps_an_empty_side_at_half_width(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(63);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_split_markdown_empty_side_width",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("docs/added.md");
+    let old_text = "";
+    let new_text = "# Added\n\nThis side must stay visible.\n";
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create empty-side markdown diff workdir");
+    seed_file_diff_state(cx, &view, repo_id, &workdir, &path, old_text, new_text);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "empty-side markdown diff target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let old = crate::view::markdown_preview::parse_markdown(old_text)
+                    .expect("empty Markdown document should parse");
+                let new = crate::view::markdown_preview::parse_markdown(new_text)
+                    .expect("added Markdown document should parse");
+                pane.diff_view = DiffViewMode::Split;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
+                pane.file_markdown_preview_cache_rev = 1;
+                pane.file_markdown_preview_cache_target = Some(target.clone());
+                pane.file_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::MarkdownPreviewDiff {
+                        old,
+                        inline: new.clone(),
+                        new,
+                    },
+                ));
+                pane.file_markdown_preview_inflight = None;
+                cx.notify();
+            });
+        });
+    });
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+
+    let left = cx
+        .debug_bounds("diff_text_empty_space_SplitLeft")
+        .expect("empty Markdown left column surface");
+    let right = cx
+        .debug_bounds("diff_text_empty_space_SplitRight")
+        .expect("nonempty Markdown right column trailing surface");
+    assert!(
+        left.right() <= right.left(),
+        "the empty surface must stay in its own split column: left={left:?} right={right:?}"
+    );
+    assert!(
+        (left.size.width - right.size.width).abs() <= px(2.0),
+        "empty and nonempty Markdown columns should retain equal flex widths: left={left:?} right={right:?}"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup empty-side markdown diff workdir");
+}
+
+#[gpui::test]
 fn secondary_f_from_markdown_file_preview_searches_the_rendered_rows(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -3719,6 +3805,561 @@ fn copied_preview_selection(
 }
 
 #[gpui::test]
+fn an_inter_block_gap_starts_markdown_selection_upward_and_downward(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(100),
+        "markdown_inter_block_gap_selection",
+        "Above block.\n\n## Middle block\n\nBelow block.\n",
+    );
+    let middle_row_ix = fixture.row_ix("Middle block");
+    let gap = cx
+        .debug_bounds("markdown_preview_block_gap_1")
+        .expect("interactive gap before the heading");
+    let above = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Above block.")
+        )))
+        .expect("paragraph above the gap");
+    let below = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Below block.")
+        )))
+        .expect("paragraph below the gap");
+    assert!(
+        gap.top() >= above.bottom() && gap.bottom() <= below.top(),
+        "the selectable gap must occupy only the space between blocks: gap={gap:?} above={above:?} below={below:?}"
+    );
+
+    cx.simulate_click(gap.center(), Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let boundary = DiffTextPos {
+            source_visible_ix: middle_row_ix,
+            region: DiffTextRegion::Inline,
+            offset: 0,
+        };
+        assert_eq!(pane.diff_text_anchor, Some(boundary));
+        assert_eq!(pane.diff_text_head, Some(boundary));
+    });
+
+    drag_preview_selection(cx, gap.center(), point(above.left(), above.center().y));
+    let upward = copied_preview_selection(cx, &view)
+        .expect("dragging upward from the block gap should select text");
+    assert!(upward.contains("Above block."), "upward={upward:?}");
+    assert!(
+        !upward.contains("Middle block") && !upward.contains("Below block."),
+        "an upward drag should stop at the following block boundary: {upward:?}"
+    );
+
+    drag_preview_selection(cx, gap.center(), point(below.right(), below.center().y));
+    let downward = copied_preview_selection(cx, &view)
+        .expect("dragging downward from the block gap should select text");
+    assert!(
+        downward.contains("Middle block") && downward.contains("Below block."),
+        "a downward drag should start with the following block: {downward:?}"
+    );
+    assert!(
+        !downward.contains("Above block."),
+        "a downward drag must not reach behind the gap boundary: {downward:?}"
+    );
+
+    let selection_before_menu = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (pane.diff_text_anchor, pane.diff_text_head)
+    });
+    cx.simulate_mouse_down(gap.center(), MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(gap.center(), MouseButton::Right, Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (pane.diff_text_anchor, pane.diff_text_head)
+        }),
+        selection_before_menu,
+        "opening the gap context menu should preserve the selection"
+    );
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).active_context_menu_invoker.clone()),
+        Some("diff_editor_menu".into())
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn fenced_code_padding_starts_flowing_selection_at_code_boundaries(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(102),
+        "markdown_code_padding_selection",
+        "Above block.\n\n```rust\nshared_call();\n```\n\nBelow block.\n",
+    );
+    let code_ix = fixture.row_ix("shared_call();");
+    let top = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_code_padding_top_{code_ix}"
+        )))
+        .expect("interactive padding above fenced code");
+    let bottom = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_code_padding_bottom_{code_ix}"
+        )))
+        .expect("interactive padding below fenced code");
+    let above = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Above block.")
+        )))
+        .expect("paragraph above fenced code");
+    let below = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Below block.")
+        )))
+        .expect("paragraph below fenced code");
+
+    cx.simulate_click(top.center(), Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let boundary = DiffTextPos {
+            source_visible_ix: code_ix,
+            region: DiffTextRegion::Inline,
+            offset: 0,
+        };
+        assert_eq!(pane.diff_text_anchor, Some(boundary));
+        assert_eq!(pane.diff_text_head, Some(boundary));
+    });
+    drag_preview_selection(cx, top.center(), point(below.right(), below.center().y));
+    let from_top = copied_preview_selection(cx, &view)
+        .expect("dragging from fenced-code top padding should select text");
+    assert!(
+        from_top.contains("shared_call();") && from_top.contains("Below block."),
+        "the top code boundary should select the code and following paragraph: {from_top:?}"
+    );
+    assert!(
+        !from_top.contains("Above block."),
+        "the top code boundary must exclude the preceding paragraph: {from_top:?}"
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_text_local_selection_range(code_ix, DiffTextRegion::Inline),
+            Some(0.."shared_call();".len()),
+            "the flowing fenced-code row should receive a full highlight"
+        );
+    });
+
+    cx.simulate_click(bottom.center(), Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let boundary = DiffTextPos {
+            source_visible_ix: code_ix,
+            region: DiffTextRegion::Inline,
+            offset: "shared_call();".len(),
+        };
+        assert_eq!(pane.diff_text_anchor, Some(boundary));
+        assert_eq!(pane.diff_text_head, Some(boundary));
+    });
+    drag_preview_selection(cx, bottom.center(), point(above.left(), above.center().y));
+    let from_bottom = copied_preview_selection(cx, &view)
+        .expect("dragging upward from fenced-code bottom padding should select text");
+    assert!(
+        from_bottom.contains("Above block.") && from_bottom.contains("shared_call();"),
+        "the bottom code boundary should select the code and preceding paragraph: {from_bottom:?}"
+    );
+    assert!(
+        !from_bottom.contains("Below block."),
+        "the bottom code boundary must exclude the following paragraph: {from_bottom:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn split_markdown_block_gaps_start_selection_in_both_columns(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(101);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_split_markdown_gap_selection",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("docs/split-gaps.md");
+    let old_text = concat!(
+        "Above block.\n\n",
+        "## Middle block\n\n",
+        "Paragraph before code.\n\n",
+        "```rust\nshared_call();\n```\n\n",
+        "Paragraph before list.\n\n",
+        "- shared item\n\n",
+        "Below old.\n",
+    );
+    let new_text = concat!(
+        "Above block.\n\n",
+        "## Middle block\n\n",
+        "Paragraph before code.\n\n",
+        "```rust\nshared_call();\n```\n\n",
+        "Paragraph before list.\n\n",
+        "- shared item\n\n",
+        "Below new.\n",
+    );
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    let preview = crate::view::markdown_preview::build_markdown_diff_preview(old_text, new_text)
+        .expect("split Markdown gap fixture should parse");
+    let above_ix = preview
+        .old
+        .rows
+        .iter()
+        .position(|row| row.text.as_ref() == "Above block.")
+        .expect("old paragraph above the gap");
+    let middle_ix = preview
+        .old
+        .rows
+        .iter()
+        .position(|row| row.text.as_ref() == "Middle block")
+        .expect("old heading below the gap");
+    let below_ix = preview
+        .old
+        .rows
+        .iter()
+        .position(|row| row.text.as_ref() == "Below old.")
+        .expect("old paragraph below the gap");
+    let code_ix = preview
+        .old
+        .rows
+        .iter()
+        .position(|row| row.text.as_ref() == "shared_call();")
+        .expect("old fenced-code row");
+    let before_list_ix = preview
+        .old
+        .rows
+        .iter()
+        .position(|row| row.text.as_ref() == "Paragraph before list.")
+        .expect("old paragraph before list");
+    let list_ix = preview
+        .old
+        .rows
+        .iter()
+        .position(|row| row.text.as_ref() == "shared item")
+        .expect("old list row");
+    let gap_ix = (above_ix + 1..middle_ix)
+        .find(|&row_ix| {
+            matches!(
+                preview.old.rows[row_ix].kind,
+                crate::view::markdown_preview::MarkdownPreviewRowKind::Spacer
+            )
+        })
+        .expect("old split column should retain a spacer before the heading");
+    assert!(
+        matches!(
+            preview.new.rows.get(gap_ix).map(|row| row.kind),
+            Some(crate::view::markdown_preview::MarkdownPreviewRowKind::Spacer)
+        ),
+        "the aligned new column should have the same spacer boundary"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create split Markdown gap workdir");
+    seed_file_diff_state(cx, &view, repo_id, &workdir, &path, old_text, new_text);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "split Markdown gap target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
+                pane.file_markdown_preview_cache_rev = 1;
+                pane.file_markdown_preview_cache_target = Some(target.clone());
+                pane.file_markdown_preview =
+                    gitcomet_state::model::Loadable::Ready(Arc::new(preview));
+                pane.file_markdown_preview_inflight = None;
+                cx.notify();
+            });
+            this.set_diff_word_wrap(false, cx);
+        });
+    });
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+
+    let left_gap = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_gap_SplitLeft_{gap_ix}"
+        )))
+        .expect("interactive spacer in the old split column");
+    let right_gap = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_gap_SplitRight_{gap_ix}"
+        )))
+        .expect("interactive spacer in the new split column");
+    assert!(
+        left_gap.right() <= right_gap.left(),
+        "each gap must remain inside its own split column: left={left_gap:?} right={right_gap:?}"
+    );
+
+    cx.simulate_click(right_gap.center(), Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let boundary = DiffTextPos {
+            source_visible_ix: gap_ix,
+            region: DiffTextRegion::SplitRight,
+            offset: 0,
+        };
+        assert_eq!(pane.diff_text_anchor, Some(boundary));
+        assert_eq!(pane.diff_text_head, Some(boundary));
+    });
+
+    cx.simulate_click(left_gap.center(), Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let boundary = DiffTextPos {
+            source_visible_ix: gap_ix,
+            region: DiffTextRegion::SplitLeft,
+            offset: 0,
+        };
+        assert_eq!(pane.diff_text_anchor, Some(boundary));
+        assert_eq!(pane.diff_text_head, Some(boundary));
+    });
+
+    let above = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        above_ix,
+        DiffTextRegion::SplitLeft,
+        0..1,
+        "old paragraph above split Markdown gap",
+    );
+    let below = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        below_ix,
+        DiffTextRegion::SplitLeft,
+        "Below old.".len() - 1.."Below old.".len(),
+        "old paragraph below split Markdown gap",
+    );
+
+    drag_preview_selection(cx, left_gap.center(), above);
+    let upward = copied_preview_selection(cx, &view)
+        .expect("dragging upward from a split spacer should select text");
+    assert!(upward.contains("Above block."), "upward={upward:?}");
+    assert!(
+        !upward.contains("Middle block") && !upward.contains("Below old."),
+        "an upward split drag should stop at the spacer boundary: {upward:?}"
+    );
+
+    drag_preview_selection(cx, left_gap.center(), below);
+    let downward = copied_preview_selection(cx, &view)
+        .expect("dragging downward from a split spacer should select text");
+    assert!(
+        downward.contains("Middle block") && downward.contains("Below old"),
+        "a downward split drag should start after the spacer: {downward:?}"
+    );
+    assert!(
+        !downward.contains("Above block."),
+        "a downward split drag must not reach behind the spacer: {downward:?}"
+    );
+
+    let (code_text_bounds, before_list_text_bounds, list_text_bounds) =
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (
+                pane.diff_text_hitbox_bounds_for_tests(code_ix, DiffTextRegion::SplitLeft)
+                    .expect("old fenced-code text hitbox"),
+                pane.diff_text_hitbox_bounds_for_tests(before_list_ix, DiffTextRegion::SplitLeft)
+                    .expect("old paragraph-before-list text hitbox"),
+                pane.diff_text_hitbox_bounds_for_tests(list_ix, DiffTextRegion::SplitLeft)
+                    .expect("old list text hitbox"),
+            )
+        });
+    let code_top_padding = point(
+        code_text_bounds.center().x,
+        code_text_bounds.top() - px(2.0),
+    );
+    let code_bottom_padding = point(
+        code_text_bounds.center().x,
+        code_text_bounds.bottom() + px(2.0),
+    );
+
+    cx.simulate_click(code_top_padding, Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let boundary = DiffTextPos {
+            source_visible_ix: code_ix,
+            region: DiffTextRegion::SplitLeft,
+            offset: 0,
+        };
+        assert_eq!(pane.diff_text_anchor, Some(boundary));
+        assert_eq!(pane.diff_text_head, Some(boundary));
+    });
+
+    drag_preview_selection(cx, code_top_padding, below);
+    let from_code_top = copied_preview_selection(cx, &view)
+        .expect("dragging down from fenced-code top padding should select text");
+    assert!(
+        from_code_top.contains("shared_call();")
+            && from_code_top.contains("shared item")
+            && from_code_top.contains("Below old"),
+        "the code-top boundary should select every following block: {from_code_top:?}"
+    );
+    assert!(
+        !from_code_top.contains("Paragraph before code."),
+        "the code-top boundary must not reach into the preceding paragraph: {from_code_top:?}"
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_text_local_selection_range(code_ix, DiffTextRegion::SplitLeft),
+            Some(0.."shared_call();".len()),
+            "the fenced-code text should receive a full selection highlight"
+        );
+    });
+
+    cx.simulate_click(code_bottom_padding, Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let boundary = DiffTextPos {
+            source_visible_ix: code_ix,
+            region: DiffTextRegion::SplitLeft,
+            offset: "shared_call();".len(),
+        };
+        assert_eq!(pane.diff_text_anchor, Some(boundary));
+        assert_eq!(pane.diff_text_head, Some(boundary));
+    });
+    drag_preview_selection(cx, code_bottom_padding, below);
+    let from_code_bottom = copied_preview_selection(cx, &view)
+        .expect("dragging down from fenced-code bottom padding should select text");
+    assert!(
+        from_code_bottom.contains("Paragraph before list.")
+            && from_code_bottom.contains("shared item")
+            && from_code_bottom.contains("Below old"),
+        "the code-bottom boundary should select the following blocks: {from_code_bottom:?}"
+    );
+    assert!(
+        !from_code_bottom.contains("shared_call();")
+            && !from_code_bottom.contains("Paragraph before code."),
+        "the code-bottom boundary must exclude the fenced code and preceding text: {from_code_bottom:?}"
+    );
+
+    let before_list_bottom_padding = point(
+        before_list_text_bounds.center().x,
+        before_list_text_bounds.bottom() + px(2.0),
+    );
+    cx.simulate_click(before_list_bottom_padding, Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let boundary = DiffTextPos {
+            source_visible_ix: before_list_ix,
+            region: DiffTextRegion::SplitLeft,
+            offset: "Paragraph before list.".len(),
+        };
+        assert_eq!(pane.diff_text_anchor, Some(boundary));
+        assert_eq!(pane.diff_text_head, Some(boundary));
+    });
+    drag_preview_selection(cx, before_list_bottom_padding, below);
+    let into_list = copied_preview_selection(cx, &view)
+        .expect("dragging from paragraph padding into a list should select text");
+    assert!(
+        into_list.contains("shared item") && into_list.contains("Below old"),
+        "the paragraph-list boundary should select the list and following paragraph: {into_list:?}"
+    );
+    assert!(
+        !into_list.contains("Paragraph before list.") && !into_list.contains("shared_call();"),
+        "the paragraph-list boundary must exclude preceding blocks: {into_list:?}"
+    );
+
+    let list_bottom_padding = point(
+        list_text_bounds.center().x,
+        list_text_bounds.bottom() + px(2.0),
+    );
+    cx.simulate_click(list_bottom_padding, Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let boundary = DiffTextPos {
+            source_visible_ix: list_ix,
+            region: DiffTextRegion::SplitLeft,
+            offset: "shared item".len(),
+        };
+        assert_eq!(pane.diff_text_anchor, Some(boundary));
+        assert_eq!(pane.diff_text_head, Some(boundary));
+    });
+    drag_preview_selection(cx, list_bottom_padding, below);
+    let out_of_list = copied_preview_selection(cx, &view)
+        .expect("dragging from list padding into a paragraph should select text");
+    assert!(
+        out_of_list.contains("Below old"),
+        "the list-paragraph boundary should select the following paragraph: {out_of_list:?}"
+    );
+    assert!(
+        !out_of_list.contains("shared item") && !out_of_list.contains("Paragraph before list."),
+        "the list-paragraph boundary must exclude the list and preceding paragraph: {out_of_list:?}"
+    );
+
+    let selection_before_menu = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (pane.diff_text_anchor, pane.diff_text_head)
+    });
+    cx.simulate_mouse_down(left_gap.center(), MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(left_gap.center(), MouseButton::Right, Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (pane.diff_text_anchor, pane.diff_text_head)
+        }),
+        selection_before_menu,
+        "opening a split spacer context menu should preserve the selection"
+    );
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).active_context_menu_invoker.clone()),
+        Some("diff_editor_menu".into())
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup split Markdown gap workdir");
+}
+
+#[gpui::test]
 fn a_drag_that_runs_past_a_short_line_still_selects_it(cx: &mut gpui::TestAppContext) {
     // A code block sizes every line to its own text so the block has something
     // to scroll, which leaves the space beside a short line belonging to no
@@ -3881,6 +4522,176 @@ fn a_picture_draws_at_the_size_its_skeleton_reserved(cx: &mut gpui::TestAppConte
             && (picture.size.height - px(20.0)).abs() <= px(0.5),
         "a picture narrower than the pane draws at its own size, which is the \
          box its skeleton reserved; got {picture:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn markdown_below_eof_surface_starts_after_a_trailing_picture(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(98),
+        "markdown_below_eof_trailing_picture",
+        "Before.\n\n![demo](demo.png)\n",
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/demo.png"),
+        test_png_bytes(40, 20).as_slice(),
+    )
+    .expect("write trailing preview picture");
+    let row_ix = fixture.row_ix("demo");
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+
+    let picture = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_block_image_{row_ix}"
+        )))
+        .expect("trailing picture bounds");
+    let empty_space = cx
+        .debug_bounds("diff_text_empty_space_Inline")
+        .expect("flowing preview below-EOF surface");
+    let before = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Before.")
+        )))
+        .expect("paragraph before the trailing picture");
+    assert!(
+        empty_space.top() >= picture.bottom(),
+        "the EOF surface must begin after the complete picture block; picture={picture:?} surface={empty_space:?}"
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.worktree_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .max_offset()
+                .y,
+            px(0.0),
+            "a short flowing document should not gain vertical scroll range"
+        );
+    });
+
+    cx.simulate_mouse_down(
+        empty_space.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        empty_space.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let last_row_ix = fixture
+            .document
+            .rows
+            .len()
+            .checked_sub(1)
+            .expect("the preview document should contain picture rows");
+        let last_row_len = fixture.document.rows[last_row_ix].text.len();
+        assert_eq!(pane.diff_text_anchor, pane.diff_text_head);
+        assert_eq!(
+            pane.diff_text_head,
+            Some(DiffTextPos {
+                source_visible_ix: last_row_ix,
+                region: DiffTextRegion::Inline,
+                offset: last_row_len,
+            }),
+            "below-EOF selection must end after every row of the trailing picture"
+        );
+    });
+
+    drag_preview_selection(
+        cx,
+        empty_space.center(),
+        point(before.left(), before.center().y),
+    );
+    let copied = copied_preview_selection(cx, &view)
+        .expect("dragging upward from below EOF should select the document");
+    assert!(
+        copied.contains("demo"),
+        "dragging upward from below EOF must include a trailing picture's alt text: {copied:?}"
+    );
+    assert_eq!(
+        copied.matches("demo").count(),
+        1,
+        "a multi-row trailing picture should contribute its alt text once: {copied:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn markdown_below_eof_resolves_after_a_trailing_thematic_break(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(99),
+        "markdown_below_eof_trailing_rule",
+        "Before.\n\n---\n",
+    );
+    let before = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Before.")
+        )))
+        .expect("paragraph before the trailing thematic break");
+    let empty_space = cx
+        .debug_bounds("diff_text_empty_space_Inline")
+        .expect("flowing preview below-EOF surface");
+
+    cx.simulate_click(empty_space.center(), Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let last_row_ix = fixture
+            .document
+            .rows
+            .len()
+            .checked_sub(1)
+            .expect("the preview document should contain a thematic-break row");
+        assert_eq!(
+            pane.diff_text_head,
+            Some(DiffTextPos {
+                source_visible_ix: last_row_ix,
+                region: DiffTextRegion::Inline,
+                offset: fixture.document.rows[last_row_ix].text.len(),
+            }),
+            "below-EOF selection must end after the trailing thematic-break row"
+        );
+    });
+
+    drag_preview_selection(
+        cx,
+        empty_space.center(),
+        point(before.left(), before.center().y),
+    );
+    let copied = copied_preview_selection(cx, &view)
+        .expect("dragging upward from below EOF should select the document");
+    assert!(
+        copied.contains("───"),
+        "dragging upward from below EOF must include the trailing thematic break: {copied:?}"
     );
 
     fixture.cleanup();

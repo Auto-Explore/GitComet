@@ -774,6 +774,23 @@ impl MainPaneView {
         None
     }
 
+    /// Number of visual rows belonging to one selectable Markdown region.
+    ///
+    /// Split previews can have different document lengths, so EOF resolution
+    /// must use the selected column rather than the combined row count. The
+    /// flowing worktree preview has no wrap plan and therefore returns its
+    /// document-row count directly.
+    pub(in crate::view) fn markdown_preview_region_row_count(
+        &self,
+        region: DiffTextRegion,
+    ) -> Option<usize> {
+        let (list, document) = self.markdown_preview_list_for_region(region)?;
+        Some(
+            self.markdown_preview_wrap_plan(list)
+                .map_or(document.rows.len(), |plan| plan.len()),
+        )
+    }
+
     /// Returns the text painted by the markdown preview row at `visible_ix`
     /// for the given `region`. For file preview (added/deleted/untracked) only
     /// `DiffTextRegion::Inline` is meaningful.

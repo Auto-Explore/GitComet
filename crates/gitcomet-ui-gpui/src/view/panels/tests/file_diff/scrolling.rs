@@ -92,6 +92,96 @@ index 1111111..2222222 100644
 }
 
 #[gpui::test]
+fn short_split_diff_has_region_confined_below_eof_surfaces(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(9141);
+    let path = PathBuf::from("src/split_below_eof.rs");
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "split_below_eof_surfaces",
+        path,
+        "\
+diff --git a/src/split_below_eof.rs b/src/split_below_eof.rs
+index 1111111..2222222 100644
+--- a/src/split_below_eof.rs
++++ b/src/split_below_eof.rs
+@@ -1,2 +1,2 @@
+-old
++new
+ tail
+"
+        .to_string(),
+        "old\ntail\n".to_string(),
+        "new\ntail\n".to_string(),
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "short split diff fixture activates",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            (
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_target.clone(),
+            )
+        },
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.diff_view = DiffViewMode::Split;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let left = cx
+        .debug_bounds("diff_text_empty_space_SplitLeft")
+        .expect("short split diff left below-EOF surface");
+    let right = cx
+        .debug_bounds("diff_text_empty_space_SplitRight")
+        .expect("short split diff right below-EOF surface");
+    assert!(left.right() <= right.left());
+    let left_row = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        0,
+        DiffTextRegion::SplitLeft,
+        0..3,
+        "split left row drag target",
+    );
+
+    cx.simulate_mouse_down(right.center(), MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(left_row, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(left_row, MouseButton::Left, Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_text_anchor.map(|pos| pos.region),
+            Some(DiffTextRegion::SplitRight)
+        );
+        assert_eq!(
+            pane.diff_text_head.map(|pos| pos.region),
+            Some(DiffTextRegion::SplitRight),
+            "dragging into the other column must stay in the initiating region"
+        );
+    });
+}
+
+#[gpui::test]
 fn diff_search_f3_continues_from_previous_location_after_patch_refresh(
     cx: &mut gpui::TestAppContext,
 ) {

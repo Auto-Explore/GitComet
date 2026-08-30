@@ -440,7 +440,12 @@ impl MainPaneView {
                             }
                         };
                         if total_len == 0 {
-                            components::empty_state(theme, "Diff", "Empty file.").into_any_element()
+                            empty_diff_text_document(
+                                cx.entity(),
+                                DiffTextRegion::Inline,
+                                components::empty_state(theme, "Diff", "Empty file.")
+                                    .into_any_element(),
+                            )
                         } else if self.diff_visible_len() == 0 {
                             components::empty_state(theme, "Diff", "Nothing to render.")
                                 .into_any_element()
@@ -469,6 +474,10 @@ impl MainPaneView {
                                         horizontal_scrollbar_gutter
                                     })
                                     .track_scroll(&self.diff_scroll)
+                                    .with_decoration(DiffTextEmptySpaceDecoration {
+                                        view: cx.entity(),
+                                        region: DiffTextRegion::Inline,
+                                    })
                                     .when(
                                         !self.diff_word_wrap,
                                         |list| {
@@ -564,6 +573,10 @@ impl MainPaneView {
                                         horizontal_scrollbar_gutter
                                     })
                                     .track_scroll(&self.diff_scroll)
+                                    .with_decoration(DiffTextEmptySpaceDecoration {
+                                        view: cx.entity(),
+                                        region: DiffTextRegion::SplitLeft,
+                                    })
                                     .when(
                                         !self.diff_word_wrap,
                                         |list| {
@@ -585,6 +598,10 @@ impl MainPaneView {
                                         horizontal_scrollbar_gutter
                                     })
                                     .track_scroll(&self.diff_split_right_scroll)
+                                    .with_decoration(DiffTextEmptySpaceDecoration {
+                                        view: cx.entity(),
+                                        region: DiffTextRegion::SplitRight,
+                                    })
                                     .when(
                                         !self.diff_word_wrap,
                                         |list| {
@@ -923,7 +940,11 @@ impl MainPaneView {
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         if old_len == 0 && new_len == 0 {
-            return components::empty_state(theme, "Preview", "Empty file.").into_any_element();
+            return empty_diff_text_document(
+                cx.entity(),
+                DiffTextRegion::Inline,
+                components::empty_state(theme, "Preview", "Empty file.").into_any_element(),
+            );
         }
 
         self.maybe_autoscroll_diff_to_first_change();
@@ -942,18 +963,22 @@ impl MainPaneView {
             _ => Vec::new(),
         };
 
-        let empty_column = || {
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .text_color(theme.colors.foreground.secondary)
-                .child("Empty file.")
-                .into_any_element()
+        let empty_column = |region| {
+            empty_diff_text_document(
+                cx.entity(),
+                region,
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(theme.colors.foreground.secondary)
+                    .child("Empty file.")
+                    .into_any_element(),
+            )
         };
 
         let vertical_sync_enabled = self.diff_scroll_sync.includes_vertical();
@@ -1005,13 +1030,17 @@ impl MainPaneView {
             ui_scale_percent,
         );
         macro_rules! mk_list {
-            ($name:expr, $len:expr, $scroll:expr, $proc:expr) => {
+            ($name:expr, $len:expr, $region:expr, $scroll:expr, $proc:expr) => {
                 uniform_list($name, $len, $proc)
                     .h_full()
                     .min_h(px(0.0))
                     .pt(document_edge_gap)
                     .pb(document_edge_gap)
                     .track_scroll(&$scroll)
+                    .with_decoration(DiffTextEmptySpaceDecoration {
+                        view: cx.entity(),
+                        region: $region,
+                    })
                     .with_horizontal_sizing_behavior(
                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                     )
@@ -1029,6 +1058,7 @@ impl MainPaneView {
             let list = mk_list!(
                 "diff_markdown_preview_inline",
                 inline_len,
+                DiffTextRegion::Inline,
                 self.diff_scroll.clone(),
                 cx.processor(Self::render_markdown_diff_inline_rows)
             );
@@ -1083,11 +1113,12 @@ impl MainPaneView {
             let list = mk_list!(
                 "diff_markdown_preview_right_single",
                 new_len,
+                DiffTextRegion::SplitRight,
                 self.diff_scroll.clone(),
                 cx.processor(Self::render_markdown_diff_right_rows)
             );
             (
-                empty_column(),
+                empty_column(DiffTextRegion::SplitLeft),
                 mk_column(
                     "diff_markdown_preview_right",
                     "diff_markdown_preview_right_scrollbar",
@@ -1103,6 +1134,7 @@ impl MainPaneView {
             let list = mk_list!(
                 "diff_markdown_preview_left_single",
                 old_len,
+                DiffTextRegion::SplitLeft,
                 self.diff_scroll.clone(),
                 cx.processor(Self::render_markdown_diff_left_rows)
             );
@@ -1115,7 +1147,7 @@ impl MainPaneView {
                     self.diff_scroll.clone(),
                     handle.clone(),
                 ),
-                empty_column(),
+                empty_column(DiffTextRegion::SplitRight),
                 handle,
             )
         } else {
@@ -1130,12 +1162,14 @@ impl MainPaneView {
             let left_list = mk_list!(
                 "diff_markdown_preview_left",
                 old_len,
+                DiffTextRegion::SplitLeft,
                 self.diff_scroll.clone(),
                 cx.processor(Self::render_markdown_diff_left_rows)
             );
             let right_list = mk_list!(
                 "diff_markdown_preview_right",
                 new_len,
+                DiffTextRegion::SplitRight,
                 self.diff_split_right_scroll.clone(),
                 cx.processor(Self::render_markdown_diff_right_rows)
             );

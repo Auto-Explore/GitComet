@@ -244,12 +244,57 @@ pub(in crate::view) fn markdown_preview_row_element(
     let is_interactive = context.view.is_some();
     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewStyledRowBuild);
     if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
-        return div()
+        let gap = div()
+            .id((
+                "markdown_preview_gap",
+                row_ix
+                    .saturating_mul(4)
+                    .saturating_add(usize::from(text_region.order())),
+            ))
+            .debug_selector(move || format!("markdown_preview_gap_{text_region:?}_{row_ix}"))
             .relative()
             .h(markdown_preview_row_height(ui_scale_percent))
             .min_h(markdown_preview_row_height(ui_scale_percent))
             .w(min_width)
-            .min_w(min_width)
+            .min_w(min_width);
+        let Some(view) = context.view.clone() else {
+            return gap.into_any_element();
+        };
+
+        let left_view = view.clone();
+        return gap
+            .cursor(gpui::CursorStyle::IBeam)
+            .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+                crate::press_gesture::claim_press(cx);
+                cx.stop_propagation();
+                let focus = left_view.read(cx).diff_panel_focus_handle.clone();
+                window.focus(&focus, cx);
+                left_view.update(cx, |this, cx| {
+                    this.handle_diff_text_document_gap_mouse_down(
+                        row_ix,
+                        text_region,
+                        event.position,
+                        cx,
+                    );
+                    cx.notify();
+                });
+            })
+            .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+                crate::press_gesture::claim_press(cx);
+                cx.stop_propagation();
+                let focus = view.read(cx).diff_panel_focus_handle.clone();
+                window.focus(&focus, cx);
+                view.update(cx, |this, cx| {
+                    this.open_diff_editor_context_menu(
+                        row_ix,
+                        text_region,
+                        event.position,
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                });
+            })
             .into_any_element();
     }
 
@@ -668,6 +713,7 @@ pub(in crate::view) fn markdown_preview_row_element(
             .w(min_width)
             .flex()
             .items_center()
+            .cursor(gpui::CursorStyle::IBeam)
             .pt(px(row_layout.top_inset_px))
             .pb(px(row_layout.bottom_inset_px))
             .when_some(markdown_preview_row_background(theme, row), |div, bg| {
@@ -690,7 +736,7 @@ pub(in crate::view) fn markdown_preview_row_element(
                             window,
                             cx,
                         ) {
-                            this.handle_diff_text_mouse_down(
+                            this.handle_markdown_preview_row_mouse_down(
                                 row_ix,
                                 text_region,
                                 position,

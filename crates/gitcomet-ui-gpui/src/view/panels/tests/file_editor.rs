@@ -2477,6 +2477,75 @@ fn seed_editor(
     workdir
 }
 
+#[gpui::test]
+fn short_file_editor_uses_the_space_below_eof_for_caret_drag_and_menu(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let contents = "alpha\nbeta";
+    let workdir = seed_editor(&view, cx, 998, "file_editor_below_eof_selection", contents);
+
+    let viewport = cx
+        .debug_bounds("file_editor_scroll")
+        .expect("short editor viewport bounds");
+    let below_eof = point(viewport.center().x, viewport.bottom() - px(24.0));
+    let target = point(viewport.left() + px(28.0), viewport.top() + px(10.0));
+    let target_offset = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let input = pane.file_editor_input.read(app);
+        assert_eq!(input.offset_for_position(below_eof), contents.len());
+        input.offset_for_position(target)
+    });
+    assert!(target_offset < contents.len());
+
+    cx.simulate_mouse_down(below_eof, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(below_eof, MouseButton::Left, Modifiers::default());
+    assert_eq!(
+        editor_selected_range(&view, cx),
+        contents.len()..contents.len()
+    );
+
+    cx.simulate_mouse_down(below_eof, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    assert_eq!(
+        editor_selected_range(&view, cx),
+        target_offset..contents.len()
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.file_editor_input
+                .update(cx, |input, cx| input.set_selected_range(0..2, false, cx));
+        });
+    });
+    cx.simulate_mouse_down(below_eof, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(below_eof, MouseButton::Right, Modifiers::default());
+    assert_eq!(
+        editor_selected_range(&view, cx),
+        contents.len()..contents.len()
+    );
+    assert!(
+        cx.debug_bounds("text_input_context_select_all").is_some(),
+        "right-clicking below EOF should open the normal text-input menu"
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.file_editor_scroll.max_offset().y,
+            px(0.0),
+            "filling the hit surface must not make a short file scroll vertically"
+        );
+    });
+
+    std::fs::remove_dir_all(workdir).expect("cleanup below-EOF editor fixture");
+}
+
 /// Open the search box over the editor and put `query` in it, the way Ctrl+F
 /// followed by typing does. Returns once the reveal has been drawn.
 fn search_the_editor_for(

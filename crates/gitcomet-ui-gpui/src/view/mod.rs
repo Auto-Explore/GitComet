@@ -236,7 +236,8 @@ use commit_message_hover::{CommitMessageHoverHost, CommitMessageHoverState};
 use diff_text_model::CachedDiffTextSegment;
 use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
 use diff_text_selection::{
-    ConflictRowSelectionTracker, DiffTextSelectionOverlay, DiffTextSelectionTracker,
+    ConflictRowSelectionTracker, DiffTextEmptySpaceDecoration, DiffTextSelectionOverlay,
+    DiffTextSelectionTracker, empty_diff_text_document, flowing_diff_text_empty_space,
 };
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
