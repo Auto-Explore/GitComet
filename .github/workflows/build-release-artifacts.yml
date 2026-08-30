@@ -16,6 +16,16 @@ on:
       release_id:
         required: false
         type: string
+      upload_symbols:
+        description: "Upload Breakpad symbols to the symbol store (off for nightly builds)"
+        required: false
+        type: boolean
+        default: true
+      generate_cask:
+        description: "Generate the Homebrew cask asset (off for nightly builds)"
+        required: false
+        type: boolean
+        default: true
     secrets:
       AZURE_CREDENTIALS:
         required: false
@@ -107,7 +117,7 @@ jobs:
             exit 1
           fi
 
-          if [[ "$tag" != v* ]]; then
+          if [[ "$tag" != v* ]] && [[ "$tag" != nightly* ]]; then
             tag="v${tag}"
           fi
 
@@ -115,12 +125,19 @@ jobs:
             version="${tag#v}"
           fi
 
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
-            echo "::error title=Invalid version::Expected semver like 1.2.3 or 1.2.3-rc.1."
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+|-nightly\.[0-9]{8})?$ ]]; then
+            echo "::error title=Invalid version::Expected semver like 1.2.3, 1.2.3-rc.1, or 1.2.3-nightly.20260830."
             exit 1
           fi
 
-          if [ "$tag" != "v${version}" ]; then
+          if [[ "$version" == *"-nightly."* ]]; then
+            # Nightly builds stage under 'nightly-new' and are renamed to the
+            # stable 'nightly' tag only after a successful build.
+            if [ "$tag" != "nightly" ] && [ "$tag" != "nightly-new" ]; then
+              echo "::error title=Tag/version mismatch::Nightly versions must use the 'nightly' or 'nightly-new' tag."
+              exit 1
+            fi
+          elif [ "$tag" != "v${version}" ]; then
             echo "::error title=Tag/version mismatch::Tag '$tag' does not match version '$version'."
             exit 1
           fi
@@ -248,6 +265,7 @@ jobs:
       # the x64 binary under emulation. dump_syms parses the .pdb as a file
       # format, so the host architecture does not have to match the target.
       - name: Install dump_syms
+        if: ${{ inputs.upload_symbols }}
         uses: ./.release-tooling/.github/actions/setup-dump-syms
         with:
           triple: ${{ matrix.dump_syms_triple }}
@@ -267,6 +285,7 @@ jobs:
       # Runs under bash so all three platforms share one guard against
       # silently-empty symbols; Git for Windows provides it on the runner.
       - name: Emit Breakpad symbols
+        if: ${{ inputs.upload_symbols }}
         shell: bash
         run: |
           scripts/emit-breakpad-symbols.sh \
@@ -277,7 +296,7 @@ jobs:
       # release_id too. Symbols are still generated above, which is what
       # exercises the pipeline.
       - name: Upload Windows Breakpad symbols
-        if: ${{ needs.prepare.outputs.release_id != '' }}
+        if: ${{ inputs.upload_symbols && needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: symbols-${{ matrix.target_platform }}
@@ -288,7 +307,7 @@ jobs:
       # Uploaded before packaging so a later failure in this job still leaves
       # symbols for the binary that was built.
       - name: Upload Windows debug symbols
-        if: ${{ needs.prepare.outputs.release_id != '' }}
+        if: ${{ inputs.upload_symbols && needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@v7
         with:
           # Deliberately not named `windows-release-artifacts-*`:
@@ -489,6 +508,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install dump_syms
+        if: ${{ inputs.upload_symbols }}
         uses: ./.release-tooling/.github/actions/setup-dump-syms
         with:
           triple: ${{ matrix.dump_syms_triple }}
@@ -503,6 +523,7 @@ jobs:
         run: cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
 
       - name: Emit Breakpad symbols
+        if: ${{ inputs.upload_symbols }}
         run: |
           set -euo pipefail
           scripts/emit-breakpad-symbols.sh \
@@ -511,7 +532,7 @@ jobs:
 
       # Release-only; see the Breakpad symbol upload above.
       - name: Upload Linux Breakpad symbols
-        if: ${{ needs.prepare.outputs.release_id != '' }}
+        if: ${{ inputs.upload_symbols && needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: symbols-${{ matrix.target_platform }}
@@ -552,6 +573,7 @@ jobs:
         run: |
           set -euo pipefail
           deb_upstream_version="${VERSION/-rc./~rc.}"
+          deb_upstream_version="${deb_upstream_version/-nightly./~nightly.}"
           deb_revision="${DEB_REVISION}"
           deb_version="${deb_upstream_version}-${deb_revision}"
           if [[ -e debian ]]; then
@@ -718,6 +740,7 @@ jobs:
           cache-targets: false
 
       - name: Install dump_syms
+        if: ${{ inputs.upload_symbols }}
         uses: ./.release-tooling/.github/actions/setup-dump-syms
         with:
           triple: ${{ matrix.dump_syms_triple }}
@@ -826,8 +849,13 @@ jobs:
             --arch "${ARCH}"
             --release
             --out-dir dist
-            --symbols-out dist/symbols
           )
+
+          # dump_syms is only installed when symbols are wanted; without
+          # --symbols-out, package-macos.sh skips Breakpad extraction entirely.
+          if [ "${{ inputs.upload_symbols }}" = "true" ]; then
+            package_args+=(--symbols-out dist/symbols)
+          fi
 
           if [ "${{ steps.macos_signing_mode.outputs.enabled }}" = "true" ]; then
             package_args+=(
@@ -842,7 +870,7 @@ jobs:
 
       # Release-only; see the Breakpad symbol upload above.
       - name: Upload macOS Breakpad symbols
-        if: ${{ needs.prepare.outputs.release_id != '' }}
+        if: ${{ inputs.upload_symbols && needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: symbols-${{ matrix.target_platform }}
@@ -858,7 +886,7 @@ jobs:
       # with the `.dSYM` wrapper lost and the bundle no longer loadable. Staged
       # outside dist/ so it stays out of the artifacts published to the release.
       - name: Archive macOS dSYM
-        if: ${{ needs.prepare.outputs.release_id != '' }}
+        if: ${{ inputs.upload_symbols && needs.prepare.outputs.release_id != '' }}
         env:
           DSYM_DIR: ${{ runner.temp }}/gitcomet-dsym
         run: |
@@ -882,7 +910,7 @@ jobs:
             -C target/release gitcomet.dSYM
 
       - name: Upload macOS dSYM
-        if: ${{ needs.prepare.outputs.release_id != '' }}
+        if: ${{ inputs.upload_symbols && needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: macos-dsym-${{ matrix.target_platform }}
@@ -943,7 +971,7 @@ jobs:
     # `release_id` is empty for test builds, which must not push ~1.4 GiB into
     # the production store for a release that may never exist — the same
     # distinction the Windows signing profile makes.
-    if: ${{ needs.prepare.outputs.release_id != '' && needs.publish_release_assets.result == 'success' }}
+    if: ${{ inputs.upload_symbols && needs.prepare.outputs.release_id != '' && needs.publish_release_assets.result == 'success' }}
     # Symbols are auxiliary triage data. This job lives inside a reusable
     # workflow whose overall result gates publish_release and every deploy job
     # in release-manual-main.yml, so a transient Azure error must not strand a
@@ -1067,6 +1095,7 @@ jobs:
           ls -lah dist/release
 
       - name: Generate Homebrew cask
+        if: ${{ inputs.generate_cask }}
         run: |
           set -euo pipefail
           linux_arm_appimage="gitcomet-v${VERSION}-linux-arm64.AppImage"

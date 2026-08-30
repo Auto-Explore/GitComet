@@ -1,0 +1,247 @@
+name: Nightly Build
+
+# Builds a nightly prerelease from `dev` at 00:00 UTC. Only one nightly
+# release exists at any time: it is published under the stable `nightly` tag,
+# and the previous day's release is replaced only after a successful build.
+#
+# The in-flight build stages under the `nightly-new` tag as a draft; once all
+# artifacts are uploaded, the release is re-tagged to `nightly` and published.
+# If the build fails, the draft is discarded and the previous nightly is left
+# untouched, so the last known-good build stays downloadable.
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if the last nightly release already covers HEAD"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: nightly-build
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Check for new commits and compute version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+      version: ${{ steps.version.outputs.version }}
+      head_sha: ${{ steps.check.outputs.head_sha }}
+      last_sha: ${{ steps.check.outputs.last_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Decide whether to build
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Drop any in-flight release left behind by a crashed run. It is
+          # never the published nightly, so it is always safe to discard.
+          gh release delete nightly-new --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes >/dev/null 2>&1 || true
+
+          head_sha="$(git rev-parse HEAD)"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+          force="${{ github.event.inputs.force || 'false' }}"
+          if [ "$force" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Forced nightly build at ${head_sha:0:12}."
+            exit 0
+          fi
+
+          if gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            last_sha="$(gh release view nightly --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)"
+            is_draft="$(gh release view nightly --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+            echo "last_sha=$last_sha" >> "$GITHUB_OUTPUT"
+            if [ "$is_draft" = "true" ]; then
+              # A crashed run left the nightly unpublished; rebuild so the
+              # finalize step can publish it.
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "Previous nightly was left unpublished; rebuilding to finalize it."
+            elif [ "$last_sha" = "$head_sha" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "No new commits on dev since the last nightly (${head_sha:0:12}); skipping."
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "New commits since the last nightly (${last_sha:0:12}..${head_sha:0:12}); building."
+            fi
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "No nightly release exists yet; building."
+          fi
+
+      - name: Compute nightly version
+        if: steps.check.outputs.skip != 'true'
+        id: version
+        run: |
+          set -euo pipefail
+          crate_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+          if ! [[ "$crate_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid crate version::Cargo.toml version '$crate_version' is not plain semver X.Y.Z."
+            exit 1
+          fi
+          version="${crate_version}-nightly.$(date -u +%Y%m%d)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Nightly version: $version"
+
+  create_release:
+    name: Open a draft nightly release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    outputs:
+      release_id: ${{ steps.create.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Create draft nightly release at HEAD
+        id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head_sha="${{ needs.prepare.outputs.head_sha }}"
+          last_sha="${{ needs.prepare.outputs.last_sha }}"
+          version="${{ needs.prepare.outputs.version }}"
+
+          date_label="$(echo "$version" | sed -n 's/.*-nightly\.\([0-9]\{8\}\)$/\1/p')"
+          if [ -z "$date_label" ]; then
+            date_label="$(date -u +%Y%m%d)"
+          fi
+          title="GitComet Nightly ${date_label:0:4}-${date_label:4:2}-${date_label:6:2}"
+
+          notes_file="${RUNNER_TEMP}/nightly-notes.md"
+          {
+            echo "Automatic nightly build from \`dev\` at \`${head_sha:0:12}\`."
+            echo ""
+            echo "### Commits since the last nightly"
+            echo '```'
+            if [ -n "$last_sha" ]; then
+              range="${last_sha}..${head_sha}"
+            else
+              range="HEAD~30..HEAD"
+            fi
+            git log --oneline --no-merges "$range" 2>/dev/null | head -100 || true
+            echo '```'
+          } > "$notes_file"
+
+          # Make sure no stale tag from a previous rename is in the way.
+          git push origin :refs/tags/nightly-new >/dev/null 2>&1 || true
+
+          gh release create nightly-new \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$title" \
+            --target "$head_sha" \
+            --prerelease \
+            --draft \
+            --notes-file "$notes_file"
+
+          release_id="$(gh release view nightly-new --repo "$GITHUB_REPOSITORY" --json id --jq .id)"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build nightly artifacts
+    needs: [prepare, create_release]
+    if: needs.prepare.outputs.skip != 'true'
+    uses: ./.github/workflows/build-release-artifacts.yml
+    with:
+      tag: nightly-new
+      version: ${{ needs.prepare.outputs.version }}
+      deb_revision: "1"
+      release_id: ${{ needs.create_release.outputs.release_id }}
+      upload_symbols: false
+      generate_cask: false
+    secrets: inherit
+
+  finalize:
+    name: Publish nightly and replace the previous one
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    needs: [prepare, create_release, build]
+    if: ${{ needs.prepare.outputs.skip != 'true' && needs.build.result == 'success' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Swap the previous nightly for the new one
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head_sha="${{ needs.prepare.outputs.head_sha }}"
+
+          # Only now that the new build succeeded, drop the previous release.
+          gh release delete nightly --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes >/dev/null 2>&1 || true
+          git push origin :refs/tags/nightly >/dev/null 2>&1 || true
+
+          # Point the stable 'nightly' tag at the new commit and attach the
+          # release to it, then publish the draft.
+          git push origin "$head_sha:refs/tags/nightly" >/dev/null
+          new_id="$(gh release view nightly-new --repo "$GITHUB_REPOSITORY" --json id --jq .id)"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$new_id" \
+            -f tag_name="nightly" >/dev/null
+          gh release edit nightly --repo "$GITHUB_REPOSITORY" --draft=false
+
+          # Drop the staging tag if the API left it behind.
+          git push origin :refs/tags/nightly-new >/dev/null 2>&1 || true
+
+      - name: Emit summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Nightly build published"
+            echo ""
+            echo "- Version: \`${{ needs.prepare.outputs.version }}\`"
+            echo "- Commit: \`${{ needs.prepare.outputs.head_sha }}\`"
+            echo ""
+            echo "Assets:"
+            gh release view nightly --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sed 's/^/- `/;s/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  restore:
+    name: Discard failed nightly
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    needs: [prepare, create_release, build]
+    if: ${{ needs.prepare.outputs.skip != 'true' && needs.build.result != 'success' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Delete the failed draft and its tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release delete nightly-new --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes >/dev/null 2>&1 || true
+          git push origin :refs/tags/nightly-new >/dev/null 2>&1 || true
+          echo "Removed the failed nightly build; the previous nightly remains published."
