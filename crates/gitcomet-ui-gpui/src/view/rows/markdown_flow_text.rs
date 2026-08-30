@@ -9,6 +9,10 @@
 
 use super::*;
 
+type MarkdownFlowHighlights = Arc<[(Range<usize>, gpui::HighlightStyle)]>;
+type MarkdownFlowBackgrounds = Arc<[(Range<usize>, gpui::Hsla)]>;
+type MarkdownFlowHighlightLayers = (MarkdownFlowHighlights, MarkdownFlowBackgrounds);
+
 /// One markdown row's text, painted with wrapping and wired to the shared
 /// selection machinery.
 pub(in crate::view) struct MarkdownFlowText {
@@ -22,8 +26,8 @@ pub(in crate::view) struct MarkdownFlowText {
     text: SharedString,
     /// Styled-run backgrounds painted separately so selection can sit above
     /// them without also washing over the glyphs.
-    run_backgrounds: Arc<[(Range<usize>, gpui::Hsla)]>,
-    highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
+    run_backgrounds: MarkdownFlowBackgrounds,
+    highlights: MarkdownFlowHighlights,
     inner: Option<gpui::StyledText>,
     layout: Option<gpui::TextLayout>,
 }
@@ -48,7 +52,7 @@ impl MarkdownFlowText {
         region: DiffTextRegion,
         row_text: SharedString,
         text: SharedString,
-        highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
+        highlights: MarkdownFlowHighlights,
     ) -> Self {
         let (highlights, run_backgrounds) = split_markdown_flow_highlight_layers(highlights);
         Self {
@@ -118,11 +122,8 @@ impl MarkdownFlowText {
 /// Pull background colours out of GPUI highlights so they can be composited
 /// independently of their glyph styles.
 fn split_markdown_flow_highlight_layers(
-    highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
-) -> (
-    Arc<[(Range<usize>, gpui::HighlightStyle)]>,
-    Arc<[(Range<usize>, gpui::Hsla)]>,
-) {
+    highlights: MarkdownFlowHighlights,
+) -> MarkdownFlowHighlightLayers {
     if !highlights
         .iter()
         .any(|(_, style)| style.background_color.is_some())
