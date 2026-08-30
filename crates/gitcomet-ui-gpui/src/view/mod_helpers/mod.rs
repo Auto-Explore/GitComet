@@ -129,10 +129,6 @@ pub(super) fn is_svg_path(path: &std::path::Path) -> bool {
 
 pub(super) fn should_bypass_text_file_preview_for_path(path: &std::path::Path) -> bool {
     image_format_for_path(path).is_some()
-        || path
-            .extension()
-            .and_then(|s| s.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

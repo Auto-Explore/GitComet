@@ -252,12 +252,14 @@ fn conflict_preview_side_bytes(
     (!fallback_text.is_empty()).then(|| fallback_text.as_ref().as_bytes().to_vec())
 }
 
-fn ready_conflict_preview_image_from_bytes(
+fn ready_conflict_preview_encoded_image_from_bytes(
     format: gpui::ImageFormat,
     bytes: Option<Vec<u8>>,
 ) -> LoadableImagePreview {
     match bytes {
-        Some(bytes) => Loadable::Ready(Some(Arc::new(gpui::Image::from_bytes(format, bytes)))),
+        Some(bytes) => Loadable::Ready(Some(ConflictPreviewImage::Encoded(Arc::new(
+            gpui::Image::from_bytes(format, bytes),
+        )))),
         None => Loadable::Ready(None),
     }
 }
@@ -286,8 +288,19 @@ fn loadable_conflict_preview_svg_image(
 ) -> LoadableImagePreview {
     match payload {
         Some((format, bytes)) => {
-            Loadable::Ready(Some(Arc::new(gpui::Image::from_bytes(format, bytes))))
+            ready_conflict_preview_encoded_image_from_bytes(format, Some(bytes))
         }
+        None if had_source => Loadable::Error("Preview unavailable.".into()),
+        None => Loadable::Ready(None),
+    }
+}
+
+fn loadable_conflict_preview_render_image(
+    image: Option<Arc<gpui::RenderImage>>,
+    had_source: bool,
+) -> LoadableImagePreview {
+    match image {
+        Some(image) => Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))),
         None if had_source => Loadable::Error("Preview unavailable.".into()),
         None => Loadable::Ready(None),
     }
@@ -551,19 +564,6 @@ impl MainPaneView {
             &self.conflict_resolver.three_way_text.theirs,
         );
 
-        if format != gpui::ImageFormat::Svg {
-            self.conflict_resolver.image_preview = ConflictResolverImagePreviewState {
-                source_hash: Some(source_hash),
-                path: Some(path),
-                images: ThreeWaySides {
-                    base: ready_conflict_preview_image_from_bytes(format, base_bytes),
-                    ours: ready_conflict_preview_image_from_bytes(format, ours_bytes),
-                    theirs: ready_conflict_preview_image_from_bytes(format, theirs_bytes),
-                },
-            };
-            return;
-        }
-
         let base_has_source = base_bytes.is_some();
         let ours_has_source = ours_bytes.is_some();
         let theirs_has_source = theirs_bytes.is_some();
@@ -576,6 +576,45 @@ impl MainPaneView {
                 theirs: loading_conflict_preview_image(theirs_has_source),
             },
         };
+
+        if format != gpui::ImageFormat::Svg {
+            cx.spawn(
+                async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                    let decode_payloads = move || {
+                        let decode = |bytes: Option<Vec<u8>>| {
+                            bytes.and_then(|bytes| {
+                                super::diff_cache::render_raster_image_diff_preview(format, &bytes)
+                            })
+                        };
+                        (decode(base_bytes), decode(ours_bytes), decode(theirs_bytes))
+                    };
+                    let (base_image, ours_image, theirs_image) =
+                        if crate::ui_runtime::current().uses_background_compute() {
+                            smol::unblock(decode_payloads).await
+                        } else {
+                            decode_payloads()
+                        };
+
+                    let _ = view.update(cx, |this, cx| {
+                        if this.conflict_resolver.image_preview.source_hash != Some(source_hash)
+                            || this.conflict_resolver.image_preview.path.as_ref() != Some(&path)
+                        {
+                            return;
+                        }
+
+                        this.conflict_resolver.image_preview.images.base =
+                            loadable_conflict_preview_render_image(base_image, base_has_source);
+                        this.conflict_resolver.image_preview.images.ours =
+                            loadable_conflict_preview_render_image(ours_image, ours_has_source);
+                        this.conflict_resolver.image_preview.images.theirs =
+                            loadable_conflict_preview_render_image(theirs_image, theirs_has_source);
+                        cx.notify();
+                    });
+                },
+            )
+            .detach();
+            return;
+        }
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {

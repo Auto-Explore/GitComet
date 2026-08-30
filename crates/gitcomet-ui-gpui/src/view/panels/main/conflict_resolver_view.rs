@@ -2286,7 +2286,7 @@ impl MainPaneView {
 
         let preview_cell = |id: &'static str,
                             label: &'static str,
-                            image: Loadable<Option<Arc<gpui::Image>>>,
+                            image: Loadable<Option<ConflictPreviewImage>>,
                             has_source: bool| {
             div()
                 .id(id)
@@ -2319,7 +2319,8 @@ impl MainPaneView {
                         .items_center()
                         .justify_center()
                         .child(match image {
-                            Loadable::Ready(Some(data)) => gpui::img(data)
+                            Loadable::Ready(Some(data)) => data
+                                .element(id)
                                 .w_full()
                                 .h_full()
                                 .object_fit(gpui::ObjectFit::Contain)

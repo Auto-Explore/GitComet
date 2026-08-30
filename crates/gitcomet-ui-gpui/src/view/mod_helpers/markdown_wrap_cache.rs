@@ -6,8 +6,6 @@ pub(crate) type LoadableMarkdownDoc =
 pub(crate) type LoadableMarkdownDiff =
     Loadable<Arc<crate::view::markdown_preview::MarkdownPreviewDiff>>;
 
-pub(crate) type LoadableImagePreview = Loadable<Option<Arc<gpui::Image>>>;
-
 /// The rendered markdown surface quick search is looking at.
 ///
 /// Each shape has its own row space and its own way of being scrolled, which

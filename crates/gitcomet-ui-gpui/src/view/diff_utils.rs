@@ -163,6 +163,8 @@ pub(super) fn image_format_for_path(path: &std::path::Path) -> Option<gpui::Imag
         Some(gpui::ImageFormat::Svg)
     } else if ext.eq_ignore_ascii_case("tif") || ext.eq_ignore_ascii_case("tiff") {
         Some(gpui::ImageFormat::Tiff)
+    } else if ext.eq_ignore_ascii_case("ico") {
+        Some(gpui::ImageFormat::Ico)
     } else {
         None
     }

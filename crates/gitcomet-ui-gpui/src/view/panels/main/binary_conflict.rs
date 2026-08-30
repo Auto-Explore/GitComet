@@ -215,7 +215,7 @@ impl MainPaneView {
 
             let image_cell = |id: &'static str,
                               label: &'static str,
-                              image: Loadable<Option<Arc<gpui::Image>>>,
+                              image: Loadable<Option<ConflictPreviewImage>>,
                               has_source: bool| {
                 div()
                     .id(id)
@@ -249,7 +249,8 @@ impl MainPaneView {
                             .items_center()
                             .justify_center()
                             .child(match image {
-                                Loadable::Ready(Some(img_data)) => gpui::img(img_data)
+                                Loadable::Ready(Some(img_data)) => img_data
+                                    .element(id)
                                     .w_full()
                                     .h_full()
                                     .object_fit(gpui::ObjectFit::Contain)

@@ -174,6 +174,12 @@ impl MainPaneView {
                             IMAGE_PREVIEW_CELL_PADDING_PX,
                             ui_scale_percent,
                         );
+                        let clamp_preview_size = self
+                            .file_image_diff_cache_path
+                            .as_deref()
+                            .and_then(std::path::Path::extension)
+                            .and_then(std::ffi::OsStr::to_str)
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"));
                         let cell = |id: &'static str, image: Option<CachedDiffImageSource>| {
                             let muted = theme.colors.foreground.secondary;
                             div()
@@ -188,11 +194,7 @@ impl MainPaneView {
                                 .p(cell_padding)
                                 .child(match image {
                                     Some(CachedDiffImageSource::Path(path)) => {
-                                        let clamp_preview_size = path
-                                            .extension()
-                                            .and_then(|s| s.to_str())
-                                            .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"));
-                                        gpui::img(path)
+                                        preview_image_element(path, id)
                                             .w_full()
                                             .h_full()
                                             .object_fit(if clamp_preview_size {
@@ -217,10 +219,14 @@ impl MainPaneView {
                                             .into_any_element()
                                     }
                                     Some(CachedDiffImageSource::Render(img_data)) => {
-                                        gpui::img(img_data)
+                                        preview_image_element(img_data, id)
                                             .w_full()
                                             .h_full()
-                                            .object_fit(gpui::ObjectFit::Contain)
+                                            .object_fit(if clamp_preview_size {
+                                                gpui::ObjectFit::ScaleDown
+                                            } else {
+                                                gpui::ObjectFit::Contain
+                                            })
                                             .with_loading(move || {
                                                 div()
                                                     .text_sm()

@@ -1,5 +1,35 @@
 use super::*;
 
+fn preview_image_element_id(container_id: &'static str) -> gpui::ElementId {
+    (gpui::ElementId::from(container_id), "image").into()
+}
+
+/// Builds an image with stable per-element state, which GPUI requires to
+/// advance animated `RenderImage` frames across renders.
+pub(crate) fn preview_image_element(
+    source: impl Into<gpui::ImageSource>,
+    container_id: &'static str,
+) -> gpui::Stateful<gpui::Img> {
+    gpui::img(source).id(preview_image_element_id(container_id))
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ConflictPreviewImage {
+    Encoded(Arc<gpui::Image>),
+    Rendered(Arc<gpui::RenderImage>),
+}
+
+impl ConflictPreviewImage {
+    pub(crate) fn element(&self, container_id: &'static str) -> gpui::Stateful<gpui::Img> {
+        match self {
+            Self::Encoded(image) => preview_image_element(Arc::clone(image), container_id),
+            Self::Rendered(image) => preview_image_element(Arc::clone(image), container_id),
+        }
+    }
+}
+
+pub(crate) type LoadableImagePreview = Loadable<Option<ConflictPreviewImage>>;
+
 #[derive(Clone, Debug)]
 pub(crate) struct ConflictResolverMarkdownPreviewState {
     pub(crate) source_hash: Option<u64>,
@@ -1695,14 +1725,41 @@ impl ConflictResolverUiState {
 #[allow(clippy::field_reassign_with_default, clippy::single_range_in_vec_init)]
 mod conflict_resolver_ui_state_tests {
     use super::{
-        ConflictResolverUiState, ConflictRowSelection, DeferredLineStarts, DiffWhitespaceMode,
-        Loadable, ThreeWayColumn, ThreeWaySides,
+        ConflictPreviewImage, ConflictResolverUiState, ConflictRowSelection, DeferredLineStarts,
+        DiffWhitespaceMode, Loadable, ThreeWayColumn, ThreeWaySides, preview_image_element_id,
     };
     use crate::view::conflict_resolver::{
         self, ConflictBlock, ConflictChoice, ConflictNavTarget, ConflictNavTargetId,
         ConflictResolverViewMode, ConflictSegment, ConflictSplitRowIndex, ResolvedLineMeta,
         ResolvedLineSource, ThreeWayVisibleItem, TwoWaySplitProjection,
     };
+
+    #[test]
+    fn animated_preview_image_elements_have_stable_distinct_ids() {
+        let frame = image::Frame::new(image::RgbaImage::from_pixel(
+            1,
+            1,
+            image::Rgba([0, 0, 0, 0]),
+        ));
+        let preview =
+            ConflictPreviewImage::Rendered(std::sync::Arc::new(gpui::RenderImage::new(vec![
+                frame.clone(),
+                frame,
+            ])));
+
+        let base = preview.element("conflict_preview_base");
+        let ours = preview.element("conflict_preview_ours");
+
+        assert_eq!(
+            gpui::Element::id(&base),
+            Some(preview_image_element_id("conflict_preview_base"))
+        );
+        assert_eq!(
+            gpui::Element::id(&ours),
+            Some(preview_image_element_id("conflict_preview_ours"))
+        );
+        assert_ne!(gpui::Element::id(&base), gpui::Element::id(&ours));
+    }
 
     #[test]
     pub(crate) fn default_groups_three_way_side_fields() {
