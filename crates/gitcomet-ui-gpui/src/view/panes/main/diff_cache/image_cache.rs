@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::diff_utils::{fill_svg_viewport_white, image_format_for_path};
-use image::AnimationDecoder as _;
+use image::{AnimationDecoder as _, ImageDecoder as _};
 use rustc_hash::FxHasher;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -15,12 +15,38 @@ const IMAGE_DIFF_CACHE_CLEANUP_WRITE_INTERVAL: usize = 16;
 const IMAGE_DIFF_RASTER_PREVIEW_MAX_EDGE_PX: u32 = 1920;
 const IMAGE_DIFF_RASTER_PREVIEW_MAX_ANIMATION_FRAMES: usize = 120;
 const IMAGE_DIFF_RASTER_PREVIEW_MAX_ANIMATION_BYTES: usize = 64 * 1024 * 1024;
+const IMAGE_DIFF_RASTER_PREVIEW_MAX_DECODE_BYTES: u64 = 512 * 1024 * 1024;
+const CONFLICT_RASTER_PREVIEW_MAX_EDGE_PX: u32 = 512;
+const CONFLICT_RASTER_PREVIEW_MAX_BYTES: usize = 512 * 512 * 4;
+const CONFLICT_RASTER_PREVIEW_MAX_DECODE_BYTES: u64 = 128 * 1024 * 1024;
 const IMAGE_DIFF_SVG_PREVIEW_TARGET_WIDTH_PX: f32 = 640.0;
 const IMAGE_DIFF_SVG_PREVIEW_MAX_EDGE_PX: f32 = 1024.0;
 static IMAGE_DIFF_SVG_USVG_OPTIONS: std::sync::LazyLock<resvg::usvg::Options<'static>> =
     std::sync::LazyLock::new(resvg::usvg::Options::default);
 static IMAGE_DIFF_CACHE_STARTUP_CLEANUP: std::sync::Once = std::sync::Once::new();
 static IMAGE_DIFF_CACHE_WRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone, Copy, Debug)]
+struct RasterPreviewPolicy {
+    max_edge_px: u32,
+    max_frames: usize,
+    max_retained_bytes: usize,
+    max_decode_bytes: u64,
+}
+
+const FILE_DIFF_RASTER_PREVIEW_POLICY: RasterPreviewPolicy = RasterPreviewPolicy {
+    max_edge_px: IMAGE_DIFF_RASTER_PREVIEW_MAX_EDGE_PX,
+    max_frames: IMAGE_DIFF_RASTER_PREVIEW_MAX_ANIMATION_FRAMES,
+    max_retained_bytes: IMAGE_DIFF_RASTER_PREVIEW_MAX_ANIMATION_BYTES,
+    max_decode_bytes: IMAGE_DIFF_RASTER_PREVIEW_MAX_DECODE_BYTES,
+};
+
+const CONFLICT_RASTER_PREVIEW_POLICY: RasterPreviewPolicy = RasterPreviewPolicy {
+    max_edge_px: CONFLICT_RASTER_PREVIEW_MAX_EDGE_PX,
+    max_frames: 1,
+    max_retained_bytes: CONFLICT_RASTER_PREVIEW_MAX_BYTES,
+    max_decode_bytes: CONFLICT_RASTER_PREVIEW_MAX_DECODE_BYTES,
+};
 
 #[derive(Debug)]
 struct ImageDiffCacheEntry {
@@ -191,12 +217,9 @@ fn extend_transparent_edge_rgb(buffer: &mut image::RgbaImage) {
     // straight RGB into the one-texel transparent neighbourhood that the
     // bilinear sampler can reach.
     //
-    // Read from a snapshot so the result cannot depend on scan direction and
-    // so this remains a one-texel extension rather than a flood fill.
-    let source = buffer.clone();
     for y in 0..height {
         for x in 0..width {
-            if source.get_pixel(x, y).0[3] != 0 {
+            if buffer.get_pixel(x, y).0[3] != 0 {
                 continue;
             }
 
@@ -209,7 +232,7 @@ fn extend_transparent_edge_rgb(buffer: &mut image::RgbaImage) {
 
             for neighbour_y in min_y..=max_y {
                 for neighbour_x in min_x..=max_x {
-                    let neighbour = source.get_pixel(neighbour_x, neighbour_y).0;
+                    let neighbour = buffer.get_pixel(neighbour_x, neighbour_y).0;
                     let alpha = u32::from(neighbour[3]);
                     if alpha == 0 {
                         continue;
@@ -236,7 +259,7 @@ fn extend_transparent_edge_rgb(buffer: &mut image::RgbaImage) {
 struct PremultipliedRgbaView<'a>(&'a image::RgbaImage);
 
 impl image::GenericImageView for PremultipliedRgbaView<'_> {
-    type Pixel = image::Rgba<f32>;
+    type Pixel = image::Rgba<u32>;
 
     fn dimensions(&self) -> (u32, u32) {
         self.0.dimensions()
@@ -244,11 +267,11 @@ impl image::GenericImageView for PremultipliedRgbaView<'_> {
 
     fn get_pixel(&self, x: u32, y: u32) -> Self::Pixel {
         let pixel = self.0.get_pixel(x, y).0;
-        let alpha = f32::from(pixel[3]) / 255.0;
+        let alpha = u32::from(pixel[3]);
         image::Rgba([
-            f32::from(pixel[0]) / 255.0 * alpha,
-            f32::from(pixel[1]) / 255.0 * alpha,
-            f32::from(pixel[2]) / 255.0 * alpha,
+            u32::from(pixel[0]) * alpha,
+            u32::from(pixel[1]) * alpha,
+            u32::from(pixel[2]) * alpha,
             alpha,
         ])
     }
@@ -256,65 +279,92 @@ impl image::GenericImageView for PremultipliedRgbaView<'_> {
 
 fn alpha_correct_thumbnail(buffer: image::RgbaImage, max_edge_px: u32) -> image::RgbaImage {
     let (width, height) = buffer.dimensions();
+    if width == 0 || height == 0 || max_edge_px == 0 || width.max(height) <= max_edge_px {
+        return buffer;
+    }
+
     let scale =
         (f64::from(max_edge_px) / f64::from(width)).min(f64::from(max_edge_px) / f64::from(height));
     let resized_width = (f64::from(width) * scale).round().max(1.0) as u32;
     let resized_height = (f64::from(height) * scale).round().max(1.0) as u32;
 
-    // Feed image-rs a lazy premultiplied view. This operates on the exact byte
-    // values the GPUI atlas samples without allocating another full-size float
-    // copy of a potentially very large source image.
-    let resized = image::imageops::resize(
+    // The integer box sampler visits each source pixel once and allocates only
+    // its output. RGB is multiplied by alpha lazily so transparent edge colors
+    // cannot bleed into the downscaled result.
+    let resized = image::imageops::thumbnail(
         &PremultipliedRgbaView(&buffer),
         resized_width,
         resized_height,
-        image::imageops::FilterType::Triangle,
     );
 
     let mut straight_samples = Vec::with_capacity(resized.as_raw().len());
     for pixel in resized.pixels() {
-        let alpha = pixel.0[3].clamp(0.0, 1.0);
+        let alpha = pixel.0[3].min(255);
         for channel in 0..3 {
-            let straight = if alpha > f32::EPSILON {
-                (pixel.0[channel] / alpha).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            straight_samples.push((straight * 255.0).round() as u8);
+            let straight = (pixel.0[channel] + alpha / 2)
+                .checked_div(alpha)
+                .unwrap_or(0)
+                .min(255) as u8;
+            straight_samples.push(straight);
         }
-        straight_samples.push((alpha * 255.0).round() as u8);
+        straight_samples.push(alpha as u8);
     }
 
     image::RgbaImage::from_raw(resized_width, resized_height, straight_samples)
         .expect("RGBA sample count follows the resized dimensions")
 }
 
-fn prepare_raster_preview_frame(mut frame: image::Frame) -> image::Frame {
+fn raster_preview_dimensions(width: u32, height: u32, max_edge_px: u32) -> Option<(u32, u32)> {
+    if width == 0 || height == 0 || max_edge_px == 0 {
+        return None;
+    }
+    if width.max(height) <= max_edge_px {
+        return Some((width, height));
+    }
+    let scale =
+        (f64::from(max_edge_px) / f64::from(width)).min(f64::from(max_edge_px) / f64::from(height));
+    Some((
+        (f64::from(width) * scale).round().max(1.0) as u32,
+        (f64::from(height) * scale).round().max(1.0) as u32,
+    ))
+}
+
+fn raster_preview_frame_bytes(
+    width: u32,
+    height: u32,
+    policy: RasterPreviewPolicy,
+) -> Option<usize> {
+    let (width, height) = raster_preview_dimensions(width, height, policy.max_edge_px)?;
+    usize::try_from(
+        u64::from(width)
+            .checked_mul(u64::from(height))?
+            .checked_mul(4)?,
+    )
+    .ok()
+}
+
+fn prepare_raster_preview_frame(
+    mut frame: image::Frame,
+    policy: RasterPreviewPolicy,
+) -> image::Frame {
     let delay = frame.delay();
     let left = frame.left();
     let top = frame.top();
-    let has_transparency = frame.buffer().pixels().any(|pixel| pixel.0[3] < 255);
-    let oversized =
-        frame.buffer().width().max(frame.buffer().height()) > IMAGE_DIFF_RASTER_PREVIEW_MAX_EDGE_PX;
+    let oversized = frame.buffer().width().max(frame.buffer().height()) > policy.max_edge_px;
 
-    let mut buffer = if oversized && has_transparency {
-        alpha_correct_thumbnail(frame.into_buffer(), IMAGE_DIFF_RASTER_PREVIEW_MAX_EDGE_PX)
-    } else if oversized {
-        image::DynamicImage::ImageRgba8(frame.into_buffer())
-            .thumbnail(
-                IMAGE_DIFF_RASTER_PREVIEW_MAX_EDGE_PX,
-                IMAGE_DIFF_RASTER_PREVIEW_MAX_EDGE_PX,
-            )
-            .into_rgba8()
+    let mut buffer = if oversized {
+        alpha_correct_thumbnail(frame.into_buffer(), policy.max_edge_px)
     } else {
         std::mem::take(frame.buffer_mut())
     };
 
-    if has_transparency {
-        extend_transparent_edge_rgb(&mut buffer);
-    }
+    let mut has_fully_transparent_pixel = false;
     for pixel in buffer.as_chunks_mut::<4>().0 {
+        has_fully_transparent_pixel |= pixel[3] == 0;
         swap_rgba_to_bgra(pixel);
+    }
+    if has_fully_transparent_pixel {
+        extend_transparent_edge_rgb(&mut buffer);
     }
 
     image::Frame::from_parts(buffer, left, top, delay)
@@ -322,9 +372,16 @@ fn prepare_raster_preview_frame(mut frame: image::Frame) -> image::Frame {
 
 fn prepare_raster_preview_animation_frames(
     mut decoded_frames: impl Iterator<Item = image::ImageResult<image::Frame>>,
-    max_frames: usize,
-    max_bytes: usize,
+    dimensions: (u32, u32),
+    orientation: image::metadata::Orientation,
+    policy: RasterPreviewPolicy,
 ) -> Vec<image::Frame> {
+    let Some(frame_bytes) = raster_preview_frame_bytes(dimensions.0, dimensions.1, policy) else {
+        return Vec::new();
+    };
+    let max_frames = policy
+        .max_frames
+        .min(policy.max_retained_bytes / frame_bytes.max(1));
     let mut frames = Vec::new();
     let mut retained_bytes = 0_usize;
 
@@ -336,18 +393,23 @@ fn prepare_raster_preview_animation_frames(
         let Some(decoded) = decoded_frames.next() else {
             break;
         };
-        let Ok(frame) = decoded else {
-            continue;
-        };
-        let frame = prepare_raster_preview_frame(frame);
-        let frame_bytes = frame.buffer().as_raw().len();
-        let Some(next_retained_bytes) = retained_bytes.checked_add(frame_bytes) else {
+        let Ok(mut frame) = decoded else {
             break;
         };
-        if next_retained_bytes > max_bytes {
+        if orientation != image::metadata::Orientation::NoTransforms {
+            let delay = frame.delay();
+            let mut decoded = image::DynamicImage::ImageRgba8(frame.into_buffer());
+            decoded.apply_orientation(orientation);
+            frame = image::Frame::from_parts(decoded.into_rgba8(), 0, 0, delay);
+        }
+        let frame = prepare_raster_preview_frame(frame, policy);
+        let Some(next_retained_bytes) = retained_bytes.checked_add(frame.buffer().as_raw().len())
+        else {
+            break;
+        };
+        if next_retained_bytes > policy.max_retained_bytes {
             break;
         }
-
         retained_bytes = next_retained_bytes;
         frames.push(frame);
     }
@@ -355,49 +417,84 @@ fn prepare_raster_preview_animation_frames(
     frames
 }
 
+fn configure_raster_decoder(
+    decoder: &mut impl image::ImageDecoder,
+    policy: RasterPreviewPolicy,
+) -> image::ImageResult<()> {
+    let (width, height) = decoder.dimensions();
+    let rgba_bytes = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| {
+            image::ImageError::Limits(image::error::LimitError::from_kind(
+                image::error::LimitErrorKind::InsufficientMemory,
+            ))
+        })?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(policy.max_decode_bytes);
+    limits.reserve(decoder.total_bytes())?;
+    limits.reserve(rgba_bytes)?;
+    decoder.set_limits(limits)
+}
+
 fn decode_oriented_static_raster_frame(
     mut decoder: impl image::ImageDecoder,
+    policy: RasterPreviewPolicy,
 ) -> Option<image::Frame> {
-    let orientation = decoder.orientation().ok()?;
+    configure_raster_decoder(&mut decoder, policy).ok()?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
     let mut decoded = image::DynamicImage::from_decoder(decoder).ok()?;
     decoded.apply_orientation(orientation);
-    Some(prepare_raster_preview_frame(image::Frame::new(
-        decoded.into_rgba8(),
-    )))
+    Some(prepare_raster_preview_frame(
+        image::Frame::new(decoded.into_rgba8()),
+        policy,
+    ))
 }
 
 fn decode_raster_preview_frames(
     format: gpui::ImageFormat,
     bytes: &[u8],
+    policy: RasterPreviewPolicy,
 ) -> Option<Vec<image::Frame>> {
     let image_format = image_rs_format_for_diff_preview(format)?;
     let frames = match format {
         gpui::ImageFormat::Gif => {
-            let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).ok()?;
+            let mut decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).ok()?;
+            configure_raster_decoder(&mut decoder, policy).ok()?;
+            let dimensions = decoder.dimensions();
             prepare_raster_preview_animation_frames(
                 decoder.into_frames(),
-                IMAGE_DIFF_RASTER_PREVIEW_MAX_ANIMATION_FRAMES,
-                IMAGE_DIFF_RASTER_PREVIEW_MAX_ANIMATION_BYTES,
+                dimensions,
+                image::metadata::Orientation::NoTransforms,
+                policy,
             )
         }
         gpui::ImageFormat::Webp => {
             let mut decoder = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).ok()?;
+            configure_raster_decoder(&mut decoder, policy).ok()?;
             if decoder.has_animation() {
+                let dimensions = decoder.dimensions();
+                let orientation = decoder
+                    .orientation()
+                    .unwrap_or(image::metadata::Orientation::NoTransforms);
                 let _ = decoder.set_background_color(image::Rgba([0, 0, 0, 0]));
                 prepare_raster_preview_animation_frames(
                     decoder.into_frames(),
-                    IMAGE_DIFF_RASTER_PREVIEW_MAX_ANIMATION_FRAMES,
-                    IMAGE_DIFF_RASTER_PREVIEW_MAX_ANIMATION_BYTES,
+                    dimensions,
+                    orientation,
+                    policy,
                 )
             } else {
-                vec![decode_oriented_static_raster_frame(decoder)?]
+                vec![decode_oriented_static_raster_frame(decoder, policy)?]
             }
         }
         _ => {
             let decoder = image::ImageReader::with_format(Cursor::new(bytes), image_format)
                 .into_decoder()
                 .ok()?;
-            vec![decode_oriented_static_raster_frame(decoder)?]
+            vec![decode_oriented_static_raster_frame(decoder, policy)?]
         }
     };
 
@@ -451,7 +548,15 @@ pub(in crate::view) fn render_raster_image_diff_preview(
     format: gpui::ImageFormat,
     bytes: &[u8],
 ) -> Option<Arc<gpui::RenderImage>> {
-    let frames = decode_raster_preview_frames(format, bytes)?;
+    let frames = decode_raster_preview_frames(format, bytes, FILE_DIFF_RASTER_PREVIEW_POLICY)?;
+    Some(Arc::new(gpui::RenderImage::new(frames)))
+}
+
+pub(in crate::view) fn render_raster_conflict_preview(
+    format: gpui::ImageFormat,
+    bytes: &[u8],
+) -> Option<Arc<gpui::RenderImage>> {
+    let frames = decode_raster_preview_frames(format, bytes, CONFLICT_RASTER_PREVIEW_POLICY)?;
     Some(Arc::new(gpui::RenderImage::new(frames)))
 }
 
@@ -528,6 +633,7 @@ struct ImageDiffCacheRebuild {
     new: Option<Arc<gpui::RenderImage>>,
     old_svg_path: Option<std::path::PathBuf>,
     new_svg_path: Option<std::path::PathBuf>,
+    failed: bool,
 }
 
 fn decode_file_image_diff_preview_pair(
@@ -581,11 +687,6 @@ fn build_file_image_diff_cache_rebuild(
     workdir: &std::path::Path,
 ) -> ImageDiffCacheRebuild {
     let format = image_format_for_path(&file.path);
-    let is_ico = file
-        .path
-        .extension()
-        .and_then(|s| s.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"));
     let file_path = Some(if file.path.is_absolute() {
         file.path.to_path_buf()
     } else {
@@ -599,43 +700,156 @@ fn build_file_image_diff_cache_rebuild(
             new: None,
             old_svg_path: None,
             new_svg_path: None,
+            failed: file.old.is_some() || file.new.is_some(),
         };
     };
 
-    let (mut old_preview, mut new_preview) =
+    let (old_preview, new_preview) =
         decode_file_image_diff_preview_pair(format, file.old.as_deref(), file.new.as_deref());
-    if is_ico {
-        if old_preview.render.is_none() {
-            old_preview.cached_path = file
-                .old
-                .as_deref()
-                .and_then(|bytes| cached_image_diff_path(bytes, "ico"));
-        }
-        if new_preview.render.is_none() {
-            new_preview.cached_path = file
-                .new
-                .as_deref()
-                .and_then(|bytes| cached_image_diff_path(bytes, "ico"));
-        }
-    }
+    let failed =
+        (file.old.is_some() && old_preview.render.is_none() && old_preview.cached_path.is_none())
+            || (file.new.is_some()
+                && new_preview.render.is_none()
+                && new_preview.cached_path.is_none());
     ImageDiffCacheRebuild {
         file_path,
         old: old_preview.render,
         new: new_preview.render,
         old_svg_path: old_preview.cached_path,
         new_svg_path: new_preview.cached_path,
+        failed,
     }
 }
 
 impl MainPaneView {
-    fn reset_file_image_diff_cache_data(&mut self) {
+    fn advance_file_image_preview_side(
+        state: &mut FileImagePreviewAnimationSide,
+        image: Option<&Arc<gpui::RenderImage>>,
+        now: std::time::Instant,
+        animate: bool,
+    ) -> Option<std::time::Instant> {
+        let Some(image) = image else {
+            *state = FileImagePreviewAnimationSide::default();
+            return None;
+        };
+        if state.image_id != Some(image.id) {
+            *state = FileImagePreviewAnimationSide {
+                image_id: Some(image.id),
+                frame_index: 0,
+                frame_started_at: None,
+            };
+        }
+
+        let frame_count = image.frame_count();
+        if !animate || frame_count <= 1 {
+            state.frame_index = 0;
+            state.frame_started_at = None;
+            return None;
+        }
+
+        let started = state.frame_started_at.get_or_insert(now);
+        let mut elapsed = now.saturating_duration_since(*started);
+        for _ in 0..frame_count {
+            let delay = std::time::Duration::from(image.delay(state.frame_index))
+                .max(std::time::Duration::from_millis(16));
+            if elapsed < delay {
+                return Some(*started + delay);
+            }
+            elapsed -= delay;
+            *started += delay;
+            state.frame_index = (state.frame_index + 1) % frame_count;
+        }
+
+        // A window can be inactive or suspended for many complete animation
+        // cycles. Preserve the current frame but discard whole-cycle lag so a
+        // resume never schedules a run of immediate catch-up renders.
+        *started = now;
+        let delay = std::time::Duration::from(image.delay(state.frame_index))
+            .max(std::time::Duration::from_millis(16));
+        Some(*started + delay)
+    }
+
+    pub(in crate::view) fn update_file_image_preview_animation(
+        &mut self,
+        old: Option<&Arc<gpui::RenderImage>>,
+        new: Option<&Arc<gpui::RenderImage>>,
+        window: &gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> [usize; 2] {
+        let now = std::time::Instant::now();
+        let animate = window.is_window_active() && !cx.reduce_motion();
+        let old_deadline = Self::advance_file_image_preview_side(
+            &mut self.file_image_preview_animation.old,
+            old,
+            now,
+            animate,
+        );
+        let new_deadline = Self::advance_file_image_preview_side(
+            &mut self.file_image_preview_animation.new,
+            new,
+            now,
+            animate,
+        );
+        let deadline = match (old_deadline, new_deadline) {
+            (Some(old), Some(new)) => Some(old.min(new)),
+            (old, new) => old.or(new),
+        };
+
+        if deadline != self.file_image_preview_animation.scheduled_deadline {
+            self.file_image_preview_animation_task = None;
+            self.file_image_preview_animation.generation =
+                self.file_image_preview_animation.generation.wrapping_add(1);
+            self.file_image_preview_animation.scheduled_deadline = deadline;
+            if let Some(deadline) = deadline {
+                let generation = self.file_image_preview_animation.generation;
+                let delay = deadline.saturating_duration_since(now);
+                self.file_image_preview_animation_task = Some(cx.spawn(
+                    async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                        cx.background_executor().timer(delay).await;
+                        let _ = view.update(cx, |this, cx| {
+                            if this.file_image_preview_animation.generation != generation {
+                                return;
+                            }
+                            this.file_image_preview_animation.scheduled_deadline = None;
+                            cx.notify();
+                        });
+                    },
+                ));
+            }
+        }
+
+        [
+            self.file_image_preview_animation.old.frame_index,
+            self.file_image_preview_animation.new.frame_index,
+        ]
+    }
+
+    fn reset_file_image_diff_cache_data(&mut self, cx: &mut gpui::Context<Self>) {
+        let old = self.file_image_diff_cache_old.take();
+        let new = self.file_image_diff_cache_new.take();
+        if old.is_some() || new.is_some() {
+            cx.defer(move |cx| {
+                if let Some(old) = old {
+                    let duplicate = new.as_ref().is_some_and(|new| new.id == old.id);
+                    cx.drop_image(old, None);
+                    if duplicate {
+                        return;
+                    }
+                }
+                if let Some(new) = new {
+                    cx.drop_image(new, None);
+                }
+            });
+        }
         self.file_image_diff_cache_content_signature = None;
         self.file_image_diff_cache_inflight = None;
+        self.file_image_diff_cache_complete = false;
+        self.file_image_diff_cache_failed = false;
         self.file_image_diff_cache_path = None;
-        self.file_image_diff_cache_old = None;
-        self.file_image_diff_cache_new = None;
         self.file_image_diff_cache_old_svg_path = None;
         self.file_image_diff_cache_new_svg_path = None;
+        self.file_image_preview_animation = FileImagePreviewAnimation::default();
+        self.file_image_preview_animation_task = None;
     }
 
     pub(in crate::view) fn ensure_file_image_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
@@ -662,7 +876,7 @@ impl MainPaneView {
             self.file_image_diff_cache_repo_id = None;
             self.file_image_diff_cache_target = None;
             self.file_image_diff_cache_rev = 0;
-            self.reset_file_image_diff_cache_data();
+            self.reset_file_image_diff_cache_data(cx);
             return;
         };
 
@@ -691,7 +905,7 @@ impl MainPaneView {
         self.file_image_diff_cache_repo_id = Some(repo_id);
         self.file_image_diff_cache_rev = diff_file_rev;
         self.file_image_diff_cache_target = Some(diff_target);
-        self.reset_file_image_diff_cache_data();
+        self.reset_file_image_diff_cache_data(cx);
 
         let Some(file) = file else {
             return;
@@ -711,6 +925,8 @@ impl MainPaneView {
                 && self.file_image_diff_cache_target == Some(diff_target_for_task.clone())
             {
                 self.file_image_diff_cache_inflight = None;
+                self.file_image_diff_cache_complete = true;
+                self.file_image_diff_cache_failed = rebuild.failed;
                 self.file_image_diff_cache_content_signature = Some(content_signature);
                 self.file_image_diff_cache_path = rebuild.file_path;
                 self.file_image_diff_cache_old = rebuild.old;
@@ -741,6 +957,8 @@ impl MainPaneView {
                     }
 
                     this.file_image_diff_cache_inflight = None;
+                    this.file_image_diff_cache_complete = true;
+                    this.file_image_diff_cache_failed = rebuild.failed;
                     this.file_image_diff_cache_content_signature = Some(content_signature);
                     this.file_image_diff_cache_path = rebuild.file_path;
                     this.file_image_diff_cache_old = rebuild.old;
@@ -759,6 +977,45 @@ impl MainPaneView {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    struct TestDecoder {
+        dimensions: (u32, u32),
+        orientation_error: bool,
+        read_called: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl image::ImageDecoder for TestDecoder {
+        fn dimensions(&self) -> (u32, u32) {
+            self.dimensions
+        }
+
+        fn color_type(&self) -> image::ColorType {
+            image::ColorType::Rgba8
+        }
+
+        fn orientation(&mut self) -> image::ImageResult<image::metadata::Orientation> {
+            if self.orientation_error {
+                Err(image::ImageError::IoError(std::io::Error::other(
+                    "metadata read failed",
+                )))
+            } else {
+                Ok(image::metadata::Orientation::NoTransforms)
+            }
+        }
+
+        fn read_image(self, buffer: &mut [u8]) -> image::ImageResult<()> {
+            self.read_called
+                .store(true, std::sync::atomic::Ordering::Release);
+            for pixel in buffer.as_chunks_mut::<4>().0 {
+                pixel.copy_from_slice(&[10, 20, 30, 255]);
+            }
+            Ok(())
+        }
+
+        fn read_image_boxed(self: Box<Self>, buffer: &mut [u8]) -> image::ImageResult<()> {
+            (*self).read_image(buffer)
+        }
+    }
 
     fn solid_rect_svg(width: u32, height: u32) -> Vec<u8> {
         format!(
@@ -952,6 +1209,48 @@ mod tests {
     }
 
     #[test]
+    fn decode_allocation_limit_is_checked_before_reading_pixels() {
+        let read_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let decoder = TestDecoder {
+            dimensions: (10, 10),
+            orientation_error: false,
+            read_called: Arc::clone(&read_called),
+        };
+        let policy = RasterPreviewPolicy {
+            max_edge_px: 10,
+            max_frames: 1,
+            max_retained_bytes: usize::MAX,
+            // Decoder RGBA output plus the projected prepared RGBA buffer is
+            // 800 bytes, so this must reject without calling read_image.
+            max_decode_bytes: 799,
+        };
+
+        assert!(decode_oriented_static_raster_frame(decoder, policy).is_none());
+        assert!(!read_called.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[test]
+    fn orientation_metadata_failure_falls_back_to_unrotated_decode() {
+        let read_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let decoder = TestDecoder {
+            dimensions: (1, 1),
+            orientation_error: true,
+            read_called: Arc::clone(&read_called),
+        };
+        let policy = RasterPreviewPolicy {
+            max_edge_px: 1,
+            max_frames: 1,
+            max_retained_bytes: 4,
+            max_decode_bytes: 8,
+        };
+
+        let frame = decode_oriented_static_raster_frame(decoder, policy)
+            .expect("pixel decode should survive metadata failure");
+        assert!(read_called.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(frame.buffer().get_pixel(0, 0).0, [30, 20, 10, 255]);
+    }
+
+    #[test]
     fn prepared_raster_frame_preserves_timing_and_extends_bgra_edge_color() {
         let delay = image::Delay::from_numer_denom_ms(17, 1);
         let frame = image::Frame::from_parts(
@@ -962,7 +1261,7 @@ mod tests {
             delay,
         );
 
-        let prepared = prepare_raster_preview_frame(frame);
+        let prepared = prepare_raster_preview_frame(frame, FILE_DIFF_RASTER_PREVIEW_POLICY);
 
         assert_eq!(prepared.delay(), delay);
         assert_eq!(prepared.left(), 2);
@@ -1043,7 +1342,17 @@ mod tests {
                 image::Rgba([10, 20, 30, 255]),
             )))
         });
-        let prepared = prepare_raster_preview_animation_frames(frames, 2, usize::MAX);
+        let prepared = prepare_raster_preview_animation_frames(
+            frames,
+            (2, 2),
+            image::metadata::Orientation::NoTransforms,
+            RasterPreviewPolicy {
+                max_edge_px: 2,
+                max_frames: 2,
+                max_retained_bytes: usize::MAX,
+                max_decode_bytes: u64::MAX,
+            },
+        );
 
         assert_eq!(prepared.len(), 2);
         assert_eq!(decoded_for_frame_limit.get(), 2);
@@ -1057,7 +1366,17 @@ mod tests {
                 image::Rgba([10, 20, 30, 255]),
             )))
         });
-        let prepared = prepare_raster_preview_animation_frames(frames, usize::MAX, 32);
+        let prepared = prepare_raster_preview_animation_frames(
+            frames,
+            (2, 2),
+            image::metadata::Orientation::NoTransforms,
+            RasterPreviewPolicy {
+                max_edge_px: 2,
+                max_frames: usize::MAX,
+                max_retained_bytes: 32,
+                max_decode_bytes: u64::MAX,
+            },
+        );
         let retained_bytes = prepared
             .iter()
             .map(|frame| frame.buffer().as_raw().len())
@@ -1065,7 +1384,66 @@ mod tests {
 
         assert_eq!(prepared.len(), 2);
         assert_eq!(retained_bytes, 32);
-        assert_eq!(decoded_for_byte_limit.get(), 3);
+        assert_eq!(decoded_for_byte_limit.get(), 2);
+    }
+
+    #[test]
+    fn animation_frame_preparation_stops_after_first_decode_error() {
+        let polls = std::cell::Cell::new(0_usize);
+        let frames = std::iter::from_fn(|| {
+            polls.set(polls.get() + 1);
+            Some(Err(image::ImageError::IoError(std::io::Error::other(
+                "corrupt frame",
+            ))))
+        });
+
+        let prepared = prepare_raster_preview_animation_frames(
+            frames,
+            (1, 1),
+            image::metadata::Orientation::NoTransforms,
+            FILE_DIFF_RASTER_PREVIEW_POLICY,
+        );
+
+        assert!(prepared.is_empty());
+        assert_eq!(polls.get(), 1);
+    }
+
+    #[test]
+    fn animation_frame_preparation_applies_orientation_to_every_frame() {
+        let frames = (0..2).map(|_| {
+            Ok(image::Frame::new(image::RgbaImage::from_pixel(
+                2,
+                1,
+                image::Rgba([10, 20, 30, 255]),
+            )))
+        });
+        let prepared = prepare_raster_preview_animation_frames(
+            frames,
+            (2, 1),
+            image::metadata::Orientation::Rotate90,
+            RasterPreviewPolicy {
+                max_edge_px: 2,
+                max_frames: 2,
+                max_retained_bytes: 16,
+                max_decode_bytes: 16,
+            },
+        );
+
+        assert_eq!(prepared.len(), 2);
+        assert!(
+            prepared
+                .iter()
+                .all(|frame| frame.buffer().dimensions() == (1, 2))
+        );
+    }
+
+    #[test]
+    fn alpha_correct_thumbnail_never_upscales_or_changes_empty_images() {
+        let source = image::RgbaImage::from_pixel(4, 2, image::Rgba([1, 2, 3, 255]));
+        assert_eq!(alpha_correct_thumbnail(source, 1920).dimensions(), (4, 2));
+
+        let empty = image::RgbaImage::new(0, 0);
+        assert_eq!(alpha_correct_thumbnail(empty, 1920).dimensions(), (0, 0));
     }
 
     #[test]
@@ -1091,6 +1469,74 @@ mod tests {
             render.frame_count(),
             IMAGE_DIFF_RASTER_PREVIEW_MAX_ANIMATION_FRAMES
         );
+    }
+
+    #[test]
+    fn conflict_raster_preview_keeps_only_a_512px_first_frame() {
+        let frames = (0..2).map(|index| {
+            image::Frame::from_parts(
+                image::RgbaImage::from_pixel(1024, 512, image::Rgba([index as u8, 20, 30, 255])),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(40, 1),
+            )
+        });
+        let mut encoded = Vec::new();
+        image::codecs::gif::GifEncoder::new(&mut encoded)
+            .encode_frames(frames)
+            .expect("encode conflict GIF");
+
+        let render = render_raster_conflict_preview(gpui::ImageFormat::Gif, &encoded)
+            .expect("render conflict GIF");
+        assert_eq!(render.frame_count(), 1);
+        assert_eq!(render.size(0).width.0, 512);
+        assert_eq!(render.size(0).height.0, 256);
+    }
+
+    #[test]
+    fn file_animation_state_follows_delays_and_resets_for_new_sources() {
+        let image = Arc::new(gpui::RenderImage::new(vec![
+            image::Frame::from_parts(
+                image::RgbaImage::new(1, 1),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(40, 1),
+            ),
+            image::Frame::from_parts(
+                image::RgbaImage::new(1, 1),
+                0,
+                0,
+                image::Delay::from_numer_denom_ms(70, 1),
+            ),
+        ]));
+        let start = std::time::Instant::now();
+        let mut state = FileImagePreviewAnimationSide::default();
+
+        assert_eq!(
+            MainPaneView::advance_file_image_preview_side(&mut state, Some(&image), start, true,),
+            Some(start + std::time::Duration::from_millis(40))
+        );
+        assert_eq!(state.frame_index, 0);
+        MainPaneView::advance_file_image_preview_side(
+            &mut state,
+            Some(&image),
+            start + std::time::Duration::from_millis(40),
+            true,
+        );
+        assert_eq!(state.frame_index, 1);
+
+        let replacement = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::new(1, 1),
+        )]));
+        MainPaneView::advance_file_image_preview_side(
+            &mut state,
+            Some(&replacement),
+            start + std::time::Duration::from_millis(50),
+            true,
+        );
+        assert_eq!(state.image_id, Some(replacement.id));
+        assert_eq!(state.frame_index, 0);
+        assert!(state.frame_started_at.is_none());
     }
 
     #[test]

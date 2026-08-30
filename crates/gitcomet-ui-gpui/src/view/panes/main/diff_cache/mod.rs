@@ -18,7 +18,7 @@ pub(in crate::view) use self::file_diff::{
     PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild_with_patch,
 };
 use self::file_diff::{file_diff_source_identity, file_diff_text_signature, line_starts_describe};
-pub(in crate::view) use self::image_cache::render_raster_image_diff_preview;
+pub(in crate::view) use self::image_cache::render_raster_conflict_preview;
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 

@@ -2970,6 +2970,21 @@ pub(in crate::view) type BlameTimeRangeCache = Option<(
     Option<(i64, i64)>,
 )>;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(in crate::view) struct FileImagePreviewAnimationSide {
+    pub(in crate::view) image_id: Option<gpui::ImageId>,
+    pub(in crate::view) frame_index: usize,
+    pub(in crate::view) frame_started_at: Option<std::time::Instant>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(in crate::view) struct FileImagePreviewAnimation {
+    pub(in crate::view) old: FileImagePreviewAnimationSide,
+    pub(in crate::view) new: FileImagePreviewAnimationSide,
+    pub(in crate::view) scheduled_deadline: Option<std::time::Instant>,
+    pub(in crate::view) generation: u64,
+}
+
 impl DiffHorizontalScrollState {
     pub(in crate::view) fn new() -> Self {
         Self {
@@ -3278,11 +3293,20 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_image_diff_cache_target: Option<DiffTarget>,
     pub(in crate::view) file_image_diff_cache_seq: u64,
     pub(in crate::view) file_image_diff_cache_inflight: Option<u64>,
+    pub(in crate::view) file_image_diff_cache_complete: bool,
+    pub(in crate::view) file_image_diff_cache_failed: bool,
     pub(in crate::view) file_image_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_image_diff_cache_old: Option<Arc<gpui::RenderImage>>,
     pub(in crate::view) file_image_diff_cache_new: Option<Arc<gpui::RenderImage>>,
     pub(in crate::view) file_image_diff_cache_old_svg_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_image_diff_cache_new_svg_path: Option<std::path::PathBuf>,
+    pub(in crate::view) file_image_preview_animation: FileImagePreviewAnimation,
+    pub(in crate::view) file_image_preview_animation_task: Option<gpui::Task<()>>,
+
+    pub(in crate::view) conflict_image_preview_seq: u64,
+    pub(in crate::view) conflict_image_preview_inflight: Option<u64>,
+    pub(in crate::view) conflict_image_preview_task: Option<gpui::Task<()>>,
+    pub(in crate::view) conflict_image_preview_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 
     pub(in crate::view) worktree_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_source_path: Option<std::path::PathBuf>,

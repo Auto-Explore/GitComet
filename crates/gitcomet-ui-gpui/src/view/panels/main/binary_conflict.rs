@@ -92,6 +92,7 @@ impl MainPaneView {
         let has_ours = file.ours_bytes.is_some();
         let has_theirs = file.theirs_bytes.is_some();
         let has_image_preview = crate::view::diff_utils::image_format_for_path(&path).is_some();
+        let clamp_preview_size = preview_path_uses_scale_down(&path);
 
         let action_section = div()
             .flex()
@@ -249,12 +250,19 @@ impl MainPaneView {
                             .items_center()
                             .justify_center()
                             .child(match image {
-                                Loadable::Ready(Some(img_data)) => img_data
-                                    .element(id)
-                                    .w_full()
-                                    .h_full()
-                                    .object_fit(gpui::ObjectFit::Contain)
-                                    .into_any_element(),
+                                Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
+                                    gpui::img(image)
+                                        .w_full()
+                                        .h_full()
+                                        .object_fit(gpui::ObjectFit::Contain)
+                                        .into_any_element()
+                                }
+                                Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) => {
+                                    preview_render_image_element(image, 0, clamp_preview_size)
+                                        .w_full()
+                                        .h_full()
+                                        .into_any_element()
+                                }
                                 Loadable::NotLoaded | Loadable::Loading if has_source => div()
                                     .text_xs()
                                     .text_color(theme.colors.foreground.secondary)

@@ -2308,10 +2308,7 @@ impl MainPaneView {
             && self.file_image_diff_cache_rev == diff_file_rev
             && self.file_image_diff_cache_target == Some(diff_target)
             && self.file_image_diff_cache_path.as_ref() == Some(&abs_path)
-            && (self.file_image_diff_cache_old.is_some()
-                || self.file_image_diff_cache_new.is_some()
-                || self.file_image_diff_cache_old_svg_path.is_some()
-                || self.file_image_diff_cache_new_svg_path.is_some())
+            && self.file_image_diff_cache_complete
     }
 
     pub(in crate::view) fn consume_suppress_click_after_drag(&mut self) -> bool {

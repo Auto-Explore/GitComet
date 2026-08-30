@@ -1,31 +1,78 @@
 use super::*;
 
-fn preview_image_element_id(container_id: &'static str) -> gpui::ElementId {
-    (gpui::ElementId::from(container_id), "image").into()
+pub(crate) fn preview_path_uses_scale_down(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ico"))
 }
 
-/// Builds an image with stable per-element state, which GPUI requires to
-/// advance animated `RenderImage` frames across renders.
-pub(crate) fn preview_image_element(
-    source: impl Into<gpui::ImageSource>,
-    container_id: &'static str,
-) -> gpui::Stateful<gpui::Img> {
-    gpui::img(source).id(preview_image_element_id(container_id))
+pub(crate) fn preview_render_image_bounds(
+    bounds: gpui::Bounds<gpui::Pixels>,
+    image_size: gpui::Size<gpui::DevicePixels>,
+    scale_factor: f32,
+    scale_down: bool,
+) -> gpui::Bounds<gpui::Pixels> {
+    let scale_factor = scale_factor.max(f32::EPSILON);
+    let image_width = gpui::px(u32::from(image_size.width) as f32 / scale_factor);
+    let image_height = gpui::px(u32::from(image_size.height) as f32 / scale_factor);
+    if image_width <= gpui::px(0.0)
+        || image_height <= gpui::px(0.0)
+        || bounds.size.width <= gpui::px(0.0)
+        || bounds.size.height <= gpui::px(0.0)
+    {
+        return gpui::Bounds {
+            origin: bounds.origin,
+            size: gpui::size(gpui::px(0.0), gpui::px(0.0)),
+        };
+    }
+
+    let mut fit = (bounds.size.width / image_width).min(bounds.size.height / image_height);
+    if scale_down {
+        fit = fit.min(1.0);
+    }
+    let fitted = gpui::size(image_width * fit, image_height * fit);
+    gpui::Bounds {
+        origin: gpui::point(
+            bounds.origin.x + (bounds.size.width - fitted.width) / 2.0,
+            bounds.origin.y + (bounds.size.height - fitted.height) / 2.0,
+        ),
+        size: fitted,
+    }
+}
+
+pub(crate) fn preview_render_image_element(
+    image: Arc<gpui::RenderImage>,
+    frame_index: usize,
+    scale_down: bool,
+) -> gpui::Canvas<gpui::Bounds<gpui::Pixels>> {
+    let frame_index = frame_index.min(image.frame_count().saturating_sub(1));
+    let image_for_layout = Arc::clone(&image);
+    gpui::canvas(
+        move |bounds, window, _cx| {
+            preview_render_image_bounds(
+                bounds,
+                image_for_layout.size(frame_index),
+                window.scale_factor(),
+                scale_down,
+            )
+        },
+        move |bounds, image_bounds, window, _cx| {
+            let _ = window.paint_image(
+                bounds,
+                image_bounds,
+                gpui::Corners::default(),
+                image,
+                frame_index,
+                false,
+            );
+        },
+    )
 }
 
 #[derive(Clone, Debug)]
 pub(crate) enum ConflictPreviewImage {
     Encoded(Arc<gpui::Image>),
     Rendered(Arc<gpui::RenderImage>),
-}
-
-impl ConflictPreviewImage {
-    pub(crate) fn element(&self, container_id: &'static str) -> gpui::Stateful<gpui::Img> {
-        match self {
-            Self::Encoded(image) => preview_image_element(Arc::clone(image), container_id),
-            Self::Rendered(image) => preview_image_element(Arc::clone(image), container_id),
-        }
-    }
 }
 
 pub(crate) type LoadableImagePreview = Loadable<Option<ConflictPreviewImage>>;
@@ -59,6 +106,7 @@ impl ConflictResolverMarkdownPreviewState {
 pub(crate) struct ConflictResolverImagePreviewState {
     pub(crate) source_hash: Option<u64>,
     pub(crate) path: Option<std::path::PathBuf>,
+    pub(crate) conflict_rev: u64,
     pub(crate) images: ThreeWaySides<LoadableImagePreview>,
 }
 
@@ -67,6 +115,7 @@ impl Default for ConflictResolverImagePreviewState {
         Self {
             source_hash: None,
             path: None,
+            conflict_rev: 0,
             images: ThreeWaySides {
                 base: Loadable::NotLoaded,
                 ours: Loadable::NotLoaded,
@@ -1725,8 +1774,8 @@ impl ConflictResolverUiState {
 #[allow(clippy::field_reassign_with_default, clippy::single_range_in_vec_init)]
 mod conflict_resolver_ui_state_tests {
     use super::{
-        ConflictPreviewImage, ConflictResolverUiState, ConflictRowSelection, DeferredLineStarts,
-        DiffWhitespaceMode, Loadable, ThreeWayColumn, ThreeWaySides, preview_image_element_id,
+        ConflictResolverUiState, ConflictRowSelection, DeferredLineStarts, DiffWhitespaceMode,
+        Loadable, ThreeWayColumn, ThreeWaySides, preview_render_image_bounds,
     };
     use crate::view::conflict_resolver::{
         self, ConflictBlock, ConflictChoice, ConflictNavTarget, ConflictNavTargetId,
@@ -1735,30 +1784,22 @@ mod conflict_resolver_ui_state_tests {
     };
 
     #[test]
-    fn animated_preview_image_elements_have_stable_distinct_ids() {
-        let frame = image::Frame::new(image::RgbaImage::from_pixel(
-            1,
-            1,
-            image::Rgba([0, 0, 0, 0]),
-        ));
-        let preview =
-            ConflictPreviewImage::Rendered(std::sync::Arc::new(gpui::RenderImage::new(vec![
-                frame.clone(),
-                frame,
-            ])));
+    fn preview_scale_down_compares_logical_image_dimensions() {
+        let bounds = gpui::Bounds {
+            origin: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            size: gpui::size(gpui::px(100.0), gpui::px(100.0)),
+        };
+        let image_size = gpui::size(gpui::DevicePixels(16), gpui::DevicePixels(16));
 
-        let base = preview.element("conflict_preview_base");
-        let ours = preview.element("conflict_preview_ours");
+        let scale_down = preview_render_image_bounds(bounds, image_size, 2.0, true);
+        assert_eq!(scale_down.size, gpui::size(gpui::px(8.0), gpui::px(8.0)));
+        assert_eq!(
+            scale_down.origin,
+            gpui::point(gpui::px(46.0), gpui::px(46.0))
+        );
 
-        assert_eq!(
-            gpui::Element::id(&base),
-            Some(preview_image_element_id("conflict_preview_base"))
-        );
-        assert_eq!(
-            gpui::Element::id(&ours),
-            Some(preview_image_element_id("conflict_preview_ours"))
-        );
-        assert_ne!(gpui::Element::id(&base), gpui::Element::id(&ours));
+        let contain = preview_render_image_bounds(bounds, image_size, 2.0, false);
+        assert_eq!(contain.size, bounds.size);
     }
 
     #[test]
