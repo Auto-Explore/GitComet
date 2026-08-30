@@ -30,6 +30,7 @@ const GIT_COMMAND_WAIT_POLL_MAX: Duration = Duration::from_millis(5);
 const GIT_ACTIVITY_OUTPUT_FLUSH: Duration = Duration::from_millis(100);
 const GIT_ACTIVITY_OUTPUT_BATCH_BYTES: usize = 16 * 1024;
 const GIT_TRACE2_POLL: Duration = Duration::from_millis(20);
+#[cfg(unix)]
 const GIT_PROCESS_TERMINATE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
