@@ -977,6 +977,40 @@ impl GitCometView {
                 cx,
             )
         });
+        window
+            .observe_release(&main_pane, cx, |pane, window, cx| {
+                if let Some(cancel) = pane.conflict_image_preview_cancel.take() {
+                    cancel.store(true, std::sync::atomic::Ordering::Release);
+                }
+                pane.conflict_image_preview_task = None;
+                pane.file_image_preview_animation_task = None;
+
+                let mut images = Vec::new();
+                if let Some(image) = pane.file_image_diff_cache_old.take() {
+                    images.push(image);
+                }
+                if let Some(image) = pane.file_image_diff_cache_new.take()
+                    && images
+                        .iter()
+                        .all(|known: &Arc<gpui::RenderImage>| known.id != image.id)
+                {
+                    images.push(image);
+                }
+                for side in ThreeWayColumn::ALL {
+                    if let Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) =
+                        pane.conflict_resolver.image_preview.image(side)
+                        && images
+                            .iter()
+                            .all(|known: &Arc<gpui::RenderImage>| known.id != image.id)
+                    {
+                        images.push(Arc::clone(image));
+                    }
+                }
+                for image in images {
+                    cx.drop_image(image, Some(&mut *window));
+                }
+            })
+            .detach();
         let details_pane = cx.new(|cx| {
             DetailsPaneView::new(
                 Arc::clone(&store),

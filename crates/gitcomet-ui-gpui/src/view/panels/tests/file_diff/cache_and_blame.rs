@@ -665,6 +665,82 @@ fn file_image_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payloa
 }
 
 #[gpui::test]
+fn replacing_file_image_diff_cache_releases_old_sprite_atlas_tiles(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(156);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_image_diff_atlas_release",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("assets/gitcomet.png");
+    let first_bytes =
+        include_bytes!("../../../../../../../assets/linux/hicolor/32x32/apps/gitcomet.png");
+    let second_bytes =
+        include_bytes!("../../../../../../../assets/linux/hicolor/48x48/apps/gitcomet.png");
+
+    seed_file_image_diff_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &path,
+        1,
+        Some(first_bytes),
+        Some(first_bytes),
+    );
+    wait_for_file_image_diff_cache(cx, &view, "initial atlas-backed image cache", |pane| {
+        pane.file_image_diff_cache_old.is_some()
+    });
+    draw_and_drain_test_window(cx);
+
+    let first_image = cx.update(|window, app| {
+        let image = view
+            .read(app)
+            .main_pane
+            .read(app)
+            .file_image_diff_cache_old
+            .as_ref()
+            .expect("first render image")
+            .clone();
+        assert!(window.has_image_atlas_entry(&image));
+        image
+    });
+
+    seed_file_image_diff_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &path,
+        2,
+        Some(second_bytes),
+        Some(second_bytes),
+    );
+    wait_for_file_image_diff_cache(cx, &view, "replacement atlas-backed image cache", |pane| {
+        pane.file_image_diff_cache_old
+            .as_ref()
+            .is_some_and(|image| image.id != first_image.id)
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|window, app| {
+        assert!(!window.has_image_atlas_entry(&first_image));
+        let replacement = view
+            .read(app)
+            .main_pane
+            .read(app)
+            .file_image_diff_cache_old
+            .as_ref()
+            .expect("replacement render image");
+        assert!(window.has_image_atlas_entry(replacement));
+    });
+}
+
+#[gpui::test]
 fn file_image_diff_cache_keeps_valid_svg_on_render_fast_path_across_rev_refreshes(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -852,6 +928,45 @@ fn file_image_diff_cache_falls_back_to_cached_svg_paths_for_invalid_svg_payloads
                 .as_ref()
                 .is_some_and(|path| path.exists())
         );
+    });
+}
+
+#[gpui::test]
+fn failed_raster_image_diff_cache_is_terminal_instead_of_processing_forever(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(155);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_failed_raster_image_diff",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("assets/broken.png");
+    let invalid = b"not a png";
+
+    seed_file_image_diff_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &path,
+        1,
+        Some(invalid),
+        Some(invalid),
+    );
+    wait_for_file_image_diff_cache(cx, &view, "failed raster cache completion", |pane| {
+        pane.file_image_diff_cache_complete
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.file_image_diff_cache_inflight.is_none());
+        assert!(pane.file_image_diff_cache_failed);
+        assert!(pane.is_file_image_diff_view_active());
     });
 }
 

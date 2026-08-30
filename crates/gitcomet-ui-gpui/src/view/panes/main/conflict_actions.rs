@@ -760,7 +760,8 @@ impl MainPaneView {
             .two_way_visible_ix_for_conflict(conflict_ix)
     }
 
-    fn clear_conflict_resolver_state(&mut self) {
+    fn clear_conflict_resolver_state(&mut self, cx: &mut gpui::Context<Self>) {
+        self.reset_conflict_image_preview_cache(cx);
         self.conflict_resolver = ConflictResolverUiState::default();
         self.conflict_resolved_output_saved_snapshot = None;
         self.conflict_resolved_output_modified = false;
@@ -771,22 +772,22 @@ impl MainPaneView {
 
     pub(super) fn sync_conflict_resolver(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(repo_id) = self.active_repo_id() else {
-            self.clear_conflict_resolver_state();
+            self.clear_conflict_resolver_state(cx);
             return;
         };
 
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
-            self.clear_conflict_resolver_state();
+            self.clear_conflict_resolver_state(cx);
             return;
         };
 
         let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_state.diff_target.as_ref()
         else {
-            self.clear_conflict_resolver_state();
+            self.clear_conflict_resolver_state(cx);
             return;
         };
         if *area != DiffArea::Unstaged {
-            self.clear_conflict_resolver_state();
+            self.clear_conflict_resolver_state(cx);
             return;
         }
 
@@ -794,7 +795,7 @@ impl MainPaneView {
             .status_entry_for_path(DiffArea::Unstaged, path.as_path())
             .filter(|entry| entry.kind == gitcomet_core::domain::FileStatusKind::Conflicted);
         let Some(conflict_entry) = conflict_entry else {
-            self.clear_conflict_resolver_state();
+            self.clear_conflict_resolver_state(cx);
             return;
         };
         let conflict_kind = conflict_entry.conflict;
@@ -805,7 +806,7 @@ impl MainPaneView {
         let should_load = repo.conflict_state.conflict_file_path.as_ref() != Some(&path)
             && !matches!(repo.conflict_state.conflict_file, Loadable::Loading);
         if should_load {
-            self.clear_conflict_resolver_state();
+            self.clear_conflict_resolver_state(cx);
             let theme = self.theme;
             self.conflict_resolver_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
@@ -880,6 +881,14 @@ impl MainPaneView {
                 file.ours_bytes.as_ref().map(|b| b.len()),
                 file.theirs_bytes.as_ref().map(|b| b.len()),
             ];
+            if let Some(cancel) = self.conflict_image_preview_cancel.take() {
+                cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
+            self.conflict_image_preview_inflight = None;
+            super::preview::release_conflict_preview_render_images(
+                &self.conflict_resolver.image_preview,
+                cx,
+            );
             self.conflict_resolver = ConflictResolverUiState {
                 repo_id: Some(repo_id),
                 path: Some(path),
@@ -1431,6 +1440,14 @@ impl MainPaneView {
 
         // Build state with core/shared fields; mode-dependent visible state
         // is populated by the rebuild methods below.
+        if let Some(cancel) = self.conflict_image_preview_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.conflict_image_preview_inflight = None;
+        super::preview::release_conflict_preview_render_images(
+            &self.conflict_resolver.image_preview,
+            cx,
+        );
         self.conflict_resolver = ConflictResolverUiState {
             repo_id: Some(repo_id),
             path: Some(path),
