@@ -26,6 +26,11 @@ on:
         required: false
         type: boolean
         default: true
+      sign_binaries:
+        description: "Sign Windows binaries and codesign/notarize macOS artifacts (off for nightly builds)"
+        required: false
+        type: boolean
+        default: true
     secrets:
       AZURE_CREDENTIALS:
         required: false
@@ -207,6 +212,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Validate Windows signing configuration
+        if: ${{ inputs.sign_binaries }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -232,11 +238,13 @@ jobs:
           Write-Host "Using Windows signing profile: $env:WINDOWS_SIGNING_PROFILE_NAME"
 
       - name: Log into Azure for Windows signing
+        if: ${{ inputs.sign_binaries }}
         uses: azure/login@v3
         with:
           creds: ${{ env.AZURE_CREDENTIALS }}
 
       - name: Locate SignTool
+        if: ${{ inputs.sign_binaries }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -321,6 +329,7 @@ jobs:
           retention-days: 90
 
       - name: Sign Windows release binary
+        if: ${{ inputs.sign_binaries }}
         uses: Azure/artifact-signing-action@v2
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
@@ -335,6 +344,7 @@ jobs:
           cache-dependencies: false
 
       - name: Verify signed Windows release binary
+        if: ${{ inputs.sign_binaries }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -399,6 +409,7 @@ jobs:
           cargo wix --package gitcomet --profile release --nocapture --no-build --bin-path "$wixBin" --output "dist\$msiName"
 
       - name: Sign Windows MSI installer
+        if: ${{ inputs.sign_binaries }}
         uses: Azure/artifact-signing-action@v2
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
@@ -413,6 +424,7 @@ jobs:
           cache-dependencies: false
 
       - name: Verify signed Windows MSI installer
+        if: ${{ inputs.sign_binaries }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -749,6 +761,14 @@ jobs:
         id: macos_signing_mode
         run: |
           set -euo pipefail
+
+          # Nightly builds are untrusted, rapidly-changing dev artifacts, so
+          # never sign them even if signing secrets are configured.
+          if [ "${{ inputs.sign_binaries }}" = "false" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Signing disabled for this build (nightly); building unsigned macOS artifacts."
+            exit 0
+          fi
 
           required=(
             MACOS_SIGNING_IDENTITY
