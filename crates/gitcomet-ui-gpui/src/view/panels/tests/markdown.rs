@@ -3690,6 +3690,57 @@ fn markdown_preview_selection_highlights_every_line_of_a_wrapped_row(
 }
 
 #[gpui::test]
+fn markdown_preview_selection_paints_over_inline_code_backgrounds(cx: &mut gpui::TestAppContext) {
+    // Inline-code styling owns a run background. If StyledText paints that
+    // background after the selection quad, the selected part of the code span
+    // looks unselected even though copy and selection geometry are correct.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let row_text = "before inline code after";
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(106),
+        "markdown_inline_code_selection_layer",
+        "before `inline code` after\n",
+    );
+    let row_ix = fixture.row_ix(row_text);
+    assert!(
+        fixture.document.rows[row_ix]
+            .inline_spans
+            .iter()
+            .any(|span| { span.style == crate::view::markdown_preview::MarkdownInlineStyle::Code }),
+        "the fixture must carry the background-producing inline-code span"
+    );
+
+    let text_bounds = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{row_ix}"
+        )))
+        .expect("expected the inline-code paragraph's text box");
+    simulate_counted_click(cx, text_bounds.center(), 3);
+    cx.run_until_parked();
+
+    crate::view::rows::begin_markdown_flow_paint_phase_capture_for_tests();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    use crate::view::rows::MarkdownFlowPaintPhase::{Glyphs, RunBackgrounds, Selection};
+    assert_eq!(
+        crate::view::rows::markdown_flow_paint_phases_for_tests(row_ix),
+        vec![RunBackgrounds, Selection, Glyphs],
+        "selection must be composited between inline-code backgrounds and glyphs"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn a_partial_wrapped_selection_starts_and_ends_where_the_drag_did(cx: &mut gpui::TestAppContext) {
     // Selecting a whole row is the easy case: every quad spans its line. A drag
     // that starts and ends mid-line is where the first and last quads have to
@@ -4528,6 +4579,120 @@ fn a_picture_draws_at_the_size_its_skeleton_reserved(cx: &mut gpui::TestAppConte
 }
 
 #[gpui::test]
+fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(103),
+        "markdown_below_eof_image_only",
+        "![demo](demo.png)\n",
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/demo.png"),
+        test_png_bytes(40, 20).as_slice(),
+    )
+    .expect("write image-only preview picture");
+    let row_ix = fixture.row_ix("demo");
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+
+    let picture = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_block_image_{row_ix}"
+        )))
+        .expect("image-only document picture bounds");
+    let empty_space = cx
+        .debug_bounds("diff_text_empty_space_Inline")
+        .expect("image-only document below-EOF surface");
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_text_hitboxes.is_empty(),
+            "a block image must not need a synthetic painted-text hitbox"
+        );
+        assert!(
+            !pane.diff_text_motion_targets.is_empty(),
+            "the image still needs a logical selection-motion target"
+        );
+    });
+
+    drag_preview_selection(cx, empty_space.center(), picture.center());
+    assert_eq!(
+        copied_preview_selection(cx, &view).as_deref(),
+        Some("demo"),
+        "dragging upward from EOF should copy an image-only document's alt text"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn markdown_below_eof_drag_selects_a_thematic_break_only_document(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(104),
+        "markdown_below_eof_rule_only",
+        "---\n",
+    );
+    let row_ix = fixture
+        .document
+        .rows
+        .iter()
+        .position(|row| {
+            matches!(
+                row.kind,
+                crate::view::markdown_preview::MarkdownPreviewRowKind::ThematicBreak
+            )
+        })
+        .expect("thematic-break source row");
+    let rule_text = fixture.document.rows[row_ix].text.clone();
+    let rule = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_thematic_break_{row_ix}"
+        )))
+        .expect("thematic-break-only document bounds");
+    let empty_space = cx
+        .debug_bounds("diff_text_empty_space_Inline")
+        .expect("thematic-break-only document below-EOF surface");
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_text_hitboxes.is_empty(),
+            "a thematic break must not need a synthetic painted-text hitbox"
+        );
+        assert!(
+            !pane.diff_text_motion_targets.is_empty(),
+            "the thematic break still needs a logical selection-motion target"
+        );
+    });
+
+    drag_preview_selection(cx, empty_space.center(), rule.center());
+    assert_eq!(
+        copied_preview_selection(cx, &view).as_deref(),
+        Some(rule_text.as_ref()),
+        "dragging upward from EOF should copy a thematic-break-only document"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn markdown_below_eof_surface_starts_after_a_trailing_picture(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
@@ -4992,6 +5157,138 @@ fn split_markdown_diff_word_wrap_keeps_both_columns_row_aligned(cx: &mut gpui::T
     });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup markdown split wrap workdir");
+}
+
+#[gpui::test]
+fn split_markdown_eof_ignores_trailing_alignment_and_wrap_padding(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(105);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_split_eof_padding",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("docs/split-eof.md");
+    let old_text = "Shared paragraph.\n\nold tail\n";
+    let new_text = format!(
+        "{old_text}\n{}\n",
+        "new-only words that wrap on the other side ".repeat(18)
+    );
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: file_rel.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    let preview = crate::view::markdown_preview::build_markdown_diff_preview(old_text, &new_text)
+        .expect("split EOF padding fixture should parse");
+    let old_tail_row_ix = preview
+        .old
+        .rows
+        .iter()
+        .position(|row| row.text.as_ref() == "old tail")
+        .expect("old tail row");
+    assert!(
+        preview.old.rows[old_tail_row_ix + 1..].iter().all(|row| {
+            matches!(
+                row.kind,
+                crate::view::markdown_preview::MarkdownPreviewRowKind::Spacer
+            )
+        }),
+        "the old side should end in alignment spacers supplied for the new-only paragraph"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create split EOF padding workdir");
+    seed_file_diff_state(cx, &view, repo_id, &workdir, &file_rel, old_text, &new_text);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "split Markdown EOF padding target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
+                pane.file_markdown_preview_cache_rev = 1;
+                pane.file_markdown_preview_cache_target = Some(target.clone());
+                pane.file_markdown_preview =
+                    gitcomet_state::model::Loadable::Ready(Arc::new(preview));
+                pane.file_markdown_preview_inflight = None;
+                cx.notify();
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    for _ in 0..3 {
+        draw_and_drain_test_window(cx);
+    }
+
+    let old_tail_visual_ix = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let plan = pane
+            .markdown_preview_wrap
+            .plan(MarkdownPreviewList::Old)
+            .expect("old split wrap plan");
+        let visible_ix = plan.visual_ix_for_row(old_tail_row_ix);
+        assert!(
+            plan.rows[visible_ix + 1..]
+                .iter()
+                .all(|visual| visual.byte_range.is_empty()),
+            "everything after the old tail should be synthetic empty padding"
+        );
+        visible_ix
+    });
+    let empty_space = cx
+        .debug_bounds("diff_text_empty_space_SplitLeft")
+        .expect("old split column below-EOF surface");
+
+    cx.simulate_click(empty_space.center(), Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_text_head,
+            Some(DiffTextPos {
+                source_visible_ix: old_tail_visual_ix,
+                region: DiffTextRegion::SplitLeft,
+                offset: "old tail".len(),
+            }),
+            "old-side EOF must stop before aligned and wrapped padding"
+        );
+    });
+
+    let old_tail_start = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        old_tail_visual_ix,
+        DiffTextRegion::SplitLeft,
+        0..1,
+        "start of the old Markdown tail",
+    );
+    drag_preview_selection(cx, empty_space.center(), old_tail_start);
+    assert_eq!(
+        copied_preview_selection(cx, &view).as_deref(),
+        Some("old tail"),
+        "synthetic split padding must not become copied blank lines"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup split EOF padding workdir");
 }
 
 #[gpui::test]

@@ -105,6 +105,21 @@ impl MainPaneView {
         self.diff_text_hitboxes.insert((visible_ix, region), hitbox);
     }
 
+    /// Register a painted non-text block as a logical target for an active
+    /// selection drag. Unlike a text hitbox this does not make invisible copy
+    /// text clickable or try to map horizontal positions into byte offsets.
+    pub(in crate::view) fn set_diff_text_motion_target(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        start: DiffTextPos,
+        end: DiffTextPos,
+    ) {
+        debug_assert_eq!(start.region, end.region);
+        debug_assert!(start.cmp_key() <= end.cmp_key());
+        self.diff_text_motion_targets
+            .push(DiffTextMotionTarget { bounds, start, end });
+    }
+
     /// Record where a row painted its stage/unstage gutter button. Hover and
     /// click routing go through the row's hitbox; this map exists so tests can
     /// aim at the button without re-deriving its geometry.
@@ -172,6 +187,38 @@ impl MainPaneView {
     ) -> Option<DiffTextPos> {
         self.diff_text_hit_in_hitbox(hitbox, region, position)
             .map(|hit| hit.pos)
+    }
+
+    /// Resolve a drag against a block whose copy text has no painted glyphs.
+    /// Approaching from above lands after it; approaching from below lands
+    /// before it. While the pointer is inside the block, the selection anchor
+    /// decides which boundary extends across the block.
+    fn diff_text_pos_from_motion_target(
+        &self,
+        target: &DiffTextMotionTarget,
+        position: Point<Pixels>,
+    ) -> DiffTextPos {
+        if position.y < target.bounds.top() {
+            return target.start;
+        }
+        if position.y > target.bounds.bottom() {
+            return target.end;
+        }
+
+        if let Some(anchor) = self.diff_text_anchor {
+            if anchor.cmp_key() >= target.end.cmp_key() {
+                return target.start;
+            }
+            if anchor.cmp_key() <= target.start.cmp_key() {
+                return target.end;
+            }
+        }
+
+        if position.y <= target.bounds.center().y {
+            target.start
+        } else {
+            target.end
+        }
     }
 
     fn diff_text_hit_in_hitbox(
@@ -481,10 +528,6 @@ impl MainPaneView {
     }
 
     fn diff_text_pos_for_mouse(&self, position: Point<Pixels>) -> Option<DiffTextPos> {
-        if self.diff_text_hitboxes.is_empty() {
-            return None;
-        }
-
         let restrict_region = self
             .diff_text_selecting
             .then_some(self.diff_text_anchor)
@@ -498,6 +541,14 @@ impl MainPaneView {
             }
             if hitbox.bounds.contains(&position) {
                 return self.diff_text_pos_from_hitbox(*visible_ix, *region, position);
+            }
+        }
+        for target in &self.diff_text_motion_targets {
+            if restrict_region.is_some_and(|restrict| restrict != target.start.region) {
+                continue;
+            }
+            if target.bounds.contains(&position) {
+                return Some(self.diff_text_pos_from_motion_target(target, position));
             }
         }
 
@@ -538,8 +589,58 @@ impl MainPaneView {
                 best = Some((*key, (dy, dx)));
             }
         }
-        let ((visible_ix, region), _) = best?;
-        self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
+
+        let mut best_motion: Option<(usize, (Pixels, Pixels, usize, u8))> = None;
+        for (target_ix, target) in self.diff_text_motion_targets.iter().enumerate() {
+            if restrict_region.is_some_and(|restrict| restrict != target.start.region) {
+                continue;
+            }
+            let dy = if position.y < target.bounds.top() {
+                target.bounds.top() - position.y
+            } else if position.y > target.bounds.bottom() {
+                position.y - target.bounds.bottom()
+            } else {
+                px(0.0)
+            };
+            let dx = if position.x < target.bounds.left() {
+                target.bounds.left() - position.x
+            } else if position.x > target.bounds.right() {
+                position.x - target.bounds.right()
+            } else {
+                px(0.0)
+            };
+            let rank = (
+                dy,
+                dx,
+                target.start.source_visible_ix,
+                target.start.region.order(),
+            );
+            if best_motion.is_none_or(|(_, best_rank)| rank < best_rank) {
+                best_motion = Some((target_ix, rank));
+            }
+        }
+
+        match (best, best_motion) {
+            (None, None) => None,
+            (Some(((visible_ix, region), _)), None) => {
+                self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
+            }
+            (None, Some((target_ix, _))) => Some(self.diff_text_pos_from_motion_target(
+                &self.diff_text_motion_targets[target_ix],
+                position,
+            )),
+            (Some(((visible_ix, region), (dy, dx))), Some((target_ix, motion_rank))) => {
+                let text_rank = (dy, dx, visible_ix, region.order());
+                if text_rank <= motion_rank {
+                    self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
+                } else {
+                    Some(self.diff_text_pos_from_motion_target(
+                        &self.diff_text_motion_targets[target_ix],
+                        position,
+                    ))
+                }
+            }
+        }
     }
 
     /// Resolve the logical final caret boundary in one selectable text region.
@@ -553,16 +654,14 @@ impl MainPaneView {
         // document before consulting painted text so a trailing non-text block
         // cannot move EOF back to the preceding paragraph.
         if self.is_markdown_preview_active()
-            && let Some(last_visible_ix) = self
-                .markdown_preview_region_row_count(region)
-                .and_then(|row_count| row_count.checked_sub(1))
+            && let Some((last_visible_ix, last_offset)) = self.markdown_preview_region_eof(region)
         {
             return (
                 last_visible_ix,
                 DiffTextPos {
                     source_visible_ix: last_visible_ix,
                     region,
-                    offset: self.markdown_preview_row_text_len(last_visible_ix, region),
+                    offset: last_offset,
                 },
             );
         }

@@ -3831,6 +3831,7 @@ impl MainPaneView {
         // the position the vertical scroll put it in.
         self.apply_pending_diff_search_horizontal_reveal(window);
         self.diff_text_hitboxes.clear();
+        self.diff_text_motion_targets.clear();
         self.conflict_text_hitboxes.clear();
         // The map still holds last frame's buttons, so it is the one place that
         // knows a hovered button has stopped being painted — the row itself

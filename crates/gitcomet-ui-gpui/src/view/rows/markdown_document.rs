@@ -270,18 +270,69 @@ fn render_block(
             .into_any_element(),
         // Only the first band of an image carries its source; the rest exist so
         // the row grid can give the picture height.
-        MarkdownBlock::Image(_) => wrapper
+        MarkdownBlock::Image(_) => non_text_block_shell(document, block.row_range(), context)
             .when_some(rows.first(), |wrapper, (row_ix, row)| {
                 wrapper.child(render_image(row_ix, row, context))
             })
             .into_any_element(),
-        MarkdownBlock::ThematicBreak(_) => wrapper
-            .child(div().w_full().h(px(1.0)).bg(with_alpha(
-                context.theme.colors.stroke.default,
-                if context.theme.is_dark { 0.92 } else { 0.88 },
-            )))
-            .into_any_element(),
+        MarkdownBlock::ThematicBreak(row_ix) => {
+            let row_ix = *row_ix;
+            non_text_block_shell(document, block.row_range(), context)
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(1.0))
+                        .bg(with_alpha(
+                            context.theme.colors.stroke.default,
+                            if context.theme.is_dark { 0.92 } else { 0.88 },
+                        ))
+                        .debug_selector(move || {
+                            format!("markdown_preview_thematic_break_{row_ix}")
+                        }),
+                )
+                .into_any_element()
+        }
     }
+}
+
+/// Give a non-text block a logical range for selection motion without
+/// pretending that its accessible copy text was painted as glyphs.
+fn non_text_block_shell(
+    document: &MarkdownPreviewDocument,
+    range: Range<usize>,
+    context: &MarkdownDocumentContext,
+) -> gpui::Div {
+    let shell = div().w_full().min_w(px(0.0));
+    let (Some(view), Some(first_row_ix), Some(last_row_ix)) = (
+        context.view.clone(),
+        range.clone().next(),
+        range.clone().next_back(),
+    ) else {
+        return shell;
+    };
+    let Some(last_row) = document.rows.get(last_row_ix) else {
+        return shell;
+    };
+    let region = context.text_region;
+    let start = DiffTextPos {
+        source_visible_ix: first_row_ix,
+        region,
+        offset: 0,
+    };
+    let end = DiffTextPos {
+        source_visible_ix: last_row_ix,
+        region,
+        offset: last_row.text.len(),
+    };
+
+    shell.on_children_prepainted(move |children_bounds, _window, app| {
+        let Some(bounds) = children_bounds.first().copied() else {
+            return;
+        };
+        view.update(app, |this, _cx| {
+            this.set_diff_text_motion_target(bounds, start, end);
+        });
+    })
 }
 
 /// The rows of one block, paired with the document index each one paints at.

@@ -584,6 +584,7 @@ impl MainPaneView {
 
     pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
         self.diff_text_hitboxes.clear();
+        self.diff_text_motion_targets.clear();
         self.diff_stage_gutter_cells.clear();
         self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
         self.diff_text_layout_cache.clear();
