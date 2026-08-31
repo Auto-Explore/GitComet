@@ -249,6 +249,7 @@ fn repo_monitor_start_failures_are_recorded_for_missing_workdir() {
         missing_workdir,
         msg_tx,
         std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
+        std::sync::Arc::new(FailingBackend),
     );
 
     wait_for_monitor_failure_count(monitor_impl::MonitorFailureKind::Start, before + 1);
@@ -448,23 +449,20 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
     repo_monitors.insert_blocked_monitor_for_test(old_repo_id, release_rx, exited_tx);
 
     let started = std::time::Instant::now();
-    handle_reducer_effects(
-        std::iter::empty::<Effect>(),
-        ReducerEffectsContext {
-            thread_state: &thread_state,
-            active_repo_id: &active_repo_id,
-            event_tx: &event_tx,
-            repo_monitors: &mut repo_monitors,
-            repos: &repos,
-            repo_task_tokens: &mut repo_task_tokens,
-            thread_msg_tx: &thread_msg_tx,
-            executor: &executor,
-            repo_load_executor: &repo_load_executor,
-            metadata_executor: &metadata_executor,
-            session_persist_executor: &session_persist_executor,
-            backend: &backend,
-        },
-    );
+    super::super::WorkerLoopContext {
+        thread_state: &thread_state,
+        active_repo_id: &active_repo_id,
+        event_tx: &event_tx,
+        repo_monitors: &mut repo_monitors,
+        repo_task_tokens: &mut repo_task_tokens,
+        thread_msg_tx: &thread_msg_tx,
+        executor: &executor,
+        repo_load_executor: &repo_load_executor,
+        metadata_executor: &metadata_executor,
+        session_persist_executor: &session_persist_executor,
+        backend: &backend,
+    }
+    .handle_effects(&repos, std::iter::empty::<Effect>());
     let elapsed = started.elapsed();
 
     assert!(

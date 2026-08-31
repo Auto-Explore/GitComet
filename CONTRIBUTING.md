@@ -2,8 +2,7 @@
 
 ### Workspace layout
 
-- `crates/gitcomet-core`: domain types, merge algorithm, conflict session, text utils.
-- `crates/gitcomet-git`: Git abstraction + no-op backend.
+- `crates/gitcomet-core`: domain types, Git service contracts, merge algorithm, conflict session, text utils.
 - `crates/gitcomet-git-gix`: `gix`/gitoxide backend implementation.
 - `crates/gitcomet-state`: MVU state store, reducers, effects, conflict session management.
 - `crates/gitcomet-ui-gpui`: GPUI views/components (focused diff/merge windows, conflict resolver, word diff).

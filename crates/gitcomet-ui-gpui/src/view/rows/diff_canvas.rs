@@ -1,4 +1,9 @@
 use super::canvas::keyed_canvas;
+use super::canvas_text;
+use super::canvas_text::{
+    HighlightSpans, LineMetrics, center_text_y, compute_runs, diff_text_style, empty_highlights,
+    line_metrics, line_metrics_scaled,
+};
 use super::diff_text::{
     PreparedDocumentByteRangeHighlights, build_cached_diff_query_overlay_styled_text,
     build_cached_diff_styled_text, build_cached_diff_styled_text_from_relative_highlights,
@@ -13,7 +18,7 @@ use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions
 use gitcomet_core::domain::{DiffArea, DiffLineKind};
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
-    Styled, TextRun, TextStyle, TransformationMatrix, TruncateFrom, Window, fill, point, px, size,
+    Styled, TextStyle, TransformationMatrix, TruncateFrom, Window, fill, point, px, size,
 };
 use palette::IntoColor;
 use rustc_hash::{FxHashMap, FxHasher};
@@ -22,9 +27,6 @@ use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::OnceLock;
-
-const DIFF_FONT_SCALE: f32 = 0.80;
 
 const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 const STREAMED_DIFF_TEXT_MIN_BYTES: usize = LARGE_DIFF_TEXT_MIN_BYTES;
@@ -75,8 +77,6 @@ const DIFF_STAGE_GUTTER_CELL_PX: f32 = 16.0;
 const DIFF_STAGE_GUTTER_GLYPH_PX: f32 = 11.0;
 const DIFF_STAGE_GUTTER_STAGE_ICON: &str = "icons/plus.svg";
 const DIFF_STAGE_GUTTER_UNSTAGE_ICON: &str = "icons/minus.svg";
-
-type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 
 /// Per-row blame data prepared for painting in the annotation column.
 #[derive(Clone)]
@@ -3329,36 +3329,6 @@ fn install_diff_row_mouse_handlers(
     });
 }
 
-#[derive(Clone, Copy, Debug)]
-struct LineMetrics {
-    font_size: Pixels,
-    line_height: Pixels,
-}
-
-fn diff_text_style(window: &Window) -> TextStyle {
-    let mut style = window.text_style();
-    style.font_weight = FontWeight::NORMAL;
-    style
-}
-
-fn line_metrics(window: &Window) -> LineMetrics {
-    line_metrics_scaled(window, 1.0)
-}
-
-/// Diff-text metrics at `extra_scale` times the base diff font size (1.0 = the
-/// regular row text; the annotation "when" column uses a slightly smaller scale).
-fn line_metrics_scaled(window: &Window, extra_scale: f32) -> LineMetrics {
-    let style = diff_text_style(window);
-    let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE * extra_scale;
-    let line_height = style
-        .line_height
-        .to_pixels(font_size.into(), window.rem_size());
-    LineMetrics {
-        font_size,
-        line_height,
-    }
-}
-
 /// Smaller font metrics for the "X ago" sub-column in the annotation panel.
 fn line_metrics_annot_when(window: &Window) -> LineMetrics {
     line_metrics_scaled(window, 0.85)
@@ -3380,7 +3350,7 @@ pub(in crate::view) fn diff_text_wrap_char_width(
 ) -> Pixels {
     let mut style = diff_text_style(window);
     style.font_family = editor_font_family.into();
-    let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE;
+    let font_size = style.font_size.to_pixels(window.rem_size()) * canvas_text::DIFF_FONT_SCALE;
     let run = style.to_run(DIFF_TEXT_WRAP_WIDTH_SAMPLE.len());
     let layout = window.text_system().shape_line(
         DIFF_TEXT_WRAP_WIDTH_SAMPLE.into(),
@@ -3393,11 +3363,6 @@ pub(in crate::view) fn diff_text_wrap_char_width(
     } else {
         (layout.width / DIFF_TEXT_WRAP_WIDTH_SAMPLE.len() as f32).max(px(1.0))
     }
-}
-
-fn center_text_y(bounds: Bounds<Pixels>, line_height: Pixels) -> Pixels {
-    let extra = (bounds.size.height - line_height).max(px(0.0));
-    bounds.top() + extra * 0.5
 }
 
 fn px_2(window: &Window) -> Pixels {
@@ -3543,34 +3508,8 @@ fn shaped_gutter_line(
     metrics: LineMetrics,
     window: &mut Window,
 ) -> gpui::ShapedLine {
-    let mut style = diff_text_style(window);
-    style.color = color.into_color();
-    let key = {
-        let mut hasher = FxHasher::default();
-        text.as_ref().hash(&mut hasher);
-        metrics.font_size.hash(&mut hasher);
-        style.font_family.hash(&mut hasher);
-        style.font_weight.hash(&mut hasher);
-        color.red.to_bits().hash(&mut hasher);
-        color.green.to_bits().hash(&mut hasher);
-        color.blue.to_bits().hash(&mut hasher);
-        color.alpha.to_bits().hash(&mut hasher);
-        hasher.finish()
-    };
-
-    let shaped = GUTTER_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned());
-    shaped.unwrap_or_else(|| {
-        let run = style.to_run(text.len());
-        let shaped = window
-            .text_system()
-            .shape_line(text.clone(), metrics.font_size, &[run], None);
-
-        GUTTER_TEXT_LAYOUT_CACHE.with(|cache| {
-            cache.borrow_mut().put(key, shaped.clone());
-        });
-
-        shaped
-    })
+    GUTTER_TEXT_LAYOUT_CACHE
+        .with(|cache| canvas_text::shaped_gutter_line(text, color, metrics, cache, window))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3783,6 +3722,21 @@ fn paint_selectable_diff_text(
         }
     };
 
+    // Styled run backgrounds (including rendered Markdown's inline-code wash)
+    // go below interactive overlays. Painting them after selection would mask
+    // that part of the selection completely; this order intentionally blends
+    // the translucent selection with the run background instead.
+    if !paint_text.is_empty() && !paint_highlights.is_empty() {
+        let _ = layout.paint_background(
+            point(paint_x, y),
+            metrics.line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
+    }
+
     // Occurrences go down first, then the pair, then the selection. One click
     // produces both a pair and a set of occurrences, and the clicked name is in
     // both: painting the pair second means the delimiters stay legible where
@@ -3868,14 +3822,6 @@ fn paint_selectable_diff_text(
         return;
     }
 
-    let _ = layout.paint_background(
-        point(paint_x, y),
-        metrics.line_height,
-        gpui::TextAlign::Left,
-        None,
-        window,
-        cx,
-    );
     let _ = layout.paint(
         point(paint_x, y),
         metrics.line_height,
@@ -3945,19 +3891,6 @@ fn ensure_layout_cached(
             .shape_line(text.clone(), metrics.font_size, &runs, None)
     };
     (layout_key, shaped.clone(), Some(shaped))
-}
-
-fn compute_runs(
-    text: &str,
-    default_style: &TextStyle,
-    highlights: &[(Range<usize>, HighlightStyle)],
-) -> Vec<TextRun> {
-    crate::text_runs::text_runs_for_highlights(text, default_style, highlights)
-}
-
-fn empty_highlights() -> HighlightSpans {
-    static EMPTY: OnceLock<HighlightSpans> = OnceLock::new();
-    Arc::clone(EMPTY.get_or_init(|| Arc::from(Vec::new())))
 }
 
 #[cfg(test)]

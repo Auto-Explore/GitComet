@@ -122,7 +122,7 @@ pub(super) fn model(
         }),
     };
     if let Some(commit_id) = branch_commit_id {
-        let comparison_mark = repo.and_then(|r| r.comparison_mark.clone());
+        let comparison_mark = repo.and_then(|r| r.navigation.comparison_mark.clone());
         items.push(ContextMenuItem::Entry {
             label: format!("Mark {name} for comparison").into(),
             icon: Some("icons/git_branch.svg".into()),

@@ -30,11 +30,11 @@ fn browse_history_menu_exposes_full_commit_message_tooltip(cx: &mut gpui::TestAp
                 }
                 .into(),
             );
-            repo.browse_history = vec![commit_id.clone()];
+            repo.navigation.browse_history = vec![commit_id.clone()];
 
             let state = app_state_with_repo(repo, repo_id);
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });

@@ -9,7 +9,7 @@
 //! - `extract-merge-fixtures`: generate Phase 3C real-world merge fixtures
 
 use clap::{Parser, Subcommand};
-use gitcomet_core::merge::{ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm};
+use gitcomet_core::merge::{ConfigValueSource, ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -533,22 +533,19 @@ fn parse_marker_size(marker_size: Option<usize>) -> Result<usize, String> {
 
 fn parse_conflict_style(value: Option<&str>) -> Result<ConflictStyle, String> {
     match value {
-        None | Some("merge") => Ok(ConflictStyle::Merge),
-        Some("diff3") => Ok(ConflictStyle::Diff3),
-        Some("zdiff3") => Ok(ConflictStyle::Zdiff3),
-        Some(other) => Err(format!(
-            "Unknown conflict style '{other}': expected merge, diff3, or zdiff3"
-        )),
+        None => Ok(ConflictStyle::Merge),
+        Some(raw) => gitcomet_core::merge::parse_conflict_style(ConfigValueSource::Cli, raw)
+            .ok_or_else(|| {
+                format!("Unknown conflict style '{raw}': expected merge, diff3, or zdiff3")
+            }),
     }
 }
 
 fn parse_diff_algorithm(value: Option<&str>) -> Result<DiffAlgorithm, String> {
     match value {
-        None | Some("myers") => Ok(DiffAlgorithm::Myers),
-        Some("histogram") => Ok(DiffAlgorithm::Histogram),
-        Some(other) => Err(format!(
-            "Unknown diff algorithm '{other}': expected myers or histogram"
-        )),
+        None => Ok(DiffAlgorithm::Myers),
+        Some(raw) => gitcomet_core::merge::parse_diff_algorithm(ConfigValueSource::Cli, raw)
+            .ok_or_else(|| format!("Unknown diff algorithm '{raw}': expected myers or histogram")),
     }
 }
 

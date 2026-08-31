@@ -11,12 +11,19 @@ on:
       - ".github/workflows/deploy-windows-installer.yml"
       - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
+      - ".github/actions/setup-dump-syms/action.yml"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
+      - "scripts/emit-breakpad-symbols.sh"
+      - "scripts/install-dump-syms.sh"
+      - "scripts/dump-syms-pins.sh"
+      - "scripts/lib/cli.sh"
+      - "scripts/lib/macos-symbols.sh"
+      - "scripts/symbolicate-minidump.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
       - "scripts/microsoft-store-fetch-listings.sh"
       - "scripts/microsoft-store-listing-languages.sh"
@@ -37,12 +44,19 @@ on:
       - ".github/workflows/deploy-windows-installer.yml"
       - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
+      - ".github/actions/setup-dump-syms/action.yml"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
+      - "scripts/emit-breakpad-symbols.sh"
+      - "scripts/install-dump-syms.sh"
+      - "scripts/dump-syms-pins.sh"
+      - "scripts/lib/cli.sh"
+      - "scripts/lib/macos-symbols.sh"
+      - "scripts/symbolicate-minidump.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
       - "scripts/microsoft-store-fetch-listings.sh"
       - "scripts/microsoft-store-listing-languages.sh"
@@ -94,6 +108,12 @@ jobs:
           bash -n scripts/macos-cargo-config.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
+          bash -n scripts/emit-breakpad-symbols.sh
+          bash -n scripts/install-dump-syms.sh
+          bash -n scripts/dump-syms-pins.sh
+          bash -n scripts/lib/cli.sh
+          bash -n scripts/lib/macos-symbols.sh
+          bash -n scripts/symbolicate-minidump.sh
           bash -n scripts/microsoft-store-fetch-listings.sh
           bash -n scripts/microsoft-store-listing-languages.sh
           bash -n scripts/microsoft-store-listing-metadata.sh
@@ -209,10 +229,25 @@ jobs:
           grep -Fq 'timestamp-digest:' .github/workflows/build-release-artifacts.yml
           grep -Fq 'append-signature:' .github/workflows/build-release-artifacts.yml
           grep -Fq 'verify-signed-artifact.ps1' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'AZURE_STORAGE_ACCOUNT_KEY' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'publish_symbols' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'emit-breakpad-symbols.sh' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'SYMBOLS_CONTAINER: $''{{ vars.APT_STORAGE_CONTAINER }}' .github/workflows/build-release-artifacts.yml
+          grep -Fq "grep -v '^symbols/'" .github/workflows/deploy-apt-repo.yml
           grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
           grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
+
+          # dump_syms pins live in one resolver script; every workflow resolves
+          # through it, so there is nothing to skew. Assert the resolver itself
+          # answers for every pinned triple.
+          for triple in $(scripts/dump-syms-pins.sh --triples); do
+            asset="$(scripts/dump-syms-pins.sh --asset "$triple")"
+            sha="$(scripts/dump-syms-pins.sh --sha256 "$triple")"
+            echo "dump_syms $triple -> $asset ($sha)"
+          done
+          grep -Fq 'setup-dump-syms' .github/workflows/build-release-artifacts.yml
 
       - name: Test Microsoft Store deployment workflow
         env:
@@ -385,6 +420,41 @@ jobs:
             exit 1
           fi
           popd >/dev/null
+
+  release-tooling-backfill-smoke:
+    name: Validate old-tag release tooling backfill
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      # This source revision has the release workflow but predates both the
+      # setup-dump-syms action and its centralized pin resolver.
+      - name: Check out pre-tooling release source
+        uses: actions/checkout@v7
+        with:
+          ref: 379fc57563ac788969223db9ea2d4d8a5679c94d
+          fetch-depth: 1
+
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Install dump_syms from workflow tooling
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
+        with:
+          triple: x86_64-unknown-linux-gnu
+
+      - name: Verify dump_syms is runnable
+        run: dump_syms --version
 
   aur-metadata-smoke:
     name: Validate AUR metadata update script
@@ -607,9 +677,11 @@ jobs:
           - target_platform: aarch64-darwin
             arch: arm64
             runs_on: macos-latest
+            dump_syms_triple: aarch64-apple-darwin
           - target_platform: x86_64-darwin
             arch: x86_64
             runs_on: macos-15-intel
+            dump_syms_triple: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v7
 
@@ -619,7 +691,33 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      # Cached so an outage or rate limit at mozilla/dump_syms does not fail
+      # unrelated pull requests. Keyed on the resolver script contents so any
+      # pin change (version, asset, or checksum) busts the cache.
+      - name: Cache dump_syms
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/gitcomet-dump-syms
+          key: dump-syms-${{ hashFiles('scripts/dump-syms-pins.sh') }}-${{ matrix.dump_syms_triple }}
+
+      - name: Install dump_syms
+        run: |
+          set -euo pipefail
+          bin_dir="${HOME}/.cache/gitcomet-dump-syms"
+          if [ ! -x "${bin_dir}/dump_syms" ]; then
+            bin_dir="$(scripts/install-dump-syms.sh \
+              --version "$(scripts/dump-syms-pins.sh --version)" \
+              --asset "$(scripts/dump-syms-pins.sh --asset "${{ matrix.dump_syms_triple }}")" \
+              --sha256 "$(scripts/dump-syms-pins.sh --sha256 "${{ matrix.dump_syms_triple }}")" \
+              --bin-dir "$bin_dir")"
+          fi
+          echo "$bin_dir" >> "$GITHUB_PATH"
+
+      # Without a .dSYM there is nothing for the symbol pipeline below to read.
       - name: Build release binary
+        env:
+          CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: packed
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: |
           set -euo pipefail
           cargo_config_output="$(scripts/macos-cargo-config.sh "${{ matrix.arch }}" release)"
@@ -629,7 +727,7 @@ jobs:
               set -- "$@" "$arg"
             done <<<"$cargo_config_output"
           fi
-          set -- "$@" -p gitcomet --release --locked --features ui-gpui,gix --bins
+          set -- "$@" -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
           cargo build "$@"
 
       - name: Package macOS artifacts
@@ -640,14 +738,40 @@ jobs:
             --arch "${{ matrix.arch }}" \
             --release \
             --no-build \
-            --out-dir dist
+            --out-dir dist \
+            --symbols-out dist/symbols
 
-      - name: Verify tarball contents
+      - name: Verify no tarball is produced
         run: |
           set -euo pipefail
-          tarball="dist/gitcomet-v0.0.0-ci-macos-${{ matrix.arch }}.tar.gz"
-          test -f "$tarball"
-          tar -tzf "$tarball" | grep -q "GitComet.app/Contents/MacOS/gitcomet$"
+          if ls dist/*.tar.gz >/dev/null 2>&1; then
+            echo "::error title=Unexpected tarball::macOS packaging produced a .tar.gz; it was removed deliberately."
+            exit 1
+          fi
+
+      # A stackwalker fetches MODULE/DEBUG_ID/MODULE.sym by the name in the
+      # crash report, so a bundle-derived name here is a 404 for every lookup
+      # while every other check still passes. The MODULE line itself is left to
+      # emit-breakpad-symbols.sh, which already checks it.
+      - name: Verify Breakpad symbol store layout
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r sym; do
+            found=$((found + 1))
+            case "$sym" in
+              dist/symbols/gitcomet/*/gitcomet.sym) ;;
+              *)
+                echo "::error title=Wrong symbol store path::Expected dist/symbols/gitcomet/<DEBUG_ID>/gitcomet.sym, got ${sym}."
+                exit 1
+                ;;
+            esac
+          done < <(find dist/symbols -type f -name '*.sym')
+
+          if [ "$found" -ne 1 ]; then
+            echo "::error title=Unexpected symbol store contents::Expected exactly one .sym, found ${found}."
+            exit 1
+          fi
 
       - name: Verify DMG launches binary
         run: |
@@ -661,5 +785,13 @@ jobs:
             exit 1
           fi
 
-          "${mount_point}/GitComet.app/Contents/MacOS/gitcomet" --help >/dev/null
+          app="${mount_point}/GitComet.app"
+          "$app/Contents/MacOS/gitcomet" --help >/dev/null
+
+          # Against the mounted image, not the staging tree: this is what users
+          # receive, and the only macOS artifact carrying the licence.
+          test -f "$app/Contents/Resources/LICENSE-AGPL-3.0"
+          test -f "$app/Contents/Resources/NOTICE"
+          test -f "$app/Contents/Resources/README.md"
+
           hdiutil detach "$mount_point"

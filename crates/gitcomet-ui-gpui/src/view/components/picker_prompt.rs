@@ -1673,10 +1673,7 @@ fn remove_row_button<V: 'static>(
         }))
 }
 
-fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
-    color.alpha = alpha;
-    color
-}
+use crate::theme::with_alpha;
 
 /// Substring search with precomputed first-byte lowercase/uppercase values.
 /// Skips positions where the first byte cannot match, avoiding the inner loop

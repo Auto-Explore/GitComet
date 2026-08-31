@@ -1,10 +1,12 @@
-use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::background_command as no_window_command;
+#[path = "support/gitcomet_bin.rs"]
+mod gitcomet_test_bin;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
+use gitcomet_test_bin::gitcomet_bin;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 #[cfg(windows)]
 use std::sync::OnceLock;
@@ -57,41 +59,6 @@ fn require_git_shell_for_tool_tests() -> bool {
         }
     }
     true
-}
-
-fn gitcomet_bin() -> PathBuf {
-    for env_key in ["CARGO_BIN_EXE_gitcomet"] {
-        if let Some(path) = std::env::var_os(env_key).map(PathBuf::from)
-            && path.is_file()
-        {
-            return path;
-        }
-    }
-
-    if let Some(path) = gitcomet_bin_from_current_exe() {
-        return path;
-    }
-
-    panic!(
-        "gitcomet binary path was not found. Tried CARGO_BIN_EXE_gitcomet and a fallback relative to current test executable"
-    );
-}
-
-fn gitcomet_bin_from_current_exe() -> Option<PathBuf> {
-    let test_exe = canonicalize_or_original(std::env::current_exe().ok()?);
-    let deps_dir = test_exe.parent()?;
-    let profile_dir = deps_dir.parent()?;
-    let exe_suffix = std::env::consts::EXE_SUFFIX;
-
-    {
-        let bin_name = "gitcomet";
-        let candidate = profile_dir.join(format!("{bin_name}{exe_suffix}"));
-        if candidate.is_file() {
-            return Some(canonicalize_or_original(candidate));
-        }
-    }
-
-    None
 }
 
 fn shell_quote(value: &str) -> String {

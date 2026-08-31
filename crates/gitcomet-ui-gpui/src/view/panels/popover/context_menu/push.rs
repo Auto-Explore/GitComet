@@ -10,7 +10,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.pending_force_push_lease.as_ref())
+        .and_then(|repo| repo.pending.force_push_lease.as_ref())
         .is_some()
     {
         "Force push published amend with lease…"

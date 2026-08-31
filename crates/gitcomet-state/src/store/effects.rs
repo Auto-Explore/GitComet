@@ -9,7 +9,7 @@ mod util;
 /// cached repository handles go with it. See [`repo_load`].
 pub(super) use repo_load::release_worktree_scan_handles;
 
-use crate::model::AppState;
+use crate::model::{AppState, Loadable};
 use crate::msg::{Effect, Msg, RepoActionKind, RepoCommandKind};
 use crate::session;
 use gitcomet_core::domain::DiffTarget;
@@ -103,6 +103,48 @@ fn selected_conflict_file_path(
         .iter()
         .find(|repo| repo.id == repo_id)
         .and_then(|repo| repo.conflict_state.conflict_file_path.clone())
+}
+
+fn current_branch_context(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+) -> Option<String> {
+    let state = thread_state
+        .read()
+        .unwrap_or_else(|error| error.into_inner());
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    match &repo.head_branch {
+        Loadable::Ready(branch) if branch != "HEAD" => Some(branch.clone()),
+        _ => None,
+    }
+}
+
+/// Returns `(local branch, remote/branch)` from the same UI-state snapshot
+/// that enabled the operation. This is display metadata only; Git still
+/// resolves and validates the real target when the command executes.
+fn tracking_branch_context(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+) -> Option<(String, String)> {
+    let state = thread_state
+        .read()
+        .unwrap_or_else(|error| error.into_inner());
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    let Loadable::Ready(local) = &repo.head_branch else {
+        return None;
+    };
+    let Loadable::Ready(branches) = &repo.branches else {
+        return None;
+    };
+    let upstream = branches
+        .iter()
+        .find(|branch| branch.name == *local)?
+        .upstream
+        .as_ref()?;
+    Some((
+        local.clone(),
+        format!("{}/{}", upstream.remote, upstream.branch),
+    ))
 }
 
 fn selected_inline_submodule_diff(
@@ -207,6 +249,7 @@ fn effect_requires_available_git(effect: &Effect) -> bool {
             | Effect::PersistRepoHistoryMode { .. }
             | Effect::PersistRepoHistoryModesBatch { .. }
             | Effect::CancelRepoLoads { .. }
+            | Effect::CancelGitOperation { .. }
             | Effect::AbortCloneRepo { .. }
     )
 }
@@ -247,7 +290,8 @@ fn send_unavailable_git_effect_result(
         | Effect::PersistRepoHistoryMode { .. }
         | Effect::PersistRepoHistoryModesBatch { .. }
         | Effect::PersistRepoHistoryAuthorFilter { .. }
-        | Effect::CancelRepoLoads { .. } => {}
+        | Effect::CancelRepoLoads { .. }
+        | Effect::CancelGitOperation { .. } => {}
         Effect::OpenRepo { repo_id, path } => {
             send(Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
                 repo_id,
@@ -1494,6 +1538,9 @@ pub(super) fn schedule_effect(
                 token.cancel();
             }
         }
+        Effect::CancelGitOperation { operation_id, .. } => {
+            let _ = gitcomet_core::git_operation::cancel(operation_id);
+        }
         Effect::LoadBranches { repo_id } => {
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
@@ -2349,14 +2396,29 @@ pub(super) fn schedule_effect(
             repo_id,
             mode,
             auth,
-        } => repo_commands::schedule_pull(executor, repos, msg_tx, repo_id, mode, auth),
+        } => repo_commands::schedule_pull(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            mode,
+            tracking_branch_context(thread_state, repo_id),
+            auth,
+        ),
         Effect::PullBranch {
             repo_id,
             remote,
             branch,
             auth,
         } => repo_commands::schedule_pull_branch(
-            executor, repos, msg_tx, repo_id, remote, branch, auth,
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            remote,
+            branch,
+            current_branch_context(thread_state, repo_id),
+            auth,
         ),
         Effect::MergeRef { repo_id, reference } => {
             repo_commands::schedule_merge_ref(executor, repos, msg_tx, repo_id, reference);
@@ -2364,9 +2426,14 @@ pub(super) fn schedule_effect(
         Effect::SquashRef { repo_id, reference } => {
             repo_commands::schedule_squash_ref(executor, repos, msg_tx, repo_id, reference);
         }
-        Effect::Push { repo_id, auth } => {
-            repo_commands::schedule_push(executor, repos, msg_tx, repo_id, auth)
-        }
+        Effect::Push { repo_id, auth } => repo_commands::schedule_push(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            tracking_branch_context(thread_state, repo_id),
+            auth,
+        ),
         Effect::PushAfterCommit {
             repo_id,
             target,
@@ -2381,9 +2448,14 @@ pub(super) fn schedule_effect(
             set_upstream,
             auth,
         ),
-        Effect::ForcePush { repo_id, auth } => {
-            repo_commands::schedule_force_push(executor, repos, msg_tx, repo_id, auth)
-        }
+        Effect::ForcePush { repo_id, auth } => repo_commands::schedule_force_push(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            tracking_branch_context(thread_state, repo_id),
+            auth,
+        ),
         Effect::ForcePushWithLease {
             repo_id,
             lease,
@@ -2397,7 +2469,14 @@ pub(super) fn schedule_effect(
             branch,
             auth,
         } => repo_commands::schedule_push_set_upstream(
-            executor, repos, msg_tx, repo_id, remote, branch, auth,
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            remote,
+            branch,
+            current_branch_context(thread_state, repo_id),
+            auth,
         ),
         Effect::SetUpstreamBranch {
             repo_id,
@@ -2576,5 +2655,15 @@ mod tests {
         assert!(!effect_requires_available_git(&Effect::AbortCloneRepo {
             dest: std::path::PathBuf::from("/tmp/example"),
         }));
+    }
+
+    #[test]
+    fn cancel_git_operation_does_not_require_available_git() {
+        assert!(!effect_requires_available_git(
+            &Effect::CancelGitOperation {
+                repo_id: RepoId(1),
+                operation_id: gitcomet_core::git_operation::GitOperationId(7),
+            }
+        ));
     }
 }

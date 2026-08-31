@@ -77,7 +77,8 @@ pub(super) fn model_for_tag(
 
 fn comparison_mark_pair(repo: Option<&RepoState>) -> Option<(CommitId, String)> {
     repo.and_then(|r| {
-        r.comparison_mark
+        r.navigation
+            .comparison_mark
             .as_ref()
             .map(|mark| (mark.commit_id.clone(), mark.label.clone()))
     })

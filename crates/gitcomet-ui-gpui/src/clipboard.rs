@@ -11,6 +11,7 @@ pub(crate) enum CopySource {
     TerminalShortcut,
     TerminalContextMenu,
     TerminalProtocol,
+    HookActivity,
     ContextMenu,
 }
 
@@ -29,6 +30,7 @@ impl CopySource {
             Self::TerminalShortcut => "terminal-shortcut",
             Self::TerminalContextMenu => "terminal-context-menu",
             Self::TerminalProtocol => "terminal-protocol",
+            Self::HookActivity => "hook-activity",
             Self::ContextMenu => "context-menu",
         }
     }

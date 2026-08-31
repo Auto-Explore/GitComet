@@ -546,6 +546,14 @@ pub trait GitRepository: Send + Sync {
         cancellation.check_cancelled()?;
         Ok(status)
     }
+    /// Whether `path` is a gitlink in the current HEAD tree.
+    ///
+    /// This is primarily needed for a staged deletion: the worktree marker is
+    /// already gone, so the old tree is the only reliable way to distinguish a
+    /// deleted submodule from a deleted regular file.
+    fn head_path_is_gitlink(&self, _path: &Path) -> Result<bool> {
+        Ok(false)
+    }
     fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
         Ok(None)
     }
@@ -1344,8 +1352,38 @@ pub enum PullMode {
     Rebase,
 }
 
+/// Filesystem kind supplied to a worktree ignore matcher.
+///
+/// Watcher events do not always carry a reliable kind, so callers can leave it
+/// unknown and let the concrete Git implementation use its normal fallback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorktreePathKind {
+    File,
+    Directory,
+    Unknown,
+}
+
+/// Stateful ignore matcher created by a concrete Git backend.
+///
+/// Keeping this narrow interface in core lets filesystem monitoring honor
+/// backend-specific ignore semantics without depending on the backend crate.
+pub trait WorktreeIgnoreMatcher: Send {
+    fn is_ignored(&mut self, relative_path: &Path, kind: WorktreePathKind) -> Result<bool>;
+}
+
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
+
+    /// Build a worktree ignore matcher when the backend supports one.
+    ///
+    /// Backends without ignore support return `None`; callers must then use a
+    /// safe not-ignored fallback so filesystem changes are never missed.
+    fn worktree_ignore_matcher(
+        &self,
+        _workdir: &Path,
+    ) -> Result<Option<Box<dyn WorktreeIgnoreMatcher>>> {
+        Ok(None)
+    }
 
     fn open_cancellable(
         &self,
@@ -1359,19 +1397,166 @@ pub trait GitBackend: Send + Sync {
     }
 }
 
+/// Backend used by builds that intentionally omit every concrete Git
+/// implementation. Keeping this alongside the service contract avoids a whole
+/// workspace crate whose only behavior was returning this error.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UnavailableGitBackend;
+
+impl GitBackend for UnavailableGitBackend {
+    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "No Git backend enabled. Build with `--features gix`.",
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        BlameLine, CommandOutput, GitRepository, decode_utf8_optional,
+        BlameLine, CommandOutput, ConflictSide, GitBackend, GitRepository, PullMode, RemoteUrlKind,
+        ResetMode, SafePushAfterCommitTarget, UnavailableGitBackend, decode_utf8_optional,
         validate_conflict_resolution_text,
     };
     use crate::domain::{
-        Branch, CommitDetails, CommitId, DiffTarget, HistoryMode, LogCursor, LogPage, ReflogEntry,
-        Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
+        Branch, CommitDetails, CommitId, DiffArea, DiffTarget, HistoryMode, LogCursor, LogPage,
+        ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
     };
     use crate::error::{Error, ErrorKind};
+    use crate::test_support::UnconfiguredRepository;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
+
+    /// Pins the fallback behavior of every provided [`GitRepository`] method.
+    ///
+    /// These defaults are what a backend inherits when it does not implement an
+    /// operation, so a default that silently changes from "unsupported" to a
+    /// plausible-looking success value (`Ok(vec![])`, `Ok(false)`) would make
+    /// every partial backend quietly report the wrong thing instead of failing
+    /// loudly. Nothing else in the workspace exercises them.
+    #[test]
+    fn provided_trait_methods_use_unsupported_fallback_behavior() {
+        fn assert_unsupported<T: std::fmt::Debug>(result: super::Result<T>) {
+            let error = result.expect_err("provided default must be unsupported");
+            assert!(
+                matches!(error.kind(), ErrorKind::Unsupported(_)),
+                "expected Unsupported, got {error:?}"
+            );
+        }
+
+        let repo = UnconfiguredRepository::new("/tmp/provided-defaults");
+        let commit = CommitId("abc123".into());
+        let safe_push_target = SafePushAfterCommitTarget {
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+            local_branch: "main".to_string(),
+            local_head: commit.clone(),
+        };
+        let cursor = LogCursor {
+            last_seen: CommitId("deadbeef".into()),
+            resume_from: None,
+            resume_token: None,
+        };
+        let diff_target = DiffTarget::WorkingTree {
+            path: PathBuf::from("file.txt"),
+            area: DiffArea::Staged,
+        };
+        let path = Path::new("file.txt");
+
+        // The three defaults that deliberately succeed: absence of an upstream,
+        // of a rebase, and of a merge message are all legitimate answers a
+        // backend can give without implementing anything.
+        assert_eq!(repo.upstream_divergence().unwrap(), None);
+        assert!(!repo.rebase_in_progress().unwrap());
+        assert_eq!(repo.merge_commit_message().unwrap(), None);
+        // Likewise: "not a gitlink" is the safe answer for a backend that
+        // cannot read HEAD trees.
+        assert!(!repo.head_path_is_gitlink(path).unwrap());
+
+        assert_unsupported(repo.log_all_branches_page(25, Some(&cursor)));
+        assert_unsupported(repo.log_file_page(path, 25, None));
+        assert_unsupported(repo.list_tags());
+        assert_unsupported(repo.list_remote_tags());
+        assert_unsupported(repo.diff_file_text(&diff_target));
+        assert_unsupported(repo.diff_file_image(&diff_target));
+        assert_unsupported(repo.conflict_file_stages(path));
+        assert_unsupported(repo.conflict_session(path));
+        assert_unsupported(repo.delete_branch_force("feature"));
+        assert_unsupported(repo.checkout_remote_branch("origin", "main", "feature"));
+        assert_unsupported(repo.commit_amend("message"));
+        assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
+        assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
+        assert_unsupported(repo.rebase_with_output("main"));
+        assert_unsupported(repo.rebase_continue_with_output());
+        assert_unsupported(repo.rebase_abort_with_output());
+        assert_unsupported(repo.merge_abort_with_output());
+        assert_unsupported(repo.create_tag_with_output("v1.0.0", "HEAD", None, false));
+        assert_unsupported(repo.delete_tag_with_output("v1.0.0"));
+        assert_unsupported(repo.prune_merged_branches_with_output());
+        assert_unsupported(repo.prune_local_tags_with_output());
+        assert_unsupported(repo.push_tag_with_output("origin", "v1.0.0"));
+        assert_unsupported(repo.delete_remote_tag_with_output("origin", "v1.0.0"));
+        assert_unsupported(repo.add_remote_with_output("origin", "https://example.com/repo.git"));
+        assert_unsupported(repo.remove_remote_with_output("origin"));
+        assert_unsupported(repo.set_remote_url_with_output(
+            "origin",
+            "https://example.com/repo.git",
+            RemoteUrlKind::Fetch,
+        ));
+        assert_unsupported(repo.fetch_all_with_output());
+        assert_unsupported(repo.fetch_all_with_output_prune(true));
+        assert_unsupported(repo.pull_with_output(PullMode::FastForwardOnly));
+        assert_unsupported(repo.push_with_output());
+        assert_unsupported(repo.push_after_commit_with_output(&safe_push_target));
+        assert_unsupported(repo.push_after_commit_set_upstream_with_output(&safe_push_target));
+        assert_unsupported(repo.push_force());
+        assert_unsupported(repo.push_force_with_output());
+        assert_unsupported(repo.push_set_upstream("origin", "main"));
+        assert_unsupported(repo.push_set_upstream_with_output("origin", "main"));
+        assert_unsupported(repo.set_upstream_branch_with_output("main", "origin/main"));
+        assert_unsupported(repo.unset_upstream_branch_with_output("main"));
+        assert_unsupported(repo.delete_remote_branch_with_output("origin", "main"));
+        assert_unsupported(repo.commit_amend_with_output("message"));
+        assert_unsupported(repo.pull_branch_with_output("origin", "main"));
+        assert_unsupported(repo.merge_ref_with_output("origin/main"));
+        assert_unsupported(repo.squash_ref_with_output("origin/main"));
+        assert_unsupported(repo.reset_with_output("HEAD~1", ResetMode::Mixed));
+        assert_unsupported(repo.blame_file(path, None));
+        assert_unsupported(repo.checkout_conflict_side(path, ConflictSide::Ours));
+        assert_unsupported(repo.accept_conflict_deletion(path));
+        assert_unsupported(repo.checkout_conflict_base(path));
+        assert_unsupported(repo.launch_mergetool(path));
+        assert_unsupported(repo.export_patch_with_output(&commit, path));
+        assert_unsupported(repo.apply_patch_with_output(path));
+        assert_unsupported(repo.apply_unified_patch_to_index_with_output("@@ -1 +1 @@", false));
+        assert_unsupported(repo.apply_unified_patch_to_worktree_with_output("@@ -1 +1 @@", true));
+        assert_unsupported(repo.list_worktrees());
+        assert_unsupported(repo.add_worktree_with_output(path, Some("main")));
+        assert_unsupported(repo.remove_worktree_with_output(path));
+        assert_unsupported(repo.force_remove_worktree_with_output(path));
+        assert_unsupported(repo.list_submodules());
+        assert_unsupported(repo.check_submodule_add_trust("https://example.com/repo.git", path));
+        assert_unsupported(repo.check_submodule_update_trust());
+        assert_unsupported(repo.add_submodule_with_output(
+            "https://example.com/repo.git",
+            path,
+            None,
+            None,
+            false,
+            &[],
+        ));
+        assert_unsupported(repo.update_submodules_with_output(&[]));
+        assert_unsupported(repo.remove_submodule_with_output(path));
+    }
+
+    #[test]
+    fn unavailable_backend_reports_unsupported() {
+        let error = match UnavailableGitBackend.open(Path::new(".")) {
+            Ok(_) => panic!("unavailable backend must reject repository opens"),
+            Err(error) => error,
+        };
+        assert!(matches!(error.kind(), ErrorKind::Unsupported(_)));
+    }
 
     fn unsupported<T>() -> super::Result<T> {
         Err(Error::new(ErrorKind::Unsupported(

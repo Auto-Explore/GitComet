@@ -249,7 +249,7 @@ fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppC
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -376,7 +376,7 @@ fn status_file_menu_hides_external_mergetool_for_staged_conflicts(cx: &mut gpui:
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -464,7 +464,7 @@ fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestApp
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -544,7 +544,7 @@ fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppCon
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });

@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/macos-symbols.sh"
 set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-macos.sh --version VERSION [--arch arm64|x86_64] [--release|--debug] [--no-build] [--skip-dmg] [--out-dir PATH] [--codesign-identity NAME] [--codesign-keychain PATH]
+Usage: scripts/package-macos.sh --version VERSION [--arch arm64|x86_64] [--release|--debug] [--no-build] [--skip-dmg] [--out-dir PATH] [--symbols-out PATH] [--codesign-identity NAME] [--codesign-keychain PATH]
 
 Builds a macOS app bundle and release artifacts:
-  - gitcomet-v<VERSION>-macos-<ARCH>.tar.gz
   - gitcomet-v<VERSION>-macos-<ARCH>.dmg
 
 Defaults:
   --release, build if needed, output to ./dist
+
+With --symbols-out, Breakpad symbols are written to that directory as a symbol
+store. This happens here rather than in the release workflow because this script
+owns the macOS build, and symbols must be extracted after linking but before the
+binary is copied into the bundle and codesigned.
 
 Environment:
   GITCOMET_MACOS_X86_RELEASE_LTO=thin|fat|false|off|inherit
@@ -27,6 +34,7 @@ mode="release"
 build=1
 create_dmg=1
 out_dir="dist"
+symbols_out=""
 codesign_identity=""
 codesign_keychain=""
 
@@ -58,6 +66,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out-dir)
       out_dir="${2:-}"
+      shift 2
+      ;;
+    --symbols-out)
+      symbols_out="${2:-}"
       shift 2
       ;;
     --codesign-identity)
@@ -138,6 +150,19 @@ if [[ ! -x "$bin_src" ]]; then
   exit 1
 fi
 
+# Extract symbols while the build output is still untouched: below, the binary
+# is copied into the bundle and codesigned, and clean_target_intermediates_for_ci
+# may delete build intermediates. The helper keeps the transactional ordering:
+# discover, validate the UUID, canonicalize, then emit.
+if [[ -n "$symbols_out" ]]; then
+  if [[ "$symbols_out" = /* ]]; then
+    symbols_abs="$symbols_out"
+  else
+    symbols_abs="${repo_root}/${symbols_out}"
+  fi
+  extract_macos_symbols
+fi
+
 if [[ "$out_dir" = /* ]]; then
   mkdir -p "$out_dir"
   out_abs="$(cd "$out_dir" && pwd)"
@@ -216,10 +241,12 @@ rm -rf "$release_dir"
 mkdir -p "$macos_dir" "$resources_dir"
 
 install -m755 "$bin_src" "${macos_dir}/gitcomet"
-install -m755 "$bin_src" "${release_dir}/gitcomet"
-install -m644 "${repo_root}/README.md" "${release_dir}/README.md"
-install -m644 "${repo_root}/LICENSE-AGPL-3.0" "${release_dir}/LICENSE-AGPL-3.0"
-install -m644 "${repo_root}/NOTICE" "${release_dir}/NOTICE"
+
+# Inside the bundle: the DMG ships only GitComet.app, and it is now the only
+# macOS artifact, so this is what keeps the licence with the program.
+install -m644 "${repo_root}/README.md" "${resources_dir}/README.md"
+install -m644 "${repo_root}/LICENSE-AGPL-3.0" "${resources_dir}/LICENSE-AGPL-3.0"
+install -m644 "${repo_root}/NOTICE" "${resources_dir}/NOTICE"
 
 icon_png="${repo_root}/assets/gitcomet-512.png"
 icon_icns="${resources_dir}/GitComet.icns"
@@ -280,10 +307,8 @@ if [[ -n "$codesign_identity" ]]; then
 
   echo "Signing macOS artifacts with identity: $codesign_identity"
   codesign "${sign_args[@]}" "${macos_dir}/gitcomet"
-  codesign "${sign_args[@]}" "${release_dir}/gitcomet"
   codesign "${sign_args[@]}" "$app_bundle"
 
-  codesign --verify --strict --verbose=2 "${release_dir}/gitcomet"
   codesign --verify --strict --verbose=2 "$app_bundle"
 fi
 
@@ -293,11 +318,9 @@ if [[ "${GITCOMET_MACOS_PACKAGE_CLEAN_TARGET:-0}" == "1" ]]; then
   show_disk_usage "after target cleanup"
 fi
 
-# Create a deterministic tarball root directory per version/arch.
-tarball_path="${out_abs}/${release_root}.tar.gz"
-rm -f "$tarball_path"
-tar -C "$stage_root" -czf "$tarball_path" "$release_root"
-
+# No tarball: it duplicated the binary the DMG ships, and the bare copy at its
+# root could not be notarized (the notary service takes no .tar.gz). The
+# Homebrew cask symlinks the notarized binary for PATH users instead.
 dmg_path="${out_abs}/${release_root}.dmg"
 if [[ $create_dmg -eq 1 ]]; then
   # Build a drag-and-drop DMG with an /Applications shortcut.
@@ -329,7 +352,6 @@ if [[ $create_dmg -eq 1 ]]; then
 fi
 
 echo "Packaged macOS artifacts:"
-echo "  $tarball_path"
 if [[ $create_dmg -eq 1 ]]; then
   echo "  $dmg_path"
 else

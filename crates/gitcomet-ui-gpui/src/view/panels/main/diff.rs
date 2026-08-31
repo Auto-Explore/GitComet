@@ -141,29 +141,38 @@ impl MainPaneView {
                     ) {
                         components::empty_state(theme, "Diff", "Processing image...")
                             .into_any_element()
+                    } else if self.file_image_diff_cache_failed {
+                        components::empty_state(theme, "Diff", "Preview unavailable.")
+                            .into_any_element()
                     } else {
                         enum CachedDiffImageSource {
                             Path(std::path::PathBuf),
-                            Render(Arc<gpui::RenderImage>),
+                            Render(Arc<gpui::RenderImage>, usize),
                         }
 
+                        let old_render = self.file_image_diff_cache_old.clone();
+                        let new_render = self.file_image_diff_cache_new.clone();
+                        let [old_frame, new_frame] = self.update_file_image_preview_animation(
+                            old_render.as_ref(),
+                            new_render.as_ref(),
+                            window,
+                            cx,
+                        );
                         let old = self
                             .file_image_diff_cache_old_svg_path
                             .clone()
                             .map(CachedDiffImageSource::Path)
                             .or_else(|| {
-                                self.file_image_diff_cache_old
-                                    .clone()
-                                    .map(CachedDiffImageSource::Render)
+                                old_render
+                                    .map(|image| CachedDiffImageSource::Render(image, old_frame))
                             });
                         let new = self
                             .file_image_diff_cache_new_svg_path
                             .clone()
                             .map(CachedDiffImageSource::Path)
                             .or_else(|| {
-                                self.file_image_diff_cache_new
-                                    .clone()
-                                    .map(CachedDiffImageSource::Render)
+                                new_render
+                                    .map(|image| CachedDiffImageSource::Render(image, new_frame))
                             });
 
                         // Breathing room around the artwork. Without it an SVG
@@ -174,6 +183,10 @@ impl MainPaneView {
                             IMAGE_PREVIEW_CELL_PADDING_PX,
                             ui_scale_percent,
                         );
+                        let clamp_preview_size = self
+                            .file_image_diff_cache_path
+                            .as_deref()
+                            .is_some_and(preview_path_uses_scale_down);
                         let cell = |id: &'static str, image: Option<CachedDiffImageSource>| {
                             let muted = theme.colors.foreground.secondary;
                             div()
@@ -187,55 +200,34 @@ impl MainPaneView {
                                 .justify_center()
                                 .p(cell_padding)
                                 .child(match image {
-                                    Some(CachedDiffImageSource::Path(path)) => {
-                                        let clamp_preview_size = path
-                                            .extension()
-                                            .and_then(|s| s.to_str())
-                                            .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"));
-                                        gpui::img(path)
-                                            .w_full()
-                                            .h_full()
-                                            .object_fit(if clamp_preview_size {
-                                                gpui::ObjectFit::ScaleDown
-                                            } else {
-                                                gpui::ObjectFit::Contain
-                                            })
-                                            .with_loading(move || {
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(muted)
-                                                    .child("Processing image...")
-                                                    .into_any_element()
-                                            })
-                                            .with_fallback(move || {
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(muted)
-                                                    .child("Preview unavailable.")
-                                                    .into_any_element()
-                                            })
-                                            .into_any_element()
-                                    }
-                                    Some(CachedDiffImageSource::Render(img_data)) => {
-                                        gpui::img(img_data)
-                                            .w_full()
-                                            .h_full()
-                                            .object_fit(gpui::ObjectFit::Contain)
-                                            .with_loading(move || {
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(muted)
-                                                    .child("Processing image...")
-                                                    .into_any_element()
-                                            })
-                                            .with_fallback(move || {
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(muted)
-                                                    .child("Preview unavailable.")
-                                                    .into_any_element()
-                                            })
-                                            .into_any_element()
+                                    Some(CachedDiffImageSource::Path(path)) => gpui::img(path)
+                                        .w_full()
+                                        .h_full()
+                                        .object_fit(gpui::ObjectFit::Contain)
+                                        .with_loading(move || {
+                                            div()
+                                                .text_sm()
+                                                .text_color(muted)
+                                                .child("Processing image...")
+                                                .into_any_element()
+                                        })
+                                        .with_fallback(move || {
+                                            div()
+                                                .text_sm()
+                                                .text_color(muted)
+                                                .child("Preview unavailable.")
+                                                .into_any_element()
+                                        })
+                                        .into_any_element(),
+                                    Some(CachedDiffImageSource::Render(img_data, frame_index)) => {
+                                        preview_render_image_element(
+                                            img_data,
+                                            frame_index,
+                                            clamp_preview_size,
+                                        )
+                                        .w_full()
+                                        .h_full()
+                                        .into_any_element()
                                     }
                                     None => div()
                                         .text_sm()
@@ -440,7 +432,12 @@ impl MainPaneView {
                             }
                         };
                         if total_len == 0 {
-                            components::empty_state(theme, "Diff", "Empty file.").into_any_element()
+                            empty_diff_text_document(
+                                cx.entity(),
+                                DiffTextRegion::Inline,
+                                components::empty_state(theme, "Diff", "Empty file.")
+                                    .into_any_element(),
+                            )
                         } else if self.diff_visible_len() == 0 {
                             components::empty_state(theme, "Diff", "Nothing to render.")
                                 .into_any_element()
@@ -469,6 +466,10 @@ impl MainPaneView {
                                         horizontal_scrollbar_gutter
                                     })
                                     .track_scroll(&self.diff_scroll)
+                                    .with_decoration(DiffTextEmptySpaceDecoration {
+                                        view: cx.entity(),
+                                        region: DiffTextRegion::Inline,
+                                    })
                                     .when(
                                         !self.diff_word_wrap,
                                         |list| {
@@ -564,6 +565,10 @@ impl MainPaneView {
                                         horizontal_scrollbar_gutter
                                     })
                                     .track_scroll(&self.diff_scroll)
+                                    .with_decoration(DiffTextEmptySpaceDecoration {
+                                        view: cx.entity(),
+                                        region: DiffTextRegion::SplitLeft,
+                                    })
                                     .when(
                                         !self.diff_word_wrap,
                                         |list| {
@@ -585,6 +590,10 @@ impl MainPaneView {
                                         horizontal_scrollbar_gutter
                                     })
                                     .track_scroll(&self.diff_split_right_scroll)
+                                    .with_decoration(DiffTextEmptySpaceDecoration {
+                                        view: cx.entity(),
+                                        region: DiffTextRegion::SplitRight,
+                                    })
                                     .when(
                                         !self.diff_word_wrap,
                                         |list| {
@@ -923,7 +932,11 @@ impl MainPaneView {
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         if old_len == 0 && new_len == 0 {
-            return components::empty_state(theme, "Preview", "Empty file.").into_any_element();
+            return empty_diff_text_document(
+                cx.entity(),
+                DiffTextRegion::Inline,
+                components::empty_state(theme, "Preview", "Empty file.").into_any_element(),
+            );
         }
 
         self.maybe_autoscroll_diff_to_first_change();
@@ -942,18 +955,22 @@ impl MainPaneView {
             _ => Vec::new(),
         };
 
-        let empty_column = || {
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .text_color(theme.colors.foreground.secondary)
-                .child("Empty file.")
-                .into_any_element()
+        let empty_column = |region| {
+            empty_diff_text_document(
+                cx.entity(),
+                region,
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(theme.colors.foreground.secondary)
+                    .child("Empty file.")
+                    .into_any_element(),
+            )
         };
 
         let vertical_sync_enabled = self.diff_scroll_sync.includes_vertical();
@@ -1005,13 +1022,17 @@ impl MainPaneView {
             ui_scale_percent,
         );
         macro_rules! mk_list {
-            ($name:expr, $len:expr, $scroll:expr, $proc:expr) => {
+            ($name:expr, $len:expr, $region:expr, $scroll:expr, $proc:expr) => {
                 uniform_list($name, $len, $proc)
                     .h_full()
                     .min_h(px(0.0))
                     .pt(document_edge_gap)
                     .pb(document_edge_gap)
                     .track_scroll(&$scroll)
+                    .with_decoration(DiffTextEmptySpaceDecoration {
+                        view: cx.entity(),
+                        region: $region,
+                    })
                     .with_horizontal_sizing_behavior(
                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                     )
@@ -1029,6 +1050,7 @@ impl MainPaneView {
             let list = mk_list!(
                 "diff_markdown_preview_inline",
                 inline_len,
+                DiffTextRegion::Inline,
                 self.diff_scroll.clone(),
                 cx.processor(Self::render_markdown_diff_inline_rows)
             );
@@ -1083,11 +1105,12 @@ impl MainPaneView {
             let list = mk_list!(
                 "diff_markdown_preview_right_single",
                 new_len,
+                DiffTextRegion::SplitRight,
                 self.diff_scroll.clone(),
                 cx.processor(Self::render_markdown_diff_right_rows)
             );
             (
-                empty_column(),
+                empty_column(DiffTextRegion::SplitLeft),
                 mk_column(
                     "diff_markdown_preview_right",
                     "diff_markdown_preview_right_scrollbar",
@@ -1103,6 +1126,7 @@ impl MainPaneView {
             let list = mk_list!(
                 "diff_markdown_preview_left_single",
                 old_len,
+                DiffTextRegion::SplitLeft,
                 self.diff_scroll.clone(),
                 cx.processor(Self::render_markdown_diff_left_rows)
             );
@@ -1115,7 +1139,7 @@ impl MainPaneView {
                     self.diff_scroll.clone(),
                     handle.clone(),
                 ),
-                empty_column(),
+                empty_column(DiffTextRegion::SplitRight),
                 handle,
             )
         } else {
@@ -1130,12 +1154,14 @@ impl MainPaneView {
             let left_list = mk_list!(
                 "diff_markdown_preview_left",
                 old_len,
+                DiffTextRegion::SplitLeft,
                 self.diff_scroll.clone(),
                 cx.processor(Self::render_markdown_diff_left_rows)
             );
             let right_list = mk_list!(
                 "diff_markdown_preview_right",
                 new_len,
+                DiffTextRegion::SplitRight,
                 self.diff_split_right_scroll.clone(),
                 cx.processor(Self::render_markdown_diff_right_rows)
             );

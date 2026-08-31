@@ -42,6 +42,127 @@ fn worktree_preview_ready_rows_preserve_trailing_empty_line(cx: &mut gpui::TestA
 }
 
 #[gpui::test]
+fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(903);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_file_preview_below_eof",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview_below_eof.rs");
+    let preview_abs_path = workdir.join(&file_rel);
+    let preview_lines = Arc::new(vec!["alpha".to_string(), "beta".to_string()]);
+    let preview_text = "alpha\nbeta";
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create below-EOF preview workdir");
+    std::fs::write(&preview_abs_path, preview_text).expect("write below-EOF preview fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = preview_abs_path.clone();
+            let preview_lines = Arc::clone(&preview_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    preview_abs_path,
+                    preview_lines,
+                    preview_text.len(),
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let empty_space = cx
+        .debug_bounds("diff_text_empty_space_Inline")
+        .unwrap_or_else(|| {
+            let snapshot = cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let scroll = pane.worktree_preview_scroll.0.borrow();
+                (
+                    pane.is_file_preview_active(),
+                    pane.worktree_preview_line_count(),
+                    scroll.last_item_size,
+                    scroll.base_handle.offset(),
+                    pane.diff_text_hitboxes.keys().copied().collect::<Vec<_>>(),
+                )
+            });
+            panic!("short file preview should expose a below-EOF surface: {snapshot:?}")
+        });
+    assert!(empty_space.size.height > px(20.0));
+    let below_eof = empty_space.center();
+    let target = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        0,
+        DiffTextRegion::Inline,
+        1..4,
+        "first preview row drag target",
+    );
+
+    cx.simulate_mouse_down(below_eof, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(below_eof, MouseButton::Left, Modifiers::default());
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let eof = DiffTextPos {
+            source_visible_ix: 1,
+            region: DiffTextRegion::Inline,
+            offset: "beta".len(),
+        };
+        assert_eq!(pane.diff_text_anchor, Some(eof));
+        assert_eq!(pane.diff_text_head, Some(eof));
+    });
+
+    cx.simulate_mouse_down(below_eof, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(target, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    let selection_before_menu = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.diff_text_has_selection());
+        (pane.diff_text_anchor, pane.diff_text_head)
+    });
+
+    cx.simulate_mouse_down(below_eof, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(below_eof, MouseButton::Right, Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (pane.diff_text_anchor, pane.diff_text_head)
+        }),
+        selection_before_menu,
+        "the read-only menu should preserve the existing text selection"
+    );
+    assert_eq!(
+        cx.update(|_window, app| view.read(app).active_context_menu_invoker.clone()),
+        Some("diff_editor_menu".into())
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup below-EOF preview fixture");
+}
+
+#[gpui::test]
 fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppContext) {
     let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));

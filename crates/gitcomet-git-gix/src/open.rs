@@ -1,3 +1,4 @@
+use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::git_dir_for_workdir;
 use std::path::Path;
 
@@ -24,4 +25,20 @@ pub(crate) fn open_worktree_repo(
     workdir: &Path,
 ) -> std::result::Result<gix::Repository, gix::open::Error> {
     gix::open(git_dir_for_workdir(workdir))
+}
+
+/// Translate a failed [`open_worktree_repo`] into the crate's error type.
+///
+/// `context` names the operation that was opening the repository and is only
+/// used for the catch-all `Backend` message; the two cases callers act on —
+/// "not a repository" and I/O — map to their own kinds so they stay
+/// distinguishable. Callers that treat a missing repository as absence rather
+/// than an error match on [`gix::open::Error`] themselves instead.
+#[allow(clippy::result_large_err)]
+pub(crate) fn map_open_error(error: gix::open::Error, context: &str) -> Error {
+    match error {
+        gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
+        gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
+        error => Error::new(ErrorKind::Backend(format!("{context}: {error}"))),
+    }
 }

@@ -208,8 +208,8 @@ pub(crate) const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         estimate_path: "repo_switch/two_hot_repos/new/estimates.json",
         threshold_ns: 100.0 * NANOS_PER_MICROSECOND,
     },
-    // repo_switch/selected_commit_and_details — changed-repo switch with
-    // commit details already active, but without a selected diff reload.
+    // repo_switch/selected_commit_and_details — changed-repo switch that clears
+    // the target's active commit details, without a selected diff reload.
     PerfBudgetSpec {
         label: "repo_switch/selected_commit_and_details",
         estimate_path: "repo_switch/selected_commit_and_details/new/estimates.json",

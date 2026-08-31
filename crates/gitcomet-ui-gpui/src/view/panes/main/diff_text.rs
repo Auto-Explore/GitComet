@@ -105,6 +105,21 @@ impl MainPaneView {
         self.diff_text_hitboxes.insert((visible_ix, region), hitbox);
     }
 
+    /// Register a painted non-text block as a logical target for an active
+    /// selection drag. Unlike a text hitbox this does not make invisible copy
+    /// text clickable or try to map horizontal positions into byte offsets.
+    pub(in crate::view) fn set_diff_text_motion_target(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        start: DiffTextPos,
+        end: DiffTextPos,
+    ) {
+        debug_assert_eq!(start.region, end.region);
+        debug_assert!(start.cmp_key() <= end.cmp_key());
+        self.diff_text_motion_targets
+            .push(DiffTextMotionTarget { bounds, start, end });
+    }
+
     /// Record where a row painted its stage/unstage gutter button. Hover and
     /// click routing go through the row's hitbox; this map exists so tests can
     /// aim at the button without re-deriving its geometry.
@@ -172,6 +187,38 @@ impl MainPaneView {
     ) -> Option<DiffTextPos> {
         self.diff_text_hit_in_hitbox(hitbox, region, position)
             .map(|hit| hit.pos)
+    }
+
+    /// Resolve a drag against a block whose copy text has no painted glyphs.
+    /// Approaching from above lands after it; approaching from below lands
+    /// before it. While the pointer is inside the block, the selection anchor
+    /// decides which boundary extends across the block.
+    fn diff_text_pos_from_motion_target(
+        &self,
+        target: &DiffTextMotionTarget,
+        position: Point<Pixels>,
+    ) -> DiffTextPos {
+        if position.y < target.bounds.top() {
+            return target.start;
+        }
+        if position.y > target.bounds.bottom() {
+            return target.end;
+        }
+
+        if let Some(anchor) = self.diff_text_anchor {
+            if anchor.cmp_key() >= target.end.cmp_key() {
+                return target.start;
+            }
+            if anchor.cmp_key() <= target.start.cmp_key() {
+                return target.end;
+            }
+        }
+
+        if position.y <= target.bounds.center().y {
+            target.start
+        } else {
+            target.end
+        }
     }
 
     fn diff_text_hit_in_hitbox(
@@ -481,10 +528,6 @@ impl MainPaneView {
     }
 
     fn diff_text_pos_for_mouse(&self, position: Point<Pixels>) -> Option<DiffTextPos> {
-        if self.diff_text_hitboxes.is_empty() {
-            return None;
-        }
-
         let restrict_region = self
             .diff_text_selecting
             .then_some(self.diff_text_anchor)
@@ -498,6 +541,14 @@ impl MainPaneView {
             }
             if hitbox.bounds.contains(&position) {
                 return self.diff_text_pos_from_hitbox(*visible_ix, *region, position);
+            }
+        }
+        for target in &self.diff_text_motion_targets {
+            if restrict_region.is_some_and(|restrict| restrict != target.start.region) {
+                continue;
+            }
+            if target.bounds.contains(&position) {
+                return Some(self.diff_text_pos_from_motion_target(target, position));
             }
         }
 
@@ -538,8 +589,106 @@ impl MainPaneView {
                 best = Some((*key, (dy, dx)));
             }
         }
-        let ((visible_ix, region), _) = best?;
-        self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
+
+        let mut best_motion: Option<(usize, (Pixels, Pixels, usize, u8))> = None;
+        for (target_ix, target) in self.diff_text_motion_targets.iter().enumerate() {
+            if restrict_region.is_some_and(|restrict| restrict != target.start.region) {
+                continue;
+            }
+            let dy = if position.y < target.bounds.top() {
+                target.bounds.top() - position.y
+            } else if position.y > target.bounds.bottom() {
+                position.y - target.bounds.bottom()
+            } else {
+                px(0.0)
+            };
+            let dx = if position.x < target.bounds.left() {
+                target.bounds.left() - position.x
+            } else if position.x > target.bounds.right() {
+                position.x - target.bounds.right()
+            } else {
+                px(0.0)
+            };
+            let rank = (
+                dy,
+                dx,
+                target.start.source_visible_ix,
+                target.start.region.order(),
+            );
+            if best_motion.is_none_or(|(_, best_rank)| rank < best_rank) {
+                best_motion = Some((target_ix, rank));
+            }
+        }
+
+        match (best, best_motion) {
+            (None, None) => None,
+            (Some(((visible_ix, region), _)), None) => {
+                self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
+            }
+            (None, Some((target_ix, _))) => Some(self.diff_text_pos_from_motion_target(
+                &self.diff_text_motion_targets[target_ix],
+                position,
+            )),
+            (Some(((visible_ix, region), (dy, dx))), Some((target_ix, motion_rank))) => {
+                let text_rank = (dy, dx, visible_ix, region.order());
+                if text_rank <= motion_rank {
+                    self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
+                } else {
+                    Some(self.diff_text_pos_from_motion_target(
+                        &self.diff_text_motion_targets[target_ix],
+                        position,
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Resolve the logical final caret boundary in one selectable text region.
+    /// Markdown uses its document rows because some blocks have no text
+    /// hitbox; other surfaces clamp against their final painted row so wrapped
+    /// and display-mapped text keeps the exact painted offset mapping.
+    fn diff_text_eof_target(&self, region: DiffTextRegion) -> (usize, DiffTextPos) {
+        // Flowing Markdown deliberately gives pictures and thematic breaks no
+        // text hitbox, but those document rows still carry selectable/copyable
+        // text (notably an image's alt text). Resolve its logical EOF from the
+        // document before consulting painted text so a trailing non-text block
+        // cannot move EOF back to the preceding paragraph.
+        if self.is_markdown_preview_active()
+            && let Some((last_visible_ix, last_offset)) = self.markdown_preview_region_eof(region)
+        {
+            return (
+                last_visible_ix,
+                DiffTextPos {
+                    source_visible_ix: last_visible_ix,
+                    region,
+                    offset: last_offset,
+                },
+            );
+        }
+
+        let last = self
+            .diff_text_hitboxes
+            .iter()
+            .filter(|((_, hit_region), _)| *hit_region == region)
+            .max_by_key(|((visible_ix, _), hitbox)| (hitbox.source_visible_ix, *visible_ix));
+
+        if let Some(((visible_ix, _), hitbox)) = last {
+            let below = point(hitbox.bounds.left(), hitbox.bounds.bottom() + px(1.0));
+            if let Some(pos) = self.diff_text_pos_in_hitbox(hitbox, region, below) {
+                return (*visible_ix, pos);
+            }
+        }
+
+        // A source-backed empty document has no row hitbox, but EOF is still a
+        // real text position and its context menu still has a file target.
+        (
+            0,
+            DiffTextPos {
+                source_visible_ix: 0,
+                region,
+                offset: 0,
+            },
+        )
     }
 
     #[cfg(test)]
@@ -809,6 +958,83 @@ impl MainPaneView {
                 self.begin_diff_text_scroll_tracking(position, cx);
             }
         }
+    }
+
+    /// Handle a press anywhere in a rendered Markdown row, including the
+    /// visual padding above, below, or beside its shaped text. Ordinary text
+    /// presses keep the full link/token/line behavior; a single press in the
+    /// surrounding whitespace clamps to the nearest boundary of that row so a
+    /// drag can cross paragraph, list, and fenced-code block edges.
+    pub(in crate::view) fn handle_markdown_preview_row_mouse_down(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        click_count: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if click_count == 1
+            && self
+                .diff_text_hit_from_hitbox(visible_ix, region, position)
+                .is_none()
+            && let Some(pos) = self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
+        {
+            self.begin_diff_text_selection_from_document_space(pos, position, cx);
+            return;
+        }
+
+        self.handle_diff_text_mouse_down(visible_ix, region, position, click_count, cx);
+    }
+
+    pub(in crate::view) fn handle_diff_text_empty_space_mouse_down(
+        &mut self,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (_, pos) = self.diff_text_eof_target(region);
+        self.begin_diff_text_selection_from_document_space(pos, position, cx);
+    }
+
+    /// Start a selection at the document boundary represented by a Markdown
+    /// gap. The gap sits immediately before `next_source_visible_ix`, so
+    /// dragging upward selects the preceding block and dragging downward starts
+    /// with the following one.
+    pub(in crate::view) fn handle_diff_text_document_gap_mouse_down(
+        &mut self,
+        next_source_visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.begin_diff_text_selection_from_document_space(
+            DiffTextPos {
+                source_visible_ix: next_source_visible_ix,
+                region,
+                offset: 0,
+            },
+            position,
+            cx,
+        );
+    }
+
+    fn begin_diff_text_selection_from_document_space(
+        &mut self,
+        pos: DiffTextPos,
+        position: Point<Pixels>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
+        self.diff_text_pending_syntax_click = None;
+        self.diff_text_selecting = true;
+        self.diff_text_anchor = Some(pos);
+        self.diff_text_head = Some(pos);
+        self.diff_selection_anchor = None;
+        self.diff_selection_range = None;
+        self.diff_text_last_mouse_pos = position;
+        self.diff_suppress_clicks_remaining = 0;
+        self.begin_diff_text_scroll_tracking(position, cx);
     }
 
     pub(in super::super::super) fn begin_diff_text_selection(
@@ -2631,6 +2857,17 @@ impl MainPaneView {
             window,
             cx,
         );
+    }
+
+    pub(in crate::view) fn open_diff_editor_context_menu_at_eof(
+        &mut self,
+        region: DiffTextRegion,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (visible_ix, _) = self.diff_text_eof_target(region);
+        self.open_diff_editor_context_menu(visible_ix, region, anchor, window, cx);
     }
 }
 

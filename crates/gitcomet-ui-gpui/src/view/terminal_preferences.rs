@@ -607,9 +607,7 @@ fn find_executable_in_path_with_env(
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn shell_single_quote(raw: &str) -> String {
-    format!("'{}'", raw.replace('\'', "'\"'\"'"))
-}
+use gitcomet_core::text_utils::shell_single_quote;
 
 #[cfg(target_os = "windows")]
 fn windows_cmd_quote_path(path: &Path) -> String {

@@ -1,5 +1,6 @@
 use crate::test_support::{lock_clipboard_test, lock_visual_test};
 use crate::view::components;
+use crate::view::test_support::TestBackend;
 use crate::{theme::AppTheme, ui_scale, view};
 use gitcomet_core::domain::*;
 use gitcomet_core::error::{Error, ErrorKind};
@@ -1203,16 +1204,6 @@ fn text_input_supports_shift_up_down_selection(cx: &mut gpui::TestAppContext) {
     cx.dispatch_action(crate::kit::SelectDown);
     let selection = cx.update(|_window, app| view.read(app).input.read(app).selected_text());
     assert_eq!(selection, Some("12345\n".into()));
-}
-
-struct TestBackend;
-
-impl GitBackend for TestBackend {
-    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "Test backend does not open repositories",
-        )))
-    }
 }
 
 struct SlowSubmoduleBackend;

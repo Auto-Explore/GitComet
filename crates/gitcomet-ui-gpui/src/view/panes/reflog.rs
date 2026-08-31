@@ -35,10 +35,6 @@ pub(in super::super) struct ReflogPanelState {
 /// like [`DetailsPaneInit`] so the constructor keeps a readable signature.
 pub(in super::super) struct ReflogPaneInit {
     pub(in super::super) theme: AppTheme,
-    pub(in super::super) ui_scale_percent: u32,
-    pub(in super::super) date_time_format: DateTimeFormat,
-    pub(in super::super) timezone: Timezone,
-    pub(in super::super) show_timezone: bool,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
 }
 
@@ -71,14 +67,12 @@ impl ReflogPaneView {
         init: ReflogPaneInit,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        let ReflogPaneInit {
-            theme,
-            ui_scale_percent,
-            date_time_format,
-            timezone,
-            show_timezone,
-            root_view,
-        } = init;
+        let ReflogPaneInit { theme, root_view } = init;
+        let preferences = ui_model.read(cx).preferences.clone();
+        let ui_scale_percent = preferences.appearance.ui_scale_percent;
+        let date_time_format = preferences.appearance.date_time_format;
+        let timezone = preferences.appearance.timezone;
+        let show_timezone = preferences.appearance.show_timezone;
         let state = Arc::clone(&ui_model.read(cx).state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
@@ -925,6 +919,7 @@ mod tests {
 #[cfg(test)]
 mod view_tests {
     use super::*;
+    use crate::view::test_support::NoopBackend;
     use gitcomet_state::model::RepoState;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -933,22 +928,6 @@ mod view_tests {
     /// Tall enough to show a handful of 28px rows, short enough that the list
     /// cannot possibly want all `ENTRY_COUNT` of them.
     const PANE_HEIGHT_PX: f32 = 300.0;
-
-    struct NoopBackend;
-
-    impl gitcomet_core::services::GitBackend for NoopBackend {
-        fn open(
-            &self,
-            _workdir: &std::path::Path,
-        ) -> std::result::Result<
-            Arc<dyn gitcomet_core::services::GitRepository>,
-            gitcomet_core::error::Error,
-        > {
-            Err(gitcomet_core::error::Error::new(
-                gitcomet_core::error::ErrorKind::Unsupported("no repositories in this test"),
-            ))
-        }
-    }
 
     /// Hosts the pane at a fixed height, the way the bottom panel does — a
     /// `uniform_list` with no bounded height would have no visible window to
@@ -1012,17 +991,26 @@ mod view_tests {
         let state = seeded_state(repo_id, entries);
 
         let (host, cx) = cx.add_window_view(|_window, cx| {
-            let ui_model = cx.new(|_cx| AppUiModel::new(Arc::clone(&state)));
+            let ui_model = cx.new(|_cx| {
+                AppUiModel::new_with_preferences(
+                    Arc::clone(&state),
+                    UiPreferences {
+                        appearance: crate::view::preferences::AppearancePreferences {
+                            date_time_format: DateTimeFormat::YmdHms,
+                            timezone: Timezone::Utc,
+                            show_timezone: false,
+                            ..crate::view::preferences::AppearancePreferences::default()
+                        },
+                        ..UiPreferences::default()
+                    },
+                )
+            });
             let pane = cx.new(|cx| {
                 ReflogPaneView::new(
                     store,
                     ui_model,
                     ReflogPaneInit {
                         theme: AppTheme::gitcomet_dark(),
-                        ui_scale_percent: 100,
-                        date_time_format: DateTimeFormat::YmdHms,
-                        timezone: Timezone::Utc,
-                        show_timezone: false,
                         root_view: gpui::WeakEntity::new_invalid(),
                     },
                     cx,

@@ -262,7 +262,8 @@ fn probe_git_runtime(preference: GitExecutablePreference) -> GitRuntimeState {
     }
 }
 
-fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
+/// Renders byte output as UTF-8 text, escaping each invalid byte as `\xNN`.
+pub fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
     let mut out = String::with_capacity(bytes.len());
@@ -295,6 +296,18 @@ fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
     }
 
     out
+}
+
+/// Writes one diagnostic line to stderr, ignoring any write failure.
+///
+/// Deliberately not `eprintln!`, which panics when stderr cannot be written.
+/// Recovery and background diagnostics run on threads with no unwind guard;
+/// a release build sets `windows_subsystem = "windows"`, so a GitComet launched
+/// from Explorer has no stderr at all and a panic here would kill the very
+/// worker the recovery exists to keep alive.
+pub fn write_stderr_line(args: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "{args}");
 }
 
 #[cfg(test)]

@@ -2,8 +2,8 @@
 
 This repository already contains the basic macOS release flow:
 
-- [`scripts/package-macos.sh`](../scripts/package-macos.sh) builds the macOS app bundle, signs the bundled executable and app when a signing identity is provided, and emits the macOS `.tar.gz` and `.dmg` artifacts.
-- [`scripts/notarize-macos.sh`](../scripts/notarize-macos.sh) submits the packaged DMG to Apple's notary service, staples the resulting ticket to the staged `.app` bundle and DMG, validates the stapled artifacts, and rebuilds the tarball so the archived `.app` bundle is current.
+- [`scripts/package-macos.sh`](../scripts/package-macos.sh) builds the macOS app bundle, signs the bundled executable and app when a signing identity is provided, and emits the macOS `.dmg` artifact.
+- [`scripts/notarize-macos.sh`](../scripts/notarize-macos.sh) submits the packaged DMG to Apple's notary service, staples the resulting ticket to the staged `.app` bundle and DMG, and validates the stapled artifacts.
 - [`.github/workflows/build-release-artifacts.yml`](../.github/workflows/build-release-artifacts.yml) wires the same process into release CI.
 
 ## What You Need
@@ -152,7 +152,6 @@ The workflow imports the `.p12` certificate into a temporary keychain, signs the
 Treat the DMG as the canonical trusted macOS download.
 
 - The DMG is the notarized and stapled end-user artifact.
-- The tarball is rebuilt after stapling so the bundled `GitComet.app` is current.
-- The standalone `gitcomet` binary at the tarball root is only code-signed. Apple's notary service does not accept `.tar.gz` uploads directly, and that file is not inside the submitted DMG.
+- The DMG is the only macOS artifact. The `.tar.gz` that used to accompany it was dropped: it duplicated the binary the DMG already ships, and the bare copy at its root was the one file that could not be notarized, since Apple's notary service does not accept `.tar.gz` uploads and that copy was not inside the submitted DMG. Users who want `gitcomet` on `PATH` get a notarized one from the Homebrew cask, which symlinks `GitComet.app/Contents/MacOS/gitcomet`.
 
 If you want a separately trusted CLI-only macOS artifact, publish it in a notary-supported container such as a ZIP, DMG, or signed flat PKG and update downstream packaging accordingly.

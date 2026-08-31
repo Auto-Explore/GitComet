@@ -921,7 +921,7 @@ fn read_pending_report_path(marker: &Path) -> std::io::Result<Option<PathBuf>> {
             && bytes.len() % 2 == 0
         {
             let mut wide = Vec::with_capacity(bytes.len() / 2);
-            for chunk in bytes.chunks_exact(2) {
+            for chunk in bytes.as_chunks::<2>().0 {
                 wide.push(u16::from_le_bytes([chunk[0], chunk[1]]));
             }
             return Ok(Some(PathBuf::from(OsString::from_wide(&wide))));
@@ -951,31 +951,8 @@ fn read_pending_report_path(marker: &Path) -> std::io::Result<Option<PathBuf>> {
 
 #[cfg(windows)]
 use crate::hex_encode;
-
 #[cfg(windows)]
-fn hex_decode(hex: &str) -> Option<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(hex.len() / 2);
-    let bytes = hex.as_bytes();
-    for pair in bytes.chunks_exact(2) {
-        let high = hex_value(pair[0])?;
-        let low = hex_value(pair[1])?;
-        out.push((high << 4) | low);
-    }
-    Some(out)
-}
-
-#[cfg(windows)]
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
+use gitcomet_core::hex::decode as hex_decode;
 
 fn unix_time_ms() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};

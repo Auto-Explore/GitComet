@@ -66,7 +66,7 @@ fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) 
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -167,7 +167,7 @@ fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) 
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -298,7 +298,7 @@ fn tag_ref_menu_scopes_actions_to_clicked_tag(cx: &mut gpui::TestAppContext) {
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -824,7 +824,7 @@ fn remote_menu_lists_fetch_and_prune_actions(cx: &mut gpui::TestAppContext) {
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -915,7 +915,7 @@ fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCon
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -1068,7 +1068,7 @@ fn branch_menu_pin_entry_toggles_and_relabels(cx: &mut gpui::TestAppContext) {
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -1163,7 +1163,7 @@ fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCo
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -1310,7 +1310,7 @@ fn remote_branch_menu_renders_squash_entry_without_panic(cx: &mut gpui::TestAppC
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -1383,7 +1383,7 @@ fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -1514,7 +1514,7 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -1598,7 +1598,7 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -1668,7 +1668,7 @@ fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::Test
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -1734,7 +1734,7 @@ fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });

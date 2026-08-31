@@ -1355,3 +1355,85 @@ fn abort_returns_active_cherry_pick_lock_error() {
         SequencerState::CherryPick
     );
 }
+
+#[test]
+fn multi_cherry_pick_rejects_a_plan_that_drops_every_commit() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let first = commit_file(&repo, "one.txt", "one\n", "feature one");
+    let second = commit_file(&repo, "two.txt", "two\n", "feature two");
+    run_git(&repo, &["checkout", "main"]);
+    let before_head = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let drop = |commit_id: String, subject: &str| InteractiveRebaseEntry {
+        action: InteractiveRebaseAction::Drop,
+        commit_id,
+        summary: subject.to_string(),
+        message: subject.to_string(),
+        new_message: None,
+    };
+    // Dropped entries are resolved away before the plan reaches git, so an
+    // all-drop plan has nothing left to apply. Saying so beats handing git an
+    // empty todo and surfacing its bare "nothing to do".
+    let err = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            drop(first, "feature one"),
+            drop(second, "feature two"),
+        ])
+        .expect_err("a plan that drops every commit should be rejected");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("every selected commit was dropped"),
+        "unexpected all-dropped error: {message}"
+    );
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
+    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "");
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::None
+    );
+}
+
+#[test]
+fn multi_cherry_pick_applies_picks_around_a_dropped_commit() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let first = commit_file(&repo, "one.txt", "one\n", "feature one");
+    let skipped = commit_file(&repo, "two.txt", "two\n", "feature two");
+    let third = commit_file(&repo, "three.txt", "three\n", "feature three");
+    run_git(&repo, &["checkout", "main"]);
+
+    let entry = |action, commit_id: String, subject: &str| InteractiveRebaseEntry {
+        action,
+        commit_id,
+        summary: subject.to_string(),
+        message: subject.to_string(),
+        new_message: None,
+    };
+    let output = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            entry(InteractiveRebaseAction::Pick, first, "feature one"),
+            entry(InteractiveRebaseAction::Drop, skipped, "feature two"),
+            entry(InteractiveRebaseAction::Pick, third, "feature three"),
+        ])
+        .expect("a dropped commit should leave the surrounding picks alone");
+
+    assert_eq!(output.exit_code, Some(0));
+    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::None
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-2", "--format=%s"]),
+        "feature three\nfeature one"
+    );
+    assert!(!repo.join("two.txt").exists(), "dropped commit was applied");
+}

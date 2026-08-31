@@ -290,7 +290,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/selected_commit_and_details",
         metric: "selected_commit_repo_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 2.0,
+        threshold: 1.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/selected_commit_and_details",
@@ -320,7 +320,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/twenty_tabs",
         metric: "selected_commit_repo_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 2.0,
+        threshold: 1.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/twenty_tabs",
@@ -356,7 +356,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/20_repos_all_hot",
         metric: "selected_commit_repo_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 20.0,
+        threshold: 19.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/20_repos_all_hot",

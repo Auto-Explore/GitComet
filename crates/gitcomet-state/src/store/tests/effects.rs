@@ -84,6 +84,26 @@ fn schedule_effect_for_test(
     );
 }
 
+/// Receives the next externally meaningful effect message while treating the
+/// Git-operation lifecycle as the envelope used by the real store reducer.
+fn recv_effect_message(
+    msg_rx: &std::sync::mpsc::Receiver<Msg>,
+    timeout: Duration,
+) -> std::result::Result<Msg, std::sync::mpsc::RecvTimeoutError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match msg_rx.recv_timeout(remaining)? {
+            Msg::Internal(crate::msg::InternalMsg::GitOperationStarted { .. })
+            | Msg::Internal(crate::msg::InternalMsg::GitOperationEvent { .. }) => {}
+            Msg::Internal(crate::msg::InternalMsg::GitOperationFinished { message, .. }) => {
+                return Ok(Msg::Internal(*message));
+            }
+            message => return Ok(message),
+        }
+    }
+}
+
 #[test]
 fn session_update_effects_persist_on_session_executor() {
     struct Backend;
@@ -244,6 +264,8 @@ fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),
             },
+            delete_branch_calls: None,
+            cancel_delete_branch: None,
         }),
     );
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
@@ -1755,7 +1777,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
     let mut saw_write_and_stage = false;
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
-        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+        if let Ok(msg) = recv_effect_message(&msg_rx, Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id: rid,
                 command,
@@ -1812,7 +1834,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
 
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
-        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+        if let Ok(msg) = recv_effect_message(&msg_rx, Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id: rid,
                 command,
@@ -1977,7 +1999,7 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         );
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(5) {
-            if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+            if let Ok(msg) = recv_effect_message(&msg_rx, Duration::from_millis(50))
                 && let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                     command,
                     result,
@@ -2183,7 +2205,7 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
 
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
-        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+        if let Ok(msg) = recv_effect_message(&msg_rx, Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id: rid,
                 command,
@@ -2345,7 +2367,7 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
 
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
-        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+        if let Ok(msg) = recv_effect_message(&msg_rx, Duration::from_millis(50))
             && let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id: rid,
                 command,
@@ -2513,7 +2535,7 @@ fn load_stashes_effect_truncates_results_to_limit() {
 
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
-        let msg = match msg_rx.recv_timeout(Duration::from_millis(100)) {
+        let msg = match recv_effect_message(&msg_rx, Duration::from_millis(100)) {
             Ok(m) => m,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(e) => panic!("channel closed: {e:?}"),
@@ -2675,7 +2697,7 @@ fn stash_effect_requests_stash_reload_on_success() {
     let mut saw_load_stashes = false;
     let mut saw_finished = false;
     while start.elapsed() < Duration::from_secs(5) {
-        let msg = match msg_rx.recv_timeout(Duration::from_millis(100)) {
+        let msg = match recv_effect_message(&msg_rx, Duration::from_millis(100)) {
             Ok(msg) => msg,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(e) => panic!("channel closed: {e:?}"),
@@ -2843,7 +2865,7 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
     let mut saw_load_stashes = false;
     let mut saw_finished = false;
     while start.elapsed() < Duration::from_secs(5) {
-        let msg = match msg_rx.recv_timeout(Duration::from_millis(100)) {
+        let msg = match recv_effect_message(&msg_rx, Duration::from_millis(100)) {
             Ok(msg) => msg,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(e) => panic!("channel closed: {e:?}"),
@@ -3011,7 +3033,7 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
     let mut saw_load_stashes = false;
     let mut saw_finished_err = false;
     while start.elapsed() < Duration::from_secs(5) {
-        let msg = match msg_rx.recv_timeout(Duration::from_millis(100)) {
+        let msg = match recv_effect_message(&msg_rx, Duration::from_millis(100)) {
             Ok(msg) => msg,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(e) => panic!("channel closed: {e:?}"),
@@ -3177,7 +3199,7 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
     let mut saw_load_stashes = false;
     let mut saw_finished = false;
     while start.elapsed() < Duration::from_secs(5) {
-        let msg = match msg_rx.recv_timeout(Duration::from_millis(100)) {
+        let msg = match recv_effect_message(&msg_rx, Duration::from_millis(100)) {
             Ok(msg) => msg,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(e) => panic!("channel closed: {e:?}"),
@@ -3341,7 +3363,7 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
     let mut saw_load_stashes = false;
     let mut saw_finished_err = false;
     while start.elapsed() < Duration::from_secs(5) {
-        let msg = match msg_rx.recv_timeout(Duration::from_millis(100)) {
+        let msg = match recv_effect_message(&msg_rx, Duration::from_millis(100)) {
             Ok(msg) => msg,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(e) => panic!("channel closed: {e:?}"),
@@ -3391,6 +3413,8 @@ fn unsupported_repo_result<T>() -> Result<T> {
 
 struct UnsupportedRepo {
     spec: RepoSpec,
+    delete_branch_calls: Option<Arc<Mutex<Vec<String>>>>,
+    cancel_delete_branch: Option<String>,
 }
 
 impl GitRepository for UnsupportedRepo {
@@ -3429,7 +3453,16 @@ impl GitRepository for UnsupportedRepo {
     fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn delete_branch(&self, _name: &str) -> Result<()> {
+    fn delete_branch(&self, name: &str) -> Result<()> {
+        if let Some(calls) = self.delete_branch_calls.as_ref() {
+            calls
+                .lock()
+                .expect("delete branch recording mutex")
+                .push(name.to_string());
+        }
+        if self.cancel_delete_branch.as_deref() == Some(name) {
+            return Err(Error::new(ErrorKind::Cancelled));
+        }
         unsupported_repo_result()
     }
     fn checkout_branch(&self, _name: &str) -> Result<()> {
@@ -3487,6 +3520,142 @@ impl GitBackend for PanicOpenBackend {
     fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
         panic!("open should not be called in effect scheduler tests")
     }
+}
+
+#[test]
+fn push_lifecycle_uses_cached_tracking_branch_context() {
+    let repo_id = RepoId(340);
+    let spec = RepoSpec {
+        workdir: unique_temp_path("gitcomet-push-hook-context"),
+    };
+    let repo: Arc<dyn GitRepository> = Arc::new(UnsupportedRepo {
+        spec: spec.clone(),
+        delete_branch_calls: None,
+        cancel_delete_branch: None,
+    });
+    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = FxHashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let mut repo_state = RepoState::new_opening(repo_id, spec);
+    repo_state.set_head_branch(Loadable::Ready("main".to_string()));
+    repo_state.set_branches(Loadable::Ready(vec![Branch {
+        name: "main".to_string(),
+        target: CommitId("1111111111111111111111111111111111111111".into()),
+        upstream: Some(gitcomet_core::domain::Upstream {
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+        }),
+        divergence: None,
+    }]));
+
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    schedule_effect_with_state_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        AppState {
+            repos: vec![repo_state],
+            ..AppState::default()
+        },
+        msg_tx,
+        Effect::Push {
+            repo_id,
+            auth: None,
+        },
+    );
+
+    match msg_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("push should start its hook activity lifecycle")
+    {
+        Msg::Internal(crate::msg::InternalMsg::GitOperationStarted {
+            repo_id: started_repo_id,
+            label,
+            context,
+            ..
+        }) => {
+            assert_eq!(started_repo_id, repo_id);
+            assert_eq!(label, "Push");
+            assert_eq!(context.as_deref(), Some("main → origin/main"));
+        }
+        other => panic!("unexpected first push lifecycle message: {other:?}"),
+    }
+    assert!(
+        matches!(
+            msg_rx.recv_timeout(Duration::from_secs(2)),
+            Ok(Msg::Internal(
+                crate::msg::InternalMsg::GitOperationFinished { .. }
+            ))
+        ),
+        "push should finish its hook activity lifecycle"
+    );
+}
+
+#[test]
+fn delete_branches_effect_stops_batch_and_preserves_cancellation() {
+    let repo_id = RepoId(341);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let repo: Arc<dyn GitRepository> = Arc::new(UnsupportedRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-delete-branches-cancelled"),
+        },
+        delete_branch_calls: Some(Arc::clone(&calls)),
+        cancel_delete_branch: Some("cancel-here".to_string()),
+    });
+    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = FxHashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::DeleteBranches {
+            repo_id,
+            names: vec!["cancel-here".to_string(), "must-not-run".to_string()],
+            force: false,
+        },
+    );
+
+    let error = loop {
+        match recv_effect_message(&msg_rx, Duration::from_secs(2))
+            .expect("batch delete should finish")
+        {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+                repo_id: finished_repo_id,
+                action: RepoActionKind::DeleteBranches,
+                result,
+            }) if finished_repo_id == repo_id => {
+                break result.expect_err("cancellation should fail the operation");
+            }
+            Msg::RefreshBranches {
+                repo_id: refreshed_repo_id,
+            } if refreshed_repo_id == repo_id => {}
+            other => panic!("unexpected batch-delete message: {other:?}"),
+        }
+    };
+
+    assert!(
+        matches!(error.kind(), ErrorKind::Cancelled),
+        "cancellation must not be wrapped as a batch failure: {error:?}"
+    );
+    assert_eq!(
+        *calls.lock().expect("delete branch recording mutex"),
+        vec!["cancel-here".to_string()],
+        "no later destructive delete may run after Stop"
+    );
 }
 
 struct BlockingReleaseGuard {
@@ -3998,7 +4167,7 @@ fn wait_for_checkout_refresh_messages(
     let mut saw_finished = false;
 
     while Instant::now() < deadline {
-        let msg = match msg_rx.recv_timeout(Duration::from_millis(50)) {
+        let msg = match recv_effect_message(msg_rx, Duration::from_millis(50)) {
             Ok(msg) => msg,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(err) => panic!("channel closed: {err:?}"),
@@ -4227,6 +4396,8 @@ fn open_repo_effect_emits_repo_opened_ok() {
         spec: RepoSpec {
             workdir: workdir.clone(),
         },
+        delete_branch_calls: None,
+        cancel_delete_branch: None,
     });
     let backend: Arc<dyn GitBackend> = Arc::new(Backend { repo });
 
@@ -4338,6 +4509,8 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         spec: RepoSpec {
             workdir: workdir.clone(),
         },
+        delete_branch_calls: None,
+        cancel_delete_branch: None,
     });
     let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
     let release = Arc::new((Mutex::new(false), Condvar::new()));
@@ -4651,6 +4824,8 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
         spec: RepoSpec {
             workdir: unique_temp_path("gitcomet-foreground-load-effect"),
         },
+        delete_branch_calls: None,
+        cancel_delete_branch: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4953,6 +5128,8 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         spec: RepoSpec {
             workdir: workdir.clone(),
         },
+        delete_branch_calls: None,
+        cancel_delete_branch: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();

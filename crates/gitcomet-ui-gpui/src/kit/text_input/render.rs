@@ -22,6 +22,26 @@ impl Render for TextInput {
         } else {
             self.vertical_padding_override.unwrap_or(px(8.0))
         };
+        // `min_h_full` alone makes GPUI treat the viewport height as the
+        // multiline field's final height, so descendant text taller than the
+        // viewport stops contributing to an outer scroll container's extent.
+        // Pair an explicit full height with the document's pixel minimum: the
+        // former fills short fields, while the latter keeps long fields
+        // scrollable.
+        let multiline_document_height = multiline.then(|| {
+            let source_rows = self.content.line_starts().len().max(1);
+            let visual_rows = if self.soft_wrap {
+                self.wrap
+                    .cache
+                    .filter(|cache| cache.rows > 0)
+                    .map(|cache| cache.rows)
+                    .or(self.wrap.last_rows.filter(|rows| *rows > 0))
+                    .unwrap_or(source_rows)
+            } else {
+                source_rows
+            };
+            self.effective_line_height(window) * visual_rows as f32 + pad_y * 2.0
+        });
         let is_focused = focus.is_focused(window);
 
         if self.interaction.has_focus != is_focused {
@@ -150,6 +170,10 @@ impl Render for TextInput {
                     window,
                 ))
             })
+            // The outer multiline surface may be constrained to the viewport;
+            // keep the document-sized inner field from flex-shrinking to that
+            // height so a long buffer still creates vertical scroll range.
+            .when(multiline, |d| d.flex_shrink_0())
             .when(multiline && self.min_lines > 0, |d| {
                 let line_height = self.effective_line_height(window);
                 d.min_h(line_height * self.min_lines as f32 + pad_y * 2.0)
@@ -200,7 +224,24 @@ impl Render for TextInput {
         } else {
             outer = outer.w_full().min_w(px(0.0));
         }
-        let mut outer = outer.flex().flex_col().child(input);
+        let mut outer = outer
+            .flex()
+            .flex_col()
+            // The outer field fills a multiline viewport while the inner field
+            // remains document-sized. That preserves the scroll container's
+            // vertical content extent for long files, and lets presses in the
+            // remainder below a short file bubble into the same handlers.
+            .when_some(multiline_document_height, |d, document_height| {
+                d.h_full()
+                    .min_h(document_height)
+                    .cursor(CursorStyle::IBeam)
+                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                    .on_mouse_move(cx.listener(Self::on_mouse_move))
+                    .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
+            })
+            .child(input);
 
         if let Some(state) = self.interaction.context_menu {
             outer = outer.child(

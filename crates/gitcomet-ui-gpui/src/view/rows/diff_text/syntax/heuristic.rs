@@ -125,6 +125,101 @@ pub(super) struct HeuristicCommentConfig {
     pub(super) haskell_dashes_line_comment: bool,
 }
 
+impl HeuristicCommentConfig {
+    const fn base() -> Self {
+        Self {
+            line_comment: None,
+            hash_comment: false,
+            block_comment: None,
+            visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
+        }
+    }
+
+    /// No comment syntax.
+    const fn none() -> Self {
+        Self::base()
+    }
+
+    /// `#` line comments only.
+    const fn hash() -> Self {
+        Self {
+            hash_comment: true,
+            ..Self::base()
+        }
+    }
+
+    /// One line-comment prefix.
+    const fn line(prefix: &'static str) -> Self {
+        Self {
+            line_comment: Some(prefix),
+            ..Self::base()
+        }
+    }
+
+    /// One line-comment prefix plus `#`.
+    const fn line_and_hash(prefix: &'static str) -> Self {
+        Self {
+            line_comment: Some(prefix),
+            hash_comment: true,
+            ..Self::base()
+        }
+    }
+
+    /// One block-comment spec.
+    const fn block(spec: HeuristicBlockCommentSpec) -> Self {
+        Self {
+            block_comment: Some(spec),
+            ..Self::base()
+        }
+    }
+
+    /// `#` plus one block-comment spec.
+    const fn hash_block(spec: HeuristicBlockCommentSpec) -> Self {
+        Self {
+            hash_comment: true,
+            block_comment: Some(spec),
+            ..Self::base()
+        }
+    }
+
+    /// One line-comment prefix plus one block-comment spec.
+    const fn line_block(prefix: &'static str, spec: HeuristicBlockCommentSpec) -> Self {
+        Self {
+            line_comment: Some(prefix),
+            block_comment: Some(spec),
+            ..Self::base()
+        }
+    }
+
+    /// One line-comment prefix, `#`, and one block-comment spec.
+    const fn line_hash_block(prefix: &'static str, spec: HeuristicBlockCommentSpec) -> Self {
+        Self {
+            line_comment: Some(prefix),
+            hash_comment: true,
+            block_comment: Some(spec),
+            ..Self::base()
+        }
+    }
+
+    /// Visual Basic's apostrophe line comment.
+    const fn visual_basic() -> Self {
+        Self {
+            visual_basic_line_comment: true,
+            ..Self::base()
+        }
+    }
+
+    /// Haskell's `--`/`{- -}` rules with the operator-aware dash handling.
+    const fn haskell() -> Self {
+        Self {
+            block_comment: Some(HEURISTIC_HASKELL_BLOCK_COMMENT),
+            haskell_dashes_line_comment: true,
+            ..Self::base()
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct HeuristicOpenStateScanConfig {
     comment: HeuristicCommentConfig,
@@ -184,23 +279,11 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Vue
         | DiffSyntaxLanguage::Svelte
-        | DiffSyntaxLanguage::Jinja => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: false,
-            block_comment: Some(HEURISTIC_HTML_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
+        | DiffSyntaxLanguage::Jinja => HeuristicCommentConfig::block(HEURISTIC_HTML_BLOCK_COMMENT),
         // A text-bodied template has no markup to comment, so `<!-- -->` would be
         // wrong; its body is yaml, shell, nginx.conf or dotenv, and all four use
         // `#`. That also lands on Jinja's own `{# … #}`, one byte late.
-        DiffSyntaxLanguage::JinjaText => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: true,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
+        DiffSyntaxLanguage::JinjaText => HeuristicCommentConfig::hash(),
         // Pascal's block comment is `(* ... *)`, which is F#'s and OCaml's too.
         // Its other form, `{ ... }`, has no `HeuristicBlockCommentKind` and would
         // swallow every record and set literal if it did.
@@ -209,88 +292,30 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Pascal
         | DiffSyntaxLanguage::FSharp
         | DiffSyntaxLanguage::OCaml
-        | DiffSyntaxLanguage::OCamlInterface => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: false,
-            block_comment: Some(HEURISTIC_FSHARP_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
-        DiffSyntaxLanguage::Haskell => HeuristicCommentConfig {
-            // `line_comment` stays None: `haskell_dashes_line_comment` replaces the
-            // plain `--` prefix with a rule that knows `-->` is an operator.
-            line_comment: None,
-            hash_comment: false,
-            block_comment: Some(HEURISTIC_HASKELL_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: true,
-        },
-        DiffSyntaxLanguage::Erlang => HeuristicCommentConfig {
-            line_comment: Some("%"),
-            hash_comment: false,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
+        | DiffSyntaxLanguage::OCamlInterface => {
+            HeuristicCommentConfig::block(HEURISTIC_FSHARP_BLOCK_COMMENT)
+        }
+        // `line_comment` stays None: `haskell_dashes_line_comment` replaces the
+        // plain `--` prefix with a rule that knows `-->` is an operator.
+        DiffSyntaxLanguage::Haskell => HeuristicCommentConfig::haskell(),
+        DiffSyntaxLanguage::Erlang => HeuristicCommentConfig::line("%"),
         // `.properties` takes `!` as well as `#`, and only at the head of a line;
         // `line_comment` carries the second marker.
-        DiffSyntaxLanguage::JavaProperties => HeuristicCommentConfig {
-            line_comment: Some("!"),
-            hash_comment: true,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
-        DiffSyntaxLanguage::Ini => HeuristicCommentConfig {
-            line_comment: Some(";"),
-            hash_comment: true,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
+        DiffSyntaxLanguage::JavaProperties => HeuristicCommentConfig::line_and_hash("!"),
+        DiffSyntaxLanguage::Ini => HeuristicCommentConfig::line_and_hash(";"),
         // `.conf` takes `#` only, even though the INI dialects among them also
         // take `;`. In nginx -- which is most of what people call a `.conf` --
         // `;` ends every statement, so treating it as a comment greys the tail of
         // every line in the file. The line-leading `;` those INI dialects
         // actually write is picked up in the main loop instead.
         // `.env` takes `#` only, and only that: a `;` is an ordinary value byte.
-        DiffSyntaxLanguage::Dotenv => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: true,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
-        DiffSyntaxLanguage::Conf => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: true,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
+        DiffSyntaxLanguage::Dotenv => HeuristicCommentConfig::hash(),
+        DiffSyntaxLanguage::Conf => HeuristicCommentConfig::hash(),
         // Wasm text takes `;;` for a line comment and `(; ... ;)` for a block one;
         // only the first is expressible here.
-        DiffSyntaxLanguage::Wat => HeuristicCommentConfig {
-            line_comment: Some(";;"),
-            hash_comment: false,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
-        DiffSyntaxLanguage::Llvm | DiffSyntaxLanguage::Spirv => HeuristicCommentConfig {
-            line_comment: Some(";"),
-            hash_comment: false,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
-        DiffSyntaxLanguage::Clojure => HeuristicCommentConfig {
-            line_comment: Some(";"),
-            hash_comment: false,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
+        DiffSyntaxLanguage::Wat => HeuristicCommentConfig::line(";;"),
+        DiffSyntaxLanguage::Llvm | DiffSyntaxLanguage::Spirv => HeuristicCommentConfig::line(";"),
+        DiffSyntaxLanguage::Clojure => HeuristicCommentConfig::line(";"),
         // Assembly takes `;` (MASM/NASM) and `/* */` (GAS, every target).
         //
         // Neither GAS line-comment spelling is here. `#` is out because ARM writes
@@ -302,27 +327,15 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // block comments and the tree-sitter path handles the rest.
         // CIL takes C's comment syntax, being an assembly language written by a
         // C-family toolchain rather than by hand.
-        DiffSyntaxLanguage::Cil => HeuristicCommentConfig {
-            line_comment: Some("//"),
-            hash_comment: false,
-            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
-        DiffSyntaxLanguage::Assembly => HeuristicCommentConfig {
-            line_comment: Some(";"),
-            hash_comment: false,
-            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
-        DiffSyntaxLanguage::Lua => HeuristicCommentConfig {
-            line_comment: Some("--"),
-            hash_comment: false,
-            block_comment: Some(HEURISTIC_LUA_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
+        DiffSyntaxLanguage::Cil => {
+            HeuristicCommentConfig::line_block("//", HEURISTIC_C_BLOCK_COMMENT)
+        }
+        DiffSyntaxLanguage::Assembly => {
+            HeuristicCommentConfig::line_block(";", HEURISTIC_C_BLOCK_COMMENT)
+        }
+        DiffSyntaxLanguage::Lua => {
+            HeuristicCommentConfig::line_block("--", HEURISTIC_LUA_BLOCK_COMMENT)
+        }
         DiffSyntaxLanguage::Jsonnet
         | DiffSyntaxLanguage::Cmake
         | DiffSyntaxLanguage::Dockerfile
@@ -344,27 +357,11 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // here, which greys the opening line to its end and leaves the rest of the
         // block plain. The tree-sitter path has the real rule.
         | DiffSyntaxLanguage::Julia
-        | DiffSyntaxLanguage::Perl => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: true,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
-        DiffSyntaxLanguage::PowerShell => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: true,
-            block_comment: Some(HEURISTIC_POWERSHELL_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
-        DiffSyntaxLanguage::Sql => HeuristicCommentConfig {
-            line_comment: Some("--"),
-            hash_comment: false,
-            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
+        | DiffSyntaxLanguage::Perl => HeuristicCommentConfig::hash(),
+        DiffSyntaxLanguage::PowerShell => {
+            HeuristicCommentConfig::hash_block(HEURISTIC_POWERSHELL_BLOCK_COMMENT)
+        }
+        DiffSyntaxLanguage::Sql => HeuristicCommentConfig::line_block("--", HEURISTIC_C_BLOCK_COMMENT),
         DiffSyntaxLanguage::Rust
         | DiffSyntaxLanguage::JavaScript
         | DiffSyntaxLanguage::TypeScript
@@ -393,39 +390,21 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Proto
         | DiffSyntaxLanguage::Bicep => HeuristicCommentConfig {
             line_comment: Some("//"),
-            hash_comment: false,
             block_comment: match language {
                 DiffSyntaxLanguage::GoMod | DiffSyntaxLanguage::GoWork => None,
                 _ => Some(HEURISTIC_C_BLOCK_COMMENT),
             },
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
+            ..HeuristicCommentConfig::base()
         },
-        DiffSyntaxLanguage::Hcl | DiffSyntaxLanguage::Php => HeuristicCommentConfig {
-            line_comment: Some("//"),
-            hash_comment: true,
-            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
+        DiffSyntaxLanguage::Hcl | DiffSyntaxLanguage::Php => {
+            HeuristicCommentConfig::line_hash_block("//", HEURISTIC_C_BLOCK_COMMENT)
+        }
         // Nix looks like the Hcl arm above but must NOT take its `//` line
         // comment: `//` is Nix's attribute-set update operator, so
         // `{ a = 1; } // { b = 2; }` would grey out from the operator to the end
         // of the line. Nix comments are `#` and `/* */` only.
-        DiffSyntaxLanguage::Nix => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: true,
-            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
-        DiffSyntaxLanguage::VisualBasic => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: false,
-            block_comment: None,
-            visual_basic_line_comment: true,
-            haskell_dashes_line_comment: false,
-        },
+        DiffSyntaxLanguage::Nix => HeuristicCommentConfig::hash_block(HEURISTIC_C_BLOCK_COMMENT),
+        DiffSyntaxLanguage::VisualBasic => HeuristicCommentConfig::visual_basic(),
         // CSV has no comment syntax at all -- every byte is data.
         DiffSyntaxLanguage::Csv
         | DiffSyntaxLanguage::Markdown
@@ -434,13 +413,7 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Jsdoc
         | DiffSyntaxLanguage::Json
         | DiffSyntaxLanguage::Diff
-        | DiffSyntaxLanguage::Regex => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: false,
-            block_comment: None,
-            visual_basic_line_comment: false,
-            haskell_dashes_line_comment: false,
-        },
+        | DiffSyntaxLanguage::Regex => HeuristicCommentConfig::none(),
     }
 }
 

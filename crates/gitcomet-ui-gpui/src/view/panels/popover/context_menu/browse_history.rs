@@ -5,7 +5,9 @@ use super::*;
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
     let repo = this.state.repos.iter().find(|r| r.id == repo_id);
     let current = repo.and_then(|r| r.browsing_commit().cloned());
-    let history: Vec<CommitId> = repo.map(|r| r.browse_history.clone()).unwrap_or_default();
+    let history: Vec<CommitId> = repo
+        .map(|r| r.navigation.browse_history.clone())
+        .unwrap_or_default();
 
     let mut items = vec![ContextMenuItem::Header("Browsing history".into())];
     let mut tooltips = FxHashMap::with_capacity_and_hasher(history.len(), Default::default());

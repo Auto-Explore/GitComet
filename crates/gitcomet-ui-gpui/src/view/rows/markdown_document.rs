@@ -4,7 +4,7 @@
 //! two columns must stay row-aligned and every row carries a change bar. A
 //! single document has neither requirement, so it lays out naturally instead:
 //! text wraps by itself, images sit inline at the size the document asked for,
-//! and the gaps around headings are margins rather than blank rows.
+//! and the gaps around headings are compact interactive spacer elements.
 //!
 //! Modelled on Zed's markdown preview, which renders a whole document as one
 //! element tree inside a scrolling container.
@@ -127,7 +127,7 @@ pub(in crate::view) fn render_markdown_document(
     let blocks = context.blocks.blocks(document);
     // The whole document lays out at once, so the rows the blocks cover are the
     // render cost. Spacers are not among them: the block builder drops them and
-    // the flowing layout spends a margin instead.
+    // the flowing layout spends one interactive gap between blocks instead.
     perf::record_row_batch(
         ViewPerfRenderLane::MarkdownPreview,
         document.rows.len(),
@@ -143,13 +143,21 @@ pub(in crate::view) fn render_markdown_document(
         .text_color(context.theme.colors.foreground.primary);
 
     for (ix, block) in blocks.iter().enumerate() {
-        column = column.child(render_block(document, block, ix == 0, context));
+        if ix > 0 {
+            let gap = if matches!(block, MarkdownBlock::Heading { .. }) {
+                HEADING_GAP_PX
+            } else {
+                BLOCK_GAP_PX
+            };
+            column = column.child(render_block_gap(ix, block.row_range().start, gap, context));
+        }
+        column = column.child(render_block(document, block, context));
     }
 
     // The change bar is one element spanning the whole document rather than a
-    // segment per row: a flowing layout puts margins between blocks, and a
+    // segment per row: a flowing layout puts gaps between blocks, and a
     // per-row bar would leave a gap in every one of them.
-    div()
+    let body = div()
         .flex()
         .items_stretch()
         .w_full()
@@ -163,25 +171,82 @@ pub(in crate::view) fn render_markdown_document(
                     .debug_selector(|| "markdown_preview_change_bar".to_string()),
             )
         })
-        .child(column)
+        .child(column);
+
+    let mut surface = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w(px(0.0))
+        .min_h_full()
+        .child(body);
+    if let Some(view) = context.view.clone() {
+        surface = surface.child(flowing_diff_text_empty_space(view, context.text_region));
+    }
+    surface.into_any_element()
+}
+
+fn render_block_gap(
+    block_ix: usize,
+    next_source_visible_ix: usize,
+    gap: f32,
+    context: &MarkdownDocumentContext,
+) -> AnyElement {
+    let space = div()
+        .id(("markdown_preview_block_gap", block_ix))
+        .debug_selector(move || format!("markdown_preview_block_gap_{block_ix}"))
+        .flex_none()
+        .w_full()
+        .h(scaled(gap, context));
+    let Some(view) = context.view.clone() else {
+        return space.into_any_element();
+    };
+
+    let left_view = view.clone();
+    let right_view = view;
+    let region = context.text_region;
+    space
+        .cursor(gpui::CursorStyle::IBeam)
+        .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+            crate::press_gesture::claim_press(cx);
+            cx.stop_propagation();
+            let focus = left_view.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus, cx);
+            left_view.update(cx, |this, cx| {
+                this.handle_diff_text_document_gap_mouse_down(
+                    next_source_visible_ix,
+                    region,
+                    event.position,
+                    cx,
+                );
+                cx.notify();
+            });
+        })
+        .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+            crate::press_gesture::claim_press(cx);
+            cx.stop_propagation();
+            let focus = right_view.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus, cx);
+            right_view.update(cx, |this, cx| {
+                this.open_diff_editor_context_menu(
+                    next_source_visible_ix,
+                    region,
+                    event.position,
+                    window,
+                    cx,
+                );
+                cx.notify();
+            });
+        })
         .into_any_element()
 }
 
 fn render_block(
     document: &MarkdownPreviewDocument,
     block: &MarkdownBlock,
-    is_first: bool,
     context: &MarkdownDocumentContext,
 ) -> AnyElement {
-    // A heading opens a wider break above it than the gap between ordinary
-    // blocks, except at the very top of the document where there is nothing to
-    // separate it from.
-    let gap = match block {
-        _ if is_first => 0.0,
-        MarkdownBlock::Heading { .. } => HEADING_GAP_PX,
-        _ => BLOCK_GAP_PX,
-    };
-    let wrapper = div().w_full().min_w(px(0.0)).mt(scaled(gap, context));
+    let wrapper = div().w_full().min_w(px(0.0));
     let rows = RowRun::new(document, block.row_range());
 
     match block {
@@ -205,18 +270,69 @@ fn render_block(
             .into_any_element(),
         // Only the first band of an image carries its source; the rest exist so
         // the row grid can give the picture height.
-        MarkdownBlock::Image(_) => wrapper
+        MarkdownBlock::Image(_) => non_text_block_shell(document, block.row_range(), context)
             .when_some(rows.first(), |wrapper, (row_ix, row)| {
                 wrapper.child(render_image(row_ix, row, context))
             })
             .into_any_element(),
-        MarkdownBlock::ThematicBreak(_) => wrapper
-            .child(div().w_full().h(px(1.0)).bg(with_alpha(
-                context.theme.colors.stroke.default,
-                if context.theme.is_dark { 0.92 } else { 0.88 },
-            )))
-            .into_any_element(),
+        MarkdownBlock::ThematicBreak(row_ix) => {
+            let row_ix = *row_ix;
+            non_text_block_shell(document, block.row_range(), context)
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(1.0))
+                        .bg(with_alpha(
+                            context.theme.colors.stroke.default,
+                            if context.theme.is_dark { 0.92 } else { 0.88 },
+                        ))
+                        .debug_selector(move || {
+                            format!("markdown_preview_thematic_break_{row_ix}")
+                        }),
+                )
+                .into_any_element()
+        }
     }
+}
+
+/// Give a non-text block a logical range for selection motion without
+/// pretending that its accessible copy text was painted as glyphs.
+fn non_text_block_shell(
+    document: &MarkdownPreviewDocument,
+    range: Range<usize>,
+    context: &MarkdownDocumentContext,
+) -> gpui::Div {
+    let shell = div().w_full().min_w(px(0.0));
+    let (Some(view), Some(first_row_ix), Some(last_row_ix)) = (
+        context.view.clone(),
+        range.clone().next(),
+        range.clone().next_back(),
+    ) else {
+        return shell;
+    };
+    let Some(last_row) = document.rows.get(last_row_ix) else {
+        return shell;
+    };
+    let region = context.text_region;
+    let start = DiffTextPos {
+        source_visible_ix: first_row_ix,
+        region,
+        offset: 0,
+    };
+    let end = DiffTextPos {
+        source_visible_ix: last_row_ix,
+        region,
+        offset: last_row.text.len(),
+    };
+
+    shell.on_children_prepainted(move |children_bounds, _window, app| {
+        let Some(bounds) = children_bounds.first().copied() else {
+            return;
+        };
+        view.update(app, |this, _cx| {
+            this.set_diff_text_motion_target(bounds, start, end);
+        });
+    })
 }
 
 /// The rows of one block, paired with the document index each one paints at.
@@ -331,6 +447,7 @@ fn row_shell(
     };
     let text_region = context.text_region;
     shell
+        .cursor(gpui::CursorStyle::IBeam)
         .on_mouse_down(gpui::MouseButton::Left, {
             let view = view.clone();
             move |event, window, cx| {
@@ -347,7 +464,7 @@ fn row_shell(
                         window,
                         cx,
                     ) {
-                        this.handle_diff_text_mouse_down(
+                        this.handle_markdown_preview_row_mouse_down(
                             row_ix,
                             text_region,
                             position,
@@ -631,6 +748,7 @@ fn render_blockquote(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> Any
 
 fn render_code(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElement {
     let first_row_ix = rows.first().map(|(row_ix, _)| row_ix).unwrap_or_default();
+    let last_row_ix = rows.iter().last().map(|(row_ix, _)| row_ix);
     let mut body = div()
         // The content moves under the shell as the block scrolls, which is the
         // only way to see that each block holds its own offset.
@@ -645,9 +763,15 @@ fn render_code(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElemen
         .font_family(context.editor_font_family.clone())
         .text_size(scaled(MARKDOWN_PREVIEW_BASE_FONT_PX, context));
 
+    if rows.first().is_some() {
+        body = body.child(render_code_padding(first_row_ix, false, context));
+    }
     for (row_ix, row) in rows.iter() {
         body = body
             .child(row_shell(row_ix, row, context).child(render_row_line(row_ix, row, context)));
+    }
+    if let Some(last_row_ix) = last_row_ix {
+        body = body.child(render_code_padding(last_row_ix, true, context));
     }
 
     scrolling_block(
@@ -659,7 +783,6 @@ fn render_code(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElemen
             block
                 .debug_selector(move || format!("markdown_preview_code_shell_{first_row_ix}"))
                 .px(scaled(MARKDOWN_PREVIEW_SHELL_PAD_X_PX, context))
-                .py(scaled(CODE_BLOCK_PAD_Y_PX, context))
                 .bg(with_alpha(
                     context.theme.colors.interaction.selected_background,
                     if context.theme.is_dark { 0.55 } else { 0.45 },
@@ -673,6 +796,64 @@ fn render_code(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElemen
                 .child(body)
         },
     )
+}
+
+/// The vertical breathing room inside a fenced-code shell is document space,
+/// just like the gap between two Markdown blocks. Keeping it as explicit
+/// elements preserves the code shell's geometry while allowing a selection to
+/// begin immediately before its first row or after its last one.
+fn render_code_padding(
+    row_ix: usize,
+    after_row: bool,
+    context: &MarkdownDocumentContext,
+) -> AnyElement {
+    let edge = if after_row { "bottom" } else { "top" };
+    let padding = div()
+        .id((
+            "markdown_preview_code_padding",
+            row_ix
+                .saturating_mul(2)
+                .saturating_add(usize::from(after_row)),
+        ))
+        .debug_selector(move || format!("markdown_preview_code_padding_{edge}_{row_ix}"))
+        .flex_none()
+        .w_full()
+        .h(scaled(CODE_BLOCK_PAD_Y_PX, context));
+    let Some(view) = context.view.clone() else {
+        return padding.into_any_element();
+    };
+
+    let left_view = view.clone();
+    let text_region = context.text_region;
+    padding
+        .cursor(gpui::CursorStyle::IBeam)
+        .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+            crate::press_gesture::claim_press(cx);
+            cx.stop_propagation();
+            let focus = left_view.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus, cx);
+            left_view.update(cx, |this, cx| {
+                this.handle_markdown_preview_row_mouse_down(
+                    row_ix,
+                    text_region,
+                    event.position,
+                    event.click_count,
+                    cx,
+                );
+                cx.notify();
+            });
+        })
+        .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+            crate::press_gesture::claim_press(cx);
+            cx.stop_propagation();
+            let focus = view.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus, cx);
+            view.update(cx, |this, cx| {
+                this.open_diff_editor_context_menu(row_ix, text_region, event.position, window, cx);
+                cx.notify();
+            });
+        })
+        .into_any_element()
 }
 
 fn render_table(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElement {

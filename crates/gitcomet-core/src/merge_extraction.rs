@@ -5,7 +5,7 @@
 //! into production code so it can be reused outside ad-hoc test harnesses.
 
 use crate::merge::{MergeOptions, merge_file};
-use crate::process::git_command;
+use crate::process::{bytes_to_text_preserving_utf8, git_command};
 use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -14,41 +14,6 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::process::Command;
 use std::process::Output;
-
-fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len());
-    let mut cursor = 0usize;
-    while cursor < bytes.len() {
-        match std::str::from_utf8(&bytes[cursor..]) {
-            Ok(valid) => {
-                out.push_str(valid);
-                break;
-            }
-            Err(err) => {
-                let valid_len = err.valid_up_to();
-                if valid_len > 0 {
-                    let valid = &bytes[cursor..cursor + valid_len];
-                    out.push_str(
-                        std::str::from_utf8(valid)
-                            .expect("slice identified by valid_up_to must be valid UTF-8"),
-                    );
-                    cursor += valid_len;
-                }
-
-                let invalid_len = err.error_len().unwrap_or(1);
-                let invalid_end = cursor.saturating_add(invalid_len).min(bytes.len());
-                for byte in &bytes[cursor..invalid_end] {
-                    let _ = write!(out, "\\x{byte:02x}");
-                }
-                cursor = invalid_end;
-            }
-        }
-    }
-
-    out
-}
 
 /// A merge commit with exactly two parents.
 #[derive(Debug, Clone, PartialEq, Eq)]

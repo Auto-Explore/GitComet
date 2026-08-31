@@ -178,3 +178,56 @@ pub enum RepoCommandKind {
         reverse: bool,
     },
 }
+
+impl RepoCommandKind {
+    pub(crate) fn hook_activity_label(&self) -> &'static str {
+        match self {
+            Self::FetchAll => "Fetch",
+            Self::PruneMergedBranches => "Prune branches",
+            Self::PruneLocalTags => "Prune tags",
+            Self::Pull { .. } | Self::PullBranch { .. } => "Pull",
+            Self::MergeRef { .. } => "Merge",
+            Self::SquashRef { .. } | Self::SquashCommits { .. } => "Squash",
+            Self::Push | Self::PushAfterCommit { .. } => "Push",
+            Self::ForcePush | Self::ForcePushWithLease { .. } => "Force push",
+            Self::PushSetUpstream { .. } => "Push and set upstream",
+            Self::SetUpstreamBranch { .. } => "Set upstream",
+            Self::UnsetUpstreamBranch { .. } => "Unset upstream",
+            Self::DeleteRemoteBranch { .. } | Self::DeleteRemoteBranches { .. } => {
+                "Delete remote branch"
+            }
+            Self::Reset { .. } => "Reset",
+            Self::Rebase { .. }
+            | Self::RebaseContinue
+            | Self::RebaseAbort
+            | Self::InteractiveRebase { .. } => "Rebase",
+            Self::InteractiveCherryPick { .. } | Self::CherryPick { .. } => "Cherry-pick",
+            Self::MergeAbort => "Abort merge",
+            Self::CreateTag { .. } => "Create tag",
+            Self::DeleteTag { .. } => "Delete tag",
+            Self::PushTag { .. } => "Push tag",
+            Self::DeleteRemoteTag { .. } => "Delete remote tag",
+            Self::AddRemote { .. } => "Add remote",
+            Self::RemoveRemote { .. } => "Remove remote",
+            Self::SetRemoteUrl { .. } => "Set remote URL",
+            Self::CheckoutConflict { .. }
+            | Self::CheckoutConflictBase { .. }
+            | Self::AcceptConflictDeletion { .. } => "Resolve conflict",
+            Self::LaunchMergetool { .. } => "Mergetool",
+            Self::SaveWorktreeFile { .. } => "Save file",
+            Self::AppendGitignorePatterns { .. } => "Update .gitignore",
+            Self::ExportPatch { .. } => "Export patch",
+            Self::ApplyPatch { .. } => "Apply patch",
+            Self::AddWorktree { .. } => "Add worktree",
+            Self::RemoveWorktree { .. } | Self::ForceRemoveWorktree { .. } => "Remove worktree",
+            Self::AddSubmodule { .. } => "Add submodule",
+            Self::UpdateSubmodules { .. } => "Update submodules",
+            Self::LoadSubmodule { .. } => "Load submodule",
+            Self::ChangeSubmodulePointer { .. } => "Change submodule",
+            Self::RemoveSubmodule { .. } => "Remove submodule",
+            Self::StageHunk => "Stage hunk",
+            Self::UnstageHunk => "Unstage hunk",
+            Self::ApplyWorktreePatch { .. } => "Apply worktree patch",
+        }
+    }
+}

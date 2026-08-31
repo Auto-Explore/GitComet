@@ -1,4 +1,5 @@
 use crate::msg::StoreEvent;
+use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 
@@ -29,18 +30,28 @@ fn failure_counter(kind: SendFailureKind) -> &'static AtomicU64 {
     }
 }
 
+/// Renders a `catch_unwind` / `JoinHandle::join` payload for a diagnostic.
+///
+/// Shared by every `store` caller that recovers from a panic so the wording
+/// stays consistent; takes a reference so a caller holding a `Box` can pass
+/// `payload.as_ref()` without giving up ownership.
+pub(super) fn panic_payload_to_string(payload: &(dyn Any + Send)) -> String {
+    gitcomet_core::text_utils::panic_payload_to_string(payload, "unknown panic payload")
+}
+
 fn record_send_failure(kind: SendFailureKind, context: &'static str) {
     let count = failure_counter(kind).fetch_add(1, Ordering::Relaxed) + 1;
-    eprintln!(
+    // These run on the store worker thread, which has no unwind guard.
+    gitcomet_core::process::write_stderr_line(format_args!(
         "gitcomet-state: channel send failed ({kind:?}) in {context}; total_failures={count}"
-    );
+    ));
 }
 
 fn record_send_failure_with_detail(kind: SendFailureKind, context: &'static str, detail: String) {
     let count = failure_counter(kind).fetch_add(1, Ordering::Relaxed) + 1;
-    eprintln!(
+    gitcomet_core::process::write_stderr_line(format_args!(
         "gitcomet-state: channel send failed ({kind:?}) in {context}; {detail}; total_failures={count}"
-    );
+    ));
 }
 
 pub(super) fn send_or_log<T>(

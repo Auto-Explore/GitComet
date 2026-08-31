@@ -479,7 +479,7 @@ fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recen
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.pending_force_push_lease = Some(test_force_push_lease());
+    repo_state.pending.force_push_lease = Some(test_force_push_lease());
     repo_state.set_recent_commit_messages(Loadable::Ready(vec![test_recent_commit_message()]));
     let recent_rev = repo_state.recent_commit_messages_rev;
     state.repos.push(repo_state);
@@ -495,7 +495,7 @@ fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recen
     );
 
     assert_eq!(
-        state.repos[0].pending_force_push_lease,
+        state.repos[0].pending.force_push_lease,
         Some(test_force_push_lease())
     );
     assert!(matches!(
@@ -1283,9 +1283,16 @@ fn reload_repo_clears_stale_navigation_history() {
         range_selection: None,
         worktree_selection: None,
     };
-    state.repos[0].nav_history.record(snap(&commit_a));
-    state.repos[0].nav_history.record(snap(&commit_b));
     state.repos[0]
+        .navigation
+        .main_history
+        .record(snap(&commit_a));
+    state.repos[0]
+        .navigation
+        .main_history
+        .record(snap(&commit_b));
+    state.repos[0]
+        .navigation
         .view_history
         .record(crate::model::ViewHistoryEntry {
             source: gitcomet_core::domain::FileSource::Commit(commit_a.clone()),
@@ -1298,7 +1305,7 @@ fn reload_repo_clears_stale_navigation_history() {
         path: Some(PathBuf::from("src/lib.rs")),
     });
     state.repos[0].set_selected_commit(Some(commit_b.clone()));
-    assert_eq!(state.repos[0].nav_history.entries.len(), 2);
+    assert_eq!(state.repos[0].navigation.main_history.entries.len(), 2);
 
     reduce(
         &mut repos,
@@ -1311,18 +1318,19 @@ fn reload_repo_clears_stale_navigation_history() {
     // would survive as `entries[0]` while only the tail gets folded over.
     assert!(
         !state.repos[0]
-            .nav_history
+            .navigation
+            .main_history
             .entries
             .iter()
             .any(|s| s.selected_commit.as_ref() == Some(&commit_a)),
         "stale nav back-stack entry must be cleared on reload"
     );
     assert!(
-        state.repos[0].nav_history.entries.len() <= 1,
+        state.repos[0].navigation.main_history.entries.len() <= 1,
         "only the post-reload current view may remain in nav_history"
     );
     assert!(
-        state.repos[0].view_history.entries.is_empty(),
+        state.repos[0].navigation.view_history.entries.is_empty(),
         "view_history must be cleared on reload"
     );
 }
@@ -1344,7 +1352,7 @@ fn reload_repo_clears_a_stale_comparison_mark() {
     ));
     state.repos[0].set_open(Loadable::Ready(()));
     state.active_repo = Some(repo_id);
-    state.repos[0].comparison_mark = Some(crate::model::ComparisonMark {
+    state.repos[0].navigation.comparison_mark = Some(crate::model::ComparisonMark {
         commit_id: CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         label: "feature".into(),
     });
@@ -1357,7 +1365,7 @@ fn reload_repo_clears_a_stale_comparison_mark() {
     );
 
     assert!(
-        state.repos[0].comparison_mark.is_none(),
+        state.repos[0].navigation.comparison_mark.is_none(),
         "a mark that a reload may have invalidated must not survive it"
     );
 }
@@ -2776,9 +2784,9 @@ fn cancelled_log_reply_is_not_reported_as_an_error() {
     );
 
     assert!(
-        state.repos[0].diagnostics.is_empty(),
+        state.repos[0].feedback.diagnostics.is_empty(),
         "a cancelled walk must not raise a diagnostic, got {:?}",
-        state.repos[0].diagnostics
+        state.repos[0].feedback.diagnostics
     );
     assert!(
         !matches!(state.repos[0].log, Loadable::Error(_)),

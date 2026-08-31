@@ -1,3 +1,7 @@
+#[cfg(any(target_os = "linux", test))]
+use gitcomet_core::platform::detect_is_wsl;
+#[cfg(target_os = "linux")]
+use gitcomet_core::platform::read_linux_osrelease;
 use gpui::Decorations;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -73,27 +77,6 @@ impl LinuxGuiEnvironment {
 #[cfg(target_os = "linux")]
 fn env_has_non_empty_os(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|value| !value.is_empty())
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn detect_is_wsl(
-    has_wsl_distro_name: bool,
-    has_wsl_interop: bool,
-    osrelease: Option<&str>,
-) -> bool {
-    has_wsl_distro_name || has_wsl_interop || osrelease_mentions_microsoft(osrelease)
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn osrelease_mentions_microsoft(osrelease: Option<&str>) -> bool {
-    osrelease
-        .map(|value| value.to_ascii_lowercase().contains("microsoft"))
-        .unwrap_or(false)
-}
-
-#[cfg(target_os = "linux")]
-fn read_linux_osrelease() -> Option<String> {
-    std::fs::read_to_string("/proc/sys/kernel/osrelease").ok()
 }
 
 #[cfg(test)]

@@ -1,7 +1,5 @@
-use crate::msg::{Msg, RepoCommandKind};
-use gitcomet_core::auth::{
-    StagedGitAuth, clear_staged_git_auth, stage_git_auth_for_current_thread,
-};
+use crate::msg::{InternalMsg, Msg, RepoCommandKind};
+use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, PullMode,
@@ -12,9 +10,194 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
-use super::util::{RepoMap, send_or_log, spawn_with_repo};
+use super::util::{
+    GitOperationTask, RepoMap, message_subject, send_or_log, short_commit_id, single_line_context,
+    spawn_with_repo,
+};
 
 const GITIGNORE_FILE_NAME: &str = gitcomet_core::gitignore::FILE_NAME;
+
+fn pull_mode_suffix(mode: PullMode) -> Option<&'static str> {
+    match mode {
+        PullMode::Default => None,
+        PullMode::Merge => Some("merge"),
+        PullMode::FastForwardIfPossible => Some("fast-forward if possible"),
+        PullMode::FastForwardOnly => Some("fast-forward only"),
+        PullMode::Rebase => Some("rebase"),
+    }
+}
+
+fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
+    let context = match command {
+        RepoCommandKind::FetchAll => "All remotes".to_string(),
+        RepoCommandKind::PruneMergedBranches => "Merged local branches".to_string(),
+        RepoCommandKind::PruneLocalTags => "Local tags missing on remotes".to_string(),
+        RepoCommandKind::Pull { mode } => pull_mode_suffix(*mode).map_or_else(
+            || "Configured upstream → current branch".to_string(),
+            |mode| format!("Configured upstream → current branch · {mode}"),
+        ),
+        RepoCommandKind::PullBranch { remote, branch } => {
+            format!("{remote}/{branch} → current branch")
+        }
+        RepoCommandKind::MergeRef { reference } => format!("{reference} → current branch"),
+        RepoCommandKind::SquashRef { reference } => reference.clone(),
+        RepoCommandKind::Push | RepoCommandKind::ForcePush => {
+            "Current branch → configured upstream".to_string()
+        }
+        RepoCommandKind::PushAfterCommit { target, .. } => {
+            format!(
+                "{} → {}/{}",
+                target.local_branch, target.remote, target.branch
+            )
+        }
+        RepoCommandKind::ForcePushWithLease { lease } => {
+            format!("{} → {}/{}", lease.local_branch, lease.remote, lease.branch)
+        }
+        RepoCommandKind::PushSetUpstream { remote, branch } => {
+            format!("Current branch → {remote}/{branch}")
+        }
+        RepoCommandKind::SetUpstreamBranch { branch, upstream } => {
+            format!("{branch} → {upstream}")
+        }
+        RepoCommandKind::UnsetUpstreamBranch { branch } => branch.clone(),
+        RepoCommandKind::DeleteRemoteBranch { remote, branch } => {
+            format!("{remote}/{branch}")
+        }
+        RepoCommandKind::DeleteRemoteBranches { remote, branches } => format!(
+            "{remote}: {}",
+            crate::name_summary::elide_names(branches, ", ")
+        ),
+        RepoCommandKind::Reset { mode, target } => {
+            let mode = match mode {
+                ResetMode::Soft => "soft",
+                ResetMode::Mixed => "mixed",
+                ResetMode::Hard => "hard",
+            };
+            format!("{target} · {mode}")
+        }
+        RepoCommandKind::SquashCommits { message, count, .. } => {
+            let subject = message_subject(message).unwrap_or_else(|| "No commit message".into());
+            format!("{count} commits · {subject}")
+        }
+        RepoCommandKind::Rebase { onto } => format!("Current branch onto {onto}"),
+        RepoCommandKind::RebaseContinue => "Current rebase".to_string(),
+        RepoCommandKind::RebaseAbort => "Current rebase".to_string(),
+        RepoCommandKind::InteractiveRebase { base, .. } => format!("Current branch onto {base}"),
+        RepoCommandKind::InteractiveCherryPick { entries } => match entries.as_slice() {
+            [] => "Selected commits".to_string(),
+            [entry] => {
+                message_subject(&entry.summary).unwrap_or_else(|| short_commit_id(&entry.commit_id))
+            }
+            [first, ..] => format!(
+                "{} commits · {}",
+                entries.len(),
+                message_subject(&first.summary)
+                    .unwrap_or_else(|| short_commit_id(&first.commit_id))
+            ),
+        },
+        RepoCommandKind::CherryPick {
+            commit_id, summary, ..
+        } => message_subject(summary).unwrap_or_else(|| short_commit_id(commit_id.as_ref())),
+        RepoCommandKind::MergeAbort => "Current merge".to_string(),
+        RepoCommandKind::CreateTag { name, target, .. } => format!("{name} at {target}"),
+        RepoCommandKind::DeleteTag { name } => name.clone(),
+        RepoCommandKind::PushTag { remote, name } => format!("{name} → {remote}"),
+        RepoCommandKind::DeleteRemoteTag { remote, name } => format!("{remote}/{name}"),
+        RepoCommandKind::AddRemote { name, .. }
+        | RepoCommandKind::RemoveRemote { name }
+        | RepoCommandKind::SetRemoteUrl { name, .. } => name.clone(),
+        RepoCommandKind::CheckoutConflict { path, side } => {
+            let side = match side {
+                ConflictSide::Ours => "ours",
+                ConflictSide::Theirs => "theirs",
+            };
+            format!("{} · {side}", path.display())
+        }
+        RepoCommandKind::AcceptConflictDeletion { path }
+        | RepoCommandKind::CheckoutConflictBase { path }
+        | RepoCommandKind::LaunchMergetool { path } => path.display().to_string(),
+        RepoCommandKind::SaveWorktreeFile { path, stage } => format!(
+            "{}{}",
+            path.display(),
+            if *stage { " · stage after saving" } else { "" }
+        ),
+        RepoCommandKind::AppendGitignorePatterns { patterns } => match patterns.as_slice() {
+            [] => GITIGNORE_FILE_NAME.to_string(),
+            [pattern] => pattern.clone(),
+            many => format!(
+                "{} patterns: {}",
+                many.len(),
+                crate::name_summary::elide_names(many, ", ")
+            ),
+        },
+        RepoCommandKind::ExportPatch { commit_id, dest } => {
+            format!(
+                "{} → {}",
+                short_commit_id(commit_id.as_ref()),
+                dest.display()
+            )
+        }
+        RepoCommandKind::ApplyPatch { patch } => patch.display().to_string(),
+        RepoCommandKind::AddWorktree { path, reference } => reference.as_ref().map_or_else(
+            || path.display().to_string(),
+            |reference| format!("{reference} → {}", path.display()),
+        ),
+        RepoCommandKind::RemoveWorktree { path }
+        | RepoCommandKind::ForceRemoveWorktree { path } => path.display().to_string(),
+        RepoCommandKind::AddSubmodule {
+            path, branch, name, ..
+        } => {
+            let mut detail = name.clone().unwrap_or_else(|| path.display().to_string());
+            if let Some(branch) = branch {
+                detail.push_str(" · ");
+                detail.push_str(branch);
+            }
+            detail
+        }
+        RepoCommandKind::UpdateSubmodules { .. } => "All submodules".to_string(),
+        RepoCommandKind::LoadSubmodule { path, .. } | RepoCommandKind::RemoveSubmodule { path } => {
+            path.display().to_string()
+        }
+        RepoCommandKind::ChangeSubmodulePointer { path, reference } => {
+            format!("{} → {reference}", path.display())
+        }
+        RepoCommandKind::StageHunk
+        | RepoCommandKind::UnstageHunk
+        | RepoCommandKind::ApplyWorktreePatch { .. } => "Selected hunk".to_string(),
+    };
+    single_line_context(context)
+}
+
+fn schedule_repo_command_with_context<F>(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    command: RepoCommandKind,
+    context_override: Option<String>,
+    run: F,
+) where
+    F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
+{
+    let label = command.hook_activity_label();
+    let context = context_override.or_else(|| repo_command_context(&command));
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
+        let result = {
+            let _scope = operation.attach();
+            run(repo)
+        };
+        let outcome = GitOperationTask::outcome(&result);
+        operation.finish(
+            outcome,
+            InternalMsg::RepoCommandFinished {
+                repo_id,
+                command,
+                result,
+            },
+        );
+    });
+}
 
 fn schedule_repo_command<F>(
     executor: &TaskExecutor,
@@ -26,17 +209,7 @@ fn schedule_repo_command<F>(
 ) where
     F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
 {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = run(repo);
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
-                repo_id,
-                command,
-                result,
-            }),
-        );
-    });
+    schedule_repo_command_with_context(executor, repos, msg_tx, repo_id, command, None, run);
 }
 
 fn normalize_worktree_relative_path(path: &Path) -> Result<PathBuf, Error> {
@@ -73,10 +246,9 @@ fn run_with_git_auth<R>(
     run: impl FnOnce() -> Result<R, Error>,
 ) -> Result<R, Error> {
     if let Some(auth) = auth {
-        stage_git_auth_for_current_thread(auth);
-        let result = run();
-        clear_staged_git_auth();
-        result
+        // The guard clears the staged auth on success, error, and panic.
+        let _scoped = ScopedStagedGitAuth::stage(auth);
+        run()
     } else {
         run()
     }
@@ -618,14 +790,23 @@ pub(super) fn schedule_pull(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     mode: PullMode,
+    tracking: Option<(String, String)>,
     auth: Option<StagedGitAuth>,
 ) {
-    schedule_repo_command(
+    let command = RepoCommandKind::Pull { mode };
+    let context = tracking.map(|(local, upstream)| {
+        pull_mode_suffix(mode).map_or_else(
+            || format!("{upstream} → {local}"),
+            |mode| format!("{upstream} → {local} · {mode}"),
+        )
+    });
+    schedule_repo_command_with_context(
         executor,
         repos,
         msg_tx,
         repo_id,
-        RepoCommandKind::Pull { mode },
+        command,
+        context,
         move |repo| run_with_git_auth(auth, || repo.pull_with_output(mode)),
     );
 }
@@ -637,11 +818,13 @@ pub(super) fn schedule_pull_branch(
     repo_id: RepoId,
     remote: String,
     branch: String,
+    local_branch: Option<String>,
     auth: Option<StagedGitAuth>,
 ) {
     let command_remote = remote.clone();
     let command_branch = branch.clone();
-    schedule_repo_command(
+    let context = local_branch.map(|local| format!("{remote}/{branch} → {local}"));
+    schedule_repo_command_with_context(
         executor,
         repos,
         msg_tx,
@@ -650,6 +833,7 @@ pub(super) fn schedule_pull_branch(
             remote: command_remote,
             branch: command_branch,
         },
+        context,
         move |repo| run_with_git_auth(auth, || repo.pull_branch_with_output(&remote, &branch)),
     );
 }
@@ -699,14 +883,17 @@ pub(super) fn schedule_push(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    tracking: Option<(String, String)>,
     auth: Option<StagedGitAuth>,
 ) {
-    schedule_repo_command(
+    let context = tracking.map(|(local, upstream)| format!("{local} → {upstream}"));
+    schedule_repo_command_with_context(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoCommandKind::Push,
+        context,
         move |repo| run_with_git_auth(auth, || repo.push_with_output()),
     );
 }
@@ -771,14 +958,17 @@ pub(super) fn schedule_force_push(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    tracking: Option<(String, String)>,
     auth: Option<StagedGitAuth>,
 ) {
-    schedule_repo_command(
+    let context = tracking.map(|(local, upstream)| format!("{local} → {upstream}"));
+    schedule_repo_command_with_context(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoCommandKind::ForcePush,
+        context,
         move |repo| run_with_git_auth(auth, || repo.push_force_with_output()),
     );
 }
@@ -811,11 +1001,13 @@ pub(super) fn schedule_push_set_upstream(
     repo_id: RepoId,
     remote: String,
     branch: String,
+    local_branch: Option<String>,
     auth: Option<StagedGitAuth>,
 ) {
     let command_remote = remote.clone();
     let command_branch = branch.clone();
-    schedule_repo_command(
+    let context = local_branch.map(|local| format!("{local} → {remote}/{branch}"));
+    schedule_repo_command_with_context(
         executor,
         repos,
         msg_tx,
@@ -824,6 +1016,7 @@ pub(super) fn schedule_push_set_upstream(
             remote: command_remote,
             branch: command_branch,
         },
+        context,
         move |repo| {
             run_with_git_auth(auth, || {
                 repo.push_set_upstream_with_output(&remote, &branch)
@@ -1366,4 +1559,54 @@ pub(super) fn schedule_launch_mergetool(
             }
         },
     );
+}
+
+#[cfg(test)]
+mod hook_activity_context_tests {
+    use super::*;
+    use gitcomet_core::domain::CommitId;
+
+    #[test]
+    fn network_and_history_commands_have_specific_context() {
+        assert_eq!(
+            repo_command_context(&RepoCommandKind::Pull {
+                mode: PullMode::Rebase,
+            })
+            .as_deref(),
+            Some("Configured upstream → current branch · rebase")
+        );
+        assert_eq!(
+            repo_command_context(&RepoCommandKind::PushAfterCommit {
+                target: SafePushAfterCommitTarget {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                    local_branch: "feature/hooks".to_string(),
+                    local_head: CommitId("0123456789abcdef".into()),
+                },
+                set_upstream: false,
+            })
+            .as_deref(),
+            Some("feature/hooks → origin/main")
+        );
+        assert_eq!(
+            repo_command_context(&RepoCommandKind::SquashCommits {
+                oldest: CommitId("1111111111111111".into()),
+                expected_head: CommitId("2222222222222222".into()),
+                message: "Squash subject\n\nBody".to_string(),
+                count: 3,
+            })
+            .as_deref(),
+            Some("3 commits · Squash subject")
+        );
+    }
+
+    #[test]
+    fn remote_context_does_not_retain_a_credential_bearing_url() {
+        let context = repo_command_context(&RepoCommandKind::AddRemote {
+            name: "origin".to_string(),
+            url: "https://token@example.invalid/private.git".to_string(),
+        });
+        assert_eq!(context.as_deref(), Some("origin"));
+        assert!(!context.unwrap().contains("token"));
+    }
 }
