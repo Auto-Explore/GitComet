@@ -1806,8 +1806,9 @@ fn commit_details_reports_merge_parents_and_file_changes() {
     );
 
     run_git(repo, &["checkout", "-b", "feature"]);
+    std::fs::write(repo.join("base.txt"), "base\nfeature\n").unwrap();
     std::fs::write(repo.join("feature.txt"), "feature\n").unwrap();
-    run_git(repo, &["add", "feature.txt"]);
+    run_git(repo, &["add", "base.txt", "feature.txt"]);
     run_git(
         repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
@@ -1844,15 +1845,132 @@ fn commit_details_reports_merge_parents_and_file_changes() {
         "expected committed_at to be set"
     );
     assert_eq!(merge_details.parent_ids.len(), 2);
+
+    assert_eq!(
+        merge_details.files.len(),
+        2,
+        "the merge should list every file it changes relative to its first parent"
+    );
+    let base_change = merge_details
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("base.txt"))
+        .expect("the file modified on the merged branch should be listed");
+    assert_eq!(base_change.kind, FileStatusKind::Modified);
+    assert_eq!(base_change.additions, Some(1));
+    assert_eq!(base_change.deletions, Some(0));
+
+    let feature_change = merge_details
+        .files
+        .iter()
+        .find(|file| file.path == Path::new("feature.txt"))
+        .expect("the file added on the merged branch should be listed");
+    assert_eq!(feature_change.kind, FileStatusKind::Added);
+    assert_eq!(feature_change.additions, Some(1));
+    assert_eq!(feature_change.deletions, Some(0));
     assert!(
-        merge_details.files.is_empty(),
-        "merge commit details should match `git show` and omit file rows without `-m`"
+        merge_details
+            .files
+            .iter()
+            .all(|file| file.path != Path::new("main.txt")),
+        "a file already present in the first parent must not be attributed to the merge"
     );
     assert!(
         feature_details.files.iter().any(|f| {
             f.path.as_path() == Path::new("feature.txt") && f.kind == FileStatusKind::Added
         }),
         "expected feature commit details to include feature file"
+    );
+}
+
+#[test]
+fn commit_details_preserves_shallow_boundary_merge_metadata_without_parent_objects() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin_work = dir.path().join("origin-work");
+    let origin_bare = dir.path().join("origin.git");
+    let shallow = dir.path().join("shallow");
+    std::fs::create_dir_all(&origin_work).unwrap();
+
+    run_git(&origin_work, &["init", "-b", "main"]);
+    run_git(&origin_work, &["config", "user.email", "you@example.com"]);
+    run_git(&origin_work, &["config", "user.name", "You"]);
+    run_git(&origin_work, &["config", "commit.gpgsign", "false"]);
+
+    commit_file_at(&origin_work, "base.txt", "base\n", "base", 1);
+    run_git(&origin_work, &["checkout", "-b", "feature"]);
+    commit_file_at(&origin_work, "feature.txt", "feature\n", "feature", 2);
+    let feature_id = git_stdout(&origin_work, &["rev-parse", "HEAD"]);
+
+    run_git(&origin_work, &["checkout", "main"]);
+    commit_file_at(&origin_work, "main.txt", "main\n", "main", 3);
+    let first_parent_id = git_stdout(&origin_work, &["rev-parse", "HEAD"]);
+    run_git_at(
+        &origin_work,
+        &["merge", "--no-ff", "feature", "-m", "merge feature"],
+        4,
+    );
+    let merge_id = git_stdout(&origin_work, &["rev-parse", "HEAD"]);
+
+    let origin_work_arg = origin_work.to_string_lossy().to_string();
+    let origin_bare_arg = origin_bare.to_string_lossy().to_string();
+    let shallow_arg = shallow.to_string_lossy().to_string();
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            "--bare",
+            origin_work_arg.as_str(),
+            origin_bare_arg.as_str(),
+        ],
+    );
+    let origin_url = git_force_file_transport_url(&origin_bare);
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            "--depth",
+            "1",
+            origin_url.as_str(),
+            shallow_arg.as_str(),
+        ],
+    );
+
+    assert_eq!(
+        git_stdout(&shallow, &["rev-parse", "--is-shallow-repository"]),
+        "true"
+    );
+    assert_eq!(git_stdout(&shallow, &["rev-parse", "HEAD"]), merge_id);
+    let first_parent_spec = format!("{first_parent_id}^{{commit}}");
+    let mut parent_check = Command::new("git");
+    test_git_env::apply(&mut parent_check);
+    let parent_check = parent_check
+        .arg("-C")
+        .arg(&shallow)
+        .args(["cat-file", "-e", first_parent_spec.as_str()])
+        .output()
+        .expect("check whether the shallow clone contains its first parent");
+    assert!(
+        !parent_check.status.success(),
+        "the fixture must omit the merge's first-parent object"
+    );
+
+    let opened = GixBackend.open(&shallow).unwrap();
+    let details = opened
+        .commit_details(&CommitId(merge_id.clone().into()))
+        .expect("merge metadata should load without its shallow parents");
+
+    assert_eq!(details.id, CommitId(merge_id.into()));
+    assert_eq!(details.message, "merge feature");
+    assert_eq!(
+        details.parent_ids,
+        vec![
+            CommitId(first_parent_id.into()),
+            CommitId(feature_id.into())
+        ]
+    );
+    assert!(
+        details.files.is_empty(),
+        "file changes are unavailable when the comparison parent is absent"
     );
 }
 
