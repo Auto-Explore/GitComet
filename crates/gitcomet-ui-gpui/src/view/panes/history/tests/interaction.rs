@@ -837,6 +837,49 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
         redraw(cx);
     };
 
+    // The first chip represents both `main` and `origin/main`. A direct
+    // right-click must disambiguate those exact refs rather than silently
+    // choosing whichever one happened to be inserted first.
+    let combined_chip_point = refs_column_point(cx, 0);
+    cx.simulate_mouse_move(combined_chip_point, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        combined_chip_point,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        combined_chip_point,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    redraw(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            crate::view::test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::BranchRefsMenu {
+                repo_id,
+                display_name: "main".to_string(),
+                targets: vec![
+                    BranchMenuTarget {
+                        section: BranchSection::Local,
+                        name: "main".to_string(),
+                    },
+                    BranchMenuTarget {
+                        section: BranchSection::Remote,
+                        name: "origin/main".to_string(),
+                    },
+                ],
+            })
+        );
+    });
+    cx.update(|_window, app| {
+        let popover_host = view.read(app).popover_host.clone();
+        popover_host.update(app, |host, cx| host.close_popover(cx));
+    });
+    cx.run_until_parked();
+    redraw(cx);
+
     move_to_refs_column(cx);
     assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
     cx.update(|_window, app| {

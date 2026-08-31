@@ -367,8 +367,8 @@ impl HistoryRefsHoverHost {
         match item.kind {
             HistoryRefListItemKind::Tag { .. } => "icons/tag.svg",
             HistoryRefListItemKind::LocalBranch { .. }
-            | HistoryRefListItemKind::RemoteBranch { .. }
-            | HistoryRefListItemKind::AttachedHead { .. } => "icons/git_branch.svg",
+            | HistoryRefListItemKind::AttachedHead { .. } => "icons/computer.svg",
+            HistoryRefListItemKind::RemoteBranch { .. } => "icons/cloud.svg",
             HistoryRefListItemKind::DetachedHead => "icons/question.svg",
         }
     }

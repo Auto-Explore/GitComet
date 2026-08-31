@@ -609,11 +609,15 @@ pub(super) struct HistoryBaseRowVm {
 #[derive(Clone, Debug)]
 pub(super) struct HistoryDecorationRowVm {
     /// Joined display text of all branch refs on the row. Rendering paints
-    /// per-ref chips from `ref_items`; this stays as the canonical flat form
+    /// grouped chips from `branch_chips`; this stays as the canonical flat form
     /// that decoration-cache tests and benchmarks assert against.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) branches_text: HistoryTextVm,
     pub(super) tag_names: Arc<[HistoryTextVm]>,
+    /// Compact branch decorations painted in the history table. Unlike
+    /// `ref_items`, these group same-named local and remote refs that share a
+    /// target while retaining every exact identity for context-menu routing.
+    pub(super) branch_chips: Arc<[HistoryBranchChipVm]>,
     pub(super) ref_items: Arc<[HistoryRefListItem]>,
     /// Branch this commit belongs to, as an index into
     /// [`HistoryDecorationCache::branch_names`]. Inherited down the lane from
@@ -621,6 +625,24 @@ pub(super) struct HistoryDecorationRowVm {
     /// which branch they are on.
     pub(super) lane_branch: Option<u16>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct HistoryBranchChipVm {
+    pub(in crate::view) text: HistoryTextVm,
+    pub(in crate::view) kind: HistoryBranchChipKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum HistoryBranchChipKind {
+    Branch {
+        is_head: bool,
+        targets: Arc<[BranchMenuTarget]>,
+    },
+    DetachedHead,
+}
+
+type HistoryBranchChips = Arc<[HistoryBranchChipVm]>;
+type HistoryBranchChipsByTarget<'a> = FxHashMap<&'a str, HistoryBranchChips>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct HistoryRefListItem {
@@ -1069,6 +1091,126 @@ pub(in crate::view) fn build_history_branch_text_by_target<'a>(
     )
 }
 
+#[derive(Clone, Default)]
+struct HistoryBranchChipGroup {
+    has_local: bool,
+    remote_names: SmallVec<[String; 2]>,
+}
+
+type HistoryBranchChipGroups = FxHashMap<String, HistoryBranchChipGroup>;
+
+fn history_branch_chips_from_groups(
+    mut groups: HistoryBranchChipGroups,
+    head_branch: Option<&str>,
+    detached_head: bool,
+) -> Arc<[HistoryBranchChipVm]> {
+    if let Some(head_branch) = head_branch {
+        groups.entry(head_branch.to_string()).or_default().has_local = true;
+    }
+
+    let mut groups = groups.into_iter().collect::<Vec<_>>();
+    groups.sort_unstable_by(|(left_name, _), (right_name, _)| {
+        let left_is_head = head_branch == Some(left_name.as_str());
+        let right_is_head = head_branch == Some(right_name.as_str());
+        right_is_head
+            .cmp(&left_is_head)
+            .then_with(|| left_name.cmp(right_name))
+    });
+
+    let mut chips = Vec::with_capacity(groups.len() + usize::from(detached_head));
+    if detached_head {
+        chips.push(HistoryBranchChipVm {
+            text: HistoryTextVm::new("HEAD".into()),
+            kind: HistoryBranchChipKind::DetachedHead,
+        });
+    }
+
+    for (name, mut group) in groups {
+        group.remote_names.sort_unstable();
+        group.remote_names.dedup();
+
+        let mut targets = Vec::with_capacity(
+            usize::from(group.has_local).saturating_add(group.remote_names.len()),
+        );
+        if group.has_local {
+            targets.push(BranchMenuTarget {
+                section: BranchSection::Local,
+                name: name.clone(),
+            });
+        }
+        targets.extend(group.remote_names.into_iter().map(|name| BranchMenuTarget {
+            section: BranchSection::Remote,
+            name,
+        }));
+
+        chips.push(HistoryBranchChipVm {
+            text: HistoryTextVm::new(SharedString::from(name.clone())),
+            kind: HistoryBranchChipKind::Branch {
+                is_head: head_branch == Some(name.as_str()),
+                targets: targets.into(),
+            },
+        });
+    }
+
+    chips.into()
+}
+
+pub(in crate::view) fn build_history_branch_chips_by_target<'a>(
+    branches: &'a [Branch],
+    remote_branches: &'a [RemoteBranch],
+    head_branch: Option<&str>,
+    head_target: Option<&str>,
+) -> (HistoryBranchChipsByTarget<'a>, Option<HistoryBranchChips>) {
+    let mut groups_by_target: FxHashMap<&str, HistoryBranchChipGroups> =
+        FxHashMap::with_capacity_and_hasher(
+            branches.len() + remote_branches.len(),
+            Default::default(),
+        );
+
+    for branch in branches {
+        groups_by_target
+            .entry(branch.target.as_ref())
+            .or_default()
+            .entry(branch.name.clone())
+            .or_default()
+            .has_local = true;
+    }
+
+    for branch in remote_branches {
+        let full_name = format!("{}/{}", branch.remote, branch.name);
+        groups_by_target
+            .entry(branch.target.as_ref())
+            .or_default()
+            .entry(branch.name.clone())
+            .or_default()
+            .remote_names
+            .push(full_name);
+    }
+
+    let head_branch_chips = head_branch.map(|head| {
+        let groups = head_target
+            .and_then(|target| groups_by_target.get(target))
+            .cloned()
+            .unwrap_or_default();
+        if head == "HEAD" {
+            history_branch_chips_from_groups(groups, None, true)
+        } else {
+            history_branch_chips_from_groups(groups, Some(head), false)
+        }
+    });
+
+    let mut chips_by_target =
+        FxHashMap::with_capacity_and_hasher(groups_by_target.len(), Default::default());
+    for (target, groups) in groups_by_target {
+        chips_by_target.insert(
+            target,
+            history_branch_chips_from_groups(groups, None, false),
+        );
+    }
+
+    (chips_by_target, head_branch_chips)
+}
+
 fn history_branch_ref_item(name: HistoryBranchNameRef<'_>) -> HistoryRefListItem {
     let text = name.to_shared_string();
     let kind = match name {
@@ -1087,7 +1229,7 @@ fn history_branch_ref_item(name: HistoryBranchNameRef<'_>) -> HistoryRefListItem
 }
 
 fn history_head_ref_item(head_branch: &str) -> HistoryRefListItem {
-    let text = history_head_branch_label(Some(head_branch)).unwrap_or_default();
+    let text = head_branch.to_string();
     let kind = if head_branch == "HEAD" {
         HistoryRefListItemKind::DetachedHead
     } else {
@@ -1638,6 +1780,178 @@ mod tests {
     }
 
     #[test]
+    fn history_branch_chips_merge_same_named_local_and_remote_refs_on_one_commit() {
+        let commit = commit_id("a");
+        let branches = vec![Branch {
+            name: "main".to_string(),
+            target: commit.clone(),
+            upstream: None,
+            divergence: None,
+        }];
+        let remote_branches = vec![
+            RemoteBranch {
+                remote: "upstream".to_string(),
+                name: "main".to_string(),
+                target: commit.clone(),
+            },
+            RemoteBranch {
+                remote: "origin".to_string(),
+                name: "main".to_string(),
+                target: commit.clone(),
+            },
+            RemoteBranch {
+                remote: "origin".to_string(),
+                name: "main".to_string(),
+                target: commit.clone(),
+            },
+        ];
+
+        let (chips_by_target, head_chips) = build_history_branch_chips_by_target(
+            &branches,
+            &remote_branches,
+            Some("main"),
+            Some(commit.as_ref()),
+        );
+
+        let normal = chips_by_target
+            .get(commit.as_ref())
+            .expect("expected compact branch chip");
+        assert_eq!(normal.len(), 1);
+        assert_eq!(normal[0].text.as_ref(), "main");
+        assert!(matches!(
+            normal[0].kind,
+            HistoryBranchChipKind::Branch { is_head: false, .. }
+        ));
+
+        let head = head_chips.expect("expected head chips");
+        assert_eq!(head.len(), 1);
+        assert_eq!(head[0].text.as_ref(), "main");
+        let HistoryBranchChipKind::Branch { is_head, targets } = &head[0].kind else {
+            panic!("expected a branch chip");
+        };
+        assert!(*is_head);
+        assert_eq!(
+            targets.as_ref(),
+            [
+                BranchMenuTarget {
+                    section: BranchSection::Local,
+                    name: "main".to_string(),
+                },
+                BranchMenuTarget {
+                    section: BranchSection::Remote,
+                    name: "origin/main".to_string(),
+                },
+                BranchMenuTarget {
+                    section: BranchSection::Remote,
+                    name: "upstream/main".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn history_branch_chips_do_not_merge_same_name_across_commits() {
+        let local_commit = commit_id("local");
+        let remote_commit = commit_id("remote");
+        let branches = vec![Branch {
+            name: "topic".to_string(),
+            target: local_commit.clone(),
+            upstream: None,
+            divergence: None,
+        }];
+        let remote_branches = vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "topic".to_string(),
+            target: remote_commit.clone(),
+        }];
+
+        let (chips_by_target, _) =
+            build_history_branch_chips_by_target(&branches, &remote_branches, None, None);
+        let local_chip = &chips_by_target[local_commit.as_ref()][0];
+        let remote_chip = &chips_by_target[remote_commit.as_ref()][0];
+        assert_eq!(local_chip.text.as_ref(), "topic");
+        assert_eq!(remote_chip.text.as_ref(), "topic");
+        assert!(matches!(
+            &local_chip.kind,
+            HistoryBranchChipKind::Branch { targets, .. }
+                if targets.as_ref() == [BranchMenuTarget {
+                    section: BranchSection::Local,
+                    name: "topic".to_string(),
+                }]
+        ));
+        assert!(matches!(
+            &remote_chip.kind,
+            HistoryBranchChipKind::Branch { targets, .. }
+                if targets.as_ref() == [BranchMenuTarget {
+                    section: BranchSection::Remote,
+                    name: "origin/topic".to_string(),
+                }]
+        ));
+    }
+
+    #[test]
+    fn history_branch_chips_keep_slash_named_local_ref_distinct_from_remote_ref() {
+        let commit = commit_id("a");
+        let branches = vec![Branch {
+            name: "origin/main".to_string(),
+            target: commit.clone(),
+            upstream: None,
+            divergence: None,
+        }];
+        let remote_branches = vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: commit.clone(),
+        }];
+
+        let (chips_by_target, _) =
+            build_history_branch_chips_by_target(&branches, &remote_branches, None, None);
+        let chips = &chips_by_target[commit.as_ref()];
+        assert_eq!(
+            chips
+                .iter()
+                .map(|chip| chip.text.as_ref())
+                .collect::<Vec<_>>(),
+            ["main", "origin/main"]
+        );
+    }
+
+    #[test]
+    fn history_branch_chips_keep_detached_head_in_its_own_chip() {
+        let commit = commit_id("a");
+        let branches = vec![Branch {
+            name: "main".to_string(),
+            target: commit.clone(),
+            upstream: None,
+            divergence: None,
+        }];
+        let remote_branches = vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: commit.clone(),
+        }];
+
+        let (_, head_chips) = build_history_branch_chips_by_target(
+            &branches,
+            &remote_branches,
+            Some("HEAD"),
+            Some(commit.as_ref()),
+        );
+        let head_chips = head_chips.expect("expected detached head chips");
+        assert_eq!(head_chips.len(), 2);
+        assert_eq!(head_chips[0].text.as_ref(), "HEAD");
+        assert!(matches!(
+            head_chips[0].kind,
+            HistoryBranchChipKind::DetachedHead
+        ));
+        assert_eq!(head_chips[1].text.as_ref(), "main");
+        assert!(matches!(
+            &head_chips[1].kind,
+            HistoryBranchChipKind::Branch { targets, .. } if targets.len() == 2
+        ));
+    }
+
+    #[test]
     fn history_tag_names_cache_dedups_once_per_target() {
         let commit_a = commit_id("a");
         let tags = vec![
@@ -1727,7 +2041,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             display,
-            vec!["v1.0.0", "v2.0.0", "HEAD → main", "feature", "origin/main"]
+            vec!["v1.0.0", "v2.0.0", "main", "feature", "origin/main"]
         );
         assert!(matches!(
             ref_items[0].kind,
@@ -1755,7 +2069,7 @@ mod tests {
             .iter()
             .map(|item| item.text.as_ref())
             .collect::<Vec<_>>();
-        assert_eq!(display, vec!["HEAD → main", "feature", "origin/main"]);
+        assert_eq!(display, vec!["main", "feature", "origin/main"]);
     }
 
     #[test]

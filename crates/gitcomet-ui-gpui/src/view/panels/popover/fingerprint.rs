@@ -185,6 +185,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::CommitMenu { repo_id, .. }
         | PopoverKind::StatusFileMenu { repo_id, .. }
         | PopoverKind::BranchMenu { repo_id, .. }
+        | PopoverKind::BranchRefsMenu { repo_id, .. }
         | PopoverKind::BranchSectionMenu { repo_id, .. }
         | PopoverKind::BranchGroupMenu { repo_id, .. }
         | PopoverKind::PinnedSectionMenu { repo_id, .. }
@@ -215,6 +216,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::BranchMenu { .. }
+        | PopoverKind::BranchRefsMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         // The group menu's branch count and the pinned menu's "Unpin all (N)"
         // both read the live branch lists, so a refresh landing while the menu
@@ -731,6 +733,20 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             hash_branch_section(*section, hasher);
             name.hash(hasher);
+        }
+        PopoverKind::BranchRefsMenu {
+            repo_id,
+            display_name,
+            targets,
+        } => {
+            104u8.hash(hasher);
+            repo_id.hash(hasher);
+            display_name.hash(hasher);
+            targets.len().hash(hasher);
+            for target in targets {
+                hash_branch_section(target.section, hasher);
+                target.name.hash(hasher);
+            }
         }
         PopoverKind::BranchSectionMenu { repo_id, section } => {
             45u8.hash(hasher);

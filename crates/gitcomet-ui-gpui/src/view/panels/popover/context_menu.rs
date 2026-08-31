@@ -2,6 +2,7 @@ use super::*;
 
 mod branch;
 mod branch_group;
+mod branch_refs;
 mod branch_section;
 mod browse_history;
 mod change_tracking_settings;
@@ -436,6 +437,11 @@ impl PopoverHost {
                 section,
                 name,
             } => Some(branch::model(self, *repo_id, *section, name)),
+            PopoverKind::BranchRefsMenu {
+                repo_id,
+                display_name,
+                targets,
+            } => Some(branch_refs::model(*repo_id, display_name, targets)),
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 Some(branch_section::model(self, *repo_id, *section))
             }
