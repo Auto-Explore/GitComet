@@ -66,7 +66,6 @@ env:
   WIXTOOLSET_VERSION: 3.14.1.20250415
   CARGO_WIX_VERSION: 0.3.9
   APPIMAGETOOL_VERSION: 1.9.1
-  DUMP_SYMS_VERSION: 2.3.9
 
 jobs:
   prepare:
@@ -150,11 +149,11 @@ jobs:
           - target_platform: x86_64-windows
             artifact_arch: x86_64
             runs_on: windows-latest
-            dump_syms_sha256: bdf48486220708808a3e00aec78856ee1cce096189d47a1e2cb1c635f93bacc7
+            dump_syms_triple: x86_64-pc-windows-msvc
           - target_platform: aarch64-windows
             artifact_arch: arm64
             runs_on: windows-11-arm
-            dump_syms_sha256: bdf48486220708808a3e00aec78856ee1cce096189d47a1e2cb1c635f93bacc7
+            dump_syms_triple: x86_64-pc-windows-msvc
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -164,12 +163,25 @@ jobs:
       WINDOWS_SIGNING_ACCOUNT_NAME: ${{ vars.WINDOWS_SIGNING_ACCOUNT_NAME }}
       WINDOWS_SIGNING_PROFILE_NAME: ${{ needs.prepare.outputs.release_id != '' && 'gitcomet-windows-release' || 'gitcomet-windows-test' }}
       WINDOWS_SIGNING_TIMESTAMP_RFC3161: http://timestamp.acs.microsoft.com/
-      DUMP_SYMS_SHA256: ${{ matrix.dump_syms_sha256 }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
+
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -236,34 +248,9 @@ jobs:
       # the x64 binary under emulation. dump_syms parses the .pdb as a file
       # format, so the host architecture does not have to match the target.
       - name: Install dump_syms
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $asset = "dump_syms-x86_64-pc-windows-msvc.zip"
-          $expected = "${env:DUMP_SYMS_SHA256}"
-          $archive = Join-Path $env:RUNNER_TEMP $asset
-          $binDir = Join-Path $env:RUNNER_TEMP "dump-syms-bin"
-
-          $url = "https://github.com/mozilla/dump_syms/releases/download/v${env:DUMP_SYMS_VERSION}/$asset"
-          Write-Host "Downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile $archive
-
-          $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLower()
-          if ($actual -ne $expected) {
-            throw "SHA-256 mismatch for $asset`n  expected: $expected`n  actual:   $actual"
-          }
-
-          New-Item -ItemType Directory -Path $binDir -Force | Out-Null
-          Expand-Archive -Path $archive -DestinationPath $binDir -Force
-          $exe = Get-ChildItem -Path $binDir -Recurse -Filter dump_syms.exe |
-            Select-Object -First 1 -ExpandProperty FullName
-          if ([string]::IsNullOrWhiteSpace($exe)) {
-            throw "Extracted archive did not contain dump_syms.exe."
-          }
-
-          & $exe --version
-          Split-Path $exe -Parent >> $env:GITHUB_PATH
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
+        with:
+          triple: ${{ matrix.dump_syms_triple }}
 
       - name: Build release binary
         shell: pwsh
@@ -445,8 +432,7 @@ jobs:
             appimagetool_asset: appimagetool-x86_64.AppImage
             appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
             appimage_arch: x86_64
-            dump_syms_asset: dump_syms-x86_64-unknown-linux-gnu.tar.xz
-            dump_syms_sha256: 0fc852a86b00337407d9d423cc388a24c3b489ccaaedcf92623cad57af5ca8ad
+            dump_syms_triple: x86_64-unknown-linux-gnu
           - target_platform: aarch64-linux
             artifact_arch: arm64
             deb_arch: arm64
@@ -455,8 +441,7 @@ jobs:
             appimagetool_asset: appimagetool-aarch64.AppImage
             appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
             appimage_arch: aarch64
-            dump_syms_asset: dump_syms-aarch64-unknown-linux-gnu.tar.xz
-            dump_syms_sha256: 1b8d6ab436fbfeb9820d4a21413cc77c50c6a4221cff25a830f5d53ba0aaa732
+            dump_syms_triple: aarch64-unknown-linux-gnu
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -466,13 +451,25 @@ jobs:
       APPIMAGETOOL_ASSET: ${{ matrix.appimagetool_asset }}
       APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
       APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
-      DUMP_SYMS_ASSET: ${{ matrix.dump_syms_asset }}
-      DUMP_SYMS_SHA256: ${{ matrix.dump_syms_sha256 }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
+
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
 
       - name: Install Linux UI native dependencies
         run: |
@@ -492,13 +489,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install dump_syms
-        run: |
-          set -euo pipefail
-          bin_dir="$(scripts/install-dump-syms.sh \
-            --version "${DUMP_SYMS_VERSION}" \
-            --asset "${DUMP_SYMS_ASSET}" \
-            --sha256 "${DUMP_SYMS_SHA256}")"
-          echo "$bin_dir" >> "$GITHUB_PATH"
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
+        with:
+          triple: ${{ matrix.dump_syms_triple }}
 
       - name: Build release binary
         env:
@@ -681,19 +674,15 @@ jobs:
           - target_platform: aarch64-darwin
             arch: arm64
             runs_on: macos-latest
-            dump_syms_asset: dump_syms-aarch64-apple-darwin.tar.xz
-            dump_syms_sha256: 4945b7e5de0d7ad403822635f0fb912b69990fc412741ff2b7b512e168c40a32
+            dump_syms_triple: aarch64-apple-darwin
           - target_platform: x86_64-darwin
             arch: x86_64
             runs_on: macos-15-intel
-            dump_syms_asset: dump_syms-x86_64-apple-darwin.tar.xz
-            dump_syms_sha256: e255caf99e403b31613c756babcead8463f6e600c1a9e1e5531fbe27a7e29cf2
+            dump_syms_triple: x86_64-apple-darwin
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
       ARCH: ${{ matrix.arch }}
-      DUMP_SYMS_ASSET: ${{ matrix.dump_syms_asset }}
-      DUMP_SYMS_SHA256: ${{ matrix.dump_syms_sha256 }}
       MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
       MACOS_SIGNING_CERT_BASE64: ${{ secrets.MACOS_SIGNING_CERT_BASE64 }}
       MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
@@ -706,6 +695,20 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -715,13 +718,9 @@ jobs:
           cache-targets: false
 
       - name: Install dump_syms
-        run: |
-          set -euo pipefail
-          bin_dir="$(scripts/install-dump-syms.sh \
-            --version "${DUMP_SYMS_VERSION}" \
-            --asset "${DUMP_SYMS_ASSET}" \
-            --sha256 "${DUMP_SYMS_SHA256}")"
-          echo "$bin_dir" >> "$GITHUB_PATH"
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
+        with:
+          triple: ${{ matrix.dump_syms_triple }}
 
       - name: Determine macOS signing mode
         id: macos_signing_mode

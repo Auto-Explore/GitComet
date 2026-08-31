@@ -22,6 +22,7 @@ mod fingerprint;
 mod force_delete_branch_confirm;
 mod force_push_confirm;
 mod force_remove_worktree_confirm;
+mod hook_activity;
 mod merge_abort_confirm;
 mod merge_commit_confirm;
 mod picker_nav;
@@ -126,6 +127,7 @@ const DIALOG_440_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(440.0);
 const DIALOG_460_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(460.0);
 const DIALOG_540_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(540.0);
 const DIALOG_640_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(640.0);
+const DIALOG_900_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(900.0);
 // Leaves enough room for “Open in code editor” and its three-key shortcut
 // badge to remain on one line on non-macOS platforms.
 const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
@@ -199,6 +201,10 @@ pub(in super::super) struct PopoverHost {
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
+    hook_activity_selected: Option<GitOperationId>,
+    hook_activity_history_scroll: ScrollHandle,
+    hook_activity_hooks_scroll: ScrollHandle,
+    hook_activity_output_scroll: ScrollHandle,
     /// Explicit 1-based mainline selected for the currently open single
     /// merge-commit cherry-pick confirmation. Reset every time that dialog
     /// opens; drafts are intentionally session-local.
@@ -356,6 +362,21 @@ pub(in super::super) struct PopoverHost {
     rebase_reword_input: Entity<components::TextInput>,
     rebase_reword_description_input: Entity<components::TextInput>,
     rebase_reword_description_scroll: ScrollHandle,
+}
+
+pub(in crate::view) struct PopoverHostInit {
+    pub(in crate::view) theme: AppTheme,
+    pub(in crate::view) root_view: WeakEntity<GitCometView>,
+    pub(in crate::view) root_view_mode: GitCometViewMode,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) main_pane: Entity<MainPaneView>,
+    pub(in crate::view) details_pane: Entity<DetailsPaneView>,
+    pub(in crate::view) reflog_pane: Entity<ReflogPaneView>,
+    pub(in crate::view) sidebar_pane: Entity<SidebarPaneView>,
+    pub(in crate::view) pinned_branches_by_repo:
+        std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
+    pub(in crate::view) collapsed_items_by_repo:
+        std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
 }
 
 /// Rows the branch badge's checkout picker would show for `query`, for the
@@ -761,6 +782,7 @@ pub(super) fn input_label(theme: AppTheme, label: &'static str) -> gpui::Div {
 fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
     match kind {
         PopoverKind::PullPicker
+        | PopoverKind::HookActivity { .. }
         | PopoverKind::PushPicker
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
@@ -841,6 +863,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CloneRepo
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
+        PopoverKind::HookActivity { .. } => Some(DIALOG_900_WIDTH),
         PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),

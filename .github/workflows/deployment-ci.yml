@@ -11,6 +11,7 @@ on:
       - ".github/workflows/deploy-windows-installer.yml"
       - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
+      - ".github/actions/setup-dump-syms/action.yml"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
@@ -19,6 +20,9 @@ on:
       - "scripts/build-apt-repo.sh"
       - "scripts/emit-breakpad-symbols.sh"
       - "scripts/install-dump-syms.sh"
+      - "scripts/dump-syms-pins.sh"
+      - "scripts/lib/cli.sh"
+      - "scripts/lib/macos-symbols.sh"
       - "scripts/symbolicate-minidump.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
       - "scripts/microsoft-store-fetch-listings.sh"
@@ -40,6 +44,7 @@ on:
       - ".github/workflows/deploy-windows-installer.yml"
       - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
+      - ".github/actions/setup-dump-syms/action.yml"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
@@ -48,6 +53,9 @@ on:
       - "scripts/build-apt-repo.sh"
       - "scripts/emit-breakpad-symbols.sh"
       - "scripts/install-dump-syms.sh"
+      - "scripts/dump-syms-pins.sh"
+      - "scripts/lib/cli.sh"
+      - "scripts/lib/macos-symbols.sh"
       - "scripts/symbolicate-minidump.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
       - "scripts/microsoft-store-fetch-listings.sh"
@@ -66,9 +74,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Kept in step with build-release-artifacts.yml; asserted in
-  # formula-script-validation.
-  DUMP_SYMS_VERSION: 2.3.9
 
 jobs:
   formula-script-validation:
@@ -105,6 +110,9 @@ jobs:
           bash -n scripts/build-apt-repo.sh
           bash -n scripts/emit-breakpad-symbols.sh
           bash -n scripts/install-dump-syms.sh
+          bash -n scripts/dump-syms-pins.sh
+          bash -n scripts/lib/cli.sh
+          bash -n scripts/lib/macos-symbols.sh
           bash -n scripts/symbolicate-minidump.sh
           bash -n scripts/microsoft-store-fetch-listings.sh
           bash -n scripts/microsoft-store-listing-languages.sh
@@ -231,26 +239,15 @@ jobs:
           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
 
-          # A skew would leave the smoke job validating a different dump_syms
-          # than releases use.
-          release_pin="$(grep -E '^  DUMP_SYMS_VERSION:' .github/workflows/build-release-artifacts.yml)"
-          ci_pin="$(grep -E '^  DUMP_SYMS_VERSION:' .github/workflows/deployment-ci.yml)"
-          if [ "$release_pin" != "$ci_pin" ]; then
-            echo "::error title=dump_syms version skew::build-release-artifacts.yml has '${release_pin}', deployment-ci.yml has '${ci_pin}'."
-            exit 1
-          fi
-
-          ci_shas="$(grep -oE 'dump_syms_sha256: [0-9a-f]{64}' .github/workflows/deployment-ci.yml | awk '{print $2}' | sort -u)"
-          if [ -z "$ci_shas" ]; then
-            echo "::error title=Missing dump_syms checksums::deployment-ci.yml pins no dump_syms_sha256 values."
-            exit 1
-          fi
-          for sha in $ci_shas; do
-            if ! grep -Fq "$sha" .github/workflows/build-release-artifacts.yml; then
-              echo "::error title=dump_syms checksum skew::${sha} is pinned in deployment-ci.yml but not in build-release-artifacts.yml."
-              exit 1
-            fi
+          # dump_syms pins live in one resolver script; every workflow resolves
+          # through it, so there is nothing to skew. Assert the resolver itself
+          # answers for every pinned triple.
+          for triple in $(scripts/dump-syms-pins.sh --triples); do
+            asset="$(scripts/dump-syms-pins.sh --asset "$triple")"
+            sha="$(scripts/dump-syms-pins.sh --sha256 "$triple")"
+            echo "dump_syms $triple -> $asset ($sha)"
           done
+          grep -Fq 'setup-dump-syms' .github/workflows/build-release-artifacts.yml
 
       - name: Test Microsoft Store deployment workflow
         env:
@@ -423,6 +420,41 @@ jobs:
             exit 1
           fi
           popd >/dev/null
+
+  release-tooling-backfill-smoke:
+    name: Validate old-tag release tooling backfill
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      # This source revision has the release workflow but predates both the
+      # setup-dump-syms action and its centralized pin resolver.
+      - name: Check out pre-tooling release source
+        uses: actions/checkout@v7
+        with:
+          ref: 379fc57563ac788969223db9ea2d4d8a5679c94d
+          fetch-depth: 1
+
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Install dump_syms from workflow tooling
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
+        with:
+          triple: x86_64-unknown-linux-gnu
+
+      - name: Verify dump_syms is runnable
+        run: dump_syms --version
 
   aur-metadata-smoke:
     name: Validate AUR metadata update script
@@ -645,13 +677,11 @@ jobs:
           - target_platform: aarch64-darwin
             arch: arm64
             runs_on: macos-latest
-            dump_syms_asset: dump_syms-aarch64-apple-darwin.tar.xz
-            dump_syms_sha256: 4945b7e5de0d7ad403822635f0fb912b69990fc412741ff2b7b512e168c40a32
+            dump_syms_triple: aarch64-apple-darwin
           - target_platform: x86_64-darwin
             arch: x86_64
             runs_on: macos-15-intel
-            dump_syms_asset: dump_syms-x86_64-apple-darwin.tar.xz
-            dump_syms_sha256: e255caf99e403b31613c756babcead8463f6e600c1a9e1e5531fbe27a7e29cf2
+            dump_syms_triple: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v7
 
@@ -662,12 +692,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       # Cached so an outage or rate limit at mozilla/dump_syms does not fail
-      # unrelated pull requests.
+      # unrelated pull requests. Keyed on the resolver script contents so any
+      # pin change (version, asset, or checksum) busts the cache.
       - name: Cache dump_syms
         uses: actions/cache@v4
         with:
           path: ~/.cache/gitcomet-dump-syms
-          key: dump-syms-${{ env.DUMP_SYMS_VERSION }}-${{ matrix.dump_syms_asset }}
+          key: dump-syms-${{ hashFiles('scripts/dump-syms-pins.sh') }}-${{ matrix.dump_syms_triple }}
 
       - name: Install dump_syms
         run: |
@@ -675,9 +706,9 @@ jobs:
           bin_dir="${HOME}/.cache/gitcomet-dump-syms"
           if [ ! -x "${bin_dir}/dump_syms" ]; then
             bin_dir="$(scripts/install-dump-syms.sh \
-              --version "${DUMP_SYMS_VERSION}" \
-              --asset "${{ matrix.dump_syms_asset }}" \
-              --sha256 "${{ matrix.dump_syms_sha256 }}" \
+              --version "$(scripts/dump-syms-pins.sh --version)" \
+              --asset "$(scripts/dump-syms-pins.sh --asset "${{ matrix.dump_syms_triple }}")" \
+              --sha256 "$(scripts/dump-syms-pins.sh --sha256 "${{ matrix.dump_syms_triple }}")" \
               --bin-dir "$bin_dir")"
           fi
           echo "$bin_dir" >> "$GITHUB_PATH"

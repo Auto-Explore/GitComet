@@ -1,0 +1,84 @@
+name: Setup dump_syms
+description: Installs the pinned mozilla/dump_syms tool for a target triple
+
+inputs:
+  triple:
+    description: Target triple to install dump_syms for (resolved via scripts/dump-syms-pins.sh)
+    required: true
+  bin-dir:
+    description: Directory to install into; defaults to a runner temp dir
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve dump_syms pins
+      id: pins
+      shell: bash
+      env:
+        TOOLING_ROOT: ${{ github.action_path }}/../../..
+      run: |
+        echo "version=$("${TOOLING_ROOT}/scripts/dump-syms-pins.sh" --version)" >> "$GITHUB_OUTPUT"
+        echo "asset=$("${TOOLING_ROOT}/scripts/dump-syms-pins.sh" --asset "${{ inputs.triple }}")" >> "$GITHUB_OUTPUT"
+        echo "sha256=$("${TOOLING_ROOT}/scripts/dump-syms-pins.sh" --sha256 "${{ inputs.triple }}")" >> "$GITHUB_OUTPUT"
+
+    - name: Install dump_syms
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        VERSION: ${{ steps.pins.outputs.version }}
+        ASSET: ${{ steps.pins.outputs.asset }}
+        SHA256: ${{ steps.pins.outputs.sha256 }}
+        TOOLING_ROOT: ${{ github.action_path }}/../../..
+      run: |
+        bin_dir="${{ inputs.bin-dir }}"
+        if [ -z "$bin_dir" ]; then
+          bin_dir="${RUNNER_TEMP:-/tmp}/dump-syms-bin"
+        fi
+        mkdir -p "$bin_dir"
+        "${TOOLING_ROOT}/scripts/install-dump-syms.sh" \
+          --version "$VERSION" \
+          --asset "$ASSET" \
+          --sha256 "$SHA256" \
+          --bin-dir "$bin_dir"
+        echo "$bin_dir" >> "$GITHUB_PATH"
+
+    - name: Install dump_syms
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        VERSION: ${{ steps.pins.outputs.version }}
+        ASSET: ${{ steps.pins.outputs.asset }}
+        SHA256: ${{ steps.pins.outputs.sha256 }}
+        BIN_DIR: ${{ inputs.bin-dir }}
+      run: |
+        $ErrorActionPreference = "Stop"
+
+        $asset = $env:ASSET
+        $expected = $env:SHA256
+        $archive = Join-Path $env:RUNNER_TEMP $asset
+        $binDir = $env:BIN_DIR
+        if ([string]::IsNullOrEmpty($binDir)) {
+          $binDir = Join-Path $env:RUNNER_TEMP "dump-syms-bin"
+        }
+
+        $url = "https://github.com/mozilla/dump_syms/releases/download/v$env:VERSION/$asset"
+        Write-Host "Downloading $url"
+        Invoke-WebRequest -Uri $url -OutFile $archive
+
+        $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLower()
+        if ($actual -ne $expected) {
+          throw "SHA-256 mismatch for $asset`n  expected: $expected`n  actual:   $actual"
+        }
+
+        New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+        Expand-Archive -Path $archive -DestinationPath $binDir -Force
+        $exe = Get-ChildItem -Path $binDir -Recurse -Filter dump_syms.exe |
+          Select-Object -First 1 -ExpandProperty FullName
+        if ([string]::IsNullOrWhiteSpace($exe)) {
+          throw "Extracted archive did not contain dump_syms.exe."
+        }
+
+        & $exe --version
+        Split-Path $exe -Parent >> $env:GITHUB_PATH

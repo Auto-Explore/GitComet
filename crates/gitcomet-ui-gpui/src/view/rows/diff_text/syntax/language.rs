@@ -1,141 +1,159 @@
 use super::*;
 
-fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLanguage> {
-    Some(match identifier {
-        "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "mdwn" | "mdx" | "mdc" => {
-            DiffSyntaxLanguage::Markdown
+/// One source table for the identifier → language registry. Kept as a macro so
+/// each identifier list sits beside its language and the twin spellings
+/// (`.jsx`/`.tsx` → `Tsx`, `ml`/`mli` → `OCaml`/`OCamlInterface`, and so on)
+/// stay in the same row; the macro expands to the same match arms as before.
+macro_rules! language_registry {
+    ($($language:path => [$($identifier:literal),+ $(,)?]),+ $(,)?) => {
+        fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLanguage> {
+            Some(match identifier {
+                $($($identifier => $language,)+)+
+                _ => return None,
+            })
         }
-        "markdown-inline" | "markdown_inline" => DiffSyntaxLanguage::MarkdownInline,
-        "html" | "htm" => DiffSyntaxLanguage::Html,
-        "vue" => DiffSyntaxLanguage::Vue,
-        "svelte" => DiffSyntaxLanguage::Svelte,
-        // The first six are the grammar's own declared file-types; `dj` is the
-        // Django addition. The markup-bodied reading is the right default for a bare
-        // identifier; `diff_syntax_language_for_path` splits off the rest.
-        "njk" | "nunjucks" | "j2" | "jinja" | "jinja2" | "twig" | "dj" => DiffSyntaxLanguage::Jinja,
-        "xml" | "svg" | "xsl" | "xslt" | "xsd" | "xhtml" | "plist" | "csproj" | "fsproj"
-        | "vbproj" | "sln" | "props" | "targets" | "resx" | "xaml" | "wsdl" | "rss" | "atom"
-        | "opml" | "glade" | "ui" | "iml" => DiffSyntaxLanguage::Xml,
-        "css" | "less" | "sass" | "scss" | "postcss" | "pcss" => DiffSyntaxLanguage::Css,
-        "hcl" | "tf" | "tfvars" => DiffSyntaxLanguage::Hcl,
-        "bicep" => DiffSyntaxLanguage::Bicep,
-        "lua" => DiffSyntaxLanguage::Lua,
-        "nix" => DiffSyntaxLanguage::Nix,
-        "mk" | "make" | "makefile" | "gnumakefile" => DiffSyntaxLanguage::Makefile,
-        "cmake" | "cmakelists.txt" => DiffSyntaxLanguage::Cmake,
-        "dockerfile" | "containerfile" => DiffSyntaxLanguage::Dockerfile,
-        // systemd unit types, `.desktop` entries, and the dotted and undotted
-        // spellings of git's own config -- all INI, none of them named `.ini`.
-        "ini" | "cfg" | "editorconfig" | ".editorconfig" | "gitconfig" | ".gitconfig"
-        | "gitmodules" | ".gitmodules" | "desktop" | "service" | "timer" | "socket" | "target"
-        | "mount" | "automount" | "path" | "slice" | "swap" | "netdev" | "network" | "nspawn" => {
-            DiffSyntaxLanguage::Ini
-        }
-        // Deliberately last of the config family, and deliberately grammarless --
-        // see `DiffSyntaxLanguage::Conf`.
-        "conf" | "cnf" => DiffSyntaxLanguage::Conf,
-        "env" | "dotenv" | ".env" => DiffSyntaxLanguage::Dotenv,
-        "ll" | "llvm" => DiffSyntaxLanguage::Llvm,
-        "just" | "justfile" | ".justfile" => DiffSyntaxLanguage::Just,
-        "caddyfile" | ".caddyfile" => DiffSyntaxLanguage::Caddyfile,
-        // Every one of these is git's own ignore syntax, byte for byte -- the
-        // tools copied the format rather than inventing one.
-        "gitignore" | ".gitignore" | "dockerignore" | ".dockerignore" | ".npmignore"
-        | ".eslintignore" | ".prettierignore" | ".helmignore" | ".gcloudignore"
-        | ".vscodeignore" => DiffSyntaxLanguage::Gitignore,
-        "wat" | "wast" => DiffSyntaxLanguage::Wat,
-        "spvasm" => DiffSyntaxLanguage::Spirv,
-        "properties" => DiffSyntaxLanguage::JavaProperties,
-        "jsonnet" | "libsonnet" => DiffSyntaxLanguage::Jsonnet,
-        "proto" | "protobuf" => DiffSyntaxLanguage::Proto,
-        "gleam" => DiffSyntaxLanguage::Gleam,
-        "dhall" => DiffSyntaxLanguage::Dhall,
-        "coffee" | "coffeescript" | "cson" | "iced" => DiffSyntaxLanguage::CoffeeScript,
-        "csv" => DiffSyntaxLanguage::Csv,
-        "kdl" => DiffSyntaxLanguage::Kdl,
-        "ron" => DiffSyntaxLanguage::Ron,
-        "cue" => DiffSyntaxLanguage::Cue,
-        "ebnf" => DiffSyntaxLanguage::Ebnf,
-        // `.v` is also Verilog and Coq. Neither is wired, and the one the corpus
-        // covers is V, so it takes the extension rather than leaving it blank.
-        "v" | "vsh" | "vv" => DiffSyntaxLanguage::V,
-        "pas" | "dpr" | "pascal" => DiffSyntaxLanguage::Pascal,
-        "crontab" | "cron" | "cronfile" => DiffSyntaxLanguage::Crontab,
-        // Not `.ils` or `.cil`: neither is a thing. `ilasm` reads `.il`.
-        "il" => DiffSyntaxLanguage::Cil,
-        "kt" | "kts" | "kotlin" => DiffSyntaxLanguage::Kotlin,
-        "zig" => DiffSyntaxLanguage::Zig,
-        // `.gradle` is Groovy unless it is `.gradle.kts`, and that suffix resolves
-        // to `kts` before this arm is ever reached. `Jenkinsfile` has no extension
-        // and matches on the file-name pass.
-        "groovy" | "gvy" | "gy" | "gsh" | "gradle" | "jenkinsfile" => DiffSyntaxLanguage::Groovy,
-        "clj" | "cljs" | "cljc" | "cljd" | "edn" | "clojure" => DiffSyntaxLanguage::Clojure,
-        "ex" | "exs" | "elixir" => DiffSyntaxLanguage::Elixir,
-        "erl" | "hrl" | "escript" | "erlang" | "rebar.config" | "rebar.lock" => {
-            DiffSyntaxLanguage::Erlang
-        }
-        // Not `.lhs`: literate Haskell is bird tracks or LaTeX with Haskell inside,
-        // and the grammar parses neither.
-        "hs" | "hs-boot" | "haskell" => DiffSyntaxLanguage::Haskell,
-        "jl" | "julia" => DiffSyntaxLanguage::Julia,
-        "ml" | "ocaml" => DiffSyntaxLanguage::OCaml,
-        "mli" => DiffSyntaxLanguage::OCamlInterface,
-        "sol" | "solidity" => DiffSyntaxLanguage::Solidity,
-        // `.s` is lowercased from `.S` (preprocessed assembly) by the caller, which
-        // is what we want -- both are assembly. `.asm` covers the MASM/NASM side.
-        "asm" | "s" | "nasm" | "assembly" => DiffSyntaxLanguage::Assembly,
-        "rs" | "rust" => DiffSyntaxLanguage::Rust,
-        "py" | "python" | "pyi" | "mpy" => DiffSyntaxLanguage::Python,
-        // `.json5` is JavaScript, not JSON. Its additions over JSON -- comments,
-        // unquoted keys, single quotes, trailing commas -- are all ordinary
-        // ECMAScript object-literal syntax, so tree-sitter-javascript parses the
-        // corpus sample with zero errors where tree-sitter-json produces 72 in 58
-        // lines.
-        "js" | "mjs" | "cjs" | "javascript" | "json5" => DiffSyntaxLanguage::JavaScript,
-        "jsdoc" => DiffSyntaxLanguage::Jsdoc,
-        "jsx" => DiffSyntaxLanguage::Tsx,
-        "ts" | "cts" | "mts" | "typescript" => DiffSyntaxLanguage::TypeScript,
-        "tsx" => DiffSyntaxLanguage::Tsx,
-        "regex" | "regexp" => DiffSyntaxLanguage::Regex,
-        "go" | "golang" => DiffSyntaxLanguage::Go,
-        "gomod" | "go.mod" => DiffSyntaxLanguage::GoMod,
-        "gowork" | "go.work" => DiffSyntaxLanguage::GoWork,
-        "c" | "h" => DiffSyntaxLanguage::C,
-        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" | "c++" | "cppm" | "ixx" | "cu" | "cuh"
-        | "ipp" | "inl" | "ino" | "ccm" | "cxxm" | "c++m" | "h++" => DiffSyntaxLanguage::Cpp,
-        "m" | "objc" | "objective-c" => DiffSyntaxLanguage::ObjectiveC,
-        "cs" | "c#" | "csharp" => DiffSyntaxLanguage::CSharp,
-        "fs" | "fsx" | "fsi" | "f#" | "fsharp" => DiffSyntaxLanguage::FSharp,
-        "vb" | "vbs" | "vbnet" | "visualbasic" => DiffSyntaxLanguage::VisualBasic,
-        "java" => DiffSyntaxLanguage::Java,
-        "php" | "phtml" => DiffSyntaxLanguage::Php,
-        "rb" | "ruby" => DiffSyntaxLanguage::Ruby,
-        "ps1" | "psm1" | "psd1" | "powershell" | "pwsh" => DiffSyntaxLanguage::PowerShell,
-        "swift" => DiffSyntaxLanguage::Swift,
-        "r" => DiffSyntaxLanguage::R,
-        "dart" => DiffSyntaxLanguage::Dart,
-        "scala" | "sc" | "sbt" => DiffSyntaxLanguage::Scala,
-        "pl" | "pm" | "perl" => DiffSyntaxLanguage::Perl,
-        "json" | "jsonc" | "geojson" | "topojson" | "flake.lock" | "bun.lock" | ".prettierrc"
-        | "prettierrc" | ".babelrc" | "babelrc" | ".eslintrc" | "eslintrc" | ".stylelintrc"
-        | "stylelintrc" | ".jshintrc" | "jshintrc" | ".swcrc" | "swcrc" | ".luaurc" | "luaurc" => {
-            DiffSyntaxLanguage::Json
-        }
-        "toml" => DiffSyntaxLanguage::Toml,
-        "yaml" | "yml" | "pixi.lock" | ".clang-format" | "clang-format" | ".clangd" | "clangd"
-        | "bst" => DiffSyntaxLanguage::Yaml,
-        "sql" => DiffSyntaxLanguage::Sql,
-        "diff" | "patch" => DiffSyntaxLanguage::Diff,
-        "commit_editmsg" | "merge_msg" | "tag_editmsg" | "notes_editmsg" | "edit_description"
-        | "gitcommit" | "git-commit" => DiffSyntaxLanguage::GitCommit,
-        "sh" | "bash" | "zsh" | "shell" | "shellscript" | "console" | ".bashrc" | "bashrc"
-        | ".bash_profile" | "bash_profile" | ".bash_aliases" | "bash_aliases" | ".bash_logout"
-        | "bash_logout" | ".profile" | "profile" | ".zshrc" | "zshrc" | ".zshenv" | "zshenv"
-        | ".zsh_profile" | "zsh_profile" | ".zsh_aliases" | "zsh_aliases" | ".zsh_histfile"
-        | "zsh_histfile" | ".zlogin" | "zlogin" | ".zprofile" | "zprofile" | "bats"
-        | "pkgbuild" | "apkbuild" => DiffSyntaxLanguage::Bash,
-        _ => return None,
-    })
+    };
+}
+
+language_registry! {
+    DiffSyntaxLanguage::Markdown => ["md", "markdown", "mdown", "mkd", "mkdn", "mdwn", "mdx", "mdc"],
+    DiffSyntaxLanguage::MarkdownInline => ["markdown-inline", "markdown_inline"],
+    DiffSyntaxLanguage::Html => ["html", "htm"],
+    DiffSyntaxLanguage::Vue => ["vue"],
+    DiffSyntaxLanguage::Svelte => ["svelte"],
+    // The first six are the grammar's own declared file-types; `dj` is the
+    // Django addition. The markup-bodied reading is the right default for a bare
+    // identifier; `diff_syntax_language_for_path` splits off the rest.
+    DiffSyntaxLanguage::Jinja => ["njk", "nunjucks", "j2", "jinja", "jinja2", "twig", "dj"],
+    DiffSyntaxLanguage::Xml => [
+        "xml", "svg", "xsl", "xslt", "xsd", "xhtml", "plist", "csproj", "fsproj", "vbproj",
+        "sln", "props", "targets", "resx", "xaml", "wsdl", "rss", "atom", "opml", "glade",
+        "ui", "iml",
+    ],
+    DiffSyntaxLanguage::Css => ["css", "less", "sass", "scss", "postcss", "pcss"],
+    DiffSyntaxLanguage::Hcl => ["hcl", "tf", "tfvars"],
+    DiffSyntaxLanguage::Bicep => ["bicep"],
+    DiffSyntaxLanguage::Lua => ["lua"],
+    DiffSyntaxLanguage::Nix => ["nix"],
+    DiffSyntaxLanguage::Makefile => ["mk", "make", "makefile", "gnumakefile"],
+    DiffSyntaxLanguage::Cmake => ["cmake", "cmakelists.txt"],
+    DiffSyntaxLanguage::Dockerfile => ["dockerfile", "containerfile"],
+    // systemd unit types, `.desktop` entries, and the dotted and undotted
+    // spellings of git's own config -- all INI, none of them named `.ini`.
+    DiffSyntaxLanguage::Ini => [
+        "ini", "cfg", "editorconfig", ".editorconfig", "gitconfig", ".gitconfig", "gitmodules",
+        ".gitmodules", "desktop", "service", "timer", "socket", "target", "mount", "automount",
+        "path", "slice", "swap", "netdev", "network", "nspawn",
+    ],
+    // Deliberately last of the config family, and deliberately grammarless --
+    // see `DiffSyntaxLanguage::Conf`.
+    DiffSyntaxLanguage::Conf => ["conf", "cnf"],
+    DiffSyntaxLanguage::Dotenv => ["env", "dotenv", ".env"],
+    DiffSyntaxLanguage::Llvm => ["ll", "llvm"],
+    DiffSyntaxLanguage::Just => ["just", "justfile", ".justfile"],
+    DiffSyntaxLanguage::Caddyfile => ["caddyfile", ".caddyfile"],
+    // Every one of these is git's own ignore syntax, byte for byte -- the
+    // tools copied the format rather than inventing one.
+    DiffSyntaxLanguage::Gitignore => [
+        "gitignore", ".gitignore", "dockerignore", ".dockerignore", ".npmignore",
+        ".eslintignore", ".prettierignore", ".helmignore", ".gcloudignore", ".vscodeignore",
+    ],
+    DiffSyntaxLanguage::Wat => ["wat", "wast"],
+    DiffSyntaxLanguage::Spirv => ["spvasm"],
+    DiffSyntaxLanguage::JavaProperties => ["properties"],
+    DiffSyntaxLanguage::Jsonnet => ["jsonnet", "libsonnet"],
+    DiffSyntaxLanguage::Proto => ["proto", "protobuf"],
+    DiffSyntaxLanguage::Gleam => ["gleam"],
+    DiffSyntaxLanguage::Dhall => ["dhall"],
+    DiffSyntaxLanguage::CoffeeScript => ["coffee", "coffeescript", "cson", "iced"],
+    DiffSyntaxLanguage::Csv => ["csv"],
+    DiffSyntaxLanguage::Kdl => ["kdl"],
+    DiffSyntaxLanguage::Ron => ["ron"],
+    DiffSyntaxLanguage::Cue => ["cue"],
+    DiffSyntaxLanguage::Ebnf => ["ebnf"],
+    // `.v` is also Verilog and Coq. Neither is wired, and the one the corpus
+    // covers is V, so it takes the extension rather than leaving it blank.
+    DiffSyntaxLanguage::V => ["v", "vsh", "vv"],
+    DiffSyntaxLanguage::Pascal => ["pas", "dpr", "pascal"],
+    DiffSyntaxLanguage::Crontab => ["crontab", "cron", "cronfile"],
+    // Not `.ils` or `.cil`: neither is a thing. `ilasm` reads `.il`.
+    DiffSyntaxLanguage::Cil => ["il"],
+    DiffSyntaxLanguage::Kotlin => ["kt", "kts", "kotlin"],
+    DiffSyntaxLanguage::Zig => ["zig"],
+    // `.gradle` is Groovy unless it is `.gradle.kts`, and that suffix resolves
+    // to `kts` before this arm is ever reached. `Jenkinsfile` has no extension
+    // and matches on the file-name pass.
+    DiffSyntaxLanguage::Groovy => ["groovy", "gvy", "gy", "gsh", "gradle", "jenkinsfile"],
+    DiffSyntaxLanguage::Clojure => ["clj", "cljs", "cljc", "cljd", "edn", "clojure"],
+    DiffSyntaxLanguage::Elixir => ["ex", "exs", "elixir"],
+    DiffSyntaxLanguage::Erlang => ["erl", "hrl", "escript", "erlang", "rebar.config", "rebar.lock"],
+    // Not `.lhs`: literate Haskell is bird tracks or LaTeX with Haskell inside,
+    // and the grammar parses neither.
+    DiffSyntaxLanguage::Haskell => ["hs", "hs-boot", "haskell"],
+    DiffSyntaxLanguage::Julia => ["jl", "julia"],
+    DiffSyntaxLanguage::OCaml => ["ml", "ocaml"],
+    DiffSyntaxLanguage::OCamlInterface => ["mli"],
+    DiffSyntaxLanguage::Solidity => ["sol", "solidity"],
+    // `.s` is lowercased from `.S` (preprocessed assembly) by the caller, which
+    // is what we want -- both are assembly. `.asm` covers the MASM/NASM side.
+    DiffSyntaxLanguage::Assembly => ["asm", "s", "nasm", "assembly"],
+    DiffSyntaxLanguage::Rust => ["rs", "rust"],
+    DiffSyntaxLanguage::Python => ["py", "python", "pyi", "mpy"],
+    // `.json5` is JavaScript, not JSON. Its additions over JSON -- comments,
+    // unquoted keys, single quotes, trailing commas -- are all ordinary
+    // ECMAScript object-literal syntax, so tree-sitter-javascript parses the
+    // corpus sample with zero errors where tree-sitter-json produces 72 in 58
+    // lines.
+    DiffSyntaxLanguage::JavaScript => ["js", "mjs", "cjs", "javascript", "json5"],
+    DiffSyntaxLanguage::Jsdoc => ["jsdoc"],
+    DiffSyntaxLanguage::Tsx => ["jsx"],
+    DiffSyntaxLanguage::TypeScript => ["ts", "cts", "mts", "typescript"],
+    DiffSyntaxLanguage::Tsx => ["tsx"],
+    DiffSyntaxLanguage::Regex => ["regex", "regexp"],
+    DiffSyntaxLanguage::Go => ["go", "golang"],
+    DiffSyntaxLanguage::GoMod => ["gomod", "go.mod"],
+    DiffSyntaxLanguage::GoWork => ["gowork", "go.work"],
+    DiffSyntaxLanguage::C => ["c", "h"],
+    DiffSyntaxLanguage::Cpp => [
+        "cc", "cpp", "cxx", "hpp", "hh", "hxx", "c++", "cppm", "ixx", "cu", "cuh", "ipp", "inl",
+        "ino", "ccm", "cxxm", "c++m", "h++",
+    ],
+    DiffSyntaxLanguage::ObjectiveC => ["m", "objc", "objective-c"],
+    DiffSyntaxLanguage::CSharp => ["cs", "c#", "csharp"],
+    DiffSyntaxLanguage::FSharp => ["fs", "fsx", "fsi", "f#", "fsharp"],
+    DiffSyntaxLanguage::VisualBasic => ["vb", "vbs", "vbnet", "visualbasic"],
+    DiffSyntaxLanguage::Java => ["java"],
+    DiffSyntaxLanguage::Php => ["php", "phtml"],
+    DiffSyntaxLanguage::Ruby => ["rb", "ruby"],
+    DiffSyntaxLanguage::PowerShell => ["ps1", "psm1", "psd1", "powershell", "pwsh"],
+    DiffSyntaxLanguage::Swift => ["swift"],
+    DiffSyntaxLanguage::R => ["r"],
+    DiffSyntaxLanguage::Dart => ["dart"],
+    DiffSyntaxLanguage::Scala => ["scala", "sc", "sbt"],
+    DiffSyntaxLanguage::Perl => ["pl", "pm", "perl"],
+    DiffSyntaxLanguage::Json => [
+        "json", "jsonc", "geojson", "topojson", "flake.lock", "bun.lock", ".prettierrc",
+        "prettierrc", ".babelrc", "babelrc", ".eslintrc", "eslintrc", ".stylelintrc",
+        "stylelintrc", ".jshintrc", "jshintrc", ".swcrc", "swcrc", ".luaurc", "luaurc",
+    ],
+    DiffSyntaxLanguage::Toml => ["toml"],
+    DiffSyntaxLanguage::Yaml => [
+        "yaml", "yml", "pixi.lock", ".clang-format", "clang-format", ".clangd", "clangd", "bst",
+    ],
+    DiffSyntaxLanguage::Sql => ["sql"],
+    DiffSyntaxLanguage::Diff => ["diff", "patch"],
+    DiffSyntaxLanguage::GitCommit => [
+        "commit_editmsg", "merge_msg", "tag_editmsg", "notes_editmsg", "edit_description",
+        "gitcommit", "git-commit",
+    ],
+    DiffSyntaxLanguage::Bash => [
+        "sh", "bash", "zsh", "shell", "shellscript", "console", ".bashrc", "bashrc",
+        ".bash_profile", "bash_profile", ".bash_aliases", "bash_aliases", ".bash_logout",
+        "bash_logout", ".profile", "profile", ".zshrc", "zshrc", ".zshenv", "zshenv",
+        ".zsh_profile", "zsh_profile", ".zsh_aliases", "zsh_aliases", ".zsh_histfile",
+        "zsh_histfile", ".zlogin", "zlogin", ".zprofile", "zprofile", "bats", "pkgbuild",
+        "apkbuild",
+    ],
 }
 
 /// Extensions whose body is HTML, so a template wrapping one keeps the injection.

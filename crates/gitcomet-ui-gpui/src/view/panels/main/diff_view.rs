@@ -875,6 +875,7 @@ impl MainPaneView {
                 && (mods.control || mods.platform)
                 && !mods.alt
                 && !mods.function
+                && !mods.shift
                 && key == "a"
             {
                 self.select_all_diff_text();
@@ -1120,6 +1121,7 @@ impl MainPaneView {
             && (mods.control || mods.platform)
             && !mods.alt
             && !mods.function
+            && !mods.shift
             && key == "a"
         {
             self.select_all_diff_text();
@@ -2966,8 +2968,12 @@ impl MainPaneView {
                                     } else {
                                         "Nothing to render."
                                     };
-                                    components::empty_state(theme, "Preview", message)
-                                        .into_any_element()
+                                    empty_diff_text_document(
+                                        cx.entity(),
+                                        DiffTextRegion::Inline,
+                                        components::empty_state(theme, "Preview", message)
+                                            .into_any_element(),
+                                    )
                                 } else {
                                     // A single document lays out as one flowing
                                     // element tree rather than a uniform row
@@ -3085,7 +3091,12 @@ impl MainPaneView {
                     Loadable::Ready(line_count) => {
                         let line_count = *line_count;
                         if line_count == 0 {
-                            components::empty_state(theme, "File", "Empty file.").into_any_element()
+                            empty_diff_text_document(
+                                cx.entity(),
+                                DiffTextRegion::Inline,
+                                components::empty_state(theme, "File", "Empty file.")
+                                    .into_any_element(),
+                            )
                         } else {
                             // Word wrap turns one line into several rows, so the
                             // projection has to be built before the list is
@@ -3104,6 +3115,10 @@ impl MainPaneView {
                             .h_full()
                             .min_h(px(0.0))
                             .track_scroll(&self.worktree_preview_scroll)
+                            .with_decoration(DiffTextEmptySpaceDecoration {
+                                view: cx.entity(),
+                                region: DiffTextRegion::Inline,
+                            })
                             .with_horizontal_sizing_behavior(
                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                             );
@@ -3357,6 +3372,10 @@ impl MainPaneView {
                                                 horizontal_scrollbar_gutter
                                             })
                                             .track_scroll(&self.diff_scroll)
+                                            .with_decoration(DiffTextEmptySpaceDecoration {
+                                                view: cx.entity(),
+                                                region: DiffTextRegion::Inline,
+                                            })
                                             .when(!self.diff_word_wrap, |list| {
                                                 list.with_horizontal_sizing_behavior(
                                                     gpui::ListHorizontalSizingBehavior::Unconstrained,
@@ -3442,6 +3461,10 @@ impl MainPaneView {
                                                 horizontal_scrollbar_gutter
                                             })
                                             .track_scroll(&self.diff_scroll)
+                                            .with_decoration(DiffTextEmptySpaceDecoration {
+                                                view: cx.entity(),
+                                                region: DiffTextRegion::SplitLeft,
+                                            })
                                             .when(!self.diff_word_wrap, |list| {
                                                 list.with_horizontal_sizing_behavior(
                                                     gpui::ListHorizontalSizingBehavior::Unconstrained,
@@ -3460,6 +3483,10 @@ impl MainPaneView {
                                                 horizontal_scrollbar_gutter
                                             })
                                             .track_scroll(&self.diff_split_right_scroll)
+                                            .with_decoration(DiffTextEmptySpaceDecoration {
+                                                view: cx.entity(),
+                                                region: DiffTextRegion::SplitRight,
+                                            })
                                             .when(!self.diff_word_wrap, |list| {
                                                 list.with_horizontal_sizing_behavior(
                                                     gpui::ListHorizontalSizingBehavior::Unconstrained,
@@ -3804,6 +3831,7 @@ impl MainPaneView {
         // the position the vertical scroll put it in.
         self.apply_pending_diff_search_horizontal_reveal(window);
         self.diff_text_hitboxes.clear();
+        self.diff_text_motion_targets.clear();
         self.conflict_text_hitboxes.clear();
         // The map still holds last frame's buttons, so it is the one place that
         // knows a hovered button has stopped being painted — the row itself

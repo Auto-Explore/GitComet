@@ -201,7 +201,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::HistoryBranchFilter { repo_id }
         | PopoverKind::HistoryAuthorFilter { repo_id }
         | PopoverKind::CommitShaLinkMenu { repo_id, .. }
-        | PopoverKind::ReflogEntryMenu { repo_id, .. } => Some(*repo_id),
+        | PopoverKind::ReflogEntryMenu { repo_id, .. }
+        | PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
     }?;
 
     state.repos.iter().find(|r| r.id == repo_id)
@@ -360,6 +361,10 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.remote_tags_rev.hash(hasher);
         }
 
+        PopoverKind::HookActivity { .. } => {
+            repo.feedback.hook_activity_rev.hash(hasher);
+        }
+
         // Most prompt-style popovers don't require live state updates.
         PopoverKind::InteractiveRebaseActionMenu { .. }
         | PopoverKind::InteractiveRebaseAutosquashMenu
@@ -410,7 +415,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 }
 
 fn hash_pending_force_push_lease(repo: &RepoState, hasher: &mut impl Hasher) {
-    match &repo.pending_force_push_lease {
+    match &repo.pending.force_push_lease {
         Some(lease) => {
             1u8.hash(hasher);
             lease.remote.hash(hasher);
@@ -891,6 +896,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             target.hash(hasher);
             selector.hash(hasher);
         }
+        PopoverKind::HookActivity {
+            repo_id,
+            operation_id,
+        } => {
+            103u8.hash(hasher);
+            repo_id.hash(hasher);
+            operation_id.hash(hasher);
+        }
     }
 }
 
@@ -1164,7 +1177,7 @@ mod tests {
         state.repos.push(repo);
 
         let before = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id });
-        state.repos[0].pending_force_push_lease = Some(test_force_push_lease());
+        state.repos[0].pending.force_push_lease = Some(test_force_push_lease());
         let after = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id });
 
         assert_ne!(before, after);
@@ -1186,7 +1199,7 @@ mod tests {
         state.repos.push(repo);
 
         let before = notify_fingerprint(&state, &PopoverKind::PushPicker);
-        state.repos[0].pending_force_push_lease = Some(test_force_push_lease());
+        state.repos[0].pending.force_push_lease = Some(test_force_push_lease());
         let after = notify_fingerprint(&state, &PopoverKind::PushPicker);
 
         assert_ne!(before, after);

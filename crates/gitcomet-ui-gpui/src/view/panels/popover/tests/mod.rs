@@ -37,15 +37,7 @@ pub(super) fn simulate_key_press(cx: &mut gpui::VisualTestContext, key: &str) {
     cx.run_until_parked();
 }
 
-pub(super) struct TestBackend;
-
-impl GitBackend for TestBackend {
-    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "Test backend does not open repositories",
-        )))
-    }
-}
+pub(super) use crate::view::test_support::TestBackend;
 
 mod add_repo_menu;
 mod app_menu;

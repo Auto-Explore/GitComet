@@ -622,7 +622,7 @@ fn status_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -702,7 +702,7 @@ fn commit_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -783,7 +783,7 @@ fn commit_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -881,7 +881,7 @@ fn status_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -1231,7 +1231,7 @@ fn file_browser_folder_menu_model(
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });
@@ -1471,7 +1471,7 @@ fn copy_path_mnemonic_selects_the_relative_entry_in_every_menu(cx: &mut gpui::Te
                 ..Default::default()
             });
             this.state = Arc::clone(&state);
-            this._ui_model
+            this.ui_model
                 .update(cx, |model, cx| model.set_state(state, cx));
             cx.notify();
         });

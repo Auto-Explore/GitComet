@@ -1,32 +1,42 @@
-use crate::msg::{Msg, RepoActionKind, RepoPathList};
-use gitcomet_core::auth::{
-    StagedGitAuth, clear_staged_git_auth, stage_git_auth_for_current_thread,
-};
+use crate::msg::{InternalMsg, Msg, RepoActionKind, RepoPathList};
+use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::GitRepository;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
-use super::util::{RepoMap, send_or_log, spawn_with_repo};
+use super::util::{
+    GitOperationTask, RepoMap, message_subject, path_context, paths_context, send_or_log,
+    short_commit_id, single_line_context, spawn_with_repo,
+};
 
 fn schedule_repo_action_with_hook<F, H, M>(
     executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    action: RepoActionKind,
+    context: Option<String>,
     run: F,
     hook: H,
     finish: M,
 ) where
     F: FnOnce(Arc<dyn GitRepository>) -> Result<(), Error> + Send + 'static,
     H: FnOnce(&StoreWorkerSender, RepoId, &Result<(), Error>) + Send + 'static,
-    M: FnOnce(RepoId, Result<(), Error>) -> Msg + Send + 'static,
+    M: FnOnce(RepoId, Result<(), Error>) -> InternalMsg + Send + 'static,
 {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = run(repo);
+        let operation =
+            GitOperationTask::start(repo_id, action.hook_activity_label(), context, &msg_tx);
+        let result = {
+            let _scope = operation.attach();
+            run(repo)
+        };
         hook(&msg_tx, repo_id, &result);
-        send_or_log(&msg_tx, finish(repo_id, result));
+        let outcome = GitOperationTask::outcome(&result);
+        let message = finish(repo_id, result);
+        operation.finish(outcome, message);
     });
 }
 
@@ -35,28 +45,34 @@ fn schedule_repo_action_with_result<T, F, M>(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    label: &'static str,
+    context: Option<String>,
     run: F,
     finish: M,
 ) where
     T: Send + 'static,
     F: FnOnce(Arc<dyn GitRepository>) -> Result<T, Error> + Send + 'static,
-    M: FnOnce(RepoId, Result<T, Error>) -> Msg + Send + 'static,
+    M: FnOnce(RepoId, Result<T, Error>) -> InternalMsg + Send + 'static,
 {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = run(repo);
-        send_or_log(&msg_tx, finish(repo_id, result));
+        let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
+        let result = {
+            let _scope = operation.attach();
+            run(repo)
+        };
+        let outcome = GitOperationTask::outcome(&result);
+        let message = finish(repo_id, result);
+        operation.finish(outcome, message);
     });
 }
 
 fn repo_action_finished(
     action: RepoActionKind,
-) -> impl FnOnce(RepoId, Result<(), Error>) -> Msg + Send + 'static {
-    move |repo_id, result| {
-        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
-            repo_id,
-            action,
-            result,
-        })
+) -> impl FnOnce(RepoId, Result<(), Error>) -> InternalMsg + Send + 'static {
+    move |repo_id, result| InternalMsg::RepoActionFinished {
+        repo_id,
+        action,
+        result,
     }
 }
 
@@ -66,6 +82,7 @@ fn schedule_repo_action<F>(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     action: RepoActionKind,
+    context: Option<String>,
     run: F,
 ) where
     F: FnOnce(Arc<dyn GitRepository>) -> Result<(), Error> + Send + 'static,
@@ -75,6 +92,8 @@ fn schedule_repo_action<F>(
         repos,
         msg_tx,
         repo_id,
+        action,
+        context,
         run,
         |_msg_tx, _repo_id, _result| {},
         repo_action_finished(action),
@@ -122,10 +141,9 @@ fn run_with_git_auth<R>(
     run: impl FnOnce() -> Result<R, Error>,
 ) -> Result<R, Error> {
     if let Some(auth) = auth {
-        stage_git_auth_for_current_thread(auth);
-        let result = run();
-        clear_staged_git_auth();
-        result
+        // The guard clears the staged auth on success, error, and panic.
+        let _scoped = ScopedStagedGitAuth::stage(auth);
+        run()
     } else {
         run()
     }
@@ -138,11 +156,14 @@ pub(super) fn schedule_checkout_branch(
     repo_id: RepoId,
     name: String,
 ) {
+    let context = single_line_context(&name);
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
+        RepoActionKind::CheckoutBranch,
+        context,
         move |repo| repo.checkout_branch(&name),
         send_refresh_branches_and_load_worktrees_on_success,
         repo_action_finished(RepoActionKind::CheckoutBranch),
@@ -159,11 +180,14 @@ pub(super) fn schedule_checkout_remote_branch(
     local_branch: String,
     mode: gitcomet_core::services::CheckoutRemoteBranchMode,
 ) {
+    let context = single_line_context(format!("{remote}/{branch} → {local_branch}"));
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
+        RepoActionKind::CheckoutRemoteBranch,
+        context,
         move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch, mode),
         send_refresh_branches_and_load_worktrees_on_success,
         repo_action_finished(RepoActionKind::CheckoutRemoteBranch),
@@ -177,11 +201,14 @@ pub(super) fn schedule_checkout_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
+    let context = Some(short_commit_id(commit_id.as_ref()));
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
+        RepoActionKind::CheckoutCommit,
+        context,
         move |repo| repo.checkout_commit(&commit_id),
         send_load_worktrees_on_success,
         repo_action_finished(RepoActionKind::CheckoutCommit),
@@ -195,12 +222,14 @@ pub(super) fn schedule_revert_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
+    let context = Some(short_commit_id(commit_id.as_ref()));
     schedule_repo_action(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoActionKind::RevertCommit,
+        context,
         move |repo| repo.revert(&commit_id),
     );
 }
@@ -213,11 +242,14 @@ pub(super) fn schedule_create_branch(
     name: String,
     target: String,
 ) {
+    let context = single_line_context(format!("{name} at {target}"));
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
+        RepoActionKind::CreateBranch,
+        context,
         move |repo| {
             let target = gitcomet_core::domain::CommitId(target.into());
             repo.create_branch(&name, &target)
@@ -236,12 +268,22 @@ pub(super) fn schedule_create_branch_and_checkout(
     target: String,
     force: bool,
 ) {
+    let context = single_line_context(format!("{name} at {target}"));
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let target_id = gitcomet_core::domain::CommitId(target.clone().into());
-        let created = if force {
-            repo.create_branch_force_and_checkout(&name, &target_id)
-        } else {
-            repo.create_branch(&name, &target_id)
+        let operation = GitOperationTask::start(
+            repo_id,
+            RepoActionKind::CreateBranchAndCheckout.hook_activity_label(),
+            context,
+            &msg_tx,
+        );
+        let created = {
+            let _scope = operation.attach();
+            let target_id = gitcomet_core::domain::CommitId(target.clone().into());
+            if force {
+                repo.create_branch_force_and_checkout(&name, &target_id)
+            } else {
+                repo.create_branch(&name, &target_id)
+            }
         };
 
         if !force
@@ -260,13 +302,14 @@ pub(super) fn schedule_create_branch_and_checkout(
             // outcome. Refresh the branch list and let shared state open the
             // confirmation prompt; this is expected, not a generic repo error.
             send_or_log(&msg_tx, Msg::RefreshBranches { repo_id });
-            send_or_log(
-                &msg_tx,
-                Msg::Internal(crate::msg::InternalMsg::CreateBranchAlreadyExists {
+            let outcome = GitOperationTask::outcome(&created);
+            operation.finish(
+                outcome,
+                InternalMsg::CreateBranchAlreadyExists {
                     repo_id,
                     name,
                     target,
-                }),
+                },
             );
             return;
         }
@@ -275,6 +318,7 @@ pub(super) fn schedule_create_branch_and_checkout(
         let result = if force {
             created
         } else {
+            let _scope = operation.attach();
             created.and_then(|()| repo.checkout_branch(&name))
         };
         if refresh {
@@ -284,13 +328,14 @@ pub(super) fn schedule_create_branch_and_checkout(
             send_or_log(&msg_tx, Msg::LoadWorktrees { repo_id });
             send_or_log(&msg_tx, Msg::LoadWorktreeDirty { repo_id });
         }
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+        let outcome = GitOperationTask::outcome(&result);
+        operation.finish(
+            outcome,
+            InternalMsg::RepoActionFinished {
                 repo_id,
                 action: RepoActionKind::CreateBranchAndCheckout,
                 result,
-            }),
+            },
         );
     });
 }
@@ -303,11 +348,14 @@ pub(super) fn schedule_rename_branch(
     old_name: String,
     new_name: String,
 ) {
+    let context = single_line_context(format!("{old_name} → {new_name}"));
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
+        RepoActionKind::RenameBranch,
+        context,
         move |repo| repo.rename_branch(&old_name, &new_name),
         send_refresh_branches_and_load_worktrees_on_success,
         repo_action_finished(RepoActionKind::RenameBranch),
@@ -321,11 +369,14 @@ pub(super) fn schedule_delete_branch(
     repo_id: RepoId,
     name: String,
 ) {
+    let context = single_line_context(&name);
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
+        RepoActionKind::DeleteBranch,
+        context,
         move |repo| repo.delete_branch(&name),
         send_refresh_branches_on_success,
         repo_action_finished(RepoActionKind::DeleteBranch),
@@ -349,11 +400,18 @@ pub(super) fn schedule_delete_branches(
     names: Vec<String>,
     force: bool,
 ) {
+    let context = single_line_context(format!(
+        "{} branches: {}",
+        names.len(),
+        crate::name_summary::elide_names(&names, ", ")
+    ));
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
+        RepoActionKind::DeleteBranches,
+        context,
         move |repo| {
             let total = names.len();
             let mut failed: Vec<String> = Vec::new();
@@ -365,6 +423,9 @@ pub(super) fn schedule_delete_branches(
                     repo.delete_branch(name)
                 };
                 if let Err(err) = result {
+                    if matches!(err.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                        return Err(err);
+                    }
                     failed.push(name.clone());
                     first_error.get_or_insert_with(|| err.to_string());
                 }
@@ -419,11 +480,14 @@ pub(super) fn schedule_force_delete_branch(
     repo_id: RepoId,
     name: String,
 ) {
+    let context = single_line_context(&name);
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
+        RepoActionKind::ForceDeleteBranch,
+        context,
         move |repo| repo.delete_branch_force(&name),
         send_refresh_branches_on_success,
         repo_action_finished(RepoActionKind::ForceDeleteBranch),
@@ -437,12 +501,14 @@ pub(super) fn schedule_stage_path(
     repo_id: RepoId,
     path: PathBuf,
 ) {
+    let context = path_context(&path);
     schedule_repo_action(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoActionKind::StagePath,
+        context,
         move |repo| {
             let path_ref: &Path = &path;
             repo.stage(&[path_ref])
@@ -457,12 +523,14 @@ pub(super) fn schedule_stage_paths(
     repo_id: RepoId,
     paths: RepoPathList,
 ) {
+    let context = paths_context(paths.as_slice(), "files");
     schedule_repo_action(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoActionKind::StagePaths,
+        context,
         move |repo| {
             let unique = dedup_paths(paths.as_slice().to_vec());
             let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
@@ -478,12 +546,14 @@ pub(super) fn schedule_unstage_path(
     repo_id: RepoId,
     path: PathBuf,
 ) {
+    let context = path_context(&path);
     schedule_repo_action(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoActionKind::UnstagePath,
+        context,
         move |repo| {
             let path_ref: &Path = &path;
             repo.unstage(&[path_ref])
@@ -498,12 +568,14 @@ pub(super) fn schedule_unstage_paths(
     repo_id: RepoId,
     paths: RepoPathList,
 ) {
+    let context = paths_context(paths.as_slice(), "files");
     schedule_repo_action(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoActionKind::UnstagePaths,
+        context,
         move |repo| {
             let unique = dedup_paths(paths.as_slice().to_vec());
             let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
@@ -519,12 +591,14 @@ pub(super) fn schedule_discard_worktree_changes_path(
     repo_id: RepoId,
     path: PathBuf,
 ) {
+    let context = path_context(&path);
     schedule_repo_action(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoActionKind::DiscardWorktreeChangesPath,
+        context,
         move |repo| {
             let path_ref: &Path = &path;
             repo.discard_worktree_changes(&[path_ref])
@@ -539,12 +613,14 @@ pub(super) fn schedule_discard_worktree_changes_paths(
     repo_id: RepoId,
     paths: Vec<PathBuf>,
 ) {
+    let context = paths_context(&paths, "files");
     schedule_repo_action(
         executor,
         repos,
         msg_tx,
         repo_id,
         RepoActionKind::DiscardWorktreeChangesPaths,
+        context,
         move |repo| {
             let unique = dedup_paths(paths);
             let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
@@ -561,15 +637,16 @@ pub(super) fn schedule_commit(
     message: String,
     auth: Option<StagedGitAuth>,
 ) {
+    let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
     schedule_repo_action_with_result(
         executor,
         repos,
         msg_tx,
         repo_id,
+        "Commit",
+        context,
         move |repo| run_with_git_auth(auth, || repo.commit_with_outcome(&message)),
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result })
-        },
+        |repo_id, result| InternalMsg::CommitFinished { repo_id, result },
     );
 }
 
@@ -581,15 +658,16 @@ pub(super) fn schedule_commit_amend(
     message: String,
     auth: Option<StagedGitAuth>,
 ) {
+    let context = message_subject(&message).or_else(|| Some("No commit message".to_string()));
     schedule_repo_action_with_result(
         executor,
         repos,
         msg_tx,
         repo_id,
+        "Amend commit",
+        context,
         move |repo| run_with_git_auth(auth, || repo.commit_amend_with_outcome(&message)),
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result })
-        },
+        |repo_id, result| InternalMsg::CommitAmendFinished { repo_id, result },
     );
 }
 
@@ -601,11 +679,19 @@ pub(super) fn schedule_stash(
     message: String,
     include_untracked: bool,
 ) {
+    let subject = message_subject(&message).unwrap_or_else(|| "Working tree changes".to_string());
+    let context = single_line_context(if include_untracked {
+        format!("{subject} · including untracked files")
+    } else {
+        subject
+    });
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
+        RepoActionKind::Stash,
+        context,
         move |repo| repo.stash_create(&message, include_untracked),
         |msg_tx, repo_id, result| {
             if result.is_ok() {
@@ -629,6 +715,7 @@ pub(super) fn schedule_apply_stash(
         msg_tx,
         repo_id,
         RepoActionKind::ApplyStash,
+        Some(format!("stash@{{{index}}}")),
         move |repo| repo.stash_apply(index),
     );
 }
@@ -640,36 +727,34 @@ pub(super) fn schedule_pop_stash(
     repo_id: RepoId,
     index: usize,
 ) {
-    spawn_with_repo(
-        executor,
-        repos,
-        repo_id,
-        msg_tx,
-        move |repo, msg_tx| match repo.stash_apply(index) {
-            Ok(()) => {
-                let result = repo.stash_drop(index);
-                send_or_log(&msg_tx, Msg::LoadStashes { repo_id });
-                send_or_log(
-                    &msg_tx,
-                    Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
-                        repo_id,
-                        action: RepoActionKind::PopStash,
-                        result,
-                    }),
-                );
-            }
-            Err(err) => {
-                send_or_log(
-                    &msg_tx,
-                    Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
-                        repo_id,
-                        action: RepoActionKind::PopStash,
-                        result: Err(err),
-                    }),
-                );
-            }
-        },
-    );
+    let context = Some(format!("stash@{{{index}}}"));
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let operation = GitOperationTask::start(
+            repo_id,
+            RepoActionKind::PopStash.hook_activity_label(),
+            context,
+            &msg_tx,
+        );
+        let (applied, result) = {
+            let _scope = operation.attach();
+            let apply_result = repo.stash_apply(index);
+            let applied = apply_result.is_ok();
+            let result = apply_result.and_then(|()| repo.stash_drop(index));
+            (applied, result)
+        };
+        if applied {
+            send_or_log(&msg_tx, Msg::LoadStashes { repo_id });
+        }
+        let outcome = GitOperationTask::outcome(&result);
+        operation.finish(
+            outcome,
+            InternalMsg::RepoActionFinished {
+                repo_id,
+                action: RepoActionKind::PopStash,
+                result,
+            },
+        );
+    });
 }
 
 pub(super) fn schedule_drop_stash(
@@ -684,6 +769,8 @@ pub(super) fn schedule_drop_stash(
         repos,
         msg_tx,
         repo_id,
+        RepoActionKind::DropStash,
+        Some(format!("stash@{{{index}}}")),
         move |repo| repo.stash_drop(index),
         |msg_tx, repo_id, _result| {
             send_or_log(msg_tx, Msg::LoadStashes { repo_id });

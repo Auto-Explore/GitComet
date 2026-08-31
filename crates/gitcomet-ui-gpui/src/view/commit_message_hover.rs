@@ -513,6 +513,7 @@ impl Render for CommitMessageHoverHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::test_support::NoopBackend;
 
     fn state(summary: &str) -> CommitMessageHoverState {
         state_for("abc", summary)
@@ -536,22 +537,6 @@ mod tests {
     }
     fn off_row() -> Point<Pixels> {
         point(px(120.0), px(400.0))
-    }
-
-    struct NoopBackend;
-
-    impl gitcomet_core::services::GitBackend for NoopBackend {
-        fn open(
-            &self,
-            _workdir: &std::path::Path,
-        ) -> std::result::Result<
-            Arc<dyn gitcomet_core::services::GitRepository>,
-            gitcomet_core::error::Error,
-        > {
-            Err(gitcomet_core::error::Error::new(
-                gitcomet_core::error::ErrorKind::Unsupported("no repositories in this test"),
-            ))
-        }
     }
 
     fn host(cx: &mut gpui::TestAppContext) -> Entity<CommitMessageHoverHost> {

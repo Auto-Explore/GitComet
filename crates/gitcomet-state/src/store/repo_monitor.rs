@@ -1,11 +1,10 @@
 use crate::model::RepoId;
 use crate::msg::{Msg, RepoExternalChange, RepoWatchDegradedReason};
-use gix::index::entry::Mode as GitIndexMode;
+use gitcomet_core::services::{GitBackend, WorktreeIgnoreMatcher, WorktreePathKind};
 use notify::event::{AccessKind, AccessMode, EventKindMask};
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -87,12 +86,11 @@ fn record_monitor_failure(
     detail: impl std::fmt::Display,
 ) {
     let count = monitor_failure_counter(kind).fetch_add(1, Ordering::Relaxed) + 1;
-    // See send_diagnostics::record_send_failure: `eprintln!` panics when stderr
-    // is unavailable, and this runs on threads with no unwind guard.
-    let _ = writeln!(
-        std::io::stderr(),
+    // This runs on threads with no unwind guard (see
+    // process::write_stderr_line).
+    gitcomet_core::process::write_stderr_line(format_args!(
         "gitcomet-state: repo monitor failure ({kind:?}) in {context}: {detail}; total_failures={count}"
-    );
+    ));
 }
 
 fn send_stop_or_log(tx: &mpsc::Sender<MonitorMsg>, repo_id: RepoId, context: &'static str) {
@@ -316,6 +314,7 @@ impl RepoMonitorManager {
         workdir: PathBuf,
         msg_tx: StoreWorkerSender,
         active_repo_id: Arc<AtomicU64>,
+        backend: Arc<dyn GitBackend>,
     ) {
         let std::collections::hash_map::Entry::Vacant(entry) = self.handles.entry(repo_id) else {
             return;
@@ -333,6 +332,7 @@ impl RepoMonitorManager {
                 monitor_tx_for_notify,
                 active_repo_id,
                 monitor_enabled_for_thread,
+                backend,
             )
         });
         entry.insert(RepoMonitorHandle {
@@ -401,76 +401,40 @@ struct CachedIgnoreResult {
     cached_at: Instant,
 }
 
-struct GitignoreMatcher {
-    repo: gix::Repository,
-    index: gix::worktree::Index,
-    excludes: gix::worktree::Stack,
-}
-
-impl GitignoreMatcher {
-    fn load(workdir: &Path) -> Option<Self> {
-        let repo = crate::store::open_worktree_repo(workdir).ok()?;
-        let worktree = repo.worktree()?;
-        let index = worktree.index().ok()?;
-        let excludes = repo
-            .excludes(
-                &index,
-                None,
-                gix::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-            )
-            .ok()?
-            .detach();
-        Some(Self {
-            repo,
-            index,
-            excludes,
-        })
-    }
-
-    fn path_is_tracked(&self, rel: &Path, is_dir_hint: Option<bool>) -> bool {
-        let rel = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(rel));
-        if self.index.entry_by_path(rel.as_ref()).is_some() {
-            return true;
-        }
-
-        is_dir_hint == Some(true)
-            && self
-                .index
-                .entry_closest_to_directory_or_directory(rel.as_ref())
-                .is_some()
-    }
-
-    fn is_ignored_rel(&mut self, rel: &Path, is_dir_hint: Option<bool>) -> Option<bool> {
-        if self.path_is_tracked(rel, is_dir_hint) {
-            return Some(false);
-        }
-
-        let mode = match is_dir_hint {
-            Some(true) => Some(GitIndexMode::DIR),
-            Some(false) => Some(GitIndexMode::FILE),
-            None => None,
-        };
-        let platform = self.excludes.at_path(rel, mode, &self.repo.objects).ok()?;
-        Some(platform.is_excluded())
-    }
-}
-
 #[derive(Default)]
 struct GitignoreRules {
     workdir: Option<PathBuf>,
-    matcher: Option<GitignoreMatcher>,
+    /// The backend used to rebuild `matcher`. Owned here because `reload` is
+    /// called from event classification, deep in the monitor loop, where the
+    /// backend is not otherwise in scope.
+    ///
+    /// `Option` only so this derives `Default`, which tests use to build rules
+    /// that ignore nothing. `load` always supplies one, so the `None` arm of
+    /// `reload` is unreachable in production.
+    backend: Option<Arc<dyn GitBackend>>,
+    matcher: Option<Box<dyn WorktreeIgnoreMatcher>>,
     cache: FxHashMap<IgnoreCacheKey, CachedIgnoreResult>,
     last_prune_at: Option<Instant>,
 }
 
 impl GitignoreRules {
-    fn load(workdir: &Path) -> Self {
-        Self {
-            workdir: Some(workdir.to_path_buf()),
-            matcher: GitignoreMatcher::load(workdir),
-            cache: FxHashMap::default(),
-            last_prune_at: None,
-        }
+    fn load(workdir: &Path, backend: Arc<dyn GitBackend>) -> Self {
+        let mut rules = Self {
+            backend: Some(backend),
+            ..Self::default()
+        };
+        rules.reload(workdir);
+        rules
+    }
+
+    fn reload(&mut self, workdir: &Path) {
+        self.workdir = Some(workdir.to_path_buf());
+        self.matcher = self
+            .backend
+            .as_ref()
+            .and_then(|backend| backend.worktree_ignore_matcher(workdir).ok().flatten());
+        self.cache.clear();
+        self.last_prune_at = None;
     }
 
     fn is_cache_entry_fresh(now: Instant, entry: &CachedIgnoreResult) -> bool {
@@ -545,12 +509,17 @@ impl GitignoreRules {
 
     fn resolve_uncached_ignore(&mut self, rel: &Path, is_dir_hint: Option<bool>) -> bool {
         let started_at = Instant::now();
+        let kind = match is_dir_hint {
+            Some(true) => WorktreePathKind::Directory,
+            Some(false) => WorktreePathKind::File,
+            None => WorktreePathKind::Unknown,
+        };
         let (ignored, matcher_failed) = match self.matcher.as_mut() {
-            Some(matcher) => match matcher.is_ignored_rel(rel, is_dir_hint) {
-                Some(ignored) => (ignored, false),
-                // gix matcher failed — treat as not-ignored (safe: may cause extra
+            Some(matcher) => match matcher.is_ignored(rel, kind) {
+                Ok(ignored) => (ignored, false),
+                // The backend matcher failed — treat as not-ignored (safe: may cause extra
                 // refreshes, but never misses real changes).
-                None => (false, true),
+                Err(_) => (false, true),
             },
             // No matcher available — treat as not-ignored.
             None => (false, true),
@@ -747,8 +716,8 @@ fn note_watch_outcome(
 }
 
 /// While degraded (worktree over budget), re-check for recovery at most this often rather than on
-/// every idle tick: each re-check reloads the ignore rules (a `gix::open`), which is wasteful to do
-/// every 30s for a repo that stays over budget.
+/// every idle tick: each re-check rebuilds the backend matcher, which is wasteful to do every 30s
+/// for a repo that stays over budget.
 const DEGRADED_WATCH_RECHECK_INTERVAL: Duration = Duration::from_secs(120);
 
 /// Whether a degraded-watch recovery re-check is due, given when one was last attempted.
@@ -785,7 +754,7 @@ fn attempt_degraded_watch_recovery(
     // Reload first: we could not observe the (subdirectory) ignore edit that may have shrunk the
     // tree, so the current rules are potentially stale. The capped walk then bounds the cost of
     // re-checking while still over budget.
-    *gitignore = GitignoreRules::load(workdir);
+    gitignore.reload(workdir);
     let subdir_count = collect_watchable_dirs_capped(
         workdir,
         workdir,
@@ -831,6 +800,7 @@ fn repo_monitor_thread(
     monitor_tx: mpsc::Sender<MonitorMsg>,
     active_repo_id: Arc<AtomicU64>,
     monitor_enabled: Arc<AtomicBool>,
+    backend: Arc<dyn GitBackend>,
 ) {
     let workdir = super::canonicalize_path(workdir);
     if !monitor_enabled.load(Ordering::Relaxed) {
@@ -838,7 +808,7 @@ fn repo_monitor_thread(
         return;
     }
     let git_dir = resolve_git_dir(&workdir);
-    let mut gitignore = GitignoreRules::load(&workdir);
+    let mut gitignore = GitignoreRules::load(&workdir, backend);
 
     // The set of worktree subdirectories currently watched per-directory, kept in sync as the tree
     // changes (deduped on re-watch, pruned on deletion). `build_workdir_watcher` repopulates it; its
@@ -1269,17 +1239,15 @@ fn setup_workdir_watch_with_limit(
             subdir_count,
             max_dirs
         );
-        // `eprintln!` would panic with no stderr (see record_monitor_failure);
-        // this runs on the unguarded monitor thread, and a degraded-watch repo
-        // is a path users hit routinely.
-        let _ = writeln!(
-            std::io::stderr(),
+        // This runs on the unguarded monitor thread, and a degraded-watch repo
+        // is a path users hit routinely (see process::write_stderr_line).
+        gitcomet_core::process::write_stderr_line(format_args!(
             "gitcomet-state: repo monitor is not watching the {subdir_count} worktree folders of \
              repo_id={repo_id:?} (workdir={}) because that exceeds the watch budget ({max_dirs}); \
              live file watching is disabled and changes refresh when the window regains focus. Add \
              build/output dirs to .gitignore or raise fs.inotify.max_user_watches to re-enable.",
             workdir.display(),
-        );
+        ));
         return WatchSetupOutcome::WorktreeSubdirsSkipped {
             dir_count: subdir_count,
         };
@@ -1319,14 +1287,13 @@ fn setup_workdir_watch_with_limit(
         // The worktree is then only partially watched, so some external edits will not be observed
         // until the next refresh. Surface it so the limit can be raised if it keeps happening; the
         // `failed_dirs` count also drives the user-facing degraded-watch warning.
-        let _ = writeln!(
-            std::io::stderr(),
+        gitcomet_core::process::write_stderr_line(format_args!(
             "gitcomet-state: repo monitor could not watch {failed}/{subdir_count} worktree \
              subdirectories for repo_id={repo_id:?} (workdir={}); some external changes may be \
              missed until the next refresh. If this persists, raise fs.inotify.max_user_watches. \
              first_failure={first_failure:?}",
             workdir.display(),
-        );
+        ));
     }
     WatchSetupOutcome::Watching {
         failed_dirs: failed,
@@ -1558,7 +1525,7 @@ fn classify_repo_event(
         .iter()
         .any(|p| is_gitignore_config_path(workdir, git_dir, p));
     if gitignore_changed {
-        *gitignore = GitignoreRules::load(workdir);
+        gitignore.reload(workdir);
     }
 
     // If notify indicates a rescan is needed, assume anything could have changed.
@@ -1822,6 +1789,10 @@ mod tests {
         // doesn't create one until the first staging operation, and the gix
         // excludes stack requires a valid index).
         run_git(workdir, &["commit", "--allow-empty", "-m", "init"]);
+    }
+
+    fn load_gitignore_rules(workdir: &Path) -> GitignoreRules {
+        GitignoreRules::load(workdir, Arc::new(gitcomet_git_gix::GixBackend))
     }
 
     fn unique_temp_dir(prefix: &str) -> tempfile::TempDir {
@@ -2172,7 +2143,7 @@ mod tests {
         // events always reference existing paths).
         fs::create_dir_all(workdir.join("build")).expect("create build directory");
 
-        let mut rules = GitignoreRules::load(&workdir);
+        let mut rules = load_gitignore_rules(&workdir);
         assert!(rules.is_ignored_rel(Path::new("target/debug/app"), Some(false)));
         assert!(rules.is_ignored_rel(Path::new("foo.gitcomet-log"), Some(false)));
         assert!(!rules.is_ignored_rel(Path::new("keep.gitcomet-log"), Some(false)));
@@ -2213,7 +2184,7 @@ mod tests {
 
         run_git(&workdir, &["add", "-f", "tracked.tracked-ignore"]);
 
-        let mut rules = GitignoreRules::load(&workdir);
+        let mut rules = load_gitignore_rules(&workdir);
         assert!(
             !rules.is_ignored_rel(Path::new("tracked.tracked-ignore"), Some(false)),
             "tracked paths must not be treated as ignored"
@@ -2250,7 +2221,7 @@ mod tests {
         fs::create_dir_all(workdir.join("target").join("debug")).expect("create target/debug");
         fs::create_dir_all(workdir.join("src").join("sub")).expect("create src/sub");
         let git_dir = resolve_git_dir(&workdir);
-        let mut gitignore = GitignoreRules::load(&workdir);
+        let mut gitignore = load_gitignore_rules(&workdir);
 
         let dirs = collect_watchable_dirs(&workdir, &workdir, git_dir.as_deref(), &mut gitignore);
 
@@ -2290,7 +2261,7 @@ mod tests {
         fs::create_dir_all(workdir.join("src")).expect("create src");
         fs::create_dir_all(workdir.join("target")).expect("create target");
         let git_dir = resolve_git_dir(&workdir);
-        let mut gitignore = GitignoreRules::load(&workdir);
+        let mut gitignore = load_gitignore_rules(&workdir);
 
         let (tx, rx) = mpsc::channel::<notify::Event>();
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -2439,7 +2410,7 @@ mod tests {
         fs::create_dir_all(workdir.join("src")).expect("create src");
         fs::create_dir_all(workdir.join("target")).expect("create target");
         let git_dir = resolve_git_dir(&workdir);
-        let mut gitignore = GitignoreRules::load(&workdir);
+        let mut gitignore = load_gitignore_rules(&workdir);
 
         let make_watcher = || {
             let (tx, rx) = mpsc::channel::<notify::Event>();
@@ -2537,7 +2508,7 @@ mod tests {
         fs::create_dir_all(workdir.join("vendor").join("pkg")).expect("create vendor/pkg");
         fs::create_dir_all(workdir.join("src")).expect("create src");
         let git_dir = resolve_git_dir(&workdir);
-        let mut gitignore = GitignoreRules::load(&workdir);
+        let mut gitignore = load_gitignore_rules(&workdir);
 
         let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
         let monitor_enabled = Arc::new(AtomicBool::new(true));
@@ -2563,7 +2534,7 @@ mod tests {
         // loop does: reload the rules and rebuild the watcher. Dropping `_initial` (via the rebind
         // below) releases its watches.
         fs::write(workdir.join(".gitignore"), "vendor/\n").expect("write .gitignore");
-        gitignore = GitignoreRules::load(&workdir);
+        gitignore = load_gitignore_rules(&workdir);
         let (_watcher, _) = build_workdir_watcher(
             RepoId(1),
             &workdir,
@@ -2696,7 +2667,7 @@ mod tests {
         init_repo_for_ignore_tests(&workdir);
         fs::create_dir_all(workdir.join("src").join("sub")).expect("create src/sub");
         let git_dir = resolve_git_dir(&workdir);
-        let mut gitignore = GitignoreRules::load(&workdir);
+        let mut gitignore = load_gitignore_rules(&workdir);
 
         let (_tx, _rx) = mpsc::channel::<notify::Event>();
         let mut watcher =
@@ -2783,7 +2754,7 @@ mod tests {
         init_repo_for_ignore_tests(&workdir);
         fs::create_dir_all(workdir.join("src").join("sub")).expect("create src/sub");
         let git_dir = resolve_git_dir(&workdir);
-        let mut gitignore = GitignoreRules::load(&workdir);
+        let mut gitignore = load_gitignore_rules(&workdir);
 
         let (tx, rx) = mpsc::channel::<notify::Event>();
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {

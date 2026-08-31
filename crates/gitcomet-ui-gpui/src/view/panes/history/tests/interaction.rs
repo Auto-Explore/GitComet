@@ -780,7 +780,7 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1294,7 +1294,7 @@ fn history_row_selection_follows_the_press_not_the_release(cx: &mut gpui::TestAp
     // view renders; the reducer thread mutates exactly this state.
     store_for_assert.replace_snapshot_for_test(Arc::clone(&state));
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1403,7 +1403,7 @@ fn history_rows_ignore_clicks_that_landed_on_the_collapsed_sidebar_popover(
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1518,7 +1518,7 @@ fn history_refs_hover_closes_when_history_scrolls_without_mouse_move(
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1618,7 +1618,7 @@ fn history_refs_hover_does_not_open_while_overlay_is_open(cx: &mut gpui::TestApp
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1721,7 +1721,7 @@ fn history_refs_hover_closes_when_click_selects_another_commit_without_mouse_mov
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1834,7 +1834,7 @@ fn history_refs_hover_item_click_keeps_existing_history_selection(cx: &mut gpui:
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1989,7 +1989,7 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
 
     let apply_state = |cx: &mut gpui::VisualTestContext, state: Arc<AppState>| {
         cx.update(|window, app| {
-            let ui_model = view.read(app)._ui_model.clone();
+            let ui_model = view.read(app).ui_model.clone();
             ui_model.update(app, |model, cx| {
                 model.set_state(Arc::clone(&state), cx);
             });
@@ -2151,7 +2151,7 @@ fn history_refs_hover_closes_when_history_scrolls_programmatically(cx: &mut gpui
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });

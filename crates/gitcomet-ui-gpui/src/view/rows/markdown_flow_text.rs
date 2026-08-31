@@ -9,6 +9,10 @@
 
 use super::*;
 
+type MarkdownFlowHighlights = Arc<[(Range<usize>, gpui::HighlightStyle)]>;
+type MarkdownFlowBackgrounds = Arc<[(Range<usize>, gpui::Hsla)]>;
+type MarkdownFlowHighlightLayers = (MarkdownFlowHighlights, MarkdownFlowBackgrounds);
+
 /// One markdown row's text, painted with wrapping and wired to the shared
 /// selection machinery.
 pub(in crate::view) struct MarkdownFlowText {
@@ -20,9 +24,25 @@ pub(in crate::view) struct MarkdownFlowText {
     untabbed: Option<SharedString>,
     /// Text as painted.
     text: SharedString,
-    highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
+    /// Styled-run backgrounds painted separately so selection can sit above
+    /// them without also washing over the glyphs.
+    run_backgrounds: MarkdownFlowBackgrounds,
+    highlights: MarkdownFlowHighlights,
     inner: Option<gpui::StyledText>,
     layout: Option<gpui::TextLayout>,
+}
+
+/// Paint layers for flowing Markdown text, in their visual stacking order.
+///
+/// Run backgrounds include inline-code and quick-search washes. The selection
+/// must sit above those backgrounds so neither can hide it, while the glyphs
+/// stay above both layers and remain crisp.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum MarkdownFlowPaintPhase {
+    RunBackgrounds,
+    Selection,
+    Glyphs,
 }
 
 impl MarkdownFlowText {
@@ -32,14 +52,16 @@ impl MarkdownFlowText {
         region: DiffTextRegion,
         row_text: SharedString,
         text: SharedString,
-        highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
+        highlights: MarkdownFlowHighlights,
     ) -> Self {
+        let (highlights, run_backgrounds) = split_markdown_flow_highlight_layers(highlights);
         Self {
             view,
             row_ix,
             region,
             untabbed: (row_text != text).then_some(row_text),
             text,
+            run_backgrounds,
             highlights,
             inner: None,
             layout: None,
@@ -62,10 +84,29 @@ impl MarkdownFlowText {
         }
 
         let color = self.view.read(cx).diff_text_selection_color();
-        let rects = markdown_flow_selection_rects(layout, start, end);
+        let rects = markdown_flow_range_rects(layout, start, end);
+        if rects.is_empty() {
+            return;
+        }
         record_selection_paint_for_tests(self.row_ix, &rects);
+        #[cfg(test)]
+        record_markdown_flow_paint_phase_for_tests(self.row_ix, MarkdownFlowPaintPhase::Selection);
         for rect in rects {
             window.paint_quad(fill(rect, color));
+        }
+    }
+
+    /// Paint styled-run backgrounds below the selection layer.
+    fn paint_run_backgrounds(&self, layout: &gpui::TextLayout, window: &mut Window) {
+        #[cfg(test)]
+        record_markdown_flow_paint_phase_for_tests(
+            self.row_ix,
+            MarkdownFlowPaintPhase::RunBackgrounds,
+        );
+        for (range, color) in self.run_backgrounds.iter() {
+            for rect in markdown_flow_range_rects(layout, range.start, range.end) {
+                window.paint_quad(fill(rect, *color));
+            }
         }
     }
 
@@ -78,12 +119,38 @@ impl MarkdownFlowText {
     }
 }
 
+/// Pull background colours out of GPUI highlights so they can be composited
+/// independently of their glyph styles.
+fn split_markdown_flow_highlight_layers(
+    highlights: MarkdownFlowHighlights,
+) -> MarkdownFlowHighlightLayers {
+    if !highlights
+        .iter()
+        .any(|(_, style)| style.background_color.is_some())
+    {
+        return (highlights, Arc::from(Vec::new()));
+    }
+
+    let mut foregrounds = Vec::with_capacity(highlights.len());
+    let mut backgrounds = Vec::new();
+    for (range, mut style) in highlights.iter().cloned() {
+        if let Some(background) = style.background_color.take() {
+            backgrounds.push((range.clone(), background));
+        }
+        // Keep even a now-default style: the original background run formed a
+        // shaping boundary, and preserving it keeps ligatures and byte-to-x
+        // geometry identical to the background GPUI would have painted.
+        foregrounds.push((range, style));
+    }
+    (Arc::from(foregrounds), Arc::from(backgrounds))
+}
+
 /// The rectangles a byte range covers, in window coordinates.
 ///
 /// A wrapped row's selection is not one box: each visual line contributes the
 /// slice of the range that falls inside it, measured against the unwrapped
 /// layout the wrap boundaries index into.
-fn markdown_flow_selection_rects(
+fn markdown_flow_range_rects(
     layout: &gpui::TextLayout,
     start: usize,
     end: usize,
@@ -186,6 +253,10 @@ fn markdown_flow_row_is_near_viewport(bounds: Bounds<Pixels>, window: &Window) -
 thread_local! {
     static SELECTION_PAINT_LOG: RefCell<Vec<(usize, Bounds<Pixels>)>> =
         const { RefCell::new(Vec::new()) };
+    // `None` keeps ordinary tests from accumulating every Markdown text paint.
+    // A regression test opts into one frame by installing an empty log.
+    static MARKDOWN_FLOW_PAINT_PHASE_LOG:
+        RefCell<Option<Vec<(usize, MarkdownFlowPaintPhase)>>> = const { RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -198,6 +269,34 @@ fn record_selection_paint_for_tests(row_ix: usize, rects: &[Bounds<Pixels>]) {
 
 #[cfg(not(test))]
 fn record_selection_paint_for_tests(_row_ix: usize, _rects: &[Bounds<Pixels>]) {}
+
+#[cfg(test)]
+fn record_markdown_flow_paint_phase_for_tests(row_ix: usize, phase: MarkdownFlowPaintPhase) {
+    MARKDOWN_FLOW_PAINT_PHASE_LOG.with(|log| {
+        if let Some(log) = log.borrow_mut().as_mut() {
+            log.push((row_ix, phase));
+        }
+    });
+}
+
+#[cfg(test)]
+pub(in crate::view) fn begin_markdown_flow_paint_phase_capture_for_tests() {
+    MARKDOWN_FLOW_PAINT_PHASE_LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
+}
+
+#[cfg(test)]
+pub(in crate::view) fn markdown_flow_paint_phases_for_tests(
+    row_ix: usize,
+) -> Vec<MarkdownFlowPaintPhase> {
+    MARKDOWN_FLOW_PAINT_PHASE_LOG.with(|log| {
+        log.borrow_mut()
+            .take()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(logged_ix, phase)| (logged_ix == row_ix).then_some(phase))
+            .collect()
+    })
+}
 
 #[cfg(test)]
 pub(in crate::view) fn clear_markdown_selection_paint_log_for_tests() {
@@ -291,10 +390,16 @@ impl gpui::Element for MarkdownFlowText {
             .layout
             .clone()
             .expect("markdown flow text should be laid out before paint");
-        // The highlight sits behind the glyphs, so it is painted first.
+
+        // Background colours were removed from `inner` when the element was
+        // built. Painting them here gives us the intended stacking order:
+        // code/search background -> selection wash -> crisp text.
+        self.paint_run_backgrounds(&layout, window);
         if on_screen {
             self.paint_selection(&layout, window, cx);
         }
+        #[cfg(test)]
+        record_markdown_flow_paint_phase_for_tests(self.row_ix, MarkdownFlowPaintPhase::Glyphs);
         self.inner
             .as_mut()
             .expect("markdown flow text should be laid out before paint")
@@ -343,6 +448,43 @@ impl gpui::Element for MarkdownFlowText {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_colors_are_removed_from_the_glyph_highlights() {
+        let code_background = gpui::hsla(0.10, 0.50, 0.25, 0.75);
+        let search_background = gpui::hsla(0.55, 0.60, 0.40, 0.45);
+        let search_foreground = gpui::hsla(0.55, 0.80, 0.80, 1.0);
+        let highlights = Arc::from(vec![
+            (
+                1..5,
+                gpui::HighlightStyle {
+                    background_color: Some(code_background),
+                    ..gpui::HighlightStyle::default()
+                },
+            ),
+            (
+                7..12,
+                gpui::HighlightStyle {
+                    color: Some(search_foreground),
+                    background_color: Some(search_background),
+                    ..gpui::HighlightStyle::default()
+                },
+            ),
+        ]);
+
+        let (foregrounds, backgrounds) = split_markdown_flow_highlight_layers(highlights);
+
+        assert_eq!(
+            backgrounds.as_ref(),
+            &[(1..5, code_background), (7..12, search_background)]
+        );
+        assert_eq!(foregrounds.len(), 2);
+        assert_eq!(foregrounds[0].0, 1..5);
+        assert_eq!(foregrounds[0].1, gpui::HighlightStyle::default());
+        assert_eq!(foregrounds[1].0, 7..12);
+        assert_eq!(foregrounds[1].1.color, Some(search_foreground));
+        assert_eq!(foregrounds[1].1.background_color, None);
+    }
 
     #[test]
     fn tab_offsets_round_trip_between_row_and_painted_text() {

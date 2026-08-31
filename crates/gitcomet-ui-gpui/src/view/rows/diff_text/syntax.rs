@@ -437,6 +437,32 @@ pub(in crate::view) struct DiffSyntaxEdit {
     pub new_range: Range<usize>,
 }
 
+/// Computes the common byte prefix and suffix of two byte strings.
+///
+/// Returns `(prefix, old_suffix_start, new_suffix_start)` such that the
+/// differing span is `prefix..old_suffix_start` in `old` and
+/// `prefix..new_suffix_start` in `new`. This is the shared edit-range
+/// primitive for diff-cache invalidation and prepared-document reparsing.
+pub(in crate::view) fn shared_byte_affix_bounds(old: &[u8], new: &[u8]) -> (usize, usize, usize) {
+    let mut prefix = 0usize;
+    let max_prefix = old.len().min(new.len());
+    while prefix < max_prefix && old[prefix] == new[prefix] {
+        prefix += 1;
+    }
+
+    let mut old_suffix_start = old.len();
+    let mut new_suffix_start = new.len();
+    while old_suffix_start > prefix
+        && new_suffix_start > prefix
+        && old[old_suffix_start - 1] == new[new_suffix_start - 1]
+    {
+        old_suffix_start -= 1;
+        new_suffix_start -= 1;
+    }
+
+    (prefix, old_suffix_start, new_suffix_start)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SyntaxToken {
     pub(super) range: Range<usize>,

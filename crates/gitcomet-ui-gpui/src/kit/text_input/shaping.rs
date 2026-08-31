@@ -187,10 +187,7 @@ pub(super) fn shape_wrapped_line(
     shaped.into_iter().next().unwrap_or_default()
 }
 
-pub(super) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
-    color.alpha = alpha;
-    color
-}
+pub(super) use crate::theme::with_alpha;
 
 #[cfg(target_os = "macos")]
 pub(super) fn primary_modifier_label() -> &'static str {

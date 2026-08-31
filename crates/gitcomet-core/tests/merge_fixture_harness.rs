@@ -322,12 +322,11 @@ fn parse_merge_api(value: &str) -> Result<MergeApi, String> {
 }
 
 fn parse_conflict_style(value: &str) -> Result<ConflictStyle, String> {
-    match value.to_ascii_lowercase().as_str() {
-        "merge" => Ok(ConflictStyle::Merge),
-        "diff3" => Ok(ConflictStyle::Diff3),
-        "zdiff3" => Ok(ConflictStyle::Zdiff3),
-        _ => Err(format!("unknown opts.style `{value}`")),
-    }
+    gitcomet_core::merge::parse_conflict_style(
+        gitcomet_core::merge::ConfigValueSource::Cli,
+        &value.to_ascii_lowercase(),
+    )
+    .ok_or_else(|| format!("unknown opts.style `{value}`"))
 }
 
 fn parse_merge_strategy(value: &str) -> Result<MergeStrategy, String> {
@@ -341,11 +340,11 @@ fn parse_merge_strategy(value: &str) -> Result<MergeStrategy, String> {
 }
 
 fn parse_diff_algorithm(value: &str) -> Result<DiffAlgorithm, String> {
-    match value.to_ascii_lowercase().as_str() {
-        "myers" => Ok(DiffAlgorithm::Myers),
-        "histogram" => Ok(DiffAlgorithm::Histogram),
-        _ => Err(format!("unknown opts.diff_algorithm `{value}`")),
-    }
+    gitcomet_core::merge::parse_diff_algorithm(
+        gitcomet_core::merge::ConfigValueSource::Cli,
+        &value.to_ascii_lowercase(),
+    )
+    .ok_or_else(|| format!("unknown opts.diff_algorithm `{value}`"))
 }
 
 fn parse_bool(value: &str) -> Result<bool, String> {

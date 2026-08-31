@@ -6,7 +6,6 @@ use gitcomet_core::domain::{
     RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
     RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
 };
-use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
     BlameLine, CancellationToken, CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome,
@@ -302,11 +301,8 @@ impl GixRepo {
     }
 
     pub(super) fn reopen_repo(&self) -> Result<gix::Repository> {
-        crate::open::open_worktree_repo(&self.spec.workdir).map_err(|e| match e {
-            gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
-            gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
-            e => Error::new(ErrorKind::Backend(format!("gix open fresh repo: {e}"))),
-        })
+        crate::open::open_worktree_repo(&self.spec.workdir)
+            .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo"))
     }
 }
 
@@ -539,6 +535,10 @@ impl GitRepository for GixRepo {
     fn status_cancellable(&self, cancellation: &CancellationToken) -> Result<RepoStatus> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
         self.status_cancellable_impl(cancellation)
+    }
+
+    fn head_path_is_gitlink(&self, path: &Path) -> Result<bool> {
+        self.head_path_is_gitlink_impl(path)
     }
 
     fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {

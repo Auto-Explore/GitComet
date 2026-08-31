@@ -14,12 +14,14 @@ use gitcomet_core::domain::{
     UpstreamDivergence,
 };
 use gitcomet_core::file_diff::FileDiffRow;
+use gitcomet_core::git_operation::GitOperationId;
 use gitcomet_core::process::refresh_git_runtime;
 use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
     AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptOperation,
-    BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind, Loadable,
-    RepoId, RepoState, SubmoduleTrustPromptOperation,
+    BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind,
+    GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable, RepoId, RepoState,
+    SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{BranchExistsChoice, Msg, StoreEvent};
 use gitcomet_state::session;
@@ -103,6 +105,8 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
+            // Ctrl/Cmd+Shift+A is the app-level recent-repositories shortcut.
+            && (key != "a" || !mods.shift)
             && matches!(
                 key,
                 "1" | "2" | "3" | "a" | "c" | "e" | "s" | "d" | "h" | "u"
@@ -180,6 +184,8 @@ mod perf;
 mod permalink;
 pub(super) mod platform_open;
 mod poller;
+mod preference_sync;
+mod preferences;
 mod reflog_panel;
 mod repo_open;
 pub(crate) mod rows;
@@ -218,6 +224,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
+use preferences::UiPreferences;
 pub(in crate::view) use terminal_preferences::{
     ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
     TerminalPreferences, parse_terminal_args_multiline, resolve_embedded_shell_program,
@@ -230,7 +237,8 @@ use commit_message_hover::{CommitMessageHoverHost, CommitMessageHoverState};
 use diff_text_model::CachedDiffTextSegment;
 use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
 use diff_text_selection::{
-    ConflictRowSelectionTracker, DiffTextSelectionOverlay, DiffTextSelectionTracker,
+    ConflictRowSelectionTracker, DiffTextEmptySpaceDecoration, DiffTextSelectionOverlay,
+    DiffTextSelectionTracker, empty_diff_text_document, flowing_diff_text_empty_space,
 };
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
@@ -251,11 +259,15 @@ pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
-use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
+use panels::{
+    ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
+    action_bar_height,
+};
 pub(crate) use panes::MainPaneView;
 use panes::{
     CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryPrimarySelection,
-    HistoryView, ReflogPaneInit, ReflogPaneView, SidebarPaneView, history_primary_selection,
+    HistoryView, MainPaneInit, ReflogPaneInit, ReflogPaneView, SidebarPaneView,
+    history_primary_selection,
 };
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;

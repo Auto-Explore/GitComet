@@ -1,8 +1,7 @@
 use super::*;
 use crate::test_support::lock_visual_test;
-use gitcomet_core::error::{Error, ErrorKind};
+use crate::view::test_support::TestBackend;
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
-use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -11,16 +10,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
 const DIFF_DEFAULTS_SESSION_SUBTEST_ENV: &str = "GITCOMET_DIFF_DEFAULTS_SESSION_SUBTEST";
-
-struct TestBackend;
-
-impl GitBackend for TestBackend {
-    fn open(&self, _workdir: &Path) -> Result<std::sync::Arc<dyn GitRepository>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "Test backend does not open repositories",
-        )))
-    }
-}
 
 fn unique_session_file(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(

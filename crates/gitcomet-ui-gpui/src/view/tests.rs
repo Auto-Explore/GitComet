@@ -1,10 +1,12 @@
 use super::*;
+use crate::view::test_support::TestBackend;
 use chrome::{cursor_style_for_resize_edge, resize_edge};
 use gitcomet_core::domain::{
     Branch, CommitId, FileEntry, FileEntryKind, Remote, RemoteBranch, RepoSpec, StashEntry,
     Submodule, SubmoduleStatus, Upstream, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use gitcomet_state::model::{AppState, AuthPromptState, AuthRetryOperation, RepoId, RepoState};
@@ -14,18 +16,23 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-struct TestBackend;
-
-impl GitBackend for TestBackend {
-    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "Test backend does not open repositories",
-        )))
-    }
-}
-
 struct RecordingFailingBackend {
     opened: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+#[test]
+fn recent_repository_shortcut_is_not_a_diff_select_all_candidate() {
+    let recent = gpui::Keystroke::parse("secondary-shift-a").expect("valid shortcut");
+    let select_all = gpui::Keystroke::parse("secondary-a").expect("valid shortcut");
+
+    assert!(
+        !is_diff_shortcut_candidate(&recent),
+        "the app-level recent-repositories chord must not reach diff text selection"
+    );
+    assert!(
+        is_diff_shortcut_candidate(&select_all),
+        "unshifted Ctrl/Cmd+A must still reach diff text selection"
+    );
 }
 
 impl GitBackend for RecordingFailingBackend {
@@ -48,6 +55,30 @@ fn pump_for(cx: &mut gpui::VisualTestContext, duration: Duration) {
         });
         cx.run_until_parked();
         std::thread::sleep(Duration::from_millis(16));
+    }
+}
+
+/// Like [`wait_until`], but keeps drawing and draining the test executor while
+/// it waits.
+///
+/// Required whenever the awaited work is a GPUI task — a `cx.spawn(..).detach()`
+/// — rather than something the store's own worker thread advances: those tasks
+/// only run when the test driver pumps them, so a sleeping wait would spin out
+/// its whole deadline without ever letting the task complete.
+fn pump_until(cx: &mut gpui::VisualTestContext, description: &str, ready: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if ready() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {description}");
+        }
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -359,18 +390,22 @@ fn dropping_one_folder_on_repository_bar_dispatches_external_repo_open(
     });
     cx.run_until_parked();
 
-    wait_until("folder drop to dispatch a repository open", || {
+    // The store canonicalizes every workdir it opens, so compare against the
+    // resolved path: on macOS the temp dir arrives as `/var/...` and comes back
+    // as `/private/var/...`.
+    let dropped = canonicalize_or_original(folder.path().to_path_buf());
+    pump_until(cx, "folder drop to dispatch a repository open", || {
         store_for_state
             .snapshot()
             .repos
             .iter()
-            .any(|repo| repo.spec.workdir == folder.path())
+            .any(|repo| repo.spec.workdir == dropped)
             || !opened.lock().expect("recording backend lock").is_empty()
     });
     let opened = opened.lock().expect("recording backend lock");
     assert!(
-        opened.is_empty() || opened.as_slice() == [folder.path().to_path_buf()],
-        "the repository-load effect must receive the dropped folder"
+        opened.is_empty() || opened.as_slice() == [dropped.clone()],
+        "the repository-load effect must receive the dropped folder, got {opened:?}"
     );
     cx.update(|_window, app| {
         assert!(!test_support::repo_external_folder_drag_active(
@@ -4229,8 +4264,9 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
             workdir: PathBuf::from("repo"),
         },
     );
-    repo.last_error = Some(error.clone());
-    repo.command_log
+    repo.feedback.last_error = Some(error.clone());
+    repo.feedback
+        .command_log
         .push(gitcomet_state::model::CommandLogEntry {
             time: std::time::SystemTime::now(),
             ok: false,
@@ -4239,6 +4275,7 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
             stdout: String::new(),
             stderr: "fatal: test".to_string(),
             announce_success: true,
+            hook_operation_id: None,
         });
     next.active_repo = Some(repo_id);
     next.repos.push(repo);

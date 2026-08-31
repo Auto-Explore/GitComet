@@ -129,10 +129,6 @@ pub(super) fn is_svg_path(path: &std::path::Path) -> bool {
 
 pub(super) fn should_bypass_text_file_preview_for_path(path: &std::path::Path) -> bool {
     image_format_for_path(path).is_some()
-        || path
-            .extension()
-            .and_then(|s| s.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -683,6 +679,20 @@ pub(super) struct DiffTextHitbox {
     pub(super) wrapped: Option<DiffTextWrappedHit>,
 }
 
+/// A selectable document range painted by something other than text.
+///
+/// Flowing Markdown pictures and thematic breaks intentionally have no
+/// [`DiffTextHitbox`]: their accessible copy text is not a run of glyphs that
+/// can be mapped to an x coordinate. They still need a geometric target while
+/// a drag crosses them, so this records the logical boundaries of the block
+/// without making its invisible text directly clickable.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DiffTextMotionTarget {
+    pub(super) bounds: Bounds<Pixels>,
+    pub(super) start: DiffTextPos,
+    pub(super) end: DiffTextPos,
+}
+
 /// Where one merge-tool column row painted its text, and the line it shaped.
 ///
 /// The conflict columns are their own canvases and register nothing in
@@ -755,7 +765,7 @@ pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
     pub(super) window_handle: gpui::AnyWindowHandle,
-    pub(super) _ui_model: Entity<AppUiModel>,
+    pub(super) ui_model: Entity<AppUiModel>,
     pub(super) _poller: Poller,
     pub(super) _ui_model_subscription: gpui::Subscription,
     pub(super) _activation_subscription: gpui::Subscription,
@@ -880,6 +890,18 @@ pub struct GitCometView {
         Option<gitcomet_state::model::SubmoduleTrustPromptState>,
     pub(super) pending_submodule_trust_check:
         Option<gitcomet_state::model::SubmoduleTrustCheckState>,
+    /// Hook chains queued to open once render has a `Window`. A chain is
+    /// identified by the outer Git operation, so pre- and post-hooks from one
+    /// command share the same presentation lifecycle.
+    pub(super) pending_hook_activity_open: Option<(RepoId, GitOperationId)>,
+    /// Active chains the user minimized, or that began behind another overlay.
+    /// They stay represented by the compact progress toast and must not
+    /// auto-open again when another hook in the same Git command starts.
+    pub(super) minimized_hook_activity_chains: FxHashSet<(RepoId, GitOperationId)>,
+    /// Repositories explicitly minimized by the user. Unlike the per-chain
+    /// suppression above, this remains set across operations until Activity is
+    /// opened again and closed with its X button.
+    pub(super) minimized_hook_activity_repos: FxHashSet<RepoId>,
     pub(super) pending_worktree_branch_removals: FxHashMap<(RepoId, std::path::PathBuf), String>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]

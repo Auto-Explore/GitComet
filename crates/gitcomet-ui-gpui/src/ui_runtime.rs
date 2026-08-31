@@ -78,6 +78,35 @@ thread_local! {
     static UI_RUNTIME_OVERRIDE: Cell<Option<UiRuntime>> = const { Cell::new(None) };
 }
 
+/// Runs `compute` on a background thread, or inline when the runtime is
+/// deterministic, then calls `apply` with the result inside a view update.
+///
+/// The `apply` closure owns the site's staleness checks (generation, repo,
+/// revision) and any re-issue, so the snapshot/compute/stale/apply skeleton
+/// stays in one place while each caller keeps its own guards.
+pub(crate) fn run_background_compute<V, O, F, A>(
+    cx: &mut gpui::Context<V>,
+    compute: F,
+    apply: A,
+) -> gpui::Task<()>
+where
+    V: 'static,
+    O: Send + 'static,
+    F: FnOnce() -> O + Send + 'static,
+    A: FnOnce(&mut V, &mut gpui::Context<V>, O) + 'static,
+{
+    cx.spawn(
+        async move |view: gpui::WeakEntity<V>, cx: &mut gpui::AsyncApp| {
+            let output = if current().uses_background_compute() {
+                smol::unblock(compute).await
+            } else {
+                compute()
+            };
+            let _ = view.update(cx, move |view, cx| apply(view, cx, output));
+        },
+    )
+}
+
 pub(crate) fn current() -> UiRuntime {
     #[cfg(test)]
     {

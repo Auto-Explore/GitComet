@@ -3,6 +3,7 @@ mod conflict_interactions;
 mod diff_selection;
 mod effects;
 mod external_and_history;
+mod git_hook_activity;
 mod repo_management;
 mod util;
 
@@ -52,6 +53,88 @@ fn normalize_repo_relative_path(
     util::canonicalize_path(path)
 }
 
+fn cache_selected_deleted_gitlink(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: &gitcomet_core::domain::DiffTarget,
+) {
+    let gitcomet_core::domain::DiffTarget::WorkingTree { path, area } = target else {
+        return;
+    };
+    if !head_gitlink_lookup_is_worth_it(state, repo_id, *area, path) {
+        return;
+    }
+
+    refresh_head_gitlink_path(repos, state, repo_id, path);
+}
+
+/// Whether classifying `path` against HEAD can still change what is rendered.
+///
+/// `refresh_head_gitlink_path` opens the repository and peels HEAD, so it is
+/// real filesystem work on the store worker while the state write lock is held.
+/// `diff_target_is_submodule` only consults the cache for `Deleted` entries, so
+/// for any other kind the lookup is pure waste — and this runs on every
+/// external git-state event, which arrive in bursts during a fetch or rebase.
+///
+/// An unknown kind still classifies: `reload_repo` blanks the status lane while
+/// deliberately retaining the diff target, and the entry has to be in place
+/// before the fresh status lands.
+fn head_gitlink_lookup_is_worth_it(
+    state: &AppState,
+    repo_id: RepoId,
+    area: gitcomet_core::domain::DiffArea,
+    path: &std::path::Path,
+) -> bool {
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return false;
+    };
+    match repo.status_entries_for_area(area) {
+        Some(entries) => entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .is_some_and(|entry| entry.kind == gitcomet_core::domain::FileStatusKind::Deleted),
+        None => true,
+    }
+}
+
+fn refresh_head_gitlink_path(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: &std::path::Path,
+) {
+    let Some(is_gitlink) = repos
+        .get(&repo_id)
+        .and_then(|repo| repo.head_path_is_gitlink(path).ok())
+    else {
+        return;
+    };
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return;
+    };
+    if is_gitlink {
+        repo.head_gitlink_paths.insert(path.to_path_buf());
+    } else {
+        repo.head_gitlink_paths.remove(path);
+    }
+}
+
+fn refresh_selected_head_gitlink(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+) {
+    let selected = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.diff_state.diff_target.clone());
+    if let Some(target) = selected {
+        cache_selected_deleted_gitlink(repos, state, repo_id, &target);
+    }
+}
+
 #[inline]
 fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -64,7 +147,7 @@ fn begin_commit_action(state: &mut AppState, repo_id: RepoId) {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
         repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_add(1);
-        repo_state.pending_force_push_lease = None;
+        repo_state.pending.force_push_lease = None;
         repo_state.bump_ops_rev();
     }
 }
@@ -589,6 +672,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
 }
 
 pub(crate) fn fill_set_active_repo_inline(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     effects: &mut SetActiveRepoEffects,
@@ -597,7 +681,7 @@ pub(crate) fn fill_set_active_repo_inline(
     // `reduce`, so bracket the mutation with the same navigation reconciliation
     // and state finalizers the ordinary reducer wrapper applies.
     reconcile_active_nav_history(state, false);
-    repo_management::fill_set_active_repo_inline(state, repo_id, effects);
+    repo_management::fill_set_active_repo_inline(repos, state, repo_id, effects);
     finalize_reduced_state(state, Some(false));
 }
 
@@ -616,6 +700,7 @@ pub(crate) fn fill_reorder_repo_tabs_inline(
 // helper in `store/mod.rs` so that the inline reduce path can be measured.
 #[cfg(feature = "benchmarks")]
 pub(crate) fn fill_select_diff_inline(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     target: gitcomet_core::domain::DiffTarget,
@@ -627,7 +712,7 @@ pub(crate) fn fill_select_diff_inline(
     } else {
         diff_selection::ContentViewMode::Diff
     };
-    diff_selection::fill_select_diff_inline(state, repo_id, target, mode, effects)
+    diff_selection::fill_select_diff_inline(repos, state, repo_id, target, mode, effects)
 }
 
 #[inline]
@@ -819,14 +904,14 @@ fn reconcile_active_nav_history(state: &mut AppState, push: bool) {
     // matches the current entry and `reconcile` would no-op. Compare by borrow
     // first and bail before cloning a `MainViewSnapshot` (which owns a `PathBuf`)
     // — this runs twice per dispatched message.
-    let cursor = repo.nav_history.cursor;
-    if let Some(current) = repo.nav_history.entries.get(cursor)
+    let cursor = repo.navigation.main_history.cursor;
+    if let Some(current) = repo.navigation.main_history.entries.get(cursor)
         && repo.main_view_snapshot_matches(current)
     {
         return;
     }
     let cur = repo.main_view_snapshot();
-    repo.nav_history.reconcile(cur, push);
+    repo.navigation.main_history.reconcile(cur, push);
 }
 
 fn reduce_inner(
@@ -840,9 +925,9 @@ fn reduce_inner(
     }
 
     match msg {
-        Msg::OpenRepo(path) => repo_management::open_repo(id_alloc, state, path),
+        Msg::OpenRepo(path) => repo_management::open_repo(repos, id_alloc, state, path),
         Msg::OpenRepoFromExternalDrop(path) => {
-            repo_management::open_repo_from_external_drop(id_alloc, state, path)
+            repo_management::open_repo_from_external_drop(repos, id_alloc, state, path)
         }
         Msg::RestoreSession {
             open_repos,
@@ -865,10 +950,27 @@ fn reduce_inner(
         }
         Msg::DismissRepoError { repo_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.last_error = None;
+                repo_state.feedback.last_error = None;
             }
             util::clear_banner_error_for_repo(state, repo_id);
             Vec::new()
+        }
+        Msg::CancelGitOperation {
+            repo_id,
+            operation_id,
+        } => {
+            let requested = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| git_hook_activity::request_cancel(repo, operation_id));
+            requested
+                .then_some(Effect::CancelGitOperation {
+                    repo_id,
+                    operation_id,
+                })
+                .into_iter()
+                .collect()
         }
         Msg::SubmitAuthPrompt { username, secret } => {
             submit_auth_prompt(repos, id_alloc, state, username, secret)
@@ -894,11 +996,97 @@ fn reduce_inner(
             state.default_tag_type = tag_type;
             Vec::new()
         }
-        Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(state, repo_id),
+        Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(repos, state, repo_id),
         Msg::ReorderRepoTabs {
             repo_id,
             insert_before,
         } => repo_management::reorder_repo_tabs(state, repo_id, insert_before),
+        Msg::Internal(crate::msg::InternalMsg::GitOperationStarted {
+            repo_id,
+            operation_id,
+            label,
+            context,
+            time,
+        }) => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                git_hook_activity::started(repo, operation_id, label, context, time);
+            }
+            Vec::new()
+        }
+        Msg::Internal(crate::msg::InternalMsg::GitOperationEvent {
+            repo_id,
+            operation_id,
+            event,
+        }) => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                git_hook_activity::apply_event(repo, operation_id, event);
+            }
+            Vec::new()
+        }
+        Msg::Internal(crate::msg::InternalMsg::GitOperationFinished {
+            repo_id,
+            operation_id,
+            outer_outcome,
+            duration,
+            message,
+        }) => {
+            let (has_hooks, all_hooks_succeeded) = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| {
+                    repo.feedback
+                        .hook_activity
+                        .iter()
+                        .find(|operation| operation.id == operation_id)
+                })
+                .map(|operation| {
+                    (
+                        operation.has_hooks(),
+                        operation.has_hooks()
+                            && operation.hooks.iter().all(|hook| {
+                                hook.status == crate::model::GitHookRunStatus::Succeeded
+                            }),
+                    )
+                })
+                .unwrap_or_default();
+            let outer_failure_after_successful_hooks = outer_outcome
+                == crate::model::GitOperationOuterOutcome::Failed
+                && all_hooks_succeeded;
+            let suppress_nested_diagnostics = has_hooks
+                && !outer_failure_after_successful_hooks
+                && matches!(
+                    message.as_ref(),
+                    crate::msg::InternalMsg::RepoActionFinished { .. }
+                );
+            let previous_diagnostic_len = suppress_nested_diagnostics
+                .then(|| {
+                    state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == repo_id)
+                        .map(|repo| repo.feedback.diagnostics.len())
+                })
+                .flatten();
+            if has_hooks && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+            {
+                repo.feedback.command_log_operation_id = Some(operation_id);
+            }
+
+            let mut effects = reduce(repos, id_alloc, state, Msg::Internal(*message));
+
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                repo.feedback.command_log_operation_id = None;
+                if let Some(previous_diagnostic_len) = previous_diagnostic_len {
+                    repo.feedback.diagnostics.truncate(previous_diagnostic_len);
+                }
+                git_hook_activity::finished(repo, operation_id, outer_outcome, duration);
+            }
+            if outer_outcome == crate::model::GitOperationOuterOutcome::Cancelled {
+                effects.extend(external_and_history::reload_repo(repos, state, repo_id));
+            }
+            effects
+        }
         Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
             repo_id,
             action,
@@ -912,10 +1100,10 @@ fn reduce_inner(
             );
             Vec::new()
         }
-        Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(state, repo_id),
+        Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(repos, state, repo_id),
         Msg::RepoActivated { .. } => Vec::new(),
         Msg::RepoExternallyChanged { repo_id, change } => {
-            external_and_history::repo_externally_changed(state, repo_id, change)
+            external_and_history::repo_externally_changed(repos, state, repo_id, change)
         }
         Msg::RepoWatchDegraded { repo_id: _, reason } => {
             let message = match reason {
@@ -1006,7 +1194,9 @@ fn reduce_inner(
             label,
         } => effects::compare_with_marked(state, repo_id, commit_id, label),
         Msg::ClearComparisonMark { repo_id } => effects::clear_comparison_mark(state, repo_id),
-        Msg::SelectDiff { repo_id, target } => diff_selection::select_diff(state, repo_id, target),
+        Msg::SelectDiff { repo_id, target } => {
+            diff_selection::select_diff(repos, state, repo_id, target)
+        }
         Msg::OpenInlineSubmoduleDiff {
             repo_id,
             origin,
@@ -1094,11 +1284,13 @@ fn reduce_inner(
             repo_id,
             source,
             path,
-        } => diff_selection::open_file_content(state, repo_id, source, path),
+        } => diff_selection::open_file_content(repos, state, repo_id, source, path),
         Msg::OpenFileEditor { repo_id, path } => {
-            diff_selection::open_file_editor(state, repo_id, path)
+            diff_selection::open_file_editor(repos, state, repo_id, path)
         }
-        Msg::ExitDiffEditMode { repo_id } => diff_selection::exit_diff_edit_mode(state, repo_id),
+        Msg::ExitDiffEditMode { repo_id } => {
+            diff_selection::exit_diff_edit_mode(repos, state, repo_id)
+        }
         Msg::OpenFileAtCommitParent {
             repo_id,
             commit_id,
@@ -1118,24 +1310,24 @@ fn reduce_inner(
             path,
         }],
         Msg::BrowseRepositoryAtCommit { repo_id, commit_id } => {
-            effects::browse_repository_at_commit(state, repo_id, commit_id)
+            effects::browse_repository_at_commit(repos, state, repo_id, commit_id)
         }
         Msg::RevealCommit { repo_id, reference } => {
             effects::reveal_commit(state, repo_id, reference)
         }
         Msg::FinishCommitReveal { repo_id } => effects::finish_commit_reveal(state, repo_id),
-        Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
+        Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(repos, state, repo_id),
         Msg::ViewerNavBack { repo_id } => {
-            diff_selection::viewer_nav(state, repo_id, crate::model::ViewNavDir::Back)
+            diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
         }
         Msg::ViewerNavForward { repo_id } => {
-            diff_selection::viewer_nav(state, repo_id, crate::model::ViewNavDir::Forward)
+            diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Forward)
         }
         Msg::GlobalNavBack { repo_id } => {
-            diff_selection::global_nav(state, repo_id, crate::model::ViewNavDir::Back)
+            diff_selection::global_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
         }
         Msg::GlobalNavForward { repo_id } => {
-            diff_selection::global_nav(state, repo_id, crate::model::ViewNavDir::Forward)
+            diff_selection::global_nav(repos, state, repo_id, crate::model::ViewNavDir::Forward)
         }
         Msg::SetSidebarMode { mode } => effects::set_sidebar_mode(state, mode),
         Msg::StageHunk { repo_id, patch } => {
@@ -1533,7 +1725,7 @@ fn reduce_inner(
         } => {
             begin_commit_action(state, repo_id);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_commit_retry = Some(PendingCommitRetry {
+                repo_state.pending.commit_retry = Some(PendingCommitRetry {
                     message: message.clone(),
                     amend: false,
                     push_after_commit,
@@ -1548,7 +1740,7 @@ fn reduce_inner(
         } => {
             begin_commit_action(state, repo_id);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_commit_retry = Some(PendingCommitRetry {
+                repo_state.pending.commit_retry = Some(PendingCommitRetry {
                     message: message.clone(),
                     amend: true,
                     push_after_commit,
@@ -2284,12 +2476,13 @@ fn reduce_inner(
             repo_id,
             action,
             result,
-        }) => external_and_history::repo_action_finished(state, repo_id, action, result),
+        }) => external_and_history::repo_action_finished(repos, state, repo_id, action, result),
         Msg::Internal(crate::msg::InternalMsg::CreateBranchAlreadyExists {
             repo_id,
             name,
             target,
         }) => external_and_history::create_branch_already_exists(
+            repos,
             state,
             BranchExistsPromptState {
                 repo_id,
@@ -2303,7 +2496,7 @@ fn reduce_inner(
                 .repos
                 .iter()
                 .find(|r| r.id == repo_id)
-                .and_then(|r| r.pending_commit_retry.clone());
+                .and_then(|r| r.pending.commit_retry.clone());
             let outcome = result.as_ref().ok().cloned();
             let push_after_commit = outcome.is_some()
                 && pending_commit
@@ -2316,7 +2509,7 @@ fn reduce_inner(
             let commit_result = result.map(|_| ());
             let mut effects = actions_emit_effects::commit_finished(state, repo_id, commit_result);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_commit_retry = None;
+                repo_state.pending.commit_retry = None;
             }
             if let Some(prompt) = auth_prompt {
                 util::clear_staged_git_auth_env();
@@ -2342,7 +2535,7 @@ fn reduce_inner(
                 .repos
                 .iter()
                 .find(|r| r.id == repo_id)
-                .and_then(|r| r.pending_commit_retry.clone());
+                .and_then(|r| r.pending.commit_retry.clone());
             let outcome = result.as_ref().ok().cloned();
             let push_after_commit = outcome.is_some()
                 && pending_commit
@@ -2356,7 +2549,7 @@ fn reduce_inner(
             let mut effects =
                 actions_emit_effects::commit_amend_finished(state, repo_id, commit_result);
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_commit_retry = None;
+                repo_state.pending.commit_retry = None;
             }
             if let Some(prompt) = auth_prompt {
                 util::clear_staged_git_auth_env();
@@ -2582,7 +2775,10 @@ mod nav_history_tests {
         );
         assert_eq!(repo(&state, repo_id).diff_state.diff_target, Some(target));
         // Origin (history log) seeded + the diff.
-        assert_eq!(repo(&state, repo_id).nav_history.entries.len(), 2);
+        assert_eq!(
+            repo(&state, repo_id).navigation.main_history.entries.len(),
+            2
+        );
 
         dispatch(&mut state, Msg::GlobalNavBack { repo_id });
         assert_eq!(
@@ -2634,7 +2830,7 @@ mod nav_history_tests {
             },
         );
 
-        let entries = &repo(&state, repo_id).nav_history.entries;
+        let entries = &repo(&state, repo_id).navigation.main_history.entries;
         assert!(entries.iter().any(|e| e.diff_target == Some(file1.clone())));
         assert!(entries.iter().any(|e| e.diff_target == Some(file2.clone())));
 
@@ -2735,8 +2931,11 @@ mod nav_history_tests {
                 target: target.clone(),
             },
         );
-        assert_eq!(repo(&state, repo_id).nav_history.entries.len(), 2);
-        assert_eq!(repo(&state, repo_id).nav_history.cursor, 1);
+        assert_eq!(
+            repo(&state, repo_id).navigation.main_history.entries.len(),
+            2
+        );
+        assert_eq!(repo(&state, repo_id).navigation.main_history.cursor, 1);
 
         // Open inline submodule diff.
         dispatch(
@@ -2754,12 +2953,12 @@ mod nav_history_tests {
         // Close inline submodule diff — must fold, not push.
         dispatch(&mut state, Msg::CloseInlineSubmoduleDiff { repo_id });
         assert_eq!(
-            repo(&state, repo_id).nav_history.entries.len(),
+            repo(&state, repo_id).navigation.main_history.entries.len(),
             2,
             "close must not add a new nav entry"
         );
         assert_eq!(
-            repo(&state, repo_id).nav_history.cursor,
+            repo(&state, repo_id).navigation.main_history.cursor,
             1,
             "cursor must not advance past the parent diff"
         );
@@ -2793,7 +2992,7 @@ mod nav_history_tests {
         // ClearDiffSelection to close the diff view.
         dispatch(&mut state, Msg::ClearDiffSelection { repo_id });
 
-        let entries = &repo(&state, repo_id).nav_history.entries;
+        let entries = &repo(&state, repo_id).navigation.main_history.entries;
         // After folding in-place, no duplicate entry remains—the file
         // diff entry is collapsed back into the commit-details entry.
         assert_eq!(
@@ -2802,7 +3001,7 @@ mod nav_history_tests {
             "fold-and-collapse must not create a new entry"
         );
         assert_eq!(
-            repo(&state, repo_id).nav_history.cursor,
+            repo(&state, repo_id).navigation.main_history.cursor,
             1,
             "cursor should be back at the commit-details step"
         );
@@ -2813,7 +3012,7 @@ mod nav_history_tests {
         let r = repo(&state, repo_id);
         assert_eq!(r.diff_state.diff_target, None);
         assert_eq!(r.history_state.selected_commit, None);
-        assert!(!r.nav_history.can_back());
+        assert!(!r.navigation.main_history.can_back());
     }
 
     #[test]
@@ -2853,11 +3052,11 @@ mod nav_history_tests {
 
         let r = repo(&state, repo_id);
         assert_eq!(
-            r.nav_history.entries.len(),
+            r.navigation.main_history.entries.len(),
             4,
             "select-commit pushes a new entry when the commit changes"
         );
-        assert_eq!(r.nav_history.cursor, 3);
+        assert_eq!(r.navigation.main_history.cursor, 3);
         assert_eq!(r.history_state.selected_commit.as_ref(), Some(&commit_b));
 
         dispatch(&mut state, Msg::GlobalNavBack { repo_id });
@@ -2920,11 +3119,11 @@ mod nav_history_tests {
         let r = repo(&state, repo_id);
         // Origin + commit details + three file diffs = 5 entries.
         assert_eq!(
-            r.nav_history.entries.len(),
+            r.navigation.main_history.entries.len(),
             5,
             "each file selection must push a distinct history entry"
         );
-        assert_eq!(r.nav_history.cursor, 4);
+        assert_eq!(r.navigation.main_history.cursor, 4);
         assert_eq!(r.diff_state.diff_target, Some(file_c.clone()));
 
         // ── Back 1: file_c → file_b ──
@@ -2940,7 +3139,7 @@ mod nav_history_tests {
             Some(&commit_a),
             "commit must remain selected while browsing files"
         );
-        assert_eq!(r.nav_history.cursor, 3);
+        assert_eq!(r.navigation.main_history.cursor, 3);
 
         // ── Back 2: file_b → file_a ──
         dispatch(&mut state, Msg::GlobalNavBack { repo_id });
@@ -2951,7 +3150,7 @@ mod nav_history_tests {
             "second back must return to the first opened file (a)"
         );
         assert_eq!(r.history_state.selected_commit.as_ref(), Some(&commit_a));
-        assert_eq!(r.nav_history.cursor, 2);
+        assert_eq!(r.navigation.main_history.cursor, 2);
 
         // ── Back 3: file_a → commit details (no diff, commit still selected) ──
         dispatch(&mut state, Msg::GlobalNavBack { repo_id });
@@ -2965,7 +3164,7 @@ mod nav_history_tests {
             Some(&commit_a),
             "commit must still be selected — back must not deselect the commit"
         );
-        assert_eq!(r.nav_history.cursor, 1);
+        assert_eq!(r.navigation.main_history.cursor, 1);
 
         // ── Back 4: commit details → history log ──
         dispatch(&mut state, Msg::GlobalNavBack { repo_id });
@@ -2975,8 +3174,8 @@ mod nav_history_tests {
             r.history_state.selected_commit, None,
             "only the fourth back returns to the history log"
         );
-        assert_eq!(r.nav_history.cursor, 0);
-        assert!(!r.nav_history.can_back());
+        assert_eq!(r.navigation.main_history.cursor, 0);
+        assert!(!r.navigation.main_history.can_back());
     }
 }
 
