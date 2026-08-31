@@ -695,7 +695,7 @@ jobs:
       # unrelated pull requests. Keyed on the resolver script contents so any
       # pin change (version, asset, or checksum) busts the cache.
       - name: Cache dump_syms
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/gitcomet-dump-syms
           key: dump-syms-${{ hashFiles('scripts/dump-syms-pins.sh') }}-${{ matrix.dump_syms_triple }}
