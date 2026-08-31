@@ -250,6 +250,9 @@ impl PopoverHost {
             PopoverKind::DiffContentModeSettings => {
                 self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
             }
+            PopoverKind::CommitFileSortMenu => {
+                self.context_menu_view(PopoverKind::CommitFileSortMenu, cx)
+            }
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
             }

@@ -38,6 +38,7 @@ pub(in super::super) struct DetailsPaneView {
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
+    main_pane: WeakEntity<MainPaneView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
@@ -48,6 +49,8 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) status_sections_bounds_ref:
         std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
     pub(in super::super) change_tracking_stack_bounds_ref:
+        std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
+    pub(in super::super) commit_files_section_bounds_ref:
         std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
     pub(in super::super) status_section_resize: Option<StatusSectionResizeState>,
 
@@ -87,6 +90,16 @@ pub(in super::super) struct DetailsPaneView {
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     commit_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
+    commit_file_projection: std::cell::RefCell<
+        crate::view::rows::CommitFileProjectionCache<(
+            RepoId,
+            u64,
+            crate::view::rows::CommitFileSort,
+            crate::view::rows::CommitFileFilter,
+        )>,
+    >,
+    pub(in super::super) commit_file_sort: crate::view::rows::CommitFileSort,
+    pub(in super::super) commit_file_filter: crate::view::rows::CommitFileFilter,
     range_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
     /// Keyed by the worktree as well as the scan revision: `rows_for` returns
@@ -113,6 +126,7 @@ pub(in super::super) struct DetailsPaneView {
 pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) theme: AppTheme,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
+    pub(in super::super) main_pane: WeakEntity<MainPaneView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
 }
 
@@ -244,6 +258,7 @@ impl DetailsPaneView {
         let DetailsPaneInit {
             theme,
             root_view,
+            main_pane,
             tooltip_host,
         } = init;
         let preferences = ui_model.read(cx).preferences.clone();
@@ -393,6 +408,7 @@ impl DetailsPaneView {
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
             root_view,
+            main_pane,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
@@ -407,6 +423,7 @@ impl DetailsPaneView {
             untracked_height: None,
             status_sections_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             change_tracking_stack_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            commit_files_section_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             status_section_resize: None,
             untracked_scroll: UniformListScrollHandle::default(),
             unstaged_scroll: UniformListScrollHandle::default(),
@@ -441,6 +458,11 @@ impl DetailsPaneView {
             commit_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
+            commit_file_projection: std::cell::RefCell::new(
+                crate::view::rows::CommitFileProjectionCache::default(),
+            ),
+            commit_file_sort: crate::view::rows::CommitFileSort::default(),
+            commit_file_filter: crate::view::rows::CommitFileFilter::default(),
             range_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
@@ -879,6 +901,81 @@ impl DetailsPaneView {
         cache.rows_for(&(repo_id, commit_details_rev), files)
     }
 
+    pub(in super::super) fn cached_commit_file_projection(
+        &self,
+        repo_id: RepoId,
+        commit_details_rev: u64,
+        files: &[gitcomet_core::domain::CommitFileChange],
+    ) -> Arc<crate::view::rows::CommitFileProjection> {
+        let sort = self.commit_file_sort;
+        let filter = self.commit_file_filter;
+        let mut cache = self.commit_file_projection.borrow_mut();
+        cache.projection_for(
+            &(repo_id, commit_details_rev, sort, filter),
+            files,
+            sort,
+            filter,
+        )
+    }
+
+    pub(in super::super) fn active_commit_file_source_indices(
+        &self,
+        repo_id: RepoId,
+    ) -> Option<Arc<[usize]>> {
+        let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
+        let Loadable::Ready(details) = &repo.history_state.commit_details else {
+            return None;
+        };
+        Some(
+            self.cached_commit_file_projection(
+                repo_id,
+                repo.history_state.commit_details_rev,
+                &details.files,
+            )
+            .source_indices
+            .clone(),
+        )
+    }
+
+    pub(in super::super) fn set_commit_file_sort(
+        &mut self,
+        sort: crate::view::rows::CommitFileSort,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_file_sort == sort {
+            return;
+        }
+        self.commit_file_sort = sort;
+        self.commit_files_scroll
+            .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        self.notify_commit_file_projection_dependents(cx);
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_commit_file_filter(
+        &mut self,
+        filter: crate::view::rows::CommitFileFilter,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_file_filter == filter {
+            return;
+        }
+        self.commit_file_filter = filter;
+        self.commit_files_scroll
+            .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        self.notify_commit_file_projection_dependents(cx);
+        cx.notify();
+    }
+
+    /// The cached main pane reads this projection to render commit-diff file
+    /// navigation, so local sort/filter changes must invalidate it explicitly.
+    fn notify_commit_file_projection_dependents(&self, cx: &mut gpui::Context<Self>) {
+        let main_pane = self.main_pane.clone();
+        cx.defer(move |cx| {
+            let _ = main_pane.update(cx, |_pane, cx| cx.notify());
+        });
+    }
+
     pub(in super::super) fn cached_range_file_rows(
         &self,
         repo_id: RepoId,
@@ -1045,6 +1142,8 @@ impl DetailsPaneView {
         path_alignment_visible_signature(&(
             repo_id,
             commit_details_rev,
+            self.commit_file_sort,
+            self.commit_file_filter,
             total_rows,
             range.start,
             range.end,
@@ -1143,6 +1242,10 @@ impl DetailsPaneView {
         });
 
         let switched_repo = prev_active_repo_id != next_repo_id;
+        let switched_commit = prev_selected_commit != next_selected_commit;
+        if switched_repo || switched_commit {
+            self.commit_file_filter = crate::view::rows::CommitFileFilter::All;
+        }
         let mut restored_commit_message: Option<SharedString> = None;
         if switched_repo {
             let was_amend_enabled = self.commit_amend_enabled;
@@ -1208,7 +1311,7 @@ impl DetailsPaneView {
             self.commit_message_input
                 .update(cx, |input, cx| input.set_text(restore.to_string(), cx));
             self.commit_message_last_text = restore;
-        } else if prev_selected_commit != next_selected_commit {
+        } else if switched_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -1375,6 +1478,24 @@ impl DetailsPaneView {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = root_view.update(cx, |root, cx| {
                     root.open_popover_at(kind, anchor, window, cx);
+                });
+            });
+        });
+    }
+
+    pub(in super::super) fn open_popover_for_bounds(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root_view = self.root_view.clone();
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = root_view.update(cx, |root, cx| {
+                    root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
                 });
             });
         });

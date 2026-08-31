@@ -219,6 +219,7 @@ pub(crate) enum PopoverKind {
     CommitOptionsMenu {
         repo_id: RepoId,
     },
+    CommitFileSortMenu,
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
     },

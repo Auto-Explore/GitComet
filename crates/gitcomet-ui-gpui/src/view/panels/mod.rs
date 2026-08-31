@@ -233,6 +233,9 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
     },
+    SetCommitFileSort {
+        sort: crate::view::rows::CommitFileSort,
+    },
     SetDiffContentMode {
         mode: DiffContentMode,
     },
