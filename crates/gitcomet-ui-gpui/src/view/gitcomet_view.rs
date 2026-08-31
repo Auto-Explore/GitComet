@@ -1018,6 +1018,7 @@ impl GitCometView {
                 DetailsPaneInit {
                     theme: initial_theme,
                     root_view: weak_view.clone(),
+                    main_pane: main_pane.downgrade(),
                     tooltip_host: tooltip_host.downgrade(),
                 },
                 window,

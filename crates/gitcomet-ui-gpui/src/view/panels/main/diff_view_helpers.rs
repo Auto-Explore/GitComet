@@ -373,6 +373,15 @@ impl MainPaneView {
                 inline.selected_ix + 1 < inline.entries.len(),
             )
         } else {
+            let commit_file_source_indices = self
+                .root_view
+                .update(cx, |root, cx| {
+                    root.details_pane
+                        .read(cx)
+                        .active_commit_file_source_indices(repo_id)
+                })
+                .ok()
+                .flatten();
             let Some(repo) = self.active_repo() else {
                 return (None, None);
             };
@@ -386,6 +395,7 @@ impl MainPaneView {
                     diff_target,
                     change_tracking_view,
                     -1,
+                    commit_file_source_indices.as_deref(),
                 )
                 .is_some(),
                 status_nav::adjacent_diff_file_target_for_repo(
@@ -393,6 +403,7 @@ impl MainPaneView {
                     diff_target,
                     change_tracking_view,
                     1,
+                    commit_file_source_indices.as_deref(),
                 )
                 .is_some(),
             )

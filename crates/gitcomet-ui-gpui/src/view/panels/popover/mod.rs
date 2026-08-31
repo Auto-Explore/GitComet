@@ -488,6 +488,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::MergetoolSettingsMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
+            | PopoverKind::CommitFileSortMenu
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
             | PopoverKind::TerminalMenu { .. }
@@ -838,6 +839,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::HistoryAuthorFilter { .. }
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::CommitFileSortMenu
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::UiScalePicker => Anchor::TopRight,
@@ -993,6 +995,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::CommitFileSortMenu
         | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryAuthorFilter { .. } => Some(HISTORY_AUTHOR_FILTER_WIDTH),

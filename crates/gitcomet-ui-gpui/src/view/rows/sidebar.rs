@@ -2131,23 +2131,29 @@ impl DetailsPaneView {
             repo.history_state.commit_details_rev,
             &details.files,
         );
+        let projection = this.cached_commit_file_projection(
+            repo_id,
+            repo.history_state.commit_details_rev,
+            &details.files,
+        );
         let visible_signature = this.commit_files_visible_signature(
             repo_id,
             repo.history_state.commit_details_rev,
             &range,
-            details.files.len(),
+            projection.source_indices.len(),
         );
         let path_alignment_group = this
             .commit_files_path_alignment_group
             .visible_rows(visible_signature);
 
         range
-            .filter_map(|ix| {
+            .filter_map(|visible_ix| {
+                let source_ix = *projection.source_indices.get(visible_ix)?;
                 details
                     .files
-                    .get(ix)
-                    .zip(file_rows.get(ix))
-                    .map(|(f, row)| (ix, f, row.label.clone(), row.visuals))
+                    .get(source_ix)
+                    .zip(file_rows.get(source_ix))
+                    .map(|(f, row)| (visible_ix, f, row.label.clone(), row.visuals))
             })
             .map(|(ix, f, path_label, visuals)| {
                 let commit_id = details.id.clone();

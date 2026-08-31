@@ -100,6 +100,74 @@ const COMPARISON_CARDS_MAX_BODY_FRACTION: f32 = 0.5;
 /// when the pane is shorter than the card cap allows for.
 const RANGE_FILES_SECTION_MIN_HEIGHT_PX: f32 = 44.0;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommitFileFilterLabels {
+    Full,
+    Compact,
+}
+
+const COMMIT_FILE_FILTER_TEXT_WIDTH_PX: f32 = 5.2;
+const COMMIT_FILE_FILTER_ICON_WIDTH_PX: f32 = 12.0;
+const COMMIT_FILE_FILTER_ICON_GAP_PX: f32 = 3.0;
+const COMMIT_FILE_FILTER_TAB_PAD_X_PX: f32 = 2.0;
+const COMMIT_FILE_FILTER_TAB_COMPACT_GAP_PX: f32 = 4.0;
+const COMMIT_FILE_FILTER_TAB_FULL_GAP_PX: f32 = 6.0;
+const COMMIT_FILE_FILTER_HEIGHT_PX: f32 = 22.0;
+
+fn commit_file_filter_labels_for_width(
+    available_width: Pixels,
+    counts: crate::view::rows::CommitFileKindCounts,
+    ui_scale_percent: u32,
+) -> CommitFileFilterLabels {
+    if available_width <= px(0.0) {
+        return CommitFileFilterLabels::Full;
+    }
+
+    let filters = crate::view::rows::CommitFileFilter::ALL;
+    let text_chars = filters
+        .into_iter()
+        .map(|filter| {
+            filter.label().chars().count()
+                + counts.for_filter(filter).to_string().chars().count()
+                + 3 // space and parentheses
+        })
+        .sum::<usize>();
+    let count = filters.len() as f32;
+    let needed = text_chars as f32 * COMMIT_FILE_FILTER_TEXT_WIDTH_PX
+        + count
+            * (COMMIT_FILE_FILTER_ICON_WIDTH_PX
+                + COMMIT_FILE_FILTER_ICON_GAP_PX
+                + 2.0 * COMMIT_FILE_FILTER_TAB_PAD_X_PX)
+        + (count - 1.0) * COMMIT_FILE_FILTER_TAB_FULL_GAP_PX;
+
+    if crate::ui_scale::design_px_from_percent(needed, ui_scale_percent) <= available_width {
+        CommitFileFilterLabels::Full
+    } else {
+        CommitFileFilterLabels::Compact
+    }
+}
+
+fn commit_file_filter_color(
+    filter: crate::view::rows::CommitFileFilter,
+    theme: AppTheme,
+) -> gpui::Rgba {
+    match filter {
+        crate::view::rows::CommitFileFilter::All => theme.colors.foreground.secondary,
+        crate::view::rows::CommitFileFilter::Modified => {
+            crate::view::rows::commit_file_kind_visuals(FileStatusKind::Modified).color(&theme)
+        }
+        crate::view::rows::CommitFileFilter::Removed => {
+            crate::view::rows::commit_file_kind_visuals(FileStatusKind::Deleted).color(&theme)
+        }
+        crate::view::rows::CommitFileFilter::Added => {
+            crate::view::rows::commit_file_kind_visuals(FileStatusKind::Added).color(&theme)
+        }
+        crate::view::rows::CommitFileFilter::Renamed => {
+            crate::view::rows::commit_file_kind_visuals(FileStatusKind::Renamed).color(&theme)
+        }
+    }
+}
+
 fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyElement) -> Div {
     div()
         .flex()
@@ -1555,14 +1623,237 @@ impl DetailsPaneView {
         .render(theme, self.commit_details_message_link_menu.clone())
     }
 
+    fn commit_file_filter_tabs(
+        &mut self,
+        counts: crate::view::rows::CommitFileKindCounts,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+        let available_width = self
+            .commit_files_section_bounds_ref
+            .borrow()
+            .as_ref()
+            .map(|bounds| bounds.size.width)
+            .unwrap_or(Pixels::MAX);
+        let labels =
+            commit_file_filter_labels_for_width(available_width, counts, self.ui_scale_percent);
+        let tab_gap = match labels {
+            CommitFileFilterLabels::Full => COMMIT_FILE_FILTER_TAB_FULL_GAP_PX,
+            CommitFileFilterLabels::Compact => COMMIT_FILE_FILTER_TAB_COMPACT_GAP_PX,
+        };
+        let current = self.commit_file_filter;
+
+        let mut tabs = div()
+            .id("commit_file_filter_tabs")
+            .debug_selector(|| "commit_file_filter_tabs".to_string())
+            .flex()
+            .items_center()
+            .gap(ui_scale.px(tab_gap))
+            .w_full()
+            .min_w(px(0.0))
+            .h(ui_scale.px(COMMIT_FILE_FILTER_HEIGHT_PX))
+            .overflow_hidden();
+
+        for (ix, filter) in crate::view::rows::CommitFileFilter::ALL
+            .into_iter()
+            .enumerate()
+        {
+            let count = counts.for_filter(filter);
+            let selected = current == filter;
+            let disabled = count == 0;
+            let full_label = format!("{} ({count})", filter.label());
+            let tooltip = filter.tooltip(count);
+            let display_label = match labels {
+                CommitFileFilterLabels::Full => full_label.clone(),
+                CommitFileFilterLabels::Compact => count.to_string(),
+            };
+            let icon_color = commit_file_filter_color(filter, theme);
+            let selected_border = if theme.is_dark {
+                gpui::rgba(0x00000000)
+            } else {
+                theme.colors.interaction.selected_indicator
+            };
+            let mut tab = div()
+                .id(("commit_file_filter_tab", ix))
+                .debug_selector(move || format!("commit_file_filter_tab_{ix}"))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .gap(ui_scale.px(COMMIT_FILE_FILTER_ICON_GAP_PX))
+                .h(ui_scale.px(COMMIT_FILE_FILTER_HEIGHT_PX))
+                .px(ui_scale.px(COMMIT_FILE_FILTER_TAB_PAD_X_PX))
+                .rounded(px(theme.radii.control))
+                .border_1()
+                .border_color(if selected {
+                    selected_border
+                } else {
+                    gpui::rgba(0x00000000)
+                })
+                .text_xs()
+                .whitespace_nowrap()
+                .text_color(if selected {
+                    theme.colors.interaction.selected_foreground
+                } else {
+                    theme.colors.foreground.secondary
+                })
+                .when(selected, |tab| {
+                    tab.bg(theme.colors.interaction.selected_background)
+                })
+                .child(svg_icon(
+                    filter.icon(),
+                    icon_color,
+                    ui_scale.px(COMMIT_FILE_FILTER_ICON_WIDTH_PX),
+                ))
+                .child(display_label)
+                .gitcomet_tooltip(theme, tooltip.into());
+
+            if disabled {
+                tab = tab.opacity(0.5).cursor(CursorStyle::Arrow);
+            } else {
+                let hover_bg = theme.hover_overlay();
+                let active_bg = theme.active_overlay();
+                tab = tab
+                    .tab_index(0)
+                    .cursor(CursorStyle::PointingHand)
+                    .when(!selected, |tab| {
+                        tab.hover(move |style| style.bg(hover_bg))
+                            .active(move |style| style.bg(active_bg))
+                    })
+                    .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
+                        if event.standard_click() {
+                            this.set_commit_file_filter(filter, cx);
+                        }
+                    }))
+                    .on_key_down(cx.listener(
+                        move |this, event: &gpui::KeyDownEvent, _window, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                cx.stop_propagation();
+                                this.set_commit_file_filter(filter, cx);
+                            }
+                        },
+                    ));
+            }
+
+            tabs = tabs.child(tab);
+        }
+        tabs
+    }
+
+    fn commit_files_section(
+        &mut self,
+        repo_id: RepoId,
+        commit_details_rev: u64,
+        details: &gitcomet_core::domain::CommitDetails,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+        let projection =
+            self.cached_commit_file_projection(repo_id, commit_details_rev, &details.files);
+        let visible_count = projection.source_indices.len();
+        let files = if details.files.is_empty() {
+            div()
+                .text_sm()
+                .text_color(theme.colors.foreground.secondary)
+                .child("No files.")
+                .into_any_element()
+        } else if visible_count == 0 {
+            div()
+                .text_sm()
+                .text_color(theme.colors.foreground.secondary)
+                .child("No files match this filter.")
+                .into_any_element()
+        } else {
+            Self::vertical_scroll_frame(
+                theme,
+                ("commit_details_files_container", repo_id.0),
+                ("commit_details_files_scrollbar", repo_id.0),
+                &self.commit_files_scroll,
+                uniform_list(
+                    ("commit_details_files_list", repo_id.0),
+                    visible_count,
+                    cx.processor(Self::render_commit_file_rows),
+                ),
+            )
+            .min_h(ui_scale.px(24.0))
+            .into_any_element()
+        };
+
+        let sort = self.commit_file_sort;
+        let sort_button = components::Button::new("commit_file_sort_button", sort.control_label())
+            .style(components::ButtonStyle::Transparent)
+            .disabled(details.files.is_empty())
+            .end_slot(svg_icon(
+                "icons/chevron_down.svg",
+                theme.colors.foreground.secondary,
+                ui_scale.px(12.0),
+            ))
+            .on_click_with_bounds(theme, cx, |this, event, bounds, window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.open_popover_for_bounds(PopoverKind::CommitFileSortMenu, bounds, window, cx);
+            })
+            .debug_selector(|| "commit_file_sort_button".to_string())
+            .gitcomet_tooltip(
+                theme,
+                format!("Sort committed files: {}", sort.label()).into(),
+            );
+
+        let heading = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .w_full()
+            .min_w(px(0.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_sm()
+                    .text_color(theme.colors.foreground.secondary)
+                    .line_clamp(1)
+                    .child(format!("Committed files ({})", projection.counts.all)),
+            )
+            .child(sort_button);
+        let filters = self.commit_file_filter_tabs(projection.counts, cx);
+
+        let section_bounds = std::rc::Rc::clone(&self.commit_files_section_bounds_ref);
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .flex_1()
+            .h_full()
+            .min_h(ui_scale.px(90.0))
+            .border_t_1()
+            .border_color(theme.colors.stroke.subtle)
+            .pt_2()
+            .on_children_prepainted(move |children_bounds, window, _app| {
+                let next_bounds = children_bounds.first().copied();
+                let mut measured = section_bounds.borrow_mut();
+                if *measured != next_bounds {
+                    *measured = next_bounds;
+                    window.refresh();
+                }
+            })
+            .child(visible_bounds_probe())
+            .child(heading)
+            .child(filters)
+            .child(files)
+            .into_any_element()
+    }
+
     pub(in super::super) fn commit_details_view(
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
-        let commit_files_min_viewport_height = ui_scale.px(24.0);
-        let commit_files_section_min_height = ui_scale.px(44.0);
         let active_repo_id = self.active_repo_id();
         let selected_id = self
             .active_repo()
@@ -1646,6 +1937,10 @@ impl DetailsPaneView {
                     repo.history_state.commit_details_rev,
                 )
             });
+            let commit_details_rev = active_commit_details
+                .as_ref()
+                .map(|(_, revision)| *revision)
+                .unwrap_or_default();
             let body: AnyElement = match active_commit_details.as_ref().map(|(details, _)| details)
             {
                 None => {
@@ -1678,28 +1973,6 @@ impl DetailsPaneView {
                                 .first()
                                 .map(|p: &CommitId| p.as_ref().to_string())
                                 .unwrap_or_else(|| "—".to_string());
-
-                            let files = if details.files.is_empty() {
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child("No files.")
-                                    .into_any_element()
-                            } else {
-                                Self::vertical_scroll_frame(
-                                    theme,
-                                    ("commit_details_files_container", repo_id.0),
-                                    ("commit_details_files_scrollbar", repo_id.0),
-                                    &self.commit_files_scroll,
-                                    uniform_list(
-                                        ("commit_details_files_list", repo_id.0),
-                                        details.files.len(),
-                                        cx.processor(Self::render_commit_file_rows),
-                                    ),
-                                )
-                                .min_h(commit_files_min_viewport_height)
-                                .into_any_element()
-                            };
 
                             self.sync_retained_commit_details_message_input(
                                 details.message.as_str(),
@@ -1765,28 +2038,12 @@ impl DetailsPaneView {
                                             ),
                                         )),
                                 )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .flex_1()
-                                        .h_full()
-                                        .min_h(commit_files_section_min_height)
-                                        .border_t_1()
-                                        .border_color(theme.colors.stroke.subtle)
-                                        .pt_2()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(theme.colors.foreground.secondary)
-                                                .child(format!(
-                                                    "Committed files ({})",
-                                                    details.files.len()
-                                                )),
-                                        )
-                                        .child(files),
-                                )
+                                .child(self.commit_files_section(
+                                    repo_id,
+                                    commit_details_rev,
+                                    details,
+                                    cx,
+                                ))
                                 .into_any_element()
                         }
                     } else {
@@ -1795,28 +2052,6 @@ impl DetailsPaneView {
                             .first()
                             .map(|p: &CommitId| p.as_ref().to_string())
                             .unwrap_or_else(|| "—".to_string());
-
-                        let files = if details.files.is_empty() {
-                            div()
-                                .text_sm()
-                                .text_color(theme.colors.foreground.secondary)
-                                .child("No files.")
-                                .into_any_element()
-                        } else {
-                            Self::vertical_scroll_frame(
-                                theme,
-                                ("commit_details_files_container", repo_id.0),
-                                ("commit_details_files_scrollbar", repo_id.0),
-                                &self.commit_files_scroll,
-                                uniform_list(
-                                    ("commit_details_files_list", repo_id.0),
-                                    details.files.len(),
-                                    cx.processor(Self::render_commit_file_rows),
-                                ),
-                            )
-                            .min_h(commit_files_min_viewport_height)
-                            .into_any_element()
-                        };
 
                         self.sync_commit_details_message_input(
                             details.message.as_str(),
@@ -1893,28 +2128,12 @@ impl DetailsPaneView {
                                         ),
                                     )),
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .flex_1()
-                                    .h_full()
-                                    .min_h(commit_files_section_min_height)
-                                    .border_t_1()
-                                    .border_color(theme.colors.stroke.subtle)
-                                    .pt_2()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.colors.foreground.secondary)
-                                            .child(format!(
-                                                "Committed files ({})",
-                                                details.files.len()
-                                            )),
-                                    )
-                                    .child(files),
-                            )
+                            .child(self.commit_files_section(
+                                repo_id,
+                                commit_details_rev,
+                                details,
+                                cx,
+                            ))
                             .into_any_element()
                     }
                 }
@@ -3326,6 +3545,45 @@ mod tests {
             "Discard (3)".len(),
             "Stage all changes".len(),
         ]
+    }
+
+    fn commit_file_filter_test_counts() -> crate::view::rows::CommitFileKindCounts {
+        crate::view::rows::CommitFileKindCounts {
+            all: 20,
+            modified: 12,
+            removed: 2,
+            added: 5,
+            renamed: 1,
+        }
+    }
+
+    #[test]
+    fn commit_file_filter_tabs_use_full_labels_when_they_fit() {
+        assert_eq!(
+            commit_file_filter_labels_for_width(
+                px(500.0),
+                commit_file_filter_test_counts(),
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ),
+            CommitFileFilterLabels::Full
+        );
+    }
+
+    #[test]
+    fn commit_file_filter_tabs_compact_in_narrow_or_scaled_panels() {
+        let counts = commit_file_filter_test_counts();
+        assert_eq!(
+            commit_file_filter_labels_for_width(
+                px(300.0),
+                counts,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ),
+            CommitFileFilterLabels::Compact
+        );
+        assert_eq!(
+            commit_file_filter_labels_for_width(px(600.0), counts, 200),
+            CommitFileFilterLabels::Compact
+        );
     }
 
     #[test]
