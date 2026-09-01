@@ -503,6 +503,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::TagRefMenu { .. }
             | PopoverKind::StatusFileMenu { .. }
             | PopoverKind::BranchMenu { .. }
+            | PopoverKind::BranchRefsMenu { .. }
             | PopoverKind::BranchSectionMenu { .. }
             | PopoverKind::SubmoduleInnerDiffMenu { .. }
             | PopoverKind::Repo {
@@ -965,6 +966,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::TagRefMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::BranchMenu { .. }
+        | PopoverKind::BranchRefsMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::Repo {

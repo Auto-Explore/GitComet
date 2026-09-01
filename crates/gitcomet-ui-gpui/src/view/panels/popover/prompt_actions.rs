@@ -411,6 +411,18 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            PopoverKind::BranchRefsMenu {
+                repo_id,
+                display_name,
+                targets,
+            } => self.context_menu_view(
+                PopoverKind::BranchRefsMenu {
+                    repo_id,
+                    display_name,
+                    targets,
+                },
+                cx,
+            ),
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 self.context_menu_view(PopoverKind::BranchSectionMenu { repo_id, section }, cx)
             }

@@ -1449,43 +1449,11 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             },
         )
     });
-    assert_declared_shortcuts(&local_branch_model, &["P", "M", "S", "B"]);
+    assert_declared_shortcuts(&local_branch_model, &[] as &[&str]);
     assert_shortcut_action!(
         local_branch_model,
         "Enter",
         ContextMenuAction::CheckoutBranch { repo_id: rid, name } if *rid == repo_id && name == "feature"
-    );
-    assert_shortcut_action!(
-        local_branch_model,
-        "P",
-        ContextMenuAction::PullBranch {
-            repo_id: rid,
-            remote,
-            branch
-        } if *rid == repo_id && remote == "." && branch == "feature"
-    );
-    assert_shortcut_action!(
-        local_branch_model,
-        "M",
-        ContextMenuAction::MergeRef {
-            repo_id: rid,
-            reference
-        } if *rid == repo_id && reference == "feature"
-    );
-    assert_shortcut_action!(
-        local_branch_model,
-        "S",
-        ContextMenuAction::SquashRef {
-            repo_id: rid,
-            reference
-        } if *rid == repo_id && reference == "feature"
-    );
-    assert_shortcut_action!(
-        local_branch_model,
-        "B",
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
-        } if *rid == repo_id && onto == "feature"
     );
     assert!(local_branch_model.items.iter().any(|item| {
         matches!(
@@ -1523,7 +1491,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             ContextMenuItem::Entry { label, .. } if label.as_ref() == "Rename branch"
         )
     }));
-    assert_declared_shortcuts(&remote_branch_model, &["P", "M", "S", "B", "F"]);
+    assert_declared_shortcuts(&remote_branch_model, &[] as &[&str]);
     assert_shortcut_action!(
         remote_branch_model,
         "Enter",
@@ -1534,43 +1502,6 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
                 branch
             }
         } if *rid == repo_id && remote == "origin" && branch == "feature"
-    );
-    assert_shortcut_action!(
-        remote_branch_model,
-        "P",
-        ContextMenuAction::PullBranch {
-            repo_id: rid,
-            remote,
-            branch
-        } if *rid == repo_id && remote == "origin" && branch == "feature"
-    );
-    assert_shortcut_action!(
-        remote_branch_model,
-        "M",
-        ContextMenuAction::MergeRef {
-            repo_id: rid,
-            reference
-        } if *rid == repo_id && reference == "origin/feature"
-    );
-    assert_shortcut_action!(
-        remote_branch_model,
-        "S",
-        ContextMenuAction::SquashRef {
-            repo_id: rid,
-            reference
-        } if *rid == repo_id && reference == "origin/feature"
-    );
-    assert_shortcut_action!(
-        remote_branch_model,
-        "B",
-        ContextMenuAction::OpenPopover {
-            kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
-        } if *rid == repo_id && onto == "origin/feature"
-    );
-    assert_shortcut_action!(
-        remote_branch_model,
-        "F",
-        ContextMenuAction::FetchAll { repo_id: rid } if *rid == repo_id
     );
 
     let remote_menu_model = cx.update(|_window, app| {

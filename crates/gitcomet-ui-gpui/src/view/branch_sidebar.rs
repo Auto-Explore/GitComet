@@ -30,6 +30,17 @@ pub(super) enum BranchSection {
     Remote,
 }
 
+/// Exact branch identity behind a compact history decoration.
+///
+/// History can collapse a local branch and one or more same-named remote
+/// branches into a single chip, but branch actions still need the original
+/// section and the full ref name (`origin/main` for a remote branch).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct BranchMenuTarget {
+    pub(super) section: BranchSection,
+    pub(super) name: String,
+}
+
 type BranchSidebarDepth = u16;
 
 pub(super) const fn pinned_section_storage_key(section: BranchSection) -> &'static str {
