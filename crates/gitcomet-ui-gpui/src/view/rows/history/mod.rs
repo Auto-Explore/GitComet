@@ -367,6 +367,7 @@ fn history_table_row(
         summary,
         when,
         short_sha,
+        active_context_menu_invoker.cloned(),
         row_bg_overlay,
         if context_menu_active {
             theme.colors.interaction.pressed_background

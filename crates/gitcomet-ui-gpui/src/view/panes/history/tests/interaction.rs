@@ -856,6 +856,14 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     redraw(cx);
     cx.update(|_window, app| {
         assert_eq!(
+            view.read(app)
+                .active_context_menu_invoker
+                .as_ref()
+                .map(|invoker| invoker.as_ref()),
+            Some("history_branch_chip_menu_1_tip_main"),
+            "a chip menu must pin the chip instead of the whole commit row"
+        );
+        assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::BranchRefsMenu {
                 repo_id,
@@ -934,6 +942,12 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
             None
         );
     });
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("feature".into()),
+        "hover-menu rows should expose their complete ref name"
+    );
 
     let click_hover_item =
         |cx: &mut gpui::VisualTestContext, selector: &'static str, button: gpui::MouseButton| {

@@ -12,7 +12,8 @@ use std::cell::RefCell;
 const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
 const HISTORY_TAG_CHIP_PADDING_X_PX: f32 = 6.0;
 const HISTORY_TAG_CHIP_GAP_PX: f32 = 4.0;
-const HISTORY_BRANCH_CHIP_ICON_PX: f32 = 12.0;
+const HISTORY_BRANCH_CHIP_ICON_PX: f32 = 11.0;
+const HISTORY_BRANCH_CHIP_COMBINED_ICON_PX: f32 = 16.0;
 const HISTORY_BRANCH_CHIP_TEXT_ICON_GAP_PX: f32 = 3.0;
 const HISTORY_BRANCH_CHIP_ICON_GAP_PX: f32 = 2.0;
 
@@ -187,6 +188,59 @@ fn shape_truncated_line_cached_from(
     font_family: Option<&'static str>,
     truncate_from: TruncateFrom,
 ) -> gpui::ShapedLine {
+    shape_truncated_line_cached_from_with_affix(
+        window,
+        base_style,
+        font_size,
+        text,
+        text_hash,
+        max_width,
+        color,
+        font_family,
+        truncate_from,
+        "…",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn shape_clipped_chip_line_cached_from(
+    window: &mut Window,
+    base_style: &gpui::TextStyle,
+    font_size: Pixels,
+    text: &SharedString,
+    text_hash: u64,
+    max_width: Pixels,
+    color: gpui::Rgba,
+    font_family: Option<&'static str>,
+    truncate_from: TruncateFrom,
+) -> gpui::ShapedLine {
+    shape_truncated_line_cached_from_with_affix(
+        window,
+        base_style,
+        font_size,
+        text,
+        text_hash,
+        max_width,
+        color,
+        font_family,
+        truncate_from,
+        "",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn shape_truncated_line_cached_from_with_affix(
+    window: &mut Window,
+    base_style: &gpui::TextStyle,
+    font_size: Pixels,
+    text: &SharedString,
+    text_hash: u64,
+    max_width: Pixels,
+    color: gpui::Rgba,
+    font_family: Option<&'static str>,
+    truncate_from: TruncateFrom,
+    truncation_affix: &'static str,
+) -> gpui::ShapedLine {
     use std::hash::{Hash, Hasher};
 
     let key = {
@@ -203,6 +257,7 @@ fn shape_truncated_line_cached_from(
         color.blue.to_bits().hash(&mut hasher);
         color.alpha.to_bits().hash(&mut hasher);
         matches!(truncate_from, TruncateFrom::Start).hash(&mut hasher);
+        truncation_affix.hash(&mut hasher);
         hasher.finish()
     };
 
@@ -222,7 +277,7 @@ fn shape_truncated_line_cached_from(
     let (truncated, runs) = wrapper.truncate_line(
         text.clone(),
         max_width.max(px(0.0)),
-        "…",
+        truncation_affix,
         &runs,
         truncate_from,
     );
@@ -252,14 +307,22 @@ struct HistoryChipVisual {
     border: gpui::Rgba,
     bg: gpui::Rgba,
     text: gpui::Rgba,
+    local_branch_icon: gpui::Rgba,
+    remote_branch_icon: gpui::Rgba,
 }
 
-fn history_chip_visual(theme: AppTheme, kind: HistoryChipStyleKind) -> HistoryChipVisual {
-    match kind {
+fn history_chip_visual(
+    theme: AppTheme,
+    kind: HistoryChipStyleKind,
+    context_menu_open: bool,
+) -> HistoryChipVisual {
+    let visual = match kind {
         HistoryChipStyleKind::Tag => HistoryChipVisual {
             border: with_alpha(theme.colors.accent.foreground, 0.35),
             bg: with_alpha(theme.colors.accent.foreground, 0.12),
             text: theme.colors.accent.foreground,
+            local_branch_icon: theme.colors.accent.foreground,
+            remote_branch_icon: theme.colors.foreground.secondary,
         },
         // The HEAD chip carries no selection state: a ring around a pill that is
         // already a solid accent fill reads as a rendering artifact, not as a
@@ -272,6 +335,10 @@ fn history_chip_visual(theme: AppTheme, kind: HistoryChipStyleKind) -> HistoryCh
             border: theme.colors.accent.solid,
             bg: theme.colors.accent.solid,
             text: theme.colors.accent.on_solid,
+            // Keep the icon legible against the solid accent chip. Plain local
+            // branch chips use `accent.foreground`, matching the sidebar.
+            local_branch_icon: theme.colors.accent.on_solid,
+            remote_branch_icon: with_alpha(theme.colors.accent.on_solid, 0.70),
         },
         // The branch picked in the sidebar is tinted rather than merely
         // re-bordered: on a busy ref column a border alone reads as noise, and
@@ -282,11 +349,38 @@ fn history_chip_visual(theme: AppTheme, kind: HistoryChipStyleKind) -> HistoryCh
             border: with_alpha(theme.colors.accent.foreground, 0.85),
             bg: with_alpha(theme.colors.accent.foreground, 0.22),
             text: selected_branch_label_color(theme),
+            local_branch_icon: theme.colors.accent.foreground,
+            remote_branch_icon: theme.colors.foreground.secondary,
         },
         HistoryChipStyleKind::Branch { selected: false } => HistoryChipVisual {
             border: with_alpha(theme.colors.stroke.default, 0.90),
             bg: theme.colors.surface.raised,
             text: theme.colors.foreground.secondary,
+            local_branch_icon: theme.colors.accent.foreground,
+            remote_branch_icon: theme.colors.foreground.secondary,
+        },
+    };
+
+    if !context_menu_open {
+        return visual;
+    }
+
+    match kind {
+        // HEAD already owns the strongest accent surface. A light ring is the
+        // only open-state treatment that remains visible without weakening its
+        // established foreground contrast.
+        HistoryChipStyleKind::Head => HistoryChipVisual {
+            border: theme.colors.accent.on_solid,
+            ..visual
+        },
+        // The menu-open state is deliberately stronger than sidebar selection,
+        // so a selected branch still changes when its own menu is pinned open.
+        HistoryChipStyleKind::Tag | HistoryChipStyleKind::Branch { .. } => HistoryChipVisual {
+            border: theme.colors.accent.foreground,
+            bg: with_alpha(theme.colors.accent.foreground, 0.30),
+            text: selected_branch_label_color(theme),
+            local_branch_icon: theme.colors.accent.foreground,
+            remote_branch_icon: theme.colors.foreground.secondary,
         },
     }
 }
@@ -424,7 +518,48 @@ fn history_branch_chip_style_kind(
     }
 }
 
-fn history_branch_chip_icons(chip: &HistoryBranchChipVm) -> SmallVec<[&'static str; 2]> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HistoryBranchChipIcon {
+    Local,
+    Remote,
+    LocalRemote,
+}
+
+impl HistoryBranchChipIcon {
+    fn path(self) -> &'static str {
+        match self {
+            Self::Local => "icons/computer.svg",
+            Self::Remote => "icons/cloud.svg",
+            Self::LocalRemote => "icons/computer-cloud-background.svg",
+        }
+    }
+
+    fn color(self, visual: &HistoryChipVisual) -> gpui::Rgba {
+        match self {
+            Self::Local => visual.local_branch_icon,
+            Self::Remote | Self::LocalRemote => visual.remote_branch_icon,
+        }
+    }
+
+    fn foreground_layer(self, visual: &HistoryChipVisual) -> Option<(&'static str, gpui::Rgba)> {
+        match self {
+            Self::LocalRemote => Some((
+                "icons/computer-cloud-foreground.svg",
+                visual.local_branch_icon,
+            )),
+            Self::Local | Self::Remote => None,
+        }
+    }
+
+    fn size(self, icon_size: Pixels, combined_icon_size: Pixels) -> Pixels {
+        match self {
+            Self::Local | Self::Remote => icon_size,
+            Self::LocalRemote => combined_icon_size,
+        }
+    }
+}
+
+fn history_branch_chip_icons(chip: &HistoryBranchChipVm) -> SmallVec<[HistoryBranchChipIcon; 2]> {
     let HistoryBranchChipKind::Branch { targets, .. } = &chip.kind else {
         return SmallVec::new();
     };
@@ -435,25 +570,32 @@ fn history_branch_chip_icons(chip: &HistoryBranchChipVm) -> SmallVec<[&'static s
         .iter()
         .any(|target| target.section == BranchSection::Remote);
     let mut icons = SmallVec::new();
-    if has_local {
-        icons.push("icons/computer.svg");
-    }
-    if has_remote {
-        icons.push("icons/cloud.svg");
+    if has_local && has_remote {
+        icons.push(HistoryBranchChipIcon::LocalRemote);
+    } else if has_local {
+        icons.push(HistoryBranchChipIcon::Local);
+    } else if has_remote {
+        icons.push(HistoryBranchChipIcon::Remote);
     }
     icons
 }
 
 fn history_branch_chip_icon_width(
-    icon_count: usize,
+    icons: &[HistoryBranchChipIcon],
     icon_size: Pixels,
+    combined_icon_size: Pixels,
     text_icon_gap: Pixels,
     icon_gap: Pixels,
 ) -> Pixels {
-    if icon_count == 0 {
+    if icons.is_empty() {
         return px(0.0);
     }
-    text_icon_gap + icon_size * icon_count as f32 + icon_gap * icon_count.saturating_sub(1) as f32
+    text_icon_gap
+        + icons
+            .iter()
+            .map(|icon| icon.size(icon_size, combined_icon_size))
+            .fold(px(0.0), |width, icon_width| width + icon_width)
+        + icon_gap * icons.len().saturating_sub(1) as f32
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -467,8 +609,9 @@ fn paint_history_chip(
     border_w: Pixels,
     pad_x: Pixels,
     line_height: Pixels,
-    icons: &[&'static str],
+    icons: &[HistoryBranchChipIcon],
     icon_size: Pixels,
+    combined_icon_size: Pixels,
     text_icon_gap: Pixels,
     icon_gap: Pixels,
 ) {
@@ -502,12 +645,30 @@ fn paint_history_chip(
         if ix > 0 {
             icon_x += icon_gap;
         }
+        let painted_icon_size = icon.size(icon_size, combined_icon_size);
         let cell = Bounds::new(
             point(icon_x, chip_bounds.top()),
-            size(icon_size, chip_bounds.size.height),
+            size(painted_icon_size, chip_bounds.size.height),
         );
-        super::diff_canvas::paint_centered_svg_icon(icon, cell, icon_size, visual.text, window, cx);
-        icon_x += icon_size;
+        super::diff_canvas::paint_centered_svg_icon(
+            icon.path(),
+            cell,
+            painted_icon_size,
+            icon.color(visual),
+            window,
+            cx,
+        );
+        if let Some((foreground_path, foreground_color)) = icon.foreground_layer(visual) {
+            super::diff_canvas::paint_centered_svg_icon(
+                foreground_path,
+                cell,
+                painted_icon_size,
+                foreground_color,
+                window,
+                cx,
+            );
+        }
+        icon_x += painted_icon_size;
     }
 }
 
@@ -529,6 +690,34 @@ fn hit_test_branch_chip(
     chips
         .iter()
         .find_map(|(bounds, chip)| bounds.contains(&p).then_some(chip))
+}
+
+fn history_tag_chip_menu_invoker(
+    repo_id: RepoId,
+    commit_id: &CommitId,
+    tag_name: &str,
+) -> SharedString {
+    format!(
+        "history_tag_chip_menu_{}_{}_{}",
+        repo_id.0,
+        commit_id.as_ref(),
+        tag_name
+    )
+    .into()
+}
+
+fn history_branch_chip_menu_invoker(
+    repo_id: RepoId,
+    commit_id: &CommitId,
+    chip: &HistoryBranchChipVm,
+) -> SharedString {
+    format!(
+        "history_branch_chip_menu_{}_{}_{}",
+        repo_id.0,
+        commit_id.as_ref(),
+        chip.text.as_ref()
+    )
+    .into()
 }
 
 fn history_branch_chip_popover_kind(
@@ -580,6 +769,7 @@ pub(super) fn history_commit_row_canvas(
     summary: HistoryTextVm,
     when: HistoryTextVm,
     short_sha: HistoryTextVm,
+    active_context_menu_invoker: Option<SharedString>,
     // The background the row's own `div` carries (selection, HEAD, open context
     // menu), and the one it swaps in while hovered. Mirrored rather than painted
     // again: the graph's icon nodes knock their glyphs out in the row background,
@@ -799,6 +989,8 @@ pub(super) fn history_commit_row_canvas(
                         let chip_radius = px(theme.radii.pill).min(chip_height * 0.5);
                         let chip_border_w = scaled_px(1.0);
                         let branch_icon_size = scaled_px(HISTORY_BRANCH_CHIP_ICON_PX);
+                        let branch_combined_icon_size =
+                            scaled_px(HISTORY_BRANCH_CHIP_COMBINED_ICON_PX);
                         let branch_text_icon_gap = scaled_px(HISTORY_BRANCH_CHIP_TEXT_ICON_GAP_PX);
                         let branch_icon_gap = scaled_px(HISTORY_BRANCH_CHIP_ICON_GAP_PX);
                         let chip_y =
@@ -870,8 +1062,9 @@ pub(super) fn history_commit_row_canvas(
                                 ChipEntry::Branch(chip) => history_branch_chip_icons(chip),
                             };
                             let icons_width = history_branch_chip_icon_width(
-                                icons.len(),
+                                icons.as_slice(),
                                 branch_icon_size,
+                                branch_combined_icon_size,
                                 branch_text_icon_gap,
                                 branch_icon_gap,
                             );
@@ -892,40 +1085,57 @@ pub(super) fn history_commit_row_canvas(
                                 break;
                             }
 
-                            let (shaped, style_kind) = match &entry {
-                                ChipEntry::Tag(name) => (
-                                    shape_truncated_line_cached(
+                            let style_kind = match &entry {
+                                ChipEntry::Tag(_) => HistoryChipStyleKind::Tag,
+                                ChipEntry::Branch(chip) => {
+                                    history_branch_chip_style_kind(chip, selected_branch.as_ref())
+                                }
+                            };
+                            let context_menu_open = active_context_menu_invoker
+                                .as_ref()
+                                .is_some_and(|active| match &entry {
+                                    ChipEntry::Tag(name) => {
+                                        active
+                                            == &history_tag_chip_menu_invoker(
+                                                repo_id,
+                                                &commit_id,
+                                                name.as_ref(),
+                                            )
+                                    }
+                                    ChipEntry::Branch(chip) => {
+                                        active
+                                            == &history_branch_chip_menu_invoker(
+                                                repo_id, &commit_id, chip,
+                                            )
+                                    }
+                                });
+                            let visual = history_chip_visual(theme, style_kind, context_menu_open);
+                            let shaped = match &entry {
+                                ChipEntry::Tag(name) => shape_clipped_chip_line_cached_from(
+                                    window,
+                                    &base_style,
+                                    xxs_font,
+                                    name.shared(),
+                                    name.text_hash(),
+                                    max_text_w,
+                                    visual.text,
+                                    None,
+                                    TruncateFrom::End,
+                                ),
+                                ChipEntry::Branch(chip) => {
+                                    // Clip from the start so the leaf segment
+                                    // ("feature_name") stays visible without
+                                    // spending chip width on an ellipsis.
+                                    shape_clipped_chip_line_cached_from(
                                         window,
                                         &base_style,
                                         xxs_font,
-                                        name.shared(),
-                                        name.text_hash(),
+                                        chip.text.shared(),
+                                        chip.text.text_hash(),
                                         max_text_w,
-                                        history_chip_visual(theme, HistoryChipStyleKind::Tag).text,
+                                        visual.text,
                                         None,
-                                    ),
-                                    HistoryChipStyleKind::Tag,
-                                ),
-                                ChipEntry::Branch(chip) => {
-                                    let style_kind = history_branch_chip_style_kind(
-                                        chip,
-                                        selected_branch.as_ref(),
-                                    );
-                                    (
-                                        // Truncate from the start so the leaf
-                                        // segment ("…/feature_name") stays visible.
-                                        shape_truncated_line_cached_from(
-                                            window,
-                                            &base_style,
-                                            xxs_font,
-                                            chip.text.shared(),
-                                            chip.text.text_hash(),
-                                            max_text_w,
-                                            history_chip_visual(theme, style_kind).text,
-                                            None,
-                                            TruncateFrom::Start,
-                                        ),
-                                        style_kind,
+                                        TruncateFrom::Start,
                                     )
                                 }
                             };
@@ -933,7 +1143,6 @@ pub(super) fn history_commit_row_canvas(
                             let chip_w = shaped.width + icons_width + chip_pad_x * 2.0;
                             let chip_bounds =
                                 Bounds::new(point(x, chip_y), size(chip_w, chip_height));
-                            let visual = history_chip_visual(theme, style_kind);
                             paint_history_chip(
                                 window,
                                 cx,
@@ -946,6 +1155,7 @@ pub(super) fn history_commit_row_canvas(
                                 xxs_line_height,
                                 icons.as_slice(),
                                 branch_icon_size,
+                                branch_combined_icon_size,
                                 branch_text_icon_gap,
                                 branch_icon_gap,
                             );
@@ -980,6 +1190,7 @@ pub(super) fn history_commit_row_canvas(
                             let visual = history_chip_visual(
                                 theme,
                                 HistoryChipStyleKind::Branch { selected: false },
+                                false,
                             );
                             paint_history_chip(
                                 window,
@@ -993,6 +1204,7 @@ pub(super) fn history_commit_row_canvas(
                                 xxs_line_height,
                                 &[],
                                 branch_icon_size,
+                                branch_combined_icon_size,
                                 branch_text_icon_gap,
                                 branch_icon_gap,
                             );
@@ -1314,12 +1526,21 @@ pub(super) fn history_commit_row_canvas(
                         return;
                     }
 
-                    let tag_name = hit_test_index(&tag_chip_bounds, event.position)
+                    let tag_menu = hit_test_index(&tag_chip_bounds, event.position)
                         .and_then(|ix| tag_names.get(ix))
-                        .map(|tag| tag.as_ref().to_string());
-                    let branch_kind = if tag_name.is_none() {
-                        hit_test_branch_chip(&branch_chip_hits, event.position)
-                            .and_then(|chip| history_branch_chip_popover_kind(repo_id, chip))
+                        .map(|tag| {
+                            let name = tag.as_ref().to_string();
+                            let invoker =
+                                history_tag_chip_menu_invoker(repo_id, &commit_id, name.as_str());
+                            (name, invoker)
+                        });
+                    let branch_menu = if tag_menu.is_none() {
+                        hit_test_branch_chip(&branch_chip_hits, event.position).and_then(|chip| {
+                            let kind = history_branch_chip_popover_kind(repo_id, chip)?;
+                            let invoker =
+                                history_branch_chip_menu_invoker(repo_id, &commit_id, chip);
+                            Some((kind, invoker))
+                        })
                     } else {
                         None
                     };
@@ -1336,17 +1557,22 @@ pub(super) fn history_commit_row_canvas(
                             clicked_index: None,
                             visible_order: None,
                         });
-                        let context_menu_invoker: SharedString =
-                            format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
-                                .into();
+                        let context_menu_invoker = tag_menu
+                            .as_ref()
+                            .map(|(_, invoker)| invoker.clone())
+                            .or_else(|| branch_menu.as_ref().map(|(_, invoker)| invoker.clone()))
+                            .unwrap_or_else(|| {
+                                format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
+                                    .into()
+                            });
                         this.activate_context_menu_invoker(context_menu_invoker, cx);
-                        let kind = match (tag_name, branch_kind) {
-                            (Some(name), _) => PopoverKind::TagRefMenu {
+                        let kind = match (tag_menu, branch_menu) {
+                            (Some((name, _)), _) => PopoverKind::TagRefMenu {
                                 repo_id,
                                 commit_id: commit_id.clone(),
                                 name,
                             },
-                            (None, Some(kind)) => kind,
+                            (None, Some((kind, _))) => kind,
                             (None, None) => PopoverKind::CommitMenu {
                                 repo_id,
                                 commit_id: commit_id.clone(),
@@ -1448,6 +1674,55 @@ mod tests {
                 "graph origin must land on a device pixel, got {graph_device_x}"
             );
             assert_canvas_columns_close(first, px(1_006.0));
+        })
+        .expect("history canvas test window should stay open");
+    }
+
+    #[gpui::test]
+    fn chip_label_clipping_omits_the_ellipsis_and_reclaims_its_width(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let window_handle = cx.add_window(|_window, _cx| gpui::Empty);
+        cx.update_window(window_handle.into(), |_, window, _| {
+            let style = window.text_style();
+            let font_size = style.font_size.to_pixels(window.rem_size());
+            let text: SharedString = "origin/feature/a-very-long-branch-name".into();
+            let max_width = px(96.0);
+            let color = AppTheme::gitcomet_dark().colors.foreground.primary;
+
+            // Use identical layout inputs so this also proves the truncation
+            // affix participates in the shared layout-cache key.
+            let ellipsized = shape_truncated_line_cached_from(
+                window,
+                &style,
+                font_size,
+                &text,
+                fx_hash_str(text.as_ref()),
+                max_width,
+                color,
+                None,
+                TruncateFrom::Start,
+            );
+            let clipped = shape_clipped_chip_line_cached_from(
+                window,
+                &style,
+                font_size,
+                &text,
+                fx_hash_str(text.as_ref()),
+                max_width,
+                color,
+                None,
+                TruncateFrom::Start,
+            );
+
+            assert!(ellipsized.text.starts_with('…'));
+            assert!(!clipped.text.contains('…'));
+            assert!(text.ends_with(clipped.text.as_ref()));
+            assert!(
+                clipped.text.chars().count()
+                    > ellipsized.text.trim_start_matches('…').chars().count(),
+                "removing the ellipsis should expose more of the branch name"
+            );
         })
         .expect("history canvas test window should stay open");
     }
@@ -1560,7 +1835,35 @@ mod tests {
 
         assert_eq!(
             history_branch_chip_icons(&combined).as_slice(),
-            ["icons/computer.svg", "icons/cloud.svg"]
+            [HistoryBranchChipIcon::LocalRemote]
+        );
+        assert_eq!(HistoryBranchChipIcon::Local.path(), "icons/computer.svg");
+        assert_eq!(HistoryBranchChipIcon::Remote.path(), "icons/cloud.svg");
+        assert_eq!(
+            HistoryBranchChipIcon::LocalRemote.path(),
+            "icons/computer-cloud-background.svg"
+        );
+        assert_eq!(
+            HistoryBranchChipIcon::Local.size(px(11.0), px(16.0)),
+            px(11.0)
+        );
+        assert_eq!(
+            HistoryBranchChipIcon::Remote.size(px(11.0), px(16.0)),
+            px(11.0)
+        );
+        assert_eq!(
+            HistoryBranchChipIcon::LocalRemote.size(px(11.0), px(16.0)),
+            px(16.0)
+        );
+        assert_eq!(
+            history_branch_chip_icon_width(
+                &[HistoryBranchChipIcon::LocalRemote],
+                px(11.0),
+                px(16.0),
+                px(3.0),
+                px(2.0),
+            ),
+            px(19.0)
         );
         assert!(matches!(
             history_branch_chip_popover_kind(repo_id, &combined),
@@ -1582,6 +1885,12 @@ mod tests {
                 ]
         ));
 
+        let local_only = branch_chip("feature/x", false, &[(BranchSection::Local, "feature/x")]);
+        assert_eq!(
+            history_branch_chip_icons(&local_only).as_slice(),
+            [HistoryBranchChipIcon::Local]
+        );
+
         let remote_only = branch_chip(
             "feature/x",
             false,
@@ -1589,7 +1898,7 @@ mod tests {
         );
         assert_eq!(
             history_branch_chip_icons(&remote_only).as_slice(),
-            ["icons/cloud.svg"]
+            [HistoryBranchChipIcon::Remote]
         );
         assert!(matches!(
             history_branch_chip_popover_kind(repo_id, &remote_only),
@@ -1785,10 +2094,17 @@ mod tests {
     fn selected_chips_are_visibly_apart_from_their_unselected_form() {
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             let rgba = |c: gpui::Rgba| (c.red, c.green, c.blue, c.alpha);
-            let sel = history_chip_visual(theme, HistoryChipStyleKind::Branch { selected: true });
-            let plain =
-                history_chip_visual(theme, HistoryChipStyleKind::Branch { selected: false });
-            let head = history_chip_visual(theme, HistoryChipStyleKind::Head);
+            let sel = history_chip_visual(
+                theme,
+                HistoryChipStyleKind::Branch { selected: true },
+                false,
+            );
+            let plain = history_chip_visual(
+                theme,
+                HistoryChipStyleKind::Branch { selected: false },
+                false,
+            );
+            let head = history_chip_visual(theme, HistoryChipStyleKind::Head, false);
 
             // A border-only difference is what made the sidebar's branch
             // selection invisible on the revealed row; the fill has to carry it.
@@ -1801,6 +2117,117 @@ mod tests {
                 rgba(sel.bg),
                 rgba(head.bg),
                 "selected branch chip must stay distinguishable from HEAD"
+            );
+        }
+    }
+
+    #[test]
+    fn chips_with_open_context_menus_have_a_distinct_visual() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let rgba = |c: gpui::Rgba| (c.red, c.green, c.blue, c.alpha);
+            for kind in [
+                HistoryChipStyleKind::Tag,
+                HistoryChipStyleKind::Branch { selected: false },
+                HistoryChipStyleKind::Branch { selected: true },
+            ] {
+                let closed = history_chip_visual(theme, kind, false);
+                let open = history_chip_visual(theme, kind, true);
+                assert_ne!(
+                    rgba(closed.bg),
+                    rgba(open.bg),
+                    "opening a chip menu must strengthen its fill"
+                );
+                assert_ne!(
+                    rgba(closed.border),
+                    rgba(open.border),
+                    "opening a chip menu must strengthen its outline"
+                );
+            }
+
+            let closed_head = history_chip_visual(theme, HistoryChipStyleKind::Head, false);
+            let open_head = history_chip_visual(theme, HistoryChipStyleKind::Head, true);
+            assert_eq!(open_head.bg, closed_head.bg);
+            assert_eq!(open_head.text, closed_head.text);
+            assert_eq!(open_head.border, theme.colors.accent.on_solid);
+            assert_ne!(rgba(open_head.border), rgba(closed_head.border));
+        }
+    }
+
+    #[test]
+    fn chip_menu_invokers_identify_the_exact_chip() {
+        let repo_id = RepoId(7);
+        let commit_id = CommitId("deadbeef".into());
+        let local = branch_chip(
+            "feature/local",
+            false,
+            &[(BranchSection::Local, "feature/local")],
+        );
+        let remote = branch_chip(
+            "feature/remote",
+            false,
+            &[(BranchSection::Remote, "origin/feature/remote")],
+        );
+
+        let local_invoker = history_branch_chip_menu_invoker(repo_id, &commit_id, &local);
+        assert_ne!(
+            local_invoker,
+            history_branch_chip_menu_invoker(repo_id, &commit_id, &remote)
+        );
+        assert_ne!(
+            local_invoker,
+            history_tag_chip_menu_invoker(repo_id, &commit_id, "feature/local")
+        );
+        assert_eq!(
+            local_invoker,
+            history_branch_chip_menu_invoker(repo_id, &commit_id, &local)
+        );
+    }
+
+    #[test]
+    fn local_branch_chip_icons_match_the_sidebar_accent() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let plain = history_chip_visual(
+                theme,
+                HistoryChipStyleKind::Branch { selected: false },
+                false,
+            );
+            assert_eq!(
+                HistoryBranchChipIcon::Local.color(&plain),
+                theme.colors.accent.foreground
+            );
+            assert_eq!(
+                HistoryBranchChipIcon::LocalRemote.color(&plain),
+                theme.colors.foreground.secondary,
+                "the combined icon's cloud base should stay neutral"
+            );
+            let (foreground_path, foreground_color) = HistoryBranchChipIcon::LocalRemote
+                .foreground_layer(&plain)
+                .expect("the combined icon should paint a computer foreground");
+            assert_eq!(foreground_path, "icons/computer-cloud-foreground.svg");
+            assert_eq!(foreground_color, theme.colors.accent.foreground);
+            assert_eq!(
+                HistoryBranchChipIcon::Remote.color(&plain),
+                plain.remote_branch_icon
+            );
+
+            let head = history_chip_visual(theme, HistoryChipStyleKind::Head, false);
+            assert_eq!(
+                HistoryBranchChipIcon::Local.color(&head),
+                theme.colors.accent.on_solid,
+                "the current branch icon must retain contrast on its solid accent chip"
+            );
+            assert_eq!(
+                HistoryBranchChipIcon::LocalRemote.color(&head),
+                with_alpha(theme.colors.accent.on_solid, 0.70),
+                "the combined cloud must retain contrast on a solid HEAD chip"
+            );
+            assert_eq!(
+                HistoryBranchChipIcon::LocalRemote
+                    .foreground_layer(&head)
+                    .expect("the combined icon should retain its foreground layer")
+                    .1,
+                theme.colors.accent.on_solid,
+                "the combined computer must retain contrast on a solid HEAD chip"
             );
         }
     }
