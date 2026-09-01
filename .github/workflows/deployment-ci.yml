@@ -10,6 +10,7 @@ on:
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/deploy-windows-installer.yml"
       - ".github/workflows/deploy-microsoft-store.yml"
+      - ".github/workflows/nightly-build.yml"
       - ".github/workflows/release-manual-main.yml"
       - ".github/actions/setup-dump-syms/action.yml"
       - "scripts/update-aur.sh"
@@ -43,6 +44,7 @@ on:
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/deploy-windows-installer.yml"
       - ".github/workflows/deploy-microsoft-store.yml"
+      - ".github/workflows/nightly-build.yml"
       - ".github/workflows/release-manual-main.yml"
       - ".github/actions/setup-dump-syms/action.yml"
       - "scripts/update-aur.sh"
@@ -145,6 +147,7 @@ jobs:
             .github/workflows/deploy-windows-installer.yml
             .github/workflows/deploy-microsoft-store.yml
             .github/workflows/deployment-ci.yml
+            .github/workflows/nightly-build.yml
             .github/workflows/release-manual-main.yml
           ].each { |path| YAML.load_file(path) }'
 
