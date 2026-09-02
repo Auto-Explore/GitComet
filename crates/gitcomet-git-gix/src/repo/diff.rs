@@ -482,7 +482,7 @@ impl GixRepo {
         }
 
         let cache_path = preview_blob_cache_path(&self.spec.workdir, logical_path, &blob_id);
-        if std::fs::metadata(&cache_path).is_ok_and(|m| m.is_file()) {
+        if cached_preview_blob_matches(&repo, &cache_path, blob_id) {
             return Ok(Some(cache_path));
         }
 
@@ -509,16 +509,8 @@ impl GixRepo {
         }
         tmp_file.flush().map_err(io_err_to_error)?;
 
-        if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent).map_err(io_err_to_error)?;
-        }
-        match tmp_file.persist(&cache_path) {
-            Ok(_) => Ok(Some(cache_path)),
-            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
-                Ok(Some(cache_path))
-            }
-            Err(err) => Err(io_err_to_error(err.error)),
-        }
+        persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        Ok(Some(cache_path))
     }
 
     pub(super) fn diff_file_image_impl(
@@ -1190,6 +1182,35 @@ fn copy_and_hash(
     }
 }
 
+/// Whether `cache_path` is a regular file whose bytes hash to `blob_id` as a
+/// git blob.
+///
+/// The cache lives in the shared temp directory under a name anyone can
+/// compute, so a pre-existing file only proves that *something* wrote it.
+/// Hashing is the check git itself would apply and needs no subprocess. A
+/// symlink is never trusted: the bytes it reaches are not ours to vouch for
+/// and can change after this check.
+fn cached_preview_blob_matches(
+    repo: &gix::Repository,
+    cache_path: &Path,
+    blob_id: gix::ObjectId,
+) -> bool {
+    let Ok(metadata) = std::fs::symlink_metadata(cache_path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    let Ok(bytes) = std::fs::read(cache_path) else {
+        return false;
+    };
+    gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, &bytes)
+        .is_ok_and(|id| id == blob_id)
+}
+
+/// Move `tmp_file` to the content-addressed `cache_path`, keeping an existing
+/// regular file only when its bytes are identical. Shared by the worktree and
+/// preview caches, both of which live in the shared temp directory.
 fn persist_worktree_git_cache_file(
     tmp_file: tempfile::NamedTempFile,
     cache_path: &Path,
@@ -1201,7 +1222,11 @@ fn persist_worktree_git_cache_file(
         Ok(_) => Ok(()),
         Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
             let tmp_file = err.file;
-            if worktree_git_cache_files_match(&tmp_file, cache_path)? {
+            // A symlink is replaced even when the bytes it reaches match: its
+            // target is outside our control and can change after the compare.
+            let existing_is_symlink = std::fs::symlink_metadata(cache_path)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink());
+            if !existing_is_symlink && worktree_git_cache_files_match(&tmp_file, cache_path)? {
                 // The path is content-addressed. Keeping an identical winner is
                 // both cheaper and semantically important: replacing it changes
                 // filesystem metadata that open diff rows use as a freshness
@@ -1514,6 +1539,136 @@ mod tests {
         let second = worktree_source_identity(workdir, path, 0x22);
 
         assert_ne!(first, second);
+    }
+
+    fn stage_blob(workdir: &Path, relative: &str, content: &[u8]) -> gix::ObjectId {
+        std::fs::write(workdir.join(relative), content).expect("write file");
+        run_git(workdir, &["add", relative]);
+        gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, content)
+            .expect("blob id")
+    }
+
+    #[test]
+    fn preview_blob_cache_ignores_pre_planted_file_with_other_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let logical_path = Path::new("image.bin");
+        let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+
+        // The name is a function of (workdir, path, blob id) that anyone on the
+        // host can compute, so a file there is not evidence of who wrote it.
+        let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id);
+        std::fs::write(&cache_path, b"planted by someone else").expect("plant cache file");
+
+        let served = repo
+            .cached_preview_blob_file_path(blob_id, logical_path)
+            .expect("materialize blob")
+            .expect("blob exists");
+
+        assert_eq!(served, cache_path);
+        assert_eq!(
+            std::fs::read(&served).expect("read served file"),
+            b"real blob bytes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_blob_cache_replaces_symlink_at_cache_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let logical_path = Path::new("image.bin");
+        let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+
+        let elsewhere = tempfile::tempdir().expect("symlink target dir");
+        let target = elsewhere.path().join("target");
+        std::fs::write(&target, b"real blob bytes").expect("write symlink target");
+        let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id);
+        let _ = std::fs::remove_file(&cache_path);
+        std::os::unix::fs::symlink(&target, &cache_path).expect("plant symlink");
+
+        let served = repo
+            .cached_preview_blob_file_path(blob_id, logical_path)
+            .expect("materialize blob")
+            .expect("blob exists");
+
+        let metadata = std::fs::symlink_metadata(&served).expect("served metadata");
+        assert!(
+            metadata.file_type().is_file(),
+            "a symlink at the cache path must be replaced by a regular file, even when its target matches"
+        );
+        assert_eq!(
+            std::fs::read(&served).expect("read served file"),
+            b"real blob bytes"
+        );
+    }
+
+    #[test]
+    fn preview_blob_cache_keeps_verified_existing_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let logical_path = Path::new("image.bin");
+        let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+
+        let first = repo
+            .cached_preview_blob_file_path(blob_id, logical_path)
+            .expect("materialize blob")
+            .expect("blob exists");
+        let mut permissions = std::fs::metadata(&first)
+            .expect("first cache metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&first, permissions).expect("make cache read-only");
+
+        let second = repo
+            .cached_preview_blob_file_path(blob_id, logical_path)
+            .expect("reuse cached blob")
+            .expect("blob exists");
+
+        assert_eq!(first, second);
+        let metadata = std::fs::metadata(&second).expect("second cache metadata");
+        assert!(
+            metadata.permissions().readonly(),
+            "a verified cache file must be reused, not rewritten"
+        );
+
+        #[cfg(windows)]
+        {
+            let mut permissions = metadata.permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&second, permissions)
+                .expect("restore writable cache for cleanup");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_worktree_git_cache_file_replaces_symlink_even_with_identical_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cache_path = tmp.path().join("gitcomet-diff-worktree-symlink.txt");
+        let target = tmp.path().join("target.txt");
+        let content = b"identical normalized content";
+        std::fs::write(&target, content).expect("write symlink target");
+        std::os::unix::fs::symlink(&target, &cache_path).expect("plant symlink");
+
+        let mut duplicate = tempfile::NamedTempFile::new_in(tmp.path()).expect("temp file");
+        duplicate.write_all(content).expect("write cache candidate");
+        duplicate.flush().expect("flush cache candidate");
+
+        persist_worktree_git_cache_file(duplicate, &cache_path)
+            .expect("replace symlinked cache file");
+
+        let metadata = std::fs::symlink_metadata(&cache_path).expect("cache metadata");
+        assert!(metadata.file_type().is_file());
+        assert_eq!(std::fs::read(&cache_path).expect("read cache"), content);
+        assert_eq!(
+            std::fs::read(&target).expect("read former target"),
+            content,
+            "the symlink target must be left alone"
+        );
     }
 
     #[test]
