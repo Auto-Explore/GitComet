@@ -241,6 +241,20 @@ fn normalize_worktree_relative_path(path: &Path) -> Result<PathBuf, Error> {
     Ok(normalized)
 }
 
+/// Where a worktree save for `path` lands, or why it must not.
+///
+/// Containment is checked twice: lexically, so `..` cannot leave the workdir,
+/// and on the filesystem, so a symlink cannot redirect the write outside it.
+fn resolve_worktree_save_target(workdir: &Path, path: &Path) -> Result<(PathBuf, PathBuf), Error> {
+    let relative_path = normalize_worktree_relative_path(path)?;
+    let full = gitcomet_core::path_utils::symlink_free_write_target(workdir, &relative_path)
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::InvalidInput => Error::new(ErrorKind::Backend(err.to_string())),
+            kind => Error::new(ErrorKind::Io(kind)),
+        })?;
+    Ok((relative_path, full))
+}
+
 fn run_with_git_auth<R>(
     auth: Option<StagedGitAuth>,
     run: impl FnOnce() -> Result<R, Error>,
@@ -284,8 +298,7 @@ pub(super) fn schedule_save_worktree_file(
             stage,
         },
         move |repo| {
-            let relative_path = normalize_worktree_relative_path(&path)?;
-            let full = repo.spec().workdir.join(&relative_path);
+            let (relative_path, full) = resolve_worktree_save_target(&repo.spec().workdir, &path)?;
             if let Some(parent) = full.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
             }
@@ -1559,6 +1572,52 @@ pub(super) fn schedule_launch_mergetool(
             }
         },
     );
+}
+
+#[cfg(test)]
+mod worktree_save_target_tests {
+    use super::resolve_worktree_save_target;
+    use gitcomet_core::error::ErrorKind;
+    use std::path::Path;
+
+    #[test]
+    fn nested_relative_path_resolves_under_workdir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (relative, full) =
+            resolve_worktree_save_target(dir.path(), Path::new("./src/../src/lib.rs"))
+                .expect("nested path");
+        assert_eq!(relative, Path::new("src/lib.rs"));
+        assert_eq!(full, dir.path().join("src/lib.rs"));
+    }
+
+    #[test]
+    fn parent_dir_escape_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = resolve_worktree_save_target(dir.path(), Path::new("../outside.txt"))
+            .expect_err("lexical escape");
+        assert!(matches!(err.kind(), ErrorKind::Backend(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_through_symlink_out_of_workdir_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside dir");
+        let victim = outside.path().join("authorized_keys");
+        std::fs::write(&victim, "original").expect("write victim");
+        std::os::unix::fs::symlink(&victim, dir.path().join("notes.md")).expect("symlink");
+
+        let err = resolve_worktree_save_target(dir.path(), Path::new("notes.md"))
+            .expect_err("symlinked file");
+        let ErrorKind::Backend(message) = err.kind() else {
+            panic!("expected a backend refusal, got {err:?}");
+        };
+        assert!(message.contains("symlink"), "{message}");
+        assert_eq!(
+            std::fs::read_to_string(&victim).expect("victim"),
+            "original"
+        );
+    }
 }
 
 #[cfg(test)]

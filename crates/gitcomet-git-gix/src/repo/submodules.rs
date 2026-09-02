@@ -14,6 +14,7 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
+use gitcomet_core::text_utils::redact_url_userinfo;
 use gix::bstr::ByteSlice as _;
 use std::collections::BTreeMap;
 use std::fs;
@@ -180,22 +181,7 @@ impl GixRepo {
             .unwrap_or_else(|| path.to_path_buf());
         validate_submodule_git_dir_name(&logical_name)?;
 
-        cmd.arg("submodule").arg("add");
-        let mut command = "git submodule add".to_string();
-        if let Some(branch) = branch {
-            cmd.arg("--branch").arg(branch);
-            command.push_str(&format!(" --branch {branch}"));
-        }
-        if force {
-            cmd.arg("--force");
-            command.push_str(" --force");
-        }
-        if let Some(name) = name {
-            cmd.arg("--name").arg(name);
-            command.push_str(&format!(" --name {name}"));
-        }
-        cmd.arg(url).arg(path);
-        command.push_str(&format!(" {url} {}", path.display()));
+        let command = push_submodule_add_args(&mut cmd, url, path, branch, name, force);
         match run_git_with_output(cmd, &command) {
             Ok(output) => Ok(output),
             Err(err) => Err(cleanup_failed_submodule_add_error(
@@ -425,6 +411,39 @@ fn collect_repo_submodules(
     }
 
     Ok(())
+}
+
+/// Append the `git submodule add` arguments and return the display label.
+///
+/// `--` keeps a user-typed URL or path that starts with `-` out of the option
+/// parser (`--reference=<path>` would borrow objects from an arbitrary repo).
+fn push_submodule_add_args(
+    cmd: &mut Command,
+    url: &str,
+    path: &Path,
+    branch: Option<&str>,
+    name: Option<&str>,
+    force: bool,
+) -> String {
+    cmd.arg("submodule").arg("add");
+    let mut command = "git submodule add".to_string();
+    if let Some(branch) = branch {
+        cmd.arg("--branch").arg(branch);
+        command.push_str(&format!(" --branch {branch}"));
+    }
+    if force {
+        cmd.arg("--force");
+        command.push_str(" --force");
+    }
+    if let Some(name) = name {
+        cmd.arg("--name").arg(name);
+        command.push_str(&format!(" --name {name}"));
+    }
+    // The label stays a human-readable summary; `--` is an argv concern only,
+    // and credentials in the URL are masked because the label is displayed.
+    cmd.arg("--").arg(url).arg(path);
+    command.push_str(&format!(" {} {}", redact_url_userinfo(url), path.display()));
+    command
 }
 
 fn collect_repo_untrusted_submodule_sources(
@@ -1886,8 +1905,9 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 mod tests {
     use super::{
         GixRepo, allow_file_submodule_transport, is_git_config_contention_error,
-        remove_submodule_git_dir, resolve_submodule_logical_name, retry_git_config_contention,
-        submodule_file_transport_consent_key, validate_submodule_git_dir_name,
+        push_submodule_add_args, remove_submodule_git_dir, resolve_submodule_logical_name,
+        retry_git_config_contention, submodule_file_transport_consent_key,
+        validate_submodule_git_dir_name,
     };
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
     use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -1923,6 +1943,51 @@ mod tests {
     fn open_repo(workdir: &Path) -> GixRepo {
         let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
         GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
+
+    #[test]
+    fn submodule_add_args_separate_positionals_from_options() {
+        let mut cmd = Command::new("git");
+        let label = push_submodule_add_args(
+            &mut cmd,
+            "--reference=/tmp/evil",
+            Path::new("sub"),
+            Some("main"),
+            Some("lib/sub"),
+            true,
+        );
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                OsStr::new("submodule"),
+                OsStr::new("add"),
+                OsStr::new("--branch"),
+                OsStr::new("main"),
+                OsStr::new("--force"),
+                OsStr::new("--name"),
+                OsStr::new("lib/sub"),
+                OsStr::new("--"),
+                OsStr::new("--reference=/tmp/evil"),
+                OsStr::new("sub"),
+            ]
+        );
+        assert_eq!(
+            label,
+            "git submodule add --branch main --force --name lib/sub --reference=/tmp/evil sub"
+        );
+    }
+
+    #[test]
+    fn submodule_add_label_masks_credentials_but_argv_keeps_the_url() {
+        let mut cmd = Command::new("git");
+        let url = "https://user:s3cret@example.com/lib.git";
+        let label = push_submodule_add_args(&mut cmd, url, Path::new("lib"), None, None, false);
+        assert_eq!(
+            label,
+            "git submodule add https://user:***@example.com/lib.git lib"
+        );
+        assert!(cmd.get_args().any(|arg| arg == OsStr::new(url)));
     }
 
     #[test]
