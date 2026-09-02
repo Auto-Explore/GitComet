@@ -1380,6 +1380,9 @@ fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+    // Both the tool name and its path come from `.git/config`, so the launch
+    // needs the same consent a repository-local `.cmd` does.
+    allow_repo_local_mergetool_cmd(repo, "fake");
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
@@ -1391,6 +1394,66 @@ fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
         Some("theirs\n".as_bytes())
     );
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "theirs\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn launch_mergetool_refuses_repo_local_tool_path_without_consent() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    // A hostile `.git/config` can point `mergetool.<tool>.path` at any file in
+    // the checkout. The script drops a marker so the test proves it never ran,
+    // not merely that the launch reported an error. `codecompare` is a git
+    // built-in, so only the path is repository-controlled here, and its real
+    // program (`CodeMerge`) exists only on Windows: the backend reads the
+    // developer's own global git config, so a common tool such as `kdiff3`
+    // could fall back to a trusted path and launch a real GUI mid-test.
+    let script_path = repo.join("repo-controlled-tool.sh");
+    let marker_path = repo.join("tool-ran");
+    fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\n: > \"{}\"\ncat \"$3\" > \"$4\"\n",
+            marker_path.display()
+        ),
+    )
+    .unwrap();
+    make_executable(&script_path);
+
+    run_git(repo, &["config", "merge.tool", "codecompare"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.codecompare.path",
+            git_path_arg(&script_path).as_str(),
+        ],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let message = opened
+        .launch_mergetool(Path::new("a.txt"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.contains("Refusing to use repository-local mergetool.codecompare.path"),
+        "{message}"
+    );
+    assert!(
+        !marker_path.exists(),
+        "repository-local mergetool.<tool>.path executed without consent"
+    );
+    let conflicted = fs::read_to_string(repo.join("a.txt")).unwrap();
+    assert!(
+        conflicted.contains("<<<<<<<"),
+        "conflict must stay unresolved: {conflicted:?}"
+    );
 }
 
 #[cfg(unix)]
@@ -1433,6 +1496,8 @@ fn launch_mergetool_builtin_tool_gets_merge_mode_arguments() {
         ],
     );
     run_git(repo, &["config", "mergetool.kdiff3.trustExitCode", "true"]);
+    // `mergetool.kdiff3.path` in `.git/config` is repository-controlled.
+    allow_repo_local_mergetool_cmd(repo, "kdiff3");
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
