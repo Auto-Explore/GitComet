@@ -164,13 +164,13 @@ jobs:
       WINDOWS_SIGNING_PROFILE_NAME: ${{ needs.prepare.outputs.release_id != '' && 'gitcomet-windows-release' || 'gitcomet-windows-test' }}
       WINDOWS_SIGNING_TIMESTAMP_RFC3161: http://timestamp.acs.microsoft.com/
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
       - name: Check out release tooling from workflow revision
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository }}
           ref: ${{ github.workflow_sha }}
@@ -184,10 +184,12 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Validate Windows signing configuration
         shell: pwsh
@@ -215,7 +217,7 @@ jobs:
           Write-Host "Using Windows signing profile: $env:WINDOWS_SIGNING_PROFILE_NAME"
 
       - name: Log into Azure for Windows signing
-        uses: azure/login@v3
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           creds: ${{ env.AZURE_CREDENTIALS }}
 
@@ -278,7 +280,7 @@ jobs:
       # exercises the pipeline.
       - name: Upload Windows Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: symbols-${{ matrix.target_platform }}
           path: dist/symbols
@@ -289,7 +291,7 @@ jobs:
       # symbols for the binary that was built.
       - name: Upload Windows debug symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # Deliberately not named `windows-release-artifacts-*`:
           # `publish_release_assets` globs that prefix into the published
@@ -302,7 +304,7 @@ jobs:
           retention-days: 90
 
       - name: Sign Windows release binary
-        uses: Azure/artifact-signing-action@v2
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
           signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
@@ -380,7 +382,7 @@ jobs:
           cargo wix --package gitcomet --profile release --nocapture --no-build --bin-path "$wixBin" --output "dist\$msiName"
 
       - name: Sign Windows MSI installer
-        uses: Azure/artifact-signing-action@v2
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
           signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
@@ -404,7 +406,7 @@ jobs:
             -SignToolPath $env:SIGNTOOL_PATH
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-release-artifacts-${{ matrix.target_platform }}
           path: |
@@ -452,13 +454,13 @@ jobs:
       APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
       APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
       - name: Check out release tooling from workflow revision
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository }}
           ref: ${{ github.workflow_sha }}
@@ -483,10 +485,12 @@ jobs:
             libxkbcommon-x11-dev
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install dump_syms
         uses: ./.release-tooling/.github/actions/setup-dump-syms
@@ -512,7 +516,7 @@ jobs:
       # Release-only; see the Breakpad symbol upload above.
       - name: Upload Linux Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: symbols-${{ matrix.target_platform }}
           path: dist/symbols
@@ -652,7 +656,7 @@ jobs:
             "${appdir}" "dist/gitcomet-v${VERSION}-linux-${ARTIFACT_ARCH}.AppImage"
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-release-artifacts-${{ matrix.target_platform }}
           path: |
@@ -690,13 +694,13 @@ jobs:
       MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
       MACOS_NOTARY_API_KEY_P8: ${{ secrets.MACOS_NOTARY_API_KEY_P8 }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
       - name: Check out release tooling from workflow revision
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository }}
           ref: ${{ github.workflow_sha }}
@@ -710,10 +714,12 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-targets: false
 
@@ -843,7 +849,7 @@ jobs:
       # Release-only; see the Breakpad symbol upload above.
       - name: Upload macOS Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: symbols-${{ matrix.target_platform }}
           path: dist/symbols
@@ -883,7 +889,7 @@ jobs:
 
       - name: Upload macOS dSYM
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-dsym-${{ matrix.target_platform }}
           path: ${{ runner.temp }}/gitcomet-dsym/gitcomet-${{ matrix.arch }}.dSYM.tar.gz
@@ -921,7 +927,7 @@ jobs:
           fi
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-release-artifacts-${{ matrix.target_platform }}
           path: dist/*.dmg
@@ -979,7 +985,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: symbols-*
           path: dist/symbols
@@ -1029,24 +1035,24 @@ jobs:
       RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
       ENABLE_KEYLESS_SIGNING: ${{ vars.ENABLE_KEYLESS_SIGNING }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: windows-release-artifacts-*
           path: dist/windows
           merge-multiple: true
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: linux-release-artifacts-*
           path: dist/linux
           merge-multiple: true
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: macos-release-artifacts-*
           path: dist/macos
@@ -1110,7 +1116,7 @@ jobs:
 
       - name: Install cosign
         if: ${{ env.ENABLE_KEYLESS_SIGNING == 'true' }}
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       - name: Sign SHA256 checksums with keyless signing
         if: ${{ env.ENABLE_KEYLESS_SIGNING == 'true' }}
@@ -1125,7 +1131,7 @@ jobs:
             "$sha_file"
 
       - name: Upload payload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-payload
           path: dist/release/*
