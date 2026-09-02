@@ -1046,14 +1046,55 @@ fn choose_popover_anchor_corner(
     }
 }
 
+/// The directory name to clone into, derived from the URL's last segment.
+///
+/// The result is joined onto the parent folder the user picked, so it must be
+/// exactly one ordinary path component: `..`, `.`, an empty segment or a drive
+/// prefix fall back to `repo` instead of resolving somewhere else.
 fn clone_repo_name_from_url(url: &str) -> String {
     let trimmed = url.trim().trim_end_matches(['/', '\\']);
     let last = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
     let name = last.strip_suffix(".git").unwrap_or(last).trim();
-    if name.is_empty() {
-        "repo".to_string()
-    } else {
-        name.to_string()
+    let mut components = std::path::Path::new(name).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => name.to_string(),
+        _ => "repo".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod clone_repo_name_tests {
+    use super::clone_repo_name_from_url;
+
+    #[test]
+    fn clone_repo_name_takes_the_last_url_segment() {
+        assert_eq!(
+            clone_repo_name_from_url("https://example.com/org/repo.git"),
+            "repo"
+        );
+        assert_eq!(
+            clone_repo_name_from_url("git@github.com:org/tools.git/"),
+            "tools"
+        );
+        assert_eq!(
+            clone_repo_name_from_url("C:\\src\\local-repo"),
+            "local-repo"
+        );
+    }
+
+    #[test]
+    fn clone_repo_name_never_resolves_outside_the_parent_folder() {
+        for url in [
+            "https://example.com/org/..",
+            "https://example.com/org/../",
+            "https://example.com/org/.",
+            "https://example.com/org/..git",
+            "",
+            "   ",
+            "/",
+        ] {
+            assert_eq!(clone_repo_name_from_url(url), "repo", "{url:?}");
+        }
     }
 }
 

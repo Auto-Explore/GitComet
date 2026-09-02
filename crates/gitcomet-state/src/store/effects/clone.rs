@@ -8,6 +8,7 @@ use gitcomet_core::auth::askpass::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::{bytes_to_text_preserving_utf8, git_command};
 use gitcomet_core::services::CommandOutput;
+use gitcomet_core::text_utils::redact_url_userinfo;
 use rustc_hash::FxHashMap;
 use std::fs;
 use std::io::Read as _;
@@ -190,6 +191,16 @@ fn validate_clone_url(url: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// The label shown in the command log and in failure messages; the URL is
+/// masked there because a pasted `https://user:token@host` must not be echoed.
+fn clone_command_label(url: &str, dest: &Path) -> String {
+    format!(
+        "git clone --progress {} {}",
+        redact_url_userinfo(url),
+        dest.display()
+    )
+}
+
 /// `--` keeps a URL or destination that starts with `-` from being parsed as
 /// a `git clone` option (`--upload-pack=<cmd>` would run `<cmd>` locally).
 fn build_clone_command(url: &str, dest: &Path) -> Command {
@@ -343,7 +354,7 @@ pub(super) fn schedule_clone_repo(
             }
         };
 
-        let command_str = format!("git clone --progress {} {}", url, dest.display());
+        let command_str = clone_command_label(&url, &dest);
 
         let child = match cmd.spawn() {
             Ok(child) => child,
@@ -568,6 +579,21 @@ mod tests {
                 "{url}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn clone_command_label_masks_credentials_in_the_url() {
+        let dest = Path::new("/tmp/gitcomet-clone-dest");
+        assert_eq!(
+            clone_command_label("https://user:s3cret@example.com/org/repo.git", dest),
+            "git clone --progress https://user:***@example.com/org/repo.git /tmp/gitcomet-clone-dest"
+        );
+        let cmd = build_clone_command("https://user:s3cret@example.com/org/repo.git", dest);
+        assert!(
+            cmd.get_args()
+                .any(|arg| arg == "https://user:s3cret@example.com/org/repo.git"),
+            "argv must carry the real URL"
+        );
     }
 
     #[test]
