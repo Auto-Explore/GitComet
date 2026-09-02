@@ -12,7 +12,7 @@ use rustc_hash::FxHashMap;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdout, ExitStatus, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -161,6 +161,15 @@ fn validate_clone_url(url: &str) -> Result<(), Error> {
         )));
     }
 
+    // Schemeless inputs (`/tmp/repo.git`, `git@host:org/repo.git`, `C:\\repo`)
+    // are handed to git as-is, so this is the only place an option-looking
+    // value would be caught before `git clone` parses it as one.
+    if url.starts_with('-') {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "clone URL cannot start with '-': {url:?}"
+        ))));
+    }
+
     let Some(scheme_end) = explicit_url_scheme_end(url) else {
         return Ok(());
     };
@@ -179,6 +188,20 @@ fn validate_clone_url(url: &str) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+/// `--` keeps a URL or destination that starts with `-` from being parsed as
+/// a `git clone` option (`--upload-pack=<cmd>` would run `<cmd>` locally).
+fn build_clone_command(url: &str, dest: &Path) -> Command {
+    let mut cmd = git_command();
+    cmd.arg("-c")
+        .arg("color.ui=false")
+        .arg("clone")
+        .arg("--progress")
+        .arg("--")
+        .arg(url)
+        .arg(dest);
+    cmd
 }
 
 fn decode_clone_progress_fragment(fragment: &[u8]) -> Option<String> {
@@ -294,14 +317,8 @@ pub(super) fn schedule_clone_repo(
             return;
         }
 
-        let mut cmd = git_command();
-        cmd.arg("-c")
-            .arg("color.ui=false")
-            .arg("clone")
-            .arg("--progress")
-            .arg(&url)
-            .arg(&dest)
-            .stdout(Stdio::piped())
+        let mut cmd = build_clone_command(&url, &dest);
+        cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
             .env("GIT_TERMINAL_PROMPT", "0");
@@ -535,6 +552,41 @@ mod tests {
     #[test]
     fn validate_clone_url_rejects_malformed_allowlisted_schemes() {
         assert!(validate_clone_url("ssh:git@example.com/org/repo.git").is_err());
+    }
+
+    #[test]
+    fn validate_clone_url_rejects_option_like_inputs() {
+        for url in [
+            "-",
+            "-o=evil",
+            "--upload-pack=touch /tmp/pwned",
+            "  --template=/tmp/x",
+        ] {
+            let err = validate_clone_url(url).expect_err(url);
+            assert!(
+                err.to_string().contains("cannot start with '-'"),
+                "{url}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_clone_command_separates_positionals_from_options() {
+        let dest = Path::new("/tmp/gitcomet-clone-dest");
+        let cmd = build_clone_command("git@github.com:org/repo.git", dest);
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new("color.ui=false"),
+                std::ffi::OsStr::new("clone"),
+                std::ffi::OsStr::new("--progress"),
+                std::ffi::OsStr::new("--"),
+                std::ffi::OsStr::new("git@github.com:org/repo.git"),
+                dest.as_os_str(),
+            ]
+        );
     }
 
     #[test]
