@@ -254,6 +254,12 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.remote_branches_rev.hash(hasher);
         }
 
+        // Its worktree note reads the worktree list and HEAD.
+        PopoverKind::BranchExistsPrompt { .. } => {
+            repo.worktrees_rev.hash(hasher);
+            repo.head_branch_rev.hash(hasher);
+        }
+
         PopoverKind::Repo {
             kind: RepoPopoverKind::Worktree(_),
             ..
@@ -377,7 +383,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
-        | PopoverKind::BranchExistsPrompt { .. }
         | PopoverKind::ResetPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
         | PopoverKind::CreateTagPrompt { .. }

@@ -9,9 +9,8 @@ mod util;
 
 use crate::model::{
     AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, BranchExistsPromptOperation,
-    BranchExistsPromptState, PendingCommitRetry, RepoId, SubmoduleAddProgressState,
-    SubmoduleTrustCheckOperation, SubmoduleTrustCheckState, SubmoduleTrustPromptOperation,
-    SubmoduleTrustPromptState,
+    PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
+    SubmoduleTrustCheckState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
 use crate::msg::{
     BranchExistsChoice, ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList,
@@ -1058,6 +1057,7 @@ fn reduce_inner(
                 && matches!(
                     message.as_ref(),
                     crate::msg::InternalMsg::RepoActionFinished { .. }
+                        | crate::msg::InternalMsg::RepoActionFinishedInWorktree { .. }
                 );
             let previous_diagnostic_len = suppress_nested_diagnostics
                 .then(|| {
@@ -1459,6 +1459,14 @@ fn reduce_inner(
                                 CheckoutRemoteBranchMode::Overwrite,
                             )
                         }
+                        BranchExistsPromptOperation::RenameBranch { old_name } => {
+                            actions_emit_effects::rename_branch(
+                                prompt.repo_id,
+                                old_name,
+                                prompt.name,
+                                true,
+                            )
+                        }
                     }
                 }
             }
@@ -1473,9 +1481,18 @@ fn reduce_inner(
             repo_id,
             old_name,
             new_name,
+            force,
         } => {
-            begin_local_action(state, repo_id);
-            actions_emit_effects::rename_branch(repo_id, old_name, new_name)
+            if force {
+                // Replacing the checked-out branch moves HEAD's commit.
+                if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                    repo_state.set_detached_head_commit(None);
+                }
+                begin_head_changing_local_action(state, repo_id);
+            } else {
+                begin_local_action(state, repo_id);
+            }
+            actions_emit_effects::rename_branch(repo_id, old_name, new_name, force)
         }
         Msg::DeleteBranch { repo_id, name } => {
             begin_local_action(state, repo_id);
@@ -2477,20 +2494,27 @@ fn reduce_inner(
             action,
             result,
         }) => external_and_history::repo_action_finished(repos, state, repo_id, action, result),
-        Msg::Internal(crate::msg::InternalMsg::CreateBranchAlreadyExists {
+        Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists { action, prompt }) => {
+            external_and_history::branch_already_exists(repos, state, action, prompt)
+        }
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
             repo_id,
-            name,
-            target,
-        }) => external_and_history::create_branch_already_exists(
-            repos,
-            state,
-            BranchExistsPromptState {
-                repo_id,
-                name,
-                target,
-                operation: BranchExistsPromptOperation::CreateBranch,
-            },
-        ),
+            action,
+            worktree_path,
+            result,
+        }) => {
+            // Open first so the origin tab is inactive when its action finishes and
+            // only refreshes its primary state instead of reloading everything.
+            let mut effects = if result.is_ok() {
+                repo_management::open_repo(repos, id_alloc, state, worktree_path)
+            } else {
+                Vec::new()
+            };
+            effects.extend(external_and_history::repo_action_finished(
+                repos, state, repo_id, action, result,
+            ));
+            effects
+        }
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
             let pending_commit = state
                 .repos

@@ -628,6 +628,14 @@ impl GitRepository for GixRepo {
         self.rename_branch_impl(old_name, new_name)
     }
 
+    fn rename_branch_force(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.rename_branch_force_impl(old_name, new_name)
+    }
+
+    fn branch_checked_out_in_other_worktree(&self, name: &str) -> Result<Option<PathBuf>> {
+        self.branch_checked_out_in_other_worktree_impl(name)
+    }
+
     fn delete_branch(&self, name: &str) -> Result<()> {
         self.delete_branch_impl(name)
     }

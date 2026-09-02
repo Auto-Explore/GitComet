@@ -1,11 +1,13 @@
 use super::GixRepo;
 use super::history::gix_head_id_or_none;
 use crate::util::{
-    bytes_to_text_preserving_utf8, path_buf_from_git_bytes, run_git_raw_output, run_git_simple,
-    run_git_simple_with_paths, validate_hex_commit_id, validate_ref_like_arg,
+    bytes_to_text_preserving_utf8, git_workdir_cmd_for, path_buf_from_git_bytes,
+    run_git_raw_output, run_git_simple, run_git_simple_with_paths, validate_hex_commit_id,
+    validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CheckoutRemoteBranchMode, CommitOperationOutcome, Result};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
@@ -27,10 +29,26 @@ fn head_targets_branch(repo: &gix::Repository, branch_ref_name: &str) -> Result<
     Ok(head_name.is_some_and(|name| name.as_bstr() == branch_ref_name))
 }
 
+/// The worktree whose HEAD is a local branch, straight from worktree metadata.
+enum WorktreeHoldingBranch {
+    /// Working directory; validate with `validated_worktree_workdir` before use.
+    Workdir(PathBuf),
+    /// Private git dir of a linked worktree whose workdir cannot be resolved.
+    Unresolved(PathBuf),
+}
+
+impl WorktreeHoldingBranch {
+    fn display_path(&self) -> &Path {
+        match self {
+            Self::Workdir(path) | Self::Unresolved(path) => path,
+        }
+    }
+}
+
 fn branch_in_use_worktree_path(
     repo: &gix::Repository,
     branch: &str,
-) -> Result<Option<std::path::PathBuf>> {
+) -> Result<Option<WorktreeHoldingBranch>> {
     // `worktrees()` only lists linked worktrees, so start from the owner repo to
     // include the main worktree even when GitComet is opened from a linked one.
     let owner_repo = repo
@@ -40,32 +58,97 @@ fn branch_in_use_worktree_path(
     if let Some(workdir) = owner_repo.workdir()
         && head_targets_branch(&owner_repo, branch_ref_name.as_str())?
     {
-        return Ok(Some(workdir.to_path_buf()));
+        return Ok(Some(WorktreeHoldingBranch::Workdir(workdir.to_path_buf())));
     }
 
     let worktrees = owner_repo
         .worktrees()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix worktrees: {e}"))))?;
     for proxy in worktrees {
-        let worktree_path = proxy
-            .base()
-            .unwrap_or_else(|_| proxy.git_dir().to_path_buf());
+        let worktree = match proxy.base() {
+            Ok(workdir) => WorktreeHoldingBranch::Workdir(workdir),
+            Err(_) => WorktreeHoldingBranch::Unresolved(proxy.git_dir().to_path_buf()),
+        };
         let linked_repo = proxy
             .into_repo_with_possibly_inaccessible_worktree()
             .map_err(|e| {
-                Error::new(ErrorKind::Backend(format!(
-                    "gix open linked worktree for branch deletion: {e}"
-                )))
+                Error::new(ErrorKind::Backend(format!("gix open linked worktree: {e}")))
             })?;
         if head_targets_branch(&linked_repo, branch_ref_name.as_str())? {
-            return Ok(Some(worktree_path));
+            return Ok(Some(worktree));
         }
     }
 
     Ok(None)
 }
 
+fn cannot_force_update_branch_error(command: &str, branch: &str, worktree: &Path) -> Error {
+    Error::new(ErrorKind::Git(GitFailure::new(
+        command,
+        GitFailureId::CommandFailed,
+        Some(128),
+        Vec::new(),
+        Vec::new(),
+        Some(format!(
+            "fatal: cannot force update the branch '{branch}' used by worktree at '{}'",
+            worktree.display()
+        )),
+    )))
+}
+
+/// Delete `refs/heads/<name>` and its config; the caller checked no worktree holds it.
+fn delete_local_branch_ref_and_config(repo: &gix::Repository, name: &str) -> Result<()> {
+    let ref_name = local_branch_ref_name(name);
+    let Some(reference) = repo
+        .try_find_reference(ref_name.as_str())
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+    else {
+        return Err(delete_branch_force_error(format!(
+            "error: branch '{name}' not found"
+        )));
+    };
+
+    reference
+        .delete()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix delete branch {name}: {e}"))))?;
+    delete_local_branch_config_section(repo, name)
+}
+
 fn delete_local_branch_config_section(repo: &gix::Repository, branch: &str) -> Result<()> {
+    edit_local_config(repo, |config| {
+        let mut removed = false;
+        while config
+            .remove_section("branch", Some(branch.into()))
+            .is_some()
+        {
+            removed = true;
+        }
+        removed
+    })
+}
+
+/// Drop `branch.<name>.remote` and `.merge` so the branch tracks nothing.
+fn clear_local_branch_upstream(repo: &gix::Repository, branch: &str) -> Result<()> {
+    edit_local_config(repo, |config| {
+        let Ok(mut section) = config.section_mut("branch", Some(gix::bstr::BStr::new(branch)))
+        else {
+            return false;
+        };
+        let mut removed = false;
+        for key in ["remote", "merge"] {
+            while section.remove(key).is_some() {
+                removed = true;
+            }
+        }
+        removed
+    })
+}
+
+/// Apply `edit` to the local config and write it back when it reports a change.
+fn edit_local_config(
+    repo: &gix::Repository,
+    edit: impl FnOnce(&mut gix::config::File) -> bool,
+) -> Result<()> {
     let config_path = repo.common_dir().join("config");
     let mut config = match gix::config::File::from_path_no_includes(
         config_path.clone(),
@@ -85,15 +168,7 @@ fn delete_local_branch_config_section(repo: &gix::Repository, branch: &str) -> R
         }
     };
 
-    let mut removed = false;
-    while config
-        .remove_section("branch", Some(branch.into()))
-        .is_some()
-    {
-        removed = true;
-    }
-
-    if removed {
+    if edit(&mut config) {
         let serialized = config.to_bstring();
         let mut lock = match gix::lock::File::acquire_to_update_resource(
             &config_path,
@@ -151,9 +226,9 @@ fn create_branch_error(detail: impl Into<String>) -> Error {
     )))
 }
 
-fn create_branch_already_exists_error(branch: &str) -> Error {
+fn branch_already_exists_error(command: &str, branch: &str) -> Error {
     Error::new(ErrorKind::Git(GitFailure::new(
-        "git branch",
+        command,
         GitFailureId::BranchAlreadyExists,
         Some(128),
         Vec::new(),
@@ -398,7 +473,7 @@ impl GixRepo {
     fn create_local_branch_reference(&self, branch: &str, target: &str) -> Result<()> {
         let mut repo = self.reopen_repo()?;
         if Self::local_branch_exists_in_repo(&repo, branch)? {
-            return Err(create_branch_already_exists_error(branch));
+            return Err(branch_already_exists_error("git branch", branch));
         }
 
         let target_id = resolve_branch_target_commit_id(&repo, target)?;
@@ -412,7 +487,7 @@ impl GixRepo {
             format!("branch: Created from {target}"),
         ) {
             if self.local_branch_exists(branch)? {
-                return Err(create_branch_already_exists_error(branch));
+                return Err(branch_already_exists_error("git branch", branch));
             }
             return Err(Error::new(ErrorKind::Backend(format!(
                 "gix create branch {branch}: {e}"
@@ -430,6 +505,9 @@ impl GixRepo {
     pub(super) fn rename_branch_impl(&self, old_name: &str, new_name: &str) -> Result<()> {
         validate_ref_like_arg(old_name, "branch name")?;
         validate_ref_like_arg(new_name, "branch name")?;
+        if self.local_branch_exists(new_name)? {
+            return Err(branch_already_exists_error("git branch -m", new_name));
+        }
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("branch")
@@ -437,7 +515,122 @@ impl GixRepo {
             .arg("--")
             .arg(old_name)
             .arg(new_name);
-        run_git_simple(cmd, "git branch -m")
+        match run_git_simple(cmd, "git branch -m") {
+            Ok(()) => Ok(()),
+            // Another Git process can create the branch after the preflight.
+            Err(_) if self.local_branch_exists(new_name)? => {
+                Err(branch_already_exists_error("git branch -m", new_name))
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn is_own_workdir(&self, path: &Path) -> bool {
+        path == self.spec.workdir
+            || canonicalize_or_original(path.to_path_buf())
+                == canonicalize_or_original(self.spec.workdir.clone())
+    }
+
+    /// Canonical workdir of a worktree holding `branch`, proven to belong to
+    /// this repository. Worktree metadata is untrusted input: git runs in this
+    /// path and the app opens it as a tab.
+    fn validated_worktree_workdir(
+        &self,
+        repo: &gix::Repository,
+        worktree: WorktreeHoldingBranch,
+        branch: &str,
+    ) -> Result<PathBuf> {
+        let WorktreeHoldingBranch::Workdir(path) = worktree else {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "the worktree holding branch '{branch}' at '{}' is inaccessible",
+                worktree.display_path().display()
+            ))));
+        };
+        let path = canonicalize_or_original(path);
+        if !path.is_dir() {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "the worktree holding branch '{branch}' at '{}' does not exist",
+                path.display()
+            ))));
+        }
+        let holder = crate::open::open_worktree_repo(&path)
+            .map_err(|e| crate::open::map_open_error(e, "gix open worktree holding branch"))?;
+        let same_repo = canonicalize_or_original(holder.common_dir().to_path_buf())
+            == canonicalize_or_original(repo.common_dir().to_path_buf());
+        if !same_repo {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "the worktree at '{}' does not belong to this repository",
+                path.display()
+            ))));
+        }
+        Ok(path)
+    }
+
+    pub(super) fn branch_checked_out_in_other_worktree_impl(
+        &self,
+        name: &str,
+    ) -> Result<Option<PathBuf>> {
+        validate_ref_like_arg(name, "branch name")?;
+        let repo = self.reopen_repo()?;
+        let Some(worktree) = branch_in_use_worktree_path(&repo, name)? else {
+            return Ok(None);
+        };
+        if matches!(&worktree, WorktreeHoldingBranch::Workdir(path) if self.is_own_workdir(path)) {
+            return Ok(None);
+        }
+        let path = self.validated_worktree_workdir(&repo, worktree, name)?;
+        Ok((!self.is_own_workdir(&path)).then_some(path))
+    }
+
+    pub(super) fn rename_branch_force_impl(&self, old_name: &str, new_name: &str) -> Result<()> {
+        validate_ref_like_arg(old_name, "branch name")?;
+        validate_ref_like_arg(new_name, "branch name")?;
+        if old_name == new_name {
+            return Err(Error::new(ErrorKind::Backend(
+                "invalid branch rename: old and new names are the same".to_string(),
+            )));
+        }
+
+        let repo = self.reopen_repo()?;
+        let Some(worktree) = branch_in_use_worktree_path(&repo, new_name)? else {
+            let mut cmd = self.git_workdir_cmd();
+            cmd.arg("branch")
+                .arg("-M")
+                .arg("--")
+                .arg(old_name)
+                .arg(new_name);
+            return run_git_simple(cmd, "git branch -M");
+        };
+        if !matches!(&worktree, WorktreeHoldingBranch::Workdir(path) if self.is_own_workdir(path)) {
+            return Err(cannot_force_update_branch_error(
+                "git branch -M",
+                new_name,
+                worktree.display_path(),
+            ));
+        }
+
+        // `new_name` is HEAD here: git refuses `-M`, so reset it in place instead.
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("checkout")
+            .arg("--no-track")
+            .arg("-B")
+            .arg(new_name)
+            .arg(old_name);
+        run_git_simple(cmd, "git checkout -B")?;
+
+        let repo = self.reopen_repo()?;
+        if let Some(worktree) = branch_in_use_worktree_path(&repo, old_name)? {
+            let path = self.validated_worktree_workdir(&repo, worktree, old_name)?;
+            if self.is_own_workdir(&path) {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "branch '{old_name}' is unexpectedly still checked out here"
+                ))));
+            }
+            let mut cmd = git_workdir_cmd_for(&path);
+            cmd.arg("checkout").arg("--detach");
+            run_git_simple(cmd, "git checkout --detach")?;
+        }
+        delete_local_branch_ref_and_config(&self.reopen_repo()?, old_name)
     }
 
     pub(super) fn delete_branch_impl(&self, name: &str) -> Result<()> {
@@ -452,27 +645,13 @@ impl GixRepo {
         validate_ref_like_arg(name, "branch name")?;
 
         let repo = self.reopen_repo()?;
-        if let Some(worktree_path) = branch_in_use_worktree_path(&repo, name)? {
+        if let Some(worktree) = branch_in_use_worktree_path(&repo, name)? {
             return Err(delete_branch_force_error(format!(
                 "error: cannot delete branch '{name}' used by worktree at '{}'",
-                worktree_path.display()
+                worktree.display_path().display()
             )));
         }
-
-        let ref_name = local_branch_ref_name(name);
-        let Some(reference) = repo
-            .try_find_reference(ref_name.as_str())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
-        else {
-            return Err(delete_branch_force_error(format!(
-                "error: branch '{name}' not found"
-            )));
-        };
-
-        reference.delete().map_err(|e| {
-            Error::new(ErrorKind::Backend(format!("gix delete branch {name}: {e}")))
-        })?;
-        delete_local_branch_config_section(&repo, name)
+        delete_local_branch_ref_and_config(&repo, name)
     }
 
     pub(super) fn checkout_branch_impl(&self, name: &str) -> Result<()> {
@@ -483,13 +662,12 @@ impl GixRepo {
         run_git_simple(cmd, "git checkout")
     }
 
-    /// `git checkout -B <name> <target>`: create the branch at `target`, or
-    /// reset an existing branch of that name to `target`, then check it out.
-    ///
-    /// Unlike a `git branch -f` + `git checkout` pair this also handles the
-    /// branch that is checked out in this worktree (the reset then behaves like
-    /// `git reset --hard <target>`), which is exactly the "overwrite and
-    /// checkout" case the caller offers the user.
+    /// `git checkout --no-track -B <name> <target>`: create the branch at
+    /// `target`, or reset an existing branch of that name to `target`, then
+    /// check it out. Also handles the branch checked out in this worktree,
+    /// which a `git branch -f` + `git checkout` pair cannot. Like a fresh
+    /// branch, the result tracks nothing: any upstream the existing branch had
+    /// is cleared.
     pub(super) fn create_branch_force_and_checkout_impl(
         &self,
         name: &str,
@@ -504,7 +682,8 @@ impl GixRepo {
             .arg("-B")
             .arg(name)
             .arg(target.as_ref());
-        run_git_simple(cmd, "git checkout -B")
+        run_git_simple(cmd, "git checkout -B")?;
+        clear_local_branch_upstream(&self.reopen_repo()?, name)
     }
 
     pub(super) fn checkout_remote_branch_impl(

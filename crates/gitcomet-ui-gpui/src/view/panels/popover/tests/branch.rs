@@ -29,6 +29,7 @@ pub(super) struct TrackingRepo {
     spec: RepoSpec,
     branches: Arc<Mutex<Vec<String>>>,
     current_branch: Arc<Mutex<String>>,
+    worktrees: Arc<Mutex<Vec<gitcomet_core::domain::Worktree>>>,
     create_attempts: Arc<Mutex<Vec<String>>>,
     actions: Arc<Mutex<Vec<String>>>,
 }
@@ -39,9 +40,27 @@ impl TrackingRepo {
             spec: RepoSpec { workdir },
             branches: Arc::new(Mutex::new(vec!["main".to_string()])),
             current_branch: Arc::new(Mutex::new("main".to_string())),
+            worktrees: Arc::new(Mutex::new(Vec::new())),
             create_attempts: Arc::new(Mutex::new(Vec::new())),
             actions: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    fn add_branch(&self, name: &str) {
+        let mut branches = self
+            .branches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !branches.iter().any(|branch| branch == name) {
+            branches.push(name.to_string());
+        }
+    }
+
+    fn set_worktrees(&self, worktrees: Vec<gitcomet_core::domain::Worktree>) {
+        *self
+            .worktrees
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = worktrees;
     }
 
     fn create_attempts(&self) -> Vec<String> {
@@ -227,6 +246,52 @@ impl GitRepository for TrackingRepo {
 
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
         Ok(())
+    }
+
+    fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.actions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(format!("rename:{old_name}:{new_name}"));
+        let mut branches = self
+            .branches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if branches.iter().any(|branch| branch == new_name) {
+            return Err(Error::new(ErrorKind::Git(GitFailure::new(
+                "git branch -m",
+                GitFailureId::BranchAlreadyExists,
+                Some(128),
+                Vec::new(),
+                Vec::new(),
+                Some(format!("a branch named '{new_name}' already exists")),
+            ))));
+        }
+        branches.retain(|branch| branch != old_name);
+        branches.push(new_name.to_string());
+        Ok(())
+    }
+
+    fn rename_branch_force(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.actions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(format!("rename-force:{old_name}:{new_name}"));
+        let mut branches = self
+            .branches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        branches.retain(|branch| branch != old_name && branch != new_name);
+        branches.push(new_name.to_string());
+        Ok(())
+    }
+
+    fn list_worktrees(&self) -> Result<Vec<gitcomet_core::domain::Worktree>> {
+        Ok(self
+            .worktrees
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone())
     }
 
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
@@ -3514,4 +3579,169 @@ fn branch_group_delete_keeps_a_remote_member_matching_the_current_branch(
     );
 
     assert_eq!(names, vec!["feat/a".to_string()]);
+}
+
+/// Renames `old_name` onto `main` (which always exists) and waits for the
+/// collision dialog. `worktrees` is what the repo lists before the prompt opens.
+fn open_rename_collision_prompt<'cx>(
+    cx: &'cx mut gpui::TestAppContext,
+    label: &str,
+    old_name: &str,
+    worktrees: Vec<gitcomet_core::domain::Worktree>,
+) -> (
+    gpui::Entity<GitCometView>,
+    &'cx mut gpui::VisualTestContext,
+    Arc<TrackingRepo>,
+    AppStore,
+) {
+    let (store, events, repo, _workdir) = create_tracking_store(label);
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    repo.add_branch(old_name);
+    let expect_listed_worktrees = worktrees.len();
+    repo.set_worktrees(worktrees);
+    store.dispatch(Msg::RefreshBranches { repo_id });
+    store.dispatch(Msg::LoadWorktrees { repo_id });
+    wait_until("branches and worktrees to load", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|state| state.id == repo_id)
+            .is_some_and(|state| {
+                matches!(
+                    &state.branches,
+                    Loadable::Ready(branches) if branches.iter().any(|branch| branch.name == old_name)
+                ) && matches!(
+                    &state.worktrees,
+                    Loadable::Ready(worktrees) if worktrees.len() == expect_listed_worktrees
+                )
+            })
+    });
+
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let old_name = old_name.to_string();
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::RenameBranchPrompt {
+                        repo_id,
+                        name: old_name.clone(),
+                        is_current_branch: false,
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                host.create_branch_input
+                    .update(cx, |input, cx| input.set_text("main", cx));
+                host.submit_rename_branch(window, cx);
+            });
+        });
+    });
+    wait_for_branch_exists_prompt(&store, &view, cx);
+
+    let kind = cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+    });
+    assert!(
+        matches!(
+            kind,
+            Some(PopoverKind::BranchExistsPrompt {
+                ref name,
+                ref target,
+                operation: BranchExistsPromptOperation::RenameBranch { old_name: ref old },
+                ..
+            }) if name == "main" && target == &old_name && old == &old_name
+        ),
+        "expected the rename collision dialog, got {kind:?}"
+    );
+    assert_eq!(repo.actions(), vec![format!("rename:{old_name}:main")]);
+
+    (view, cx, repo, store)
+}
+
+#[gpui::test]
+fn rename_branch_prompt_existing_name_opens_collision_dialog(cx: &mut gpui::TestAppContext) {
+    let (view, cx, _repo, store) =
+        open_rename_collision_prompt(cx, "rename-collision-dialog", "old", Vec::new());
+
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let snapshot = store.snapshot();
+    let repo_state = snapshot
+        .repos
+        .iter()
+        .find(|state| state.id == repo_id)
+        .expect("active repo state");
+    assert!(
+        !repo_state
+            .feedback
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("already exists")),
+        "a collision is a prompt, not an error banner: {:?}",
+        repo_state.feedback.diagnostics
+    );
+    assert!(
+        cx.debug_bounds("branch_exists_worktree_note").is_none(),
+        "no worktree note when no other worktree holds the branch"
+    );
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()));
+    assert!(store.snapshot().branch_exists_prompt.is_none());
+}
+
+#[gpui::test]
+fn rename_collision_dialog_overwrite_dispatches_force_rename(cx: &mut gpui::TestAppContext) {
+    let (view, cx, repo, _store) =
+        open_rename_collision_prompt(cx, "rename-collision-overwrite", "old", Vec::new());
+
+    click_debug_selector(cx, "branch_exists_overwrite");
+    wait_until("forced rename repo action", || {
+        repo.actions()
+            == vec![
+                "rename:old:main".to_string(),
+                "rename-force:old:main".to_string(),
+            ]
+    });
+    assert!(!cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()));
+}
+
+#[gpui::test]
+fn rename_collision_dialog_checkout_existing_checks_out_target(cx: &mut gpui::TestAppContext) {
+    let (view, cx, repo, _store) =
+        open_rename_collision_prompt(cx, "rename-collision-checkout", "old", Vec::new());
+
+    click_debug_selector(cx, "branch_exists_checkout_existing");
+    wait_until("existing branch checkout", || {
+        repo.actions() == vec!["rename:old:main".to_string(), "checkout:main".to_string()]
+    });
+    assert!(!cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()));
+}
+
+#[gpui::test]
+fn branch_exists_dialog_notes_worktree_holding_the_branch(cx: &mut gpui::TestAppContext) {
+    let worktrees = vec![gitcomet_core::domain::Worktree {
+        path: PathBuf::from("/tmp/gitcomet-ui-other-worktree"),
+        head: None,
+        branch: Some("main".to_string()),
+        detached: false,
+    }];
+    let (_view, cx, _repo, _store) =
+        open_rename_collision_prompt(cx, "rename-collision-worktree-note", "old", worktrees);
+
+    assert!(
+        cx.debug_bounds("branch_exists_worktree_note").is_some(),
+        "expected the dialog to say the branch lives in another worktree"
+    );
 }

@@ -299,6 +299,7 @@ pub enum Effect {
         repo_id: RepoId,
         old_name: String,
         new_name: String,
+        force: bool,
     },
     DeleteBranch {
         repo_id: RepoId,

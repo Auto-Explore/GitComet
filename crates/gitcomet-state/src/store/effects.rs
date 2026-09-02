@@ -2137,7 +2137,14 @@ pub(super) fn schedule_effect(
             }
         }
         Effect::CheckoutBranch { repo_id, name } => {
-            repo_actions::schedule_checkout_branch(executor, repos, msg_tx, repo_id, name);
+            repo_actions::schedule_checkout_branch(
+                executor,
+                repos,
+                backend.clone(),
+                msg_tx,
+                repo_id,
+                name,
+            );
         }
         Effect::CheckoutRemoteBranch {
             repo_id,
@@ -2148,6 +2155,7 @@ pub(super) fn schedule_effect(
         } => repo_actions::schedule_checkout_remote_branch(
             executor,
             repos,
+            backend.clone(),
             msg_tx,
             repo_id,
             remote,
@@ -2186,16 +2194,31 @@ pub(super) fn schedule_effect(
             force,
         } => {
             repo_actions::schedule_create_branch_and_checkout(
-                executor, repos, msg_tx, repo_id, name, target, force,
+                executor,
+                repos,
+                backend.clone(),
+                msg_tx,
+                repo_id,
+                name,
+                target,
+                force,
             );
         }
         Effect::RenameBranch {
             repo_id,
             old_name,
             new_name,
+            force,
         } => {
             repo_actions::schedule_rename_branch(
-                executor, repos, msg_tx, repo_id, old_name, new_name,
+                executor,
+                repos,
+                backend.clone(),
+                msg_tx,
+                repo_id,
+                old_name,
+                new_name,
+                force,
             );
         }
         Effect::DeleteBranch { repo_id, name } => {

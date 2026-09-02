@@ -1023,6 +1023,7 @@ fn create_rename_and_delete_branch_emit_effects() {
             repo_id: RepoId(1),
             old_name: "feature".to_string(),
             new_name: "renamed-feature".to_string(),
+            force: false,
         },
     );
     assert!(matches!(
@@ -1031,6 +1032,7 @@ fn create_rename_and_delete_branch_emit_effects() {
             repo_id: RepoId(1),
             old_name,
             new_name,
+            force: false,
         }] if old_name == "feature" && new_name == "renamed-feature"
     ));
 
@@ -2595,6 +2597,37 @@ fn branch_collision_prompt_choices_emit_exact_follow_up_actions() {
         }] if *id == repo_id
             && name == "feature"
             && target == "origin/feature-one"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let rename_prompt = crate::model::BranchExistsPromptState {
+        repo_id,
+        name: "feature".to_string(),
+        target: "old".to_string(),
+        operation: crate::model::BranchExistsPromptOperation::RenameBranch {
+            old_name: "old".to_string(),
+        },
+    };
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(rename_prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: rename_prompt,
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RenameBranch {
+            repo_id: id,
+            old_name,
+            new_name,
+            force: true,
+        }] if *id == repo_id && old_name == "old" && new_name == "feature"
     ));
     assert!(state.branch_exists_prompt.is_none());
     assert_eq!(state.repos[0].local_actions_in_flight, 1);

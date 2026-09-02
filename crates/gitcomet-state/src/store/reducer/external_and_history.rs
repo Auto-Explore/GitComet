@@ -863,9 +863,10 @@ pub(super) fn repo_action_finished(
     finish_repo_action(repos, state, repo_id, action, completion)
 }
 
-pub(super) fn create_branch_already_exists(
+pub(super) fn branch_already_exists(
     repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
+    action: RepoActionKind,
     prompt: BranchExistsPromptState,
 ) -> Vec<Effect> {
     if !state.repos.iter().any(|repo| repo.id == prompt.repo_id) {
@@ -878,7 +879,7 @@ pub(super) fn create_branch_already_exists(
         repos,
         state,
         repo_id,
-        RepoActionKind::CreateBranchAndCheckout,
+        action,
         RepoActionCompletion::ExpectedNoop,
     )
 }
@@ -892,6 +893,7 @@ fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
             | RepoActionKind::CherryPickCommit
             | RepoActionKind::RevertCommit
             | RepoActionKind::CreateBranchAndCheckout
+            | RepoActionKind::RenameBranch
     )
 }
 

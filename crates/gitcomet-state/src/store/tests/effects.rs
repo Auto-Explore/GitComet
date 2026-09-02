@@ -4045,11 +4045,62 @@ struct RecordingCheckoutRepo {
     spec: RepoSpec,
     calls: Arc<std::sync::Mutex<Vec<String>>>,
     create_branch_already_exists: bool,
+    rename_branch_already_exists: bool,
+    /// Reported by `branch_checked_out_in_other_worktree` for every branch.
+    other_worktree: Option<PathBuf>,
+    /// Reported by `current_branch`; unsupported when `None`.
+    current_branch: Option<String>,
+}
+
+impl RecordingCheckoutRepo {
+    fn new(spec: RepoSpec, calls: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+        Self {
+            spec,
+            calls,
+            create_branch_already_exists: false,
+            rename_branch_already_exists: false,
+            other_worktree: None,
+            current_branch: None,
+        }
+    }
+
+    fn record(&self, call: String) {
+        self.calls
+            .lock()
+            .expect("checkout recording mutex")
+            .push(call);
+    }
+}
+
+fn branch_already_exists_error(command: &str, name: &str) -> Error {
+    Error::new(ErrorKind::Git(gitcomet_core::error::GitFailure::new(
+        command,
+        gitcomet_core::error::GitFailureId::BranchAlreadyExists,
+        Some(128),
+        Vec::new(),
+        Vec::new(),
+        Some(format!("a branch named '{name}' already exists")),
+    )))
 }
 
 impl GitRepository for RecordingCheckoutRepo {
     fn spec(&self) -> &RepoSpec {
         &self.spec
+    }
+
+    fn branch_checked_out_in_other_worktree(&self, _name: &str) -> Result<Option<PathBuf>> {
+        Ok(self.other_worktree.clone())
+    }
+    fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.record(format!("rename {old_name} {new_name}"));
+        if self.rename_branch_already_exists {
+            return Err(branch_already_exists_error("git branch -m", new_name));
+        }
+        Ok(())
+    }
+    fn rename_branch_force(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.record(format!("rename-force {old_name} {new_name}"));
+        Ok(())
     }
 
     fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
@@ -4062,7 +4113,9 @@ impl GitRepository for RecordingCheckoutRepo {
         unsupported_repo_result()
     }
     fn current_branch(&self) -> Result<String> {
-        unsupported_repo_result()
+        self.current_branch
+            .clone()
+            .map_or_else(unsupported_repo_result, Ok)
     }
     fn list_branches(&self) -> Result<Vec<Branch>> {
         unsupported_repo_result()
@@ -4081,21 +4134,9 @@ impl GitRepository for RecordingCheckoutRepo {
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()> {
-        self.calls
-            .lock()
-            .expect("checkout recording mutex")
-            .push(format!("create {name} {}", target.as_ref()));
+        self.record(format!("create {name} {}", target.as_ref()));
         if self.create_branch_already_exists {
-            return Err(Error::new(ErrorKind::Git(
-                gitcomet_core::error::GitFailure::new(
-                    "git branch",
-                    gitcomet_core::error::GitFailureId::BranchAlreadyExists,
-                    Some(128),
-                    Vec::new(),
-                    Vec::new(),
-                    Some(format!("a branch named '{name}' already exists")),
-                ),
-            )));
+            return Err(branch_already_exists_error("git branch", name));
         }
         Ok(())
     }
@@ -4252,6 +4293,9 @@ fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
         },
         calls: Arc::clone(&calls),
         create_branch_already_exists: false,
+        rename_branch_already_exists: false,
+        other_worktree: None,
+        current_branch: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4291,6 +4335,9 @@ fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success(
         },
         calls: Arc::clone(&calls),
         create_branch_already_exists: false,
+        rename_branch_already_exists: false,
+        other_worktree: None,
+        current_branch: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4333,6 +4380,9 @@ fn checkout_commit_effect_requests_worktree_reload_on_success() {
         },
         calls: Arc::clone(&calls),
         create_branch_already_exists: false,
+        rename_branch_already_exists: false,
+        other_worktree: None,
+        current_branch: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4373,6 +4423,9 @@ fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_succ
         },
         calls: Arc::clone(&calls),
         create_branch_already_exists: false,
+        rename_branch_already_exists: false,
+        other_worktree: None,
+        current_branch: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4417,6 +4470,9 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
         },
         calls: Arc::clone(&calls),
         create_branch_already_exists: false,
+        rename_branch_already_exists: false,
+        other_worktree: None,
+        current_branch: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4458,6 +4514,9 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
         },
         calls: Arc::clone(&calls),
         create_branch_already_exists: true,
+        rename_branch_already_exists: false,
+        other_worktree: None,
+        current_branch: None,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4488,10 +4547,14 @@ fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
         recv_effect_message(&msg_rx, Duration::from_secs(2)).expect("expected semantic collision");
     assert!(matches!(
         second,
-        Msg::Internal(crate::msg::InternalMsg::CreateBranchAlreadyExists {
-            repo_id: id,
-            name,
-            target,
+        Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists {
+            action: RepoActionKind::CreateBranchAndCheckout,
+            prompt: crate::model::BranchExistsPromptState {
+                repo_id: id,
+                name,
+                target,
+                operation: crate::model::BranchExistsPromptOperation::CreateBranch,
+            },
         }) if id == repo_id && name == "feature" && target == "origin/feature-one"
     ));
     assert!(
@@ -5474,6 +5537,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 old_name: "topic2".to_string(),
                 new_name: "renamed-topic".to_string(),
+                force: false,
             },
             1,
         ),
@@ -5895,4 +5959,477 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         );
         recv_n_msgs(&msg_rx, expected_messages);
     }
+}
+
+struct RecordingWorktreeBackend {
+    repo: Arc<dyn GitRepository>,
+    opened: Arc<std::sync::Mutex<Vec<PathBuf>>>,
+}
+
+impl GitBackend for RecordingWorktreeBackend {
+    fn open(&self, path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+        self.opened
+            .lock()
+            .expect("opened mutex")
+            .push(path.to_path_buf());
+        Ok(Arc::clone(&self.repo))
+    }
+}
+
+/// An origin repo that reports every branch as checked out in `worktree`, and
+/// the recorder the backend hands out for that worktree.
+struct WorktreeRedirectFixture {
+    repos: FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    backend: Arc<dyn GitBackend>,
+    origin_calls: Arc<std::sync::Mutex<Vec<String>>>,
+    worktree_calls: Arc<std::sync::Mutex<Vec<String>>>,
+    opened: Arc<std::sync::Mutex<Vec<PathBuf>>>,
+    worktree: PathBuf,
+}
+
+fn worktree_redirect_fixture(
+    repo_id: RepoId,
+    label: &str,
+    worktree_branch: &str,
+    worktree_is_origin: bool,
+) -> WorktreeRedirectFixture {
+    let origin_workdir = unique_temp_path(label);
+    let worktree = unique_temp_path(&format!("{label}-worktree"));
+    let origin_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let worktree_calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut origin = RecordingCheckoutRepo::new(
+        RepoSpec {
+            workdir: origin_workdir.clone(),
+        },
+        Arc::clone(&origin_calls),
+    );
+    origin.other_worktree = Some(worktree.clone());
+    let mut worktree_repo = RecordingCheckoutRepo::new(
+        RepoSpec {
+            workdir: if worktree_is_origin {
+                origin_workdir
+            } else {
+                worktree.clone()
+            },
+        },
+        Arc::clone(&worktree_calls),
+    );
+    worktree_repo.current_branch = Some(worktree_branch.to_string());
+    let opened = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(RecordingWorktreeBackend {
+        repo: Arc::new(worktree_repo),
+        opened: Arc::clone(&opened),
+    });
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    repos.insert(repo_id, Arc::new(origin));
+    WorktreeRedirectFixture {
+        repos,
+        backend,
+        origin_calls,
+        worktree_calls,
+        opened,
+        worktree,
+    }
+}
+
+/// Messages before the action's finishing message, and that message.
+fn recv_until_action_finished(msg_rx: &std::sync::mpsc::Receiver<Msg>) -> (Vec<Msg>, Msg) {
+    let mut others = Vec::new();
+    loop {
+        let msg = recv_effect_message(msg_rx, Duration::from_secs(2))
+            .expect("expected the action to finish");
+        if matches!(
+            msg,
+            Msg::Internal(
+                crate::msg::InternalMsg::RepoActionFinished { .. }
+                    | crate::msg::InternalMsg::RepoActionFinishedInWorktree { .. }
+                    | crate::msg::InternalMsg::BranchAlreadyExists { .. }
+            )
+        ) {
+            return (others, msg);
+        }
+        others.push(msg);
+    }
+}
+
+fn assert_refreshes_branches_and_worktrees(others: &[Msg], repo_id: RepoId) {
+    assert_eq!(others.len(), 3, "unexpected messages: {others:?}");
+    assert!(
+        others
+            .iter()
+            .any(|msg| matches!(msg, Msg::RefreshBranches { repo_id: id } if *id == repo_id))
+    );
+    assert!(
+        others
+            .iter()
+            .any(|msg| matches!(msg, Msg::LoadWorktrees { repo_id: id } if *id == repo_id))
+    );
+    assert!(
+        others
+            .iter()
+            .any(|msg| matches!(msg, Msg::LoadWorktreeDirty { repo_id: id } if *id == repo_id))
+    );
+}
+
+fn run_effect_with_fixture(
+    fixture: &WorktreeRedirectFixture,
+    effect: Effect,
+) -> std::sync::mpsc::Receiver<Msg> {
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &fixture.backend,
+        &fixture.repos,
+        msg_tx,
+        effect,
+    );
+    msg_rx
+}
+
+#[test]
+fn checkout_branch_effect_reports_other_worktree_without_running_checkout() {
+    let repo_id = RepoId(710);
+    let fixture =
+        worktree_redirect_fixture(repo_id, "gitcomet-checkout-redirect", "feature", false);
+    let msg_rx = run_effect_with_fixture(
+        &fixture,
+        Effect::CheckoutBranch {
+            repo_id,
+            name: "feature".to_string(),
+        },
+    );
+
+    let (others, finished) = recv_until_action_finished(&msg_rx);
+    assert!(
+        others.is_empty(),
+        "a redirected checkout runs nothing and refreshes nothing: {others:?}"
+    );
+    assert!(matches!(
+        &finished,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id: id,
+            action: RepoActionKind::CheckoutBranch,
+            worktree_path,
+            result: Ok(()),
+        }) if *id == repo_id && worktree_path == &fixture.worktree
+    ));
+    assert!(fixture.origin_calls.lock().unwrap().is_empty());
+    assert!(fixture.opened.lock().unwrap().is_empty());
+}
+
+#[test]
+fn create_branch_and_checkout_force_effect_runs_in_other_worktree() {
+    let repo_id = RepoId(711);
+    let fixture =
+        worktree_redirect_fixture(repo_id, "gitcomet-force-create-redirect", "feature", false);
+    let msg_rx = run_effect_with_fixture(
+        &fixture,
+        Effect::CreateBranchAndCheckout {
+            repo_id,
+            name: "feature".to_string(),
+            target: "origin/feature-one".to_string(),
+            force: true,
+        },
+    );
+
+    let (others, finished) = recv_until_action_finished(&msg_rx);
+    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert!(matches!(
+        &finished,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id: id,
+            action: RepoActionKind::CreateBranchAndCheckout,
+            worktree_path,
+            result: Ok(()),
+        }) if *id == repo_id && worktree_path == &fixture.worktree
+    ));
+    assert!(fixture.origin_calls.lock().unwrap().is_empty());
+    assert_eq!(
+        *fixture.worktree_calls.lock().unwrap(),
+        vec!["force-create-and-checkout feature origin/feature-one".to_string()]
+    );
+    assert_eq!(
+        *fixture.opened.lock().unwrap(),
+        vec![fixture.worktree.clone()]
+    );
+}
+
+#[test]
+fn checkout_remote_branch_overwrite_effect_runs_in_other_worktree() {
+    let repo_id = RepoId(712);
+    let fixture = worktree_redirect_fixture(
+        repo_id,
+        "gitcomet-remote-overwrite-redirect",
+        "feature",
+        false,
+    );
+    let msg_rx = run_effect_with_fixture(
+        &fixture,
+        Effect::CheckoutRemoteBranch {
+            repo_id,
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+            local_branch: "feature".to_string(),
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
+        },
+    );
+
+    let (others, finished) = recv_until_action_finished(&msg_rx);
+    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert!(matches!(
+        &finished,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id: id,
+            action: RepoActionKind::CheckoutRemoteBranch,
+            worktree_path,
+            result: Ok(()),
+        }) if *id == repo_id && worktree_path == &fixture.worktree
+    ));
+    assert!(fixture.origin_calls.lock().unwrap().is_empty());
+    assert_eq!(
+        *fixture.worktree_calls.lock().unwrap(),
+        vec!["checkout_remote origin/feature -> feature (Overwrite)".to_string()]
+    );
+}
+
+#[test]
+fn checkout_remote_branch_create_effect_runs_here_even_when_branch_is_elsewhere() {
+    let repo_id = RepoId(713);
+    let fixture =
+        worktree_redirect_fixture(repo_id, "gitcomet-remote-create-here", "feature", false);
+    let msg_rx = run_effect_with_fixture(
+        &fixture,
+        Effect::CheckoutRemoteBranch {
+            repo_id,
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+            local_branch: "feature".to_string(),
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Create,
+        },
+    );
+
+    let (others, finished) = recv_until_action_finished(&msg_rx);
+    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert!(matches!(
+        &finished,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id: id,
+            action: RepoActionKind::CheckoutRemoteBranch,
+            result: Ok(()),
+        }) if *id == repo_id
+    ));
+    assert_eq!(
+        *fixture.origin_calls.lock().unwrap(),
+        vec!["checkout_remote origin/feature -> feature (Create)".to_string()]
+    );
+    assert!(fixture.opened.lock().unwrap().is_empty());
+}
+
+#[test]
+fn rename_branch_effect_routes_collision_to_prompt() {
+    let repo_id = RepoId(714);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut repo = RecordingCheckoutRepo::new(
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-rename-collision-effect"),
+        },
+        Arc::clone(&calls),
+    );
+    repo.rename_branch_already_exists = true;
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = FxHashMap::default();
+        repos.insert(repo_id, Arc::new(repo) as Arc<dyn GitRepository>);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::RenameBranch {
+            repo_id,
+            old_name: "old".to_string(),
+            new_name: "feature".to_string(),
+            force: false,
+        },
+    );
+
+    let (others, finished) = recv_until_action_finished(&msg_rx);
+    assert!(matches!(
+        others.as_slice(),
+        [Msg::RefreshBranches { repo_id: id }] if *id == repo_id
+    ));
+    assert!(matches!(
+        &finished,
+        Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists {
+            action: RepoActionKind::RenameBranch,
+            prompt: crate::model::BranchExistsPromptState {
+                repo_id: id,
+                name,
+                target,
+                operation: crate::model::BranchExistsPromptOperation::RenameBranch { old_name },
+            },
+        }) if *id == repo_id && name == "feature" && target == "old" && old_name == "old"
+    ));
+    assert!(
+        msg_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "a collision must not emit worktree reloads or a generic failure"
+    );
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["rename old feature".to_string()]
+    );
+}
+
+#[test]
+fn rename_branch_effect_finishes_normally_without_collision() {
+    let repo_id = RepoId(715);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let repo = RecordingCheckoutRepo::new(
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-rename-effect"),
+        },
+        Arc::clone(&calls),
+    );
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = FxHashMap::default();
+        repos.insert(repo_id, Arc::new(repo) as Arc<dyn GitRepository>);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::RenameBranch {
+            repo_id,
+            old_name: "old".to_string(),
+            new_name: "feature".to_string(),
+            force: false,
+        },
+    );
+
+    let (others, finished) = recv_until_action_finished(&msg_rx);
+    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert!(matches!(
+        &finished,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id: id,
+            action: RepoActionKind::RenameBranch,
+            result: Ok(()),
+        }) if *id == repo_id
+    ));
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["rename old feature".to_string()]
+    );
+}
+
+#[test]
+fn rename_branch_force_effect_runs_in_other_worktree() {
+    let repo_id = RepoId(716);
+    let fixture =
+        worktree_redirect_fixture(repo_id, "gitcomet-rename-force-redirect", "feature", false);
+    let msg_rx = run_effect_with_fixture(
+        &fixture,
+        Effect::RenameBranch {
+            repo_id,
+            old_name: "old".to_string(),
+            new_name: "feature".to_string(),
+            force: true,
+        },
+    );
+
+    let (others, finished) = recv_until_action_finished(&msg_rx);
+    assert_refreshes_branches_and_worktrees(&others, repo_id);
+    assert!(matches!(
+        &finished,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id: id,
+            action: RepoActionKind::RenameBranch,
+            worktree_path,
+            result: Ok(()),
+        }) if *id == repo_id && worktree_path == &fixture.worktree
+    ));
+    assert!(fixture.origin_calls.lock().unwrap().is_empty());
+    assert_eq!(
+        *fixture.worktree_calls.lock().unwrap(),
+        vec!["rename-force old feature".to_string()]
+    );
+}
+
+#[test]
+fn branch_action_in_other_worktree_fails_when_it_no_longer_holds_the_branch() {
+    let repo_id = RepoId(717);
+    let fixture = worktree_redirect_fixture(repo_id, "gitcomet-redirect-moved-on", "main", false);
+    let msg_rx = run_effect_with_fixture(
+        &fixture,
+        Effect::CreateBranchAndCheckout {
+            repo_id,
+            name: "feature".to_string(),
+            target: "origin/feature-one".to_string(),
+            force: true,
+        },
+    );
+
+    let (others, finished) = recv_until_action_finished(&msg_rx);
+    assert!(
+        others.is_empty(),
+        "nothing to refresh after a failed guard: {others:?}"
+    );
+    assert!(matches!(
+        &finished,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id: id,
+            action: RepoActionKind::CreateBranchAndCheckout,
+            result: Err(_),
+            ..
+        }) if *id == repo_id
+    ));
+    assert!(fixture.origin_calls.lock().unwrap().is_empty());
+    assert!(
+        fixture.worktree_calls.lock().unwrap().is_empty(),
+        "the overwrite must not run in a worktree that moved to another branch"
+    );
+}
+
+#[test]
+fn branch_action_in_other_worktree_fails_when_backend_opens_own_workdir() {
+    let repo_id = RepoId(718);
+    let fixture = worktree_redirect_fixture(repo_id, "gitcomet-redirect-self", "feature", true);
+    let msg_rx = run_effect_with_fixture(
+        &fixture,
+        Effect::RenameBranch {
+            repo_id,
+            old_name: "old".to_string(),
+            new_name: "feature".to_string(),
+            force: true,
+        },
+    );
+
+    let (others, finished) = recv_until_action_finished(&msg_rx);
+    assert!(others.is_empty(), "unexpected messages: {others:?}");
+    assert!(matches!(
+        &finished,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id: id,
+            action: RepoActionKind::RenameBranch,
+            result: Err(_),
+            ..
+        }) if *id == repo_id
+    ));
+    assert!(fixture.origin_calls.lock().unwrap().is_empty());
+    assert!(fixture.worktree_calls.lock().unwrap().is_empty());
 }

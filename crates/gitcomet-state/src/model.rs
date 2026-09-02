@@ -618,6 +618,7 @@ pub struct AppState {
 pub enum BranchExistsPromptOperation {
     CreateBranch,
     CheckoutRemoteBranch { remote: String, branch: String },
+    RenameBranch { old_name: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

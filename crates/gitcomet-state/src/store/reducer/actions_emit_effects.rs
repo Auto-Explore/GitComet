@@ -94,11 +94,17 @@ pub(super) fn create_branch_and_checkout(
     }]
 }
 
-pub(super) fn rename_branch(repo_id: RepoId, old_name: String, new_name: String) -> Vec<Effect> {
+pub(super) fn rename_branch(
+    repo_id: RepoId,
+    old_name: String,
+    new_name: String,
+    force: bool,
+) -> Vec<Effect> {
     vec![Effect::RenameBranch {
         repo_id,
         old_name,
         new_name,
+        force,
     }]
 }
 

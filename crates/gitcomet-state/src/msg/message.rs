@@ -578,6 +578,8 @@ pub enum Msg {
         repo_id: RepoId,
         old_name: String,
         new_name: String,
+        /// Replace an existing `new_name` instead of failing with "already exists".
+        force: bool,
     },
     DeleteBranch {
         repo_id: RepoId,
@@ -1315,10 +1317,18 @@ pub enum InternalMsg {
         action: RepoActionKind,
         result: Result<(), Error>,
     },
-    CreateBranchAlreadyExists {
+    /// The action ran into an existing branch; open the collision prompt.
+    BranchAlreadyExists {
+        action: RepoActionKind,
+        prompt: BranchExistsPromptState,
+    },
+    /// The action was carried out in (or redirected to) another worktree that
+    /// has the branch checked out; on success that worktree is opened.
+    RepoActionFinishedInWorktree {
         repo_id: RepoId,
-        name: String,
-        target: String,
+        action: RepoActionKind,
+        worktree_path: PathBuf,
+        result: Result<(), Error>,
     },
     CommitFinished {
         repo_id: RepoId,

@@ -1749,7 +1749,7 @@ impl PopoverHost {
         };
         self.create_branch_input.read_with(cx, |input, _| {
             let new_name = input.text().trim();
-            !new_name.is_empty() && new_name != name
+            is_submittable_branch_name(new_name) && new_name != name
         })
     }
 
@@ -1765,13 +1765,14 @@ impl PopoverHost {
         let new_name = self
             .create_branch_input
             .read_with(cx, |input, _| input.text().trim().to_string());
-        if new_name.is_empty() || new_name == name {
+        if !is_submittable_branch_name(&new_name) || new_name == name {
             return;
         }
         self.store.dispatch(Msg::RenameBranch {
             repo_id,
             old_name: name,
             new_name,
+            force: false,
         });
         self.dismiss_inline_popover(window, cx);
     }

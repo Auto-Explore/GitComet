@@ -1657,57 +1657,138 @@ fn create_branch_force_and_checkout_resets_existing_branch_and_checks_it_out() {
     );
 }
 
+/// Repo on `main` with a configured `origin` remote, `refs/remotes/origin/feature`
+/// at HEAD, and a local `feature` whose upstream is a different remote.
+fn repo_with_feature_tracking_another_remote(dir: &Path) -> PathBuf {
+    let repo = dir.join("repo");
+    let remote_repo = dir.join("origin.git");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&remote_repo).unwrap();
+
+    run_git(&repo, &["init", "-b", "main"]);
+    run_git(&repo, &["config", "user.email", "you@example.com"]);
+    run_git(&repo, &["config", "user.name", "You"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    run_git(&remote_repo, &["init", "--bare"]);
+
+    write(&repo, "a.txt", "one\n");
+    run_git(&repo, &["add", "a.txt"]);
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let remote_url = git_remote_url(&remote_repo);
+    run_git(&repo, &["remote", "add", "origin", &remote_url]);
+    run_git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/feature", "HEAD"],
+    );
+    run_git(&repo, &["branch", "feature"]);
+    run_git(&repo, &["config", "branch.feature.remote", "backup"]);
+    run_git(
+        &repo,
+        &["config", "branch.feature.merge", "refs/heads/original"],
+    );
+    repo
+}
+
 #[test]
-fn create_branch_force_and_checkout_preserves_existing_upstream_for_remote_target() {
+fn create_branch_force_and_checkout_clears_existing_upstream_for_any_target() {
     if !require_git_shell_for_status_integration_tests() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path();
-    let remote_dir = tempfile::tempdir().unwrap();
-    let remote_repo = remote_dir.path();
-
-    run_git(repo, &["init", "-b", "main"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    run_git(remote_repo, &["init", "--bare"]);
-
-    write(repo, "a.txt", "one\n");
-    run_git(repo, &["add", "a.txt"]);
-    run_git(
-        repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
-    );
-
-    let remote_url = git_remote_url(remote_repo);
-    run_git(repo, &["remote", "add", "origin", &remote_url]);
-    run_git(repo, &["update-ref", "refs/remotes/origin/feature", "HEAD"]);
-    run_git(repo, &["branch", "feature"]);
-    run_git(repo, &["config", "branch.feature.remote", "backup"]);
-    run_git(
-        repo,
-        &["config", "branch.feature.merge", "refs/heads/original"],
-    );
+    let repo = repo_with_feature_tracking_another_remote(dir.path());
+    let head = run_git_output(&repo, &["rev-parse", "HEAD"]);
 
     let backend = GixBackend;
-    let opened = backend.open(repo).unwrap();
+    let opened = backend.open(&repo).unwrap();
+    for target in ["origin/feature", "main", head.as_str()] {
+        run_git(&repo, &["config", "branch.feature.remote", "backup"]);
+        run_git(
+            &repo,
+            &["config", "branch.feature.merge", "refs/heads/original"],
+        );
+        run_git(&repo, &["config", "branch.feature.rebase", "true"]);
+
+        opened
+            .create_branch_force_and_checkout(
+                "feature",
+                &gitcomet_core::domain::CommitId(target.into()),
+            )
+            .unwrap();
+
+        assert_eq!(
+            run_git_output(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            "feature"
+        );
+        run_git_expect_failure(&repo, &["config", "--get", "branch.feature.remote"]);
+        run_git_expect_failure(&repo, &["config", "--get", "branch.feature.merge"]);
+        assert_eq!(
+            run_git_output(&repo, &["config", "branch.feature.rebase"]),
+            "true",
+            "target {target}: only the tracking keys are cleared"
+        );
+    }
+}
+
+#[test]
+fn create_branch_force_and_checkout_never_sets_tracking_for_a_remote_target() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo_with_feature_tracking_another_remote(dir.path());
+    run_git(&repo, &["branch", "--unset-upstream", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&repo).unwrap();
+    for name in ["feature", "fresh"] {
+        opened
+            .create_branch_force_and_checkout(
+                name,
+                &gitcomet_core::domain::CommitId("origin/feature".into()),
+            )
+            .unwrap();
+        run_git_expect_failure(
+            &repo,
+            &["config", "--get", &format!("branch.{name}.remote")],
+        );
+        run_git_expect_failure(&repo, &["config", "--get", &format!("branch.{name}.merge")]);
+    }
+}
+
+#[test]
+fn checkout_remote_branch_overwrite_retargets_upstream_to_the_selected_remote() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = repo_with_feature_tracking_another_remote(dir.path());
+
+    let backend = GixBackend;
+    let opened = backend.open(&repo).unwrap();
     opened
-        .create_branch_force_and_checkout(
+        .checkout_remote_branch(
+            "origin",
             "feature",
-            &gitcomet_core::domain::CommitId("origin/feature".into()),
+            "feature",
+            CheckoutRemoteBranchMode::Overwrite,
         )
         .unwrap();
 
     assert_eq!(
-        run_git_output(repo, &["config", "branch.feature.remote"]),
-        "backup",
-        "overwriting a branch must not change its configured remote"
+        run_git_output(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "feature"
     );
     assert_eq!(
-        run_git_output(repo, &["config", "branch.feature.merge"]),
-        "refs/heads/original",
-        "overwriting a branch must not change its configured merge ref"
+        run_git_output(&repo, &["config", "branch.feature.remote"]),
+        "origin"
+    );
+    assert_eq!(
+        run_git_output(&repo, &["config", "branch.feature.merge"]),
+        "refs/heads/feature"
     );
 }
 
@@ -3613,4 +3694,301 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
         .count()
         .saturating_sub(1);
     assert_eq!(parent_count, 1, "expected fast-forward");
+}
+
+struct LinkedWorktreeFixture {
+    repo: PathBuf,
+    linked: PathBuf,
+    first_commit: String,
+    second_commit: String,
+}
+
+/// Main worktree on `main` at the second commit, linked worktree on `feature`
+/// at the first commit.
+fn init_repo_with_linked_worktree(dir: &Path) -> LinkedWorktreeFixture {
+    let repo = dir.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    run_git(&repo, &["init", "-b", "main"]);
+    run_git(&repo, &["config", "user.email", "you@example.com"]);
+    run_git(&repo, &["config", "user.name", "You"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+
+    write(&repo, "a.txt", "one\n");
+    run_git(&repo, &["add", "a.txt"]);
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    let first_commit = run_git_output(&repo, &["rev-parse", "HEAD"]);
+    run_git(&repo, &["branch", "feature"]);
+
+    write(&repo, "b.txt", "two\n");
+    run_git(&repo, &["add", "b.txt"]);
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "second"],
+    );
+    let second_commit = run_git_output(&repo, &["rev-parse", "HEAD"]);
+
+    let linked = dir.join("feature-worktree");
+    run_git(
+        &repo,
+        &["worktree", "add", &git_path_arg(&linked), "feature"],
+    );
+    LinkedWorktreeFixture {
+        repo,
+        linked,
+        first_commit,
+        second_commit,
+    }
+}
+
+fn canonical(path: &Path) -> PathBuf {
+    gitcomet_core::path_utils::canonicalize_or_original(path.to_path_buf())
+}
+
+fn branch_exists(repo: &Path, branch: &str) -> bool {
+    git_command()
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .status()
+        .expect("show-ref")
+        .success()
+}
+
+#[test]
+fn branch_checked_out_in_other_worktree_reports_linked_and_main_worktrees() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = init_repo_with_linked_worktree(dir.path());
+    run_git(&fixture.repo, &["branch", "idle"]);
+
+    let backend = GixBackend;
+    let from_main = backend.open(&fixture.repo).unwrap();
+    assert_eq!(
+        from_main
+            .branch_checked_out_in_other_worktree("feature")
+            .unwrap(),
+        Some(canonical(&fixture.linked))
+    );
+    assert_eq!(
+        from_main
+            .branch_checked_out_in_other_worktree("main")
+            .unwrap(),
+        None,
+        "the branch checked out here is not in another worktree"
+    );
+    assert_eq!(
+        from_main
+            .branch_checked_out_in_other_worktree("idle")
+            .unwrap(),
+        None
+    );
+
+    let from_linked = backend.open(&fixture.linked).unwrap();
+    assert_eq!(
+        from_linked
+            .branch_checked_out_in_other_worktree("main")
+            .unwrap(),
+        Some(canonical(&fixture.repo))
+    );
+    assert_eq!(
+        from_linked
+            .branch_checked_out_in_other_worktree("feature")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn branch_checked_out_in_other_worktree_rejects_worktree_from_another_repository() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = init_repo_with_linked_worktree(dir.path());
+
+    let foreign = dir.path().join("foreign");
+    fs::create_dir_all(&foreign).unwrap();
+    run_git(&foreign, &["init", "-b", "main"]);
+    // Point the linked worktree's metadata at a repository it does not belong to.
+    let gitdir_file = fixture
+        .repo
+        .join(".git")
+        .join("worktrees")
+        .join("feature-worktree")
+        .join("gitdir");
+    fs::write(
+        &gitdir_file,
+        format!("{}\n", foreign.join(".git").display()),
+    )
+    .unwrap();
+
+    let backend = GixBackend;
+    let opened = backend.open(&fixture.repo).unwrap();
+    let err = opened
+        .branch_checked_out_in_other_worktree("feature")
+        .expect_err("a worktree outside this repository must not be reported");
+    assert!(
+        err.to_string()
+            .contains("does not belong to this repository"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn rename_branch_existing_target_returns_structured_git_error() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = init_repo_with_linked_worktree(dir.path());
+    run_git(&fixture.repo, &["branch", "idle"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&fixture.repo).unwrap();
+    let err = opened
+        .rename_branch("idle", "feature")
+        .expect_err("renaming onto an existing branch should fail");
+    assert_git_failure(&err, "git branch -m", GitFailureId::BranchAlreadyExists);
+    assert!(branch_exists(&fixture.repo, "idle"));
+    assert_eq!(
+        run_git_output(&fixture.repo, &["rev-parse", "refs/heads/feature"]),
+        fixture.first_commit
+    );
+}
+
+#[test]
+fn rename_branch_force_replaces_existing_branch_and_follows_head() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(repo, &["branch", "feature"]);
+    write(repo, "b.txt", "two\n");
+    run_git(repo, &["add", "b.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "second"],
+    );
+    let second_commit = run_git_output(repo, &["rev-parse", "HEAD"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened.rename_branch_force("main", "feature").unwrap();
+
+    assert_eq!(
+        run_git_output(repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "feature"
+    );
+    assert_eq!(run_git_output(repo, &["rev-parse", "HEAD"]), second_commit);
+    assert!(!branch_exists(repo, "main"));
+}
+
+#[test]
+fn rename_branch_force_over_current_branch_resets_head_and_deletes_old() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = init_repo_with_linked_worktree(dir.path());
+    run_git(&fixture.repo, &["branch", "old", &fixture.first_commit]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&fixture.repo).unwrap();
+    opened.rename_branch_force("old", "main").unwrap();
+
+    assert_eq!(
+        run_git_output(&fixture.repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "main"
+    );
+    assert_eq!(
+        run_git_output(&fixture.repo, &["rev-parse", "HEAD"]),
+        fixture.first_commit
+    );
+    assert!(
+        !fixture.repo.join("b.txt").exists(),
+        "the working tree follows the reset branch"
+    );
+    assert!(!branch_exists(&fixture.repo, "old"));
+}
+
+#[test]
+fn rename_branch_force_over_branch_held_by_linked_worktree_from_that_handle_detaches_main() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = init_repo_with_linked_worktree(dir.path());
+
+    let backend = GixBackend;
+    let from_linked = backend.open(&fixture.linked).unwrap();
+    from_linked.rename_branch_force("main", "feature").unwrap();
+
+    assert_eq!(
+        run_git_output(&fixture.linked, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "feature"
+    );
+    assert_eq!(
+        run_git_output(&fixture.linked, &["rev-parse", "HEAD"]),
+        fixture.second_commit
+    );
+    assert_eq!(
+        run_git_output(&fixture.repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "HEAD",
+        "the main worktree is left detached"
+    );
+    assert_eq!(
+        run_git_output(&fixture.repo, &["rev-parse", "HEAD"]),
+        fixture.second_commit,
+        "detaching keeps the main worktree at its commit"
+    );
+    assert!(fixture.repo.join("b.txt").exists());
+    assert!(!branch_exists(&fixture.repo, "main"));
+}
+
+#[test]
+fn rename_branch_force_over_branch_held_by_other_worktree_from_main_handle_fails_like_git() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = init_repo_with_linked_worktree(dir.path());
+    run_git(&fixture.repo, &["branch", "idle"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&fixture.repo).unwrap();
+    let err = opened
+        .rename_branch_force("idle", "feature")
+        .expect_err("a branch held by another worktree cannot be replaced from here");
+    assert_git_failure(&err, "git branch -M", GitFailureId::CommandFailed);
+    assert!(
+        err.to_string()
+            .contains("cannot force update the branch 'feature' used by worktree at"),
+        "unexpected error: {err}"
+    );
+    assert!(branch_exists(&fixture.repo, "idle"));
+    assert_eq!(
+        run_git_output(&fixture.repo, &["rev-parse", "refs/heads/feature"]),
+        fixture.first_commit
+    );
 }
