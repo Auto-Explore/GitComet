@@ -10,10 +10,25 @@ use gitcomet_core::services::{
     CancellationToken, CommandOutput, ForcePushLease, PullMode, RemoteUrlKind, Result,
     SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
 };
+use gitcomet_core::text_utils::redact_url_userinfo;
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashSet;
 use std::process::Command;
 use std::str;
+
+/// Display label for `git remote add`; the URL is masked because the label
+/// ends up in the command log and error toasts, unlike the argv.
+fn remote_add_label(name: &str, url: &str) -> String {
+    format!("git remote add {name} {}", redact_url_userinfo(url))
+}
+
+fn remote_set_url_label(name: &str, url: &str, kind: RemoteUrlKind) -> String {
+    let url = redact_url_userinfo(url);
+    match kind {
+        RemoteUrlKind::Fetch => format!("git remote set-url {name} {url}"),
+        RemoteUrlKind::Push => format!("git remote set-url --push {name} {url}"),
+    }
+}
 
 fn parse_refname_set(output: &str) -> FxHashSet<String> {
     output
@@ -912,7 +927,7 @@ impl GixRepo {
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("remote").arg("add").arg("--").arg(name).arg(url);
-        run_git_with_output(cmd, &format!("git remote add {name} {url}"))
+        run_git_with_output(cmd, &remote_add_label(name, url))
     }
 
     pub(super) fn remove_remote_with_output_impl(&self, name: &str) -> Result<CommandOutput> {
@@ -940,11 +955,7 @@ impl GixRepo {
             }
         }
         cmd.arg("--").arg(name).arg(url);
-        let label = match kind {
-            RemoteUrlKind::Fetch => format!("git remote set-url {name} {url}"),
-            RemoteUrlKind::Push => format!("git remote set-url --push {name} {url}"),
-        };
-        run_git_with_output(cmd, &label)
+        run_git_with_output(cmd, &remote_set_url_label(name, url, kind))
     }
 
     pub(super) fn push_set_upstream_impl(&self, remote: &str, branch: &str) -> Result<()> {
@@ -1331,5 +1342,30 @@ feature/no-upstream\t\n";
         assert!(!simple_called.get());
         assert!(with_output_called.get());
         assert_eq!(output, expected);
+    }
+}
+
+#[cfg(test)]
+mod remote_label_tests {
+    use super::{RemoteUrlKind, remote_add_label, remote_set_url_label};
+
+    #[test]
+    fn remote_labels_mask_credentials_in_urls() {
+        assert_eq!(
+            remote_add_label("origin", "https://user:s3cret@example.com/org/repo.git"),
+            "git remote add origin https://user:***@example.com/org/repo.git"
+        );
+        assert_eq!(
+            remote_set_url_label(
+                "origin",
+                "https://ghp_token@github.com/org/repo.git",
+                RemoteUrlKind::Fetch
+            ),
+            "git remote set-url origin https://***@github.com/org/repo.git"
+        );
+        assert_eq!(
+            remote_set_url_label("origin", "git@github.com:org/repo.git", RemoteUrlKind::Push),
+            "git remote set-url --push origin git@github.com:org/repo.git"
+        );
     }
 }
