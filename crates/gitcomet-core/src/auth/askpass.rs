@@ -133,9 +133,9 @@ pub fn git_command_timeout() -> Duration {
         .unwrap_or(Duration::from_secs(GIT_COMMAND_TIMEOUT_DEFAULT_SECS))
 }
 
-#[cfg(unix)]
-pub fn askpass_script_contents() -> &'static [u8] {
-    br#"#!/bin/sh
+/// The POSIX helper. Every use of the prompt is double-quoted, so text git
+/// or ssh hands us is never re-parsed by the shell.
+pub const UNIX_ASKPASS_SCRIPT: &[u8] = br#"#!/bin/sh
 prompt="$1"
 lower_prompt=$(printf '%s' "$prompt" | tr '[:upper:]' '[:lower:]')
 if [ -n "${GITCOMET_ASKPASS_PROMPT_LOG:-}" ]; then
@@ -176,28 +176,32 @@ elif [ "$kind" = "host_verification" ]; then
 else
   printf '%s\n' "${GITCOMET_AUTH_SECRET:-}"
 fi
-"#
-}
+"#;
 
-#[cfg(windows)]
-pub fn askpass_script_contents() -> &'static [u8] {
-    br#"@echo off
+/// The Windows helper.
+///
+/// The prompt is git's or ssh's text and embeds the remote URL, which the
+/// repository being fetched controls, so it must only ever be read through
+/// delayed expansion (`!prompt!`): `%prompt%` is substituted before `cmd`
+/// parses the line, and a `&`, `|` or `>` in the value would then run as a
+/// command. `EnableDelayedExpansion` is on from the first line for that reason.
+pub const WINDOWS_ASKPASS_SCRIPT: &[u8] = br#"@echo off
 setlocal EnableDelayedExpansion
 set "prompt=%~1"
 if not "%GITCOMET_ASKPASS_PROMPT_LOG%"=="" (
-  echo %prompt% | findstr /I /C:"authenticity of host" /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
+  echo !prompt! | findstr /I /C:"authenticity of host" /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
   if not errorlevel 1 (
-    >>"%GITCOMET_ASKPASS_PROMPT_LOG%" echo %prompt%
+    >>"%GITCOMET_ASKPASS_PROMPT_LOG%" echo !prompt!
   )
 )
 if not "%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%"=="" (
-  echo %prompt% | findstr /I "passphrase" >nul
+  echo !prompt! | findstr /I "passphrase" >nul
   if not errorlevel 1 (
-    >>"%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%" echo %prompt%
+    >>"%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%" echo !prompt!
   )
 )
 if /I "%GITCOMET_AUTH_KIND%"=="username_password" (
-  echo %prompt% | findstr /I "username" >nul
+  echo !prompt! | findstr /I "username" >nul
   if not errorlevel 1 (
     echo %GITCOMET_AUTH_USERNAME%
     exit /b 0
@@ -222,14 +226,21 @@ if /I "%GITCOMET_AUTH_KIND%"=="passphrase_cached" (
   exit /b 0
 )
 if /I "%GITCOMET_AUTH_KIND%"=="host_verification" (
-  echo %prompt% | findstr /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
+  echo !prompt! | findstr /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
   if not errorlevel 1 (
     echo %GITCOMET_AUTH_SECRET%
   )
   exit /b 0
 )
 echo %GITCOMET_AUTH_SECRET%
-"#
+"#;
+
+pub fn askpass_script_contents() -> &'static [u8] {
+    if cfg!(windows) {
+        WINDOWS_ASKPASS_SCRIPT
+    } else {
+        UNIX_ASKPASS_SCRIPT
+    }
 }
 
 pub fn create_askpass_script() -> std::io::Result<AskPassScript> {
@@ -360,4 +371,84 @@ pub fn append_host_prompt_to_stderr(stderr: &mut Vec<u8>, askpass: &AskPassScrip
     stderr.extend_from_slice(b"SSH host verification prompt:\n");
     stderr.extend_from_slice(prompt_log.as_bytes());
     stderr.push(b'\n');
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Windows helper must only read the prompt through delayed expansion.
+    /// `%prompt%` is substituted before `cmd` tokenises the line, so a `&`
+    /// in a remote URL echoed back by git would run as a command.
+    #[test]
+    fn windows_askpass_script_never_expands_the_prompt_at_parse_time() {
+        let script = std::str::from_utf8(WINDOWS_ASKPASS_SCRIPT).expect("ascii script");
+        assert!(
+            script.starts_with("@echo off\r\nsetlocal EnableDelayedExpansion")
+                || script.starts_with("@echo off\nsetlocal EnableDelayedExpansion"),
+            "delayed expansion must be enabled before the prompt is used"
+        );
+        for (number, line) in script.lines().enumerate() {
+            assert!(
+                !line.contains("%prompt%"),
+                "line {}: `{line}` re-parses the prompt; use !prompt!",
+                number + 1
+            );
+        }
+        assert!(
+            script.contains("echo !prompt!"),
+            "the prompt is still inspected"
+        );
+    }
+
+    #[test]
+    fn unix_askpass_script_quotes_every_prompt_use() {
+        let script = std::str::from_utf8(UNIX_ASKPASS_SCRIPT).expect("ascii script");
+        for (number, line) in script.lines().enumerate() {
+            let mut rest = line;
+            while let Some(index) = rest.find("$prompt") {
+                let quoted = rest[..index].ends_with('"') || rest[..index].ends_with("${");
+                assert!(
+                    quoted,
+                    "line {}: `{line}` uses $prompt unquoted",
+                    number + 1
+                );
+                rest = &rest[index + "$prompt".len()..];
+            }
+        }
+    }
+
+    /// Runs the real helper the way git does — the prompt as one argument —
+    /// with a prompt shaped like a credential request for a hostile URL.
+    #[cfg(windows)]
+    #[test]
+    fn windows_askpass_script_does_not_execute_metacharacters_in_the_prompt() {
+        let askpass = create_askpass_script().expect("askpass script");
+        let marker = askpass.path().with_file_name("injected.txt");
+        let prompt = format!(
+            "Password for 'https://user&echo pwned>\"{}\"&x@example.invalid': ",
+            marker.display()
+        );
+        let output = Command::new(askpass.path())
+            .arg(&prompt)
+            .env(GITCOMET_AUTH_KIND_ENV, GITCOMET_AUTH_KIND_USERNAME_PASSWORD)
+            .env(GITCOMET_AUTH_USERNAME_ENV, "user")
+            .env(GITCOMET_AUTH_SECRET_ENV, "s3cret")
+            .env(
+                GITCOMET_ASKPASS_PROMPT_LOG_ENV,
+                askpass.host_prompt_log_path(),
+            )
+            .env(
+                GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV,
+                askpass.passphrase_prompt_log_path(),
+            )
+            .output()
+            .expect("run askpass helper");
+
+        assert!(
+            !marker.exists(),
+            "metacharacters in the prompt were executed by cmd"
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "s3cret");
+    }
 }
