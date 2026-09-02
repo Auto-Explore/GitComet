@@ -14,6 +14,7 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
+use gitcomet_core::text_utils::redact_url_userinfo;
 use gix::bstr::ByteSlice as _;
 use std::collections::BTreeMap;
 use std::fs;
@@ -438,9 +439,10 @@ fn push_submodule_add_args(
         cmd.arg("--name").arg(name);
         command.push_str(&format!(" --name {name}"));
     }
-    // The label stays a human-readable summary; `--` is an argv concern only.
+    // The label stays a human-readable summary; `--` is an argv concern only,
+    // and credentials in the URL are masked because the label is displayed.
     cmd.arg("--").arg(url).arg(path);
-    command.push_str(&format!(" {url} {}", path.display()));
+    command.push_str(&format!(" {} {}", redact_url_userinfo(url), path.display()));
     command
 }
 
@@ -1974,6 +1976,18 @@ mod tests {
             label,
             "git submodule add --branch main --force --name lib/sub --reference=/tmp/evil sub"
         );
+    }
+
+    #[test]
+    fn submodule_add_label_masks_credentials_but_argv_keeps_the_url() {
+        let mut cmd = Command::new("git");
+        let url = "https://user:s3cret@example.com/lib.git";
+        let label = push_submodule_add_args(&mut cmd, url, Path::new("lib"), None, None, false);
+        assert_eq!(
+            label,
+            "git submodule add https://user:***@example.com/lib.git lib"
+        );
+        assert!(cmd.get_args().any(|arg| arg == OsStr::new(url)));
     }
 
     #[test]
