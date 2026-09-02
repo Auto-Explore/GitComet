@@ -66,6 +66,8 @@ impl GixRepo {
             DiffTarget::Commit { commit_id, path } => {
                 cmd.arg("show")
                     .arg("--no-ext-diff")
+                    .arg("-m")
+                    .arg("--first-parent")
                     .arg("--pretty=format:")
                     .arg(commit_id.as_ref());
                 if let Some(path) = path {

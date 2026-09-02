@@ -209,6 +209,7 @@ impl HistoryView {
                     visible_ix,
                     connect_from_top_col,
                     Arc::clone(&decoration_row_vm.tag_names),
+                    Arc::clone(&decoration_row_vm.branch_chips),
                     Arc::clone(&decoration_row_vm.ref_items),
                     selected_branch,
                     selected_lane,
@@ -298,6 +299,7 @@ fn history_table_row(
     graph_row_ix: usize,
     connect_from_top_col: Option<usize>,
     tag_names: Arc<[HistoryTextVm]>,
+    branch_chips: Arc<[HistoryBranchChipVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
     selected_branch: Option<SelectedHistoryBranch>,
     // Colour index of the lane the selection sits on; every other lane washes
@@ -356,6 +358,7 @@ fn history_table_row(
         graph_rows,
         graph_row_ix,
         tag_names,
+        branch_chips,
         ref_items,
         selected_branch,
         selected_lane,
@@ -364,6 +367,7 @@ fn history_table_row(
         summary,
         when,
         short_sha,
+        active_context_menu_invoker.cloned(),
         row_bg_overlay,
         if context_menu_active {
             theme.colors.interaction.pressed_background

@@ -2,11 +2,13 @@ use super::*;
 
 mod branch;
 mod branch_group;
+mod branch_refs;
 mod branch_section;
 mod browse_history;
 mod change_tracking_settings;
 mod commit;
 mod commit_file;
+mod commit_file_sort;
 mod commit_options;
 mod commit_sha_link;
 mod conflict_resolver_chunk;
@@ -436,6 +438,11 @@ impl PopoverHost {
                 section,
                 name,
             } => Some(branch::model(self, *repo_id, *section, name)),
+            PopoverKind::BranchRefsMenu {
+                repo_id,
+                display_name,
+                targets,
+            } => Some(branch_refs::model(*repo_id, display_name, targets)),
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 Some(branch_section::model(self, *repo_id, *section))
             }
@@ -475,6 +482,7 @@ impl PopoverHost {
                 commit_id,
                 path,
             } => Some(commit_file::model(self, *repo_id, commit_id, path)),
+            PopoverKind::CommitFileSortMenu => Some(commit_file_sort::model(self, cx)),
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 Some(file_browser_file::model(self, *repo_id, path, cx))
             }
@@ -1004,6 +1012,11 @@ impl PopoverHost {
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
+            }
+            ContextMenuAction::SetCommitFileSort { sort } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.set_commit_file_sort(sort, cx);
+                });
             }
             ContextMenuAction::SetDiffContentMode { mode } => {
                 self.diff_content_mode = mode;

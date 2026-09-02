@@ -1,11 +1,11 @@
 use super::super::*;
 use crate::view::caches::{
     HistoryListPlan, HistoryListPlanCache, HistoryShortShaVm, HistoryVisibleIndices, HistoryWhenVm,
-    HistoryWorktreeRowAnchor, analyze_history_stashes, build_history_branch_containment_bits,
-    build_history_branch_ref_items_by_target, build_history_branch_text_by_target,
-    build_history_tag_names_by_target, build_history_visible_indices,
-    history_ref_items_from_displayed_refs, next_history_stash_tip_for_commit_ix,
-    related_commit_contains,
+    HistoryWorktreeRowAnchor, analyze_history_stashes, build_history_branch_chips_by_target,
+    build_history_branch_containment_bits, build_history_branch_ref_items_by_target,
+    build_history_branch_text_by_target, build_history_tag_names_by_target,
+    build_history_visible_indices, history_ref_items_from_displayed_refs,
+    next_history_stash_tip_for_commit_ix, related_commit_contains,
 };
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
@@ -2707,6 +2707,8 @@ fn build_history_decoration_cache(
     );
     let (mut branch_text_by_target, head_branches_text) =
         build_history_branch_text_by_target(branches, remote_branches, head_branch, head_target);
+    let (mut branch_chips_by_target, head_branch_chips) =
+        build_history_branch_chips_by_target(branches, remote_branches, head_branch, head_target);
     let (mut branch_ref_items_by_target, head_branch_ref_items) =
         build_history_branch_ref_items_by_target(
             branches,
@@ -2784,6 +2786,11 @@ fn build_history_decoration_cache(
                 .remove(commit_id)
                 .unwrap_or_default()
         };
+        let branch_chips = if base_row.is_head {
+            head_branch_chips.clone().unwrap_or_default()
+        } else {
+            branch_chips_by_target.remove(commit_id).unwrap_or_default()
+        };
         let tag_names = tag_names_by_target.remove(commit_id).unwrap_or_default();
         let ref_items = history_ref_items_from_displayed_refs(&tag_names, branch_items);
 
@@ -2858,6 +2865,7 @@ fn build_history_decoration_cache(
         row_vms.push(HistoryDecorationRowVm {
             branches_text,
             tag_names,
+            branch_chips,
             ref_items,
             lane_branch,
         });

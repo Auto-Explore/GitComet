@@ -24,13 +24,14 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
+          toolchain: stable
           components: rustfmt
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Check formatting
         run: cargo fmt --all --check
 
@@ -49,13 +50,15 @@ jobs:
             target_platform: aarch64-linux
             runs_on: ubuntu-22.04-arm
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Show Git version
         run: git --version
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Run headless test suite
         run: |
           cargo test --workspace \
@@ -85,7 +88,7 @@ jobs:
             pkg-config \
             tar \
             which
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Show Git version
         run: git --version
       - name: Install Rust toolchain
@@ -130,7 +133,7 @@ jobs:
       XDG_SESSION_TYPE: ${{ matrix.profile.session_type }}
       XDG_CURRENT_DESKTOP: ${{ matrix.profile.desktop }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Show Git version
         run: git --version
       - name: Install Linux UI native dependencies
@@ -156,9 +159,11 @@ jobs:
           fi
           pkg-config --modversion xcb xkbcommon xkbcommon-x11
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Print display profile
         run: |
           echo "DISPLAY=${DISPLAY:-<unset>}"
@@ -190,13 +195,15 @@ jobs:
             name: intel (macos-15-intel)
             runs_on: macos-15-intel
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Show Git version
         run: git --version
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Show host target
         run: rustc -vV
       - name: Assert Apple Silicon runner
@@ -241,14 +248,16 @@ jobs:
           - target_platform: aarch64-windows
             runs_on: windows-11-arm
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Show Git version
         shell: pwsh
         run: git --version
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Show path behavior (PowerShell + Git Bash)
         shell: pwsh
         run: |

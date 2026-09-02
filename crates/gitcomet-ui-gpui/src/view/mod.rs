@@ -207,12 +207,12 @@ mod user_survey;
 mod word_diff;
 
 use app_model::AppUiModel;
-use branch_sidebar::{BranchSection, BranchSidebarRow};
+use branch_sidebar::{BranchMenuTarget, BranchSection, BranchSidebarRow};
 use caches::{
-    HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryCache,
-    HistoryCacheBuildRequest, HistoryDecorationCache, HistoryDecorationCacheRequest,
-    HistoryDecorationRowVm, HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind,
-    HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
+    HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryBranchChipKind,
+    HistoryBranchChipVm, HistoryCache, HistoryCacheBuildRequest, HistoryDecorationCache,
+    HistoryDecorationCacheRequest, HistoryDecorationRowVm, HistoryDisplayKey, HistoryRefListItem,
+    HistoryRefListItemKind, HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
 };
 use chrome::TitleBarView;
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};

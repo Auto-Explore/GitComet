@@ -1161,6 +1161,67 @@ fn diff_parsed_outside_repository_path_returns_structured_git_error() {
 }
 
 #[test]
+fn diff_parsed_merge_commit_uses_first_parent() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "shared.txt", "base\n");
+    run_git(repo, &["add", "shared.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "shared.txt", "base\nfeature\n");
+    run_git(repo, &["add", "shared.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+
+    run_git(repo, &["checkout", "main"]);
+    write(repo, "main.txt", "main\n");
+    run_git(repo, &["add", "main.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "main"],
+    );
+    run_git(repo, &["merge", "--no-ff", "feature", "-m", "merge"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let merge_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let diff = opened
+        .diff_parsed(&DiffTarget::Commit {
+            commit_id: merge_id,
+            path: Some(PathBuf::from("shared.txt")),
+        })
+        .expect("parse merge commit diff against its first parent");
+
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Hunk),
+        "the first-parent merge diff should contain a hunk"
+    );
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.kind == DiffLineKind::Add && line.text.as_ref() == "+feature"),
+        "the first-parent merge diff should show the merged branch's change"
+    );
+}
+
+#[test]
 fn diff_parsed_commit_rename_preserves_rename_headers_and_hunks() {
     if !require_git_shell_for_status_integration_tests() {
         return;

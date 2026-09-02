@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 const HISTORY_REFS_HOVER_CLOSE_GRACE_MS: u64 = 120;
 const HISTORY_REFS_HOVER_OPEN_DELAY_MS: u64 = 160;
-const HISTORY_REFS_HOVER_WIDTH_PX: f32 = 220.0;
+const HISTORY_REFS_HOVER_WIDTH_PX: f32 = 240.0;
 const HISTORY_REFS_HOVER_MAX_HEIGHT_PX: f32 = 260.0;
 const HISTORY_REFS_HOVER_POINTER_INSET_PX: f32 = 16.0;
 pub(in crate::view) const HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX: &str = "history_refs_hover_menu_";
@@ -367,9 +367,20 @@ impl HistoryRefsHoverHost {
         match item.kind {
             HistoryRefListItemKind::Tag { .. } => "icons/tag.svg",
             HistoryRefListItemKind::LocalBranch { .. }
-            | HistoryRefListItemKind::RemoteBranch { .. }
-            | HistoryRefListItemKind::AttachedHead { .. } => "icons/git_branch.svg",
+            | HistoryRefListItemKind::AttachedHead { .. } => "icons/computer.svg",
+            HistoryRefListItemKind::RemoteBranch { .. } => "icons/cloud.svg",
             HistoryRefListItemKind::DetachedHead => "icons/question.svg",
+        }
+    }
+
+    fn item_icon_color(theme: AppTheme, kind: &HistoryRefListItemKind) -> gpui::Rgba {
+        match kind {
+            HistoryRefListItemKind::Tag { .. }
+            | HistoryRefListItemKind::LocalBranch { .. }
+            | HistoryRefListItemKind::AttachedHead { .. } => theme.colors.accent.foreground,
+            HistoryRefListItemKind::RemoteBranch { .. } | HistoryRefListItemKind::DetachedHead => {
+                theme.colors.foreground.secondary
+            }
         }
     }
 
@@ -496,17 +507,14 @@ impl Render for HistoryRefsHoverHost {
         let items = state.items.iter().enumerate().map(|(ix, item)| {
             let item_for_right = item.clone();
             let label = item.text.shared().clone();
+            let tooltip = label.clone();
             let actionable =
                 Self::item_popover_kind(state.repo_id, &state.commit_id, item).is_some();
             let frozen = self.item_menu_open;
             let pinned = self.pinned_item_ix == Some(ix);
             let debug_selector = Self::item_debug_selector(item);
             let icon = Self::item_icon(item);
-            let icon_color = match item.kind {
-                HistoryRefListItemKind::Tag { .. } => theme.colors.accent.foreground,
-                HistoryRefListItemKind::DetachedHead => theme.colors.foreground.secondary,
-                _ => theme.colors.foreground.secondary,
-            };
+            let icon_color = Self::item_icon_color(theme, &item.kind);
             div()
                 .id(("history_refs_hover_item", ix))
                 .debug_selector(move || debug_selector.clone())
@@ -564,6 +572,7 @@ impl Render for HistoryRefsHoverHost {
                         .whitespace_nowrap()
                         .child(label),
                 )
+                .gitcomet_tooltip(theme, tooltip)
                 // `on_click`/`on_aux_click` rather than raw mouse-up: the panel
                 // shows on hover, so it can slide under a button that is
                 // already held, and gpui only fires these when the press
@@ -701,6 +710,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_branch_computer_icons_match_the_sidebar_accent() {
+        let local = HistoryRefListItemKind::LocalBranch {
+            name: "main".to_string(),
+        };
+        let head = HistoryRefListItemKind::AttachedHead {
+            branch: "main".to_string(),
+        };
+        let remote = HistoryRefListItemKind::RemoteBranch {
+            name: "origin/main".to_string(),
+        };
+
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            assert_eq!(
+                HistoryRefsHoverHost::item_icon_color(theme, &local),
+                theme.colors.accent.foreground
+            );
+            assert_eq!(
+                HistoryRefsHoverHost::item_icon_color(theme, &head),
+                theme.colors.accent.foreground
+            );
+            assert_eq!(
+                HistoryRefsHoverHost::item_icon_color(theme, &remote),
+                theme.colors.foreground.secondary
+            );
+        }
+    }
+
+    #[test]
     fn history_refs_hover_layout_clamps_right_and_chooses_above_near_bottom() {
         let layout = history_refs_hover_layout(
             Bounds::new(point(px(280.0), px(150.0)), size(px(20.0), px(16.0))),
@@ -714,8 +751,8 @@ mod tests {
         );
 
         assert!(matches!(layout.anchor_corner, Anchor::BottomLeft));
-        assert_eq!(layout.panel_w, px(220.0));
-        assert_eq!(layout.anchor.x, px(72.0));
+        assert_eq!(layout.panel_w, px(240.0));
+        assert_eq!(layout.anchor.x, px(52.0));
         assert_eq!(layout.anchor.y, px(150.0));
         assert_eq!(layout.max_panel_h, px(142.0));
         assert!(layout.anchor.x + layout.panel_w <= px(292.0));

@@ -17,7 +17,7 @@ use gitcomet_core::services::{
 use gix::bstr::ByteSlice as _;
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -178,23 +178,9 @@ impl GixRepo {
         let logical_name = name
             .map(PathBuf::from)
             .unwrap_or_else(|| path.to_path_buf());
+        validate_submodule_git_dir_name(&logical_name)?;
 
-        cmd.arg("submodule").arg("add");
-        let mut command = "git submodule add".to_string();
-        if let Some(branch) = branch {
-            cmd.arg("--branch").arg(branch);
-            command.push_str(&format!(" --branch {branch}"));
-        }
-        if force {
-            cmd.arg("--force");
-            command.push_str(" --force");
-        }
-        if let Some(name) = name {
-            cmd.arg("--name").arg(name);
-            command.push_str(&format!(" --name {name}"));
-        }
-        cmd.arg(url).arg(path);
-        command.push_str(&format!(" {url} {}", path.display()));
+        let command = push_submodule_add_args(&mut cmd, url, path, branch, name, force);
         match run_git_with_output(cmd, &command) {
             Ok(output) => Ok(output),
             Err(err) => Err(cleanup_failed_submodule_add_error(
@@ -424,6 +410,38 @@ fn collect_repo_submodules(
     }
 
     Ok(())
+}
+
+/// Append the `git submodule add` arguments and return the display label.
+///
+/// `--` keeps a user-typed URL or path that starts with `-` out of the option
+/// parser (`--reference=<path>` would borrow objects from an arbitrary repo).
+fn push_submodule_add_args(
+    cmd: &mut Command,
+    url: &str,
+    path: &Path,
+    branch: Option<&str>,
+    name: Option<&str>,
+    force: bool,
+) -> String {
+    cmd.arg("submodule").arg("add");
+    let mut command = "git submodule add".to_string();
+    if let Some(branch) = branch {
+        cmd.arg("--branch").arg(branch);
+        command.push_str(&format!(" --branch {branch}"));
+    }
+    if force {
+        cmd.arg("--force");
+        command.push_str(" --force");
+    }
+    if let Some(name) = name {
+        cmd.arg("--name").arg(name);
+        command.push_str(&format!(" --name {name}"));
+    }
+    // The label stays a human-readable summary; `--` is an argv concern only.
+    cmd.arg("--").arg(url).arg(path);
+    command.push_str(&format!(" {url} {}", path.display()));
+    command
 }
 
 fn collect_repo_untrusted_submodule_sources(
@@ -1251,7 +1269,16 @@ fn resolve_submodule_logical_name(repo: &gix::Repository, path: &Path) -> Result
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
             .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
         if relative_path == path {
-            return pathbuf_from_gix_path(submodule.name()).map(Some);
+            let name = submodule.validated_name().map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "submodule '{}' has an unsafe name {:?}: {e}",
+                    path.display(),
+                    submodule.name()
+                )))
+            })?;
+            let logical_name = pathbuf_from_gix_path(name)?;
+            validate_submodule_git_dir_name(&logical_name)?;
+            return Ok(Some(logical_name));
         }
     }
 
@@ -1474,9 +1501,45 @@ fn remove_local_submodule_config_section_if_present(
     ))))
 }
 
+/// Refuse a submodule name that could leave `.git/modules/` once joined onto
+/// it.
+///
+/// Names come from `.gitmodules` (`[submodule "<name>"]`, tracked content that
+/// whoever published the repository controls) or from the user's own `--name`.
+/// Git only forbids `..` components, so an absolute name passes its checks —
+/// and `Path::join` adopts an absolute right-hand side wholesale, which would
+/// aim the metadata removal below at an arbitrary directory.
+fn validate_submodule_git_dir_name(logical_name: &Path) -> Result<()> {
+    let mut has_normal_component = false;
+    for component in logical_name.components() {
+        match component {
+            Component::Normal(_) => has_normal_component = true,
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(unsafe_submodule_name_error(logical_name));
+            }
+        }
+    }
+    if !has_normal_component {
+        return Err(unsafe_submodule_name_error(logical_name));
+    }
+    Ok(())
+}
+
+fn unsafe_submodule_name_error(logical_name: &Path) -> Error {
+    Error::new(ErrorKind::Backend(format!(
+        "refusing to use submodule name '{}': it must be a relative path without '..' components so it stays inside .git/modules",
+        logical_name.display()
+    )))
+}
+
 fn remove_submodule_git_dir(git_dir: &Path, logical_name: &Path) -> Result<()> {
+    validate_submodule_git_dir_name(logical_name)?;
     let modules_root = git_dir.join("modules");
     let module_dir = modules_root.join(logical_name);
+    if !module_dir.starts_with(&modules_root) {
+        return Err(unsafe_submodule_name_error(logical_name));
+    }
     if !module_dir.exists() {
         return Ok(());
     }
@@ -1840,7 +1903,9 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 mod tests {
     use super::{
         GixRepo, allow_file_submodule_transport, is_git_config_contention_error,
+        push_submodule_add_args, remove_submodule_git_dir, resolve_submodule_logical_name,
         retry_git_config_contention, submodule_file_transport_consent_key,
+        validate_submodule_git_dir_name,
     };
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
     use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -1876,6 +1941,147 @@ mod tests {
     fn open_repo(workdir: &Path) -> GixRepo {
         let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
         GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
+
+    #[test]
+    fn submodule_add_args_separate_positionals_from_options() {
+        let mut cmd = Command::new("git");
+        let label = push_submodule_add_args(
+            &mut cmd,
+            "--reference=/tmp/evil",
+            Path::new("sub"),
+            Some("main"),
+            Some("lib/sub"),
+            true,
+        );
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                OsStr::new("submodule"),
+                OsStr::new("add"),
+                OsStr::new("--branch"),
+                OsStr::new("main"),
+                OsStr::new("--force"),
+                OsStr::new("--name"),
+                OsStr::new("lib/sub"),
+                OsStr::new("--"),
+                OsStr::new("--reference=/tmp/evil"),
+                OsStr::new("sub"),
+            ]
+        );
+        assert_eq!(
+            label,
+            "git submodule add --branch main --force --name lib/sub --reference=/tmp/evil sub"
+        );
+    }
+
+    #[test]
+    fn submodule_git_dir_name_validation_accepts_nested_relative_names() {
+        for name in ["sub", "group/sub", "./sub", "a.b/c-d"] {
+            validate_submodule_git_dir_name(Path::new(name))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+    }
+
+    #[test]
+    fn submodule_git_dir_name_validation_rejects_names_that_escape_modules_dir() {
+        for name in ["", ".", "..", "../victim", "sub/../../victim", "sub/.."] {
+            let err = validate_submodule_git_dir_name(Path::new(name))
+                .expect_err(&format!("{name:?} must be rejected"));
+            assert!(
+                matches!(err.kind(), ErrorKind::Backend(_)),
+                "{name:?}: {err}"
+            );
+        }
+        let absolute = std::env::temp_dir().join("gitcomet-victim");
+        validate_submodule_git_dir_name(&absolute).expect_err("absolute names must be rejected");
+    }
+
+    #[test]
+    fn remove_submodule_git_dir_refuses_parent_dir_names() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let git_dir = tmp.path().join(".git");
+        let victim = tmp.path().join("victim");
+        std::fs::create_dir_all(git_dir.join("modules")).expect("modules dir");
+        std::fs::create_dir_all(&victim).expect("victim dir");
+        std::fs::write(victim.join("keep"), b"keep").expect("victim file");
+
+        let err = remove_submodule_git_dir(&git_dir, Path::new("../../victim"))
+            .expect_err("a name with '..' must not be joined onto .git/modules");
+        assert!(err.to_string().contains("../../victim"), "{err}");
+        assert!(victim.join("keep").exists(), "victim directory was deleted");
+    }
+
+    #[test]
+    fn remove_submodule_git_dir_refuses_absolute_names() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(git_dir.join("modules")).expect("modules dir");
+        let victim = tempfile::tempdir().expect("victim tempdir");
+        std::fs::write(victim.path().join("keep"), b"keep").expect("victim file");
+
+        let err = remove_submodule_git_dir(&git_dir, victim.path())
+            .expect_err("an absolute name must not replace the .git/modules root");
+        assert!(matches!(err.kind(), ErrorKind::Backend(_)), "{err}");
+        assert!(
+            victim.path().join("keep").exists(),
+            "victim directory was deleted"
+        );
+    }
+
+    #[test]
+    fn remove_submodule_git_dir_removes_nested_module_and_prunes_empty_parents() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let git_dir = tmp.path().join(".git");
+        let modules = git_dir.join("modules");
+        let module_dir = modules.join("group").join("sub");
+        std::fs::create_dir_all(&module_dir).expect("module dir");
+        std::fs::write(module_dir.join("HEAD"), b"ref: refs/heads/main\n").expect("module file");
+
+        remove_submodule_git_dir(&git_dir, Path::new("group/sub")).expect("remove module dir");
+
+        assert!(!module_dir.exists());
+        assert!(
+            !modules.join("group").exists(),
+            "empty parent should be pruned"
+        );
+        assert!(modules.exists(), "modules root must survive");
+    }
+
+    #[test]
+    fn resolve_submodule_logical_name_rejects_names_that_escape_modules_dir() {
+        for name in ["../../escape", "/tmp/gitcomet-victim"] {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            init_test_repo(tmp.path());
+            std::fs::write(
+                tmp.path().join(".gitmodules"),
+                format!(
+                    "[submodule \"{name}\"]\n\tpath = sub\n\turl = https://example.invalid/sub.git\n"
+                ),
+            )
+            .expect("write .gitmodules");
+
+            let repo = gix::open(tmp.path()).expect("open repo");
+            let err = resolve_submodule_logical_name(&repo, Path::new("sub"))
+                .expect_err(&format!("name {name:?} must be rejected"));
+            assert!(err.to_string().contains(name), "{name:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn resolve_submodule_logical_name_returns_safe_names() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        std::fs::write(
+            tmp.path().join(".gitmodules"),
+            "[submodule \"group/sub\"]\n\tpath = sub\n\turl = https://example.invalid/sub.git\n",
+        )
+        .expect("write .gitmodules");
+
+        let repo = gix::open(tmp.path()).expect("open repo");
+        let name = resolve_submodule_logical_name(&repo, Path::new("sub")).expect("resolve name");
+        assert_eq!(name.as_deref(), Some(Path::new("group/sub")));
     }
 
     #[test]

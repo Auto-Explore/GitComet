@@ -51,6 +51,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             }
         }
         PopoverKind::DiffContentModeSettings
+        | PopoverKind::CommitFileSortMenu
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::CommitShaLinkMenu { .. }
         | PopoverKind::DiffActionMenu
@@ -130,6 +131,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::RepoPicker
         | PopoverKind::CloneRepo
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::CommitFileSortMenu
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
@@ -186,6 +188,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::CommitMenu { repo_id, .. }
         | PopoverKind::StatusFileMenu { repo_id, .. }
         | PopoverKind::BranchMenu { repo_id, .. }
+        | PopoverKind::BranchRefsMenu { repo_id, .. }
         | PopoverKind::BranchSectionMenu { repo_id, .. }
         | PopoverKind::BranchGroupMenu { repo_id, .. }
         | PopoverKind::PinnedSectionMenu { repo_id, .. }
@@ -216,6 +219,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::BranchMenu { .. }
+        | PopoverKind::BranchRefsMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         // The group menu's branch count and the pinned menu's "Unpin all (N)"
         // both read the live branch lists, so a refresh landing while the menu
@@ -393,6 +397,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // user's cursor when a refresh lands mid-edit.
         | PopoverKind::AddToGitignorePrompt { .. }
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::CommitFileSortMenu
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::CommitShaLinkMenu { .. }
         | PopoverKind::DiffActionMenu
@@ -492,6 +497,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::CloneRepo => 4u8.hash(hasher),
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
+        PopoverKind::CommitFileSortMenu => 104u8.hash(hasher),
         PopoverKind::UiScalePicker => 68u8.hash(hasher),
         PopoverKind::WebLinkMenu { url } => {
             96u8.hash(hasher);
@@ -745,6 +751,20 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             hash_branch_section(*section, hasher);
             name.hash(hasher);
+        }
+        PopoverKind::BranchRefsMenu {
+            repo_id,
+            display_name,
+            targets,
+        } => {
+            104u8.hash(hasher);
+            repo_id.hash(hasher);
+            display_name.hash(hasher);
+            targets.len().hash(hasher);
+            for target in targets {
+                hash_branch_section(target.section, hasher);
+                target.name.hash(hasher);
+            }
         }
         PopoverKind::BranchSectionMenu { repo_id, section } => {
             45u8.hash(hasher);

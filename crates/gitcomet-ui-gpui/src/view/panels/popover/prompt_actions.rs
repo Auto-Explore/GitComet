@@ -256,6 +256,9 @@ impl PopoverHost {
             PopoverKind::DiffContentModeSettings => {
                 self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
             }
+            PopoverKind::CommitFileSortMenu => {
+                self.context_menu_view(PopoverKind::CommitFileSortMenu, cx)
+            }
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
             }
@@ -411,6 +414,18 @@ impl PopoverHost {
                     repo_id,
                     section,
                     name,
+                },
+                cx,
+            ),
+            PopoverKind::BranchRefsMenu {
+                repo_id,
+                display_name,
+                targets,
+            } => self.context_menu_view(
+                PopoverKind::BranchRefsMenu {
+                    repo_id,
+                    display_name,
+                    targets,
                 },
                 cx,
             ),

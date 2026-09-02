@@ -69,8 +69,9 @@ fn worktree_add_list_remove_round_trip() {
     let linked_path = root.join("linked\ntree");
     #[cfg(not(unix))]
     let linked_path = root.join("linked tree");
+    // `HEAD` is not a branch, so git checks the new worktree out detached.
     let add_output = opened
-        .add_worktree_with_output(&linked_path, Some("--detach"))
+        .add_worktree_with_output(&linked_path, Some("HEAD"))
         .expect("add linked worktree");
     assert_eq!(add_output.exit_code, Some(0));
 

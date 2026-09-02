@@ -1026,13 +1026,23 @@ pub(crate) fn commit_details_cached_row_hash(
     details: &CommitDetails,
     message_render: Option<&CommitDetailsMessageRenderState>,
     file_rows: &mut crate::view::rows::CommitFileRowPresentationCache<CommitId>,
+    file_projection: &mut crate::view::rows::CommitFileProjectionCache<CommitId>,
 ) -> u64 {
     let mut h = FxHasher::default();
     details.id.as_ref().hash(&mut h);
     commit_details_message_hash(details.message.len(), message_render, &mut h);
     let rows = file_rows.rows_for(&details.id, &details.files);
     hash_commit_file_row_presentations(rows.as_ref()).hash(&mut h);
-    details.files.len().hash(&mut h);
+    let projection = file_projection.projection_for(
+        &details.id,
+        &details.files,
+        crate::view::rows::CommitFileSort::PathAscending,
+        crate::view::rows::CommitFileFilter::All,
+    );
+    projection.source_indices.hash(&mut h);
+    for filter in crate::view::rows::CommitFileFilter::ALL {
+        projection.counts.for_filter(filter).hash(&mut h);
+    }
     h.finish()
 }
 
