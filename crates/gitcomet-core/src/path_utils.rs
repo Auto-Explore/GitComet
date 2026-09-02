@@ -1,3 +1,4 @@
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// When a workdir path ends with ".git" and contains a `.git` entry (e.g.
@@ -51,11 +52,90 @@ pub fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
     path
 }
 
+/// Resolve `relative` under `workdir` for a write, refusing when any component
+/// on the way is a symlink.
+///
+/// A lexical check on `relative` stops `..` from leaving the worktree, but the
+/// filesystem can still redirect the write: a tracked symlink such as
+/// `notes.md -> ~/.ssh/authorized_keys` lists like a plain file and
+/// `fs::write` follows it. Git itself never writes *through* a symlink when it
+/// checks files out, so refusing here keeps the editor at parity. Components
+/// that do not exist yet are fine; the caller creates them.
+pub fn symlink_free_write_target(workdir: &Path, relative: &Path) -> io::Result<PathBuf> {
+    let mut candidate = workdir.to_path_buf();
+    for component in relative.components() {
+        candidate.push(component.as_os_str());
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "refusing to write through symlink '{}'",
+                        candidate
+                            .strip_prefix(workdir)
+                            .unwrap_or(&candidate)
+                            .display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => break,
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(workdir.join(relative))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::git_dir_for_workdir;
+    use super::{git_dir_for_workdir, symlink_free_write_target};
     use std::fs;
+    use std::path::Path;
     use tempfile::tempdir;
+
+    #[test]
+    fn symlink_free_write_target_accepts_regular_and_missing_paths() {
+        let dir = tempdir().expect("create temp dir");
+        fs::create_dir_all(dir.path().join("docs")).expect("create docs");
+        fs::write(dir.path().join("docs/notes.md"), "x").expect("write notes");
+
+        assert_eq!(
+            symlink_free_write_target(dir.path(), Path::new("docs/notes.md")).expect("regular"),
+            dir.path().join("docs/notes.md")
+        );
+        assert_eq!(
+            symlink_free_write_target(dir.path(), Path::new("new/dir/file.txt"))
+                .expect("missing components are created later"),
+            dir.path().join("new/dir/file.txt")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_free_write_target_refuses_symlinked_file() {
+        let dir = tempdir().expect("create temp dir");
+        let outside = tempdir().expect("create outside dir");
+        let target = outside.path().join("victim");
+        fs::write(&target, "keep").expect("write victim");
+        std::os::unix::fs::symlink(&target, dir.path().join("notes.md")).expect("symlink");
+
+        let err = symlink_free_write_target(dir.path(), Path::new("notes.md"))
+            .expect_err("a symlinked file must be refused");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("notes.md"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_free_write_target_refuses_symlinked_parent() {
+        let dir = tempdir().expect("create temp dir");
+        let outside = tempdir().expect("create outside dir");
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("docs")).expect("symlink");
+
+        let err = symlink_free_write_target(dir.path(), Path::new("docs/notes.md"))
+            .expect_err("a symlinked parent must be refused");
+        assert!(err.to_string().contains("docs"), "{err}");
+    }
 
     #[test]
     fn normal_workdir_returns_unchanged() {
