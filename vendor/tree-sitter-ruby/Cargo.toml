@@ -38,4 +38,4 @@ tree-sitter-language = "0.1"
 tree-sitter-build = { path = "../tree-sitter-build" }
 
 [dev-dependencies]
-tree-sitter = "0.26.13"
+tree-sitter = "0.27.0"

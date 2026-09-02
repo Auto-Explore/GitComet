@@ -447,7 +447,7 @@ pub(crate) fn collect_query_pass_tokens_for_document(
             let mut captures = cursor.captures(&highlight.query, tree.root_node(), input);
             tree_sitter::StreamingIterator::advance(&mut captures);
             while let Some((m, capture_ix)) = captures.get() {
-                let Some(capture) = m.captures.get(*capture_ix) else {
+                let Some(capture) = m.captures().get(*capture_ix) else {
                     tree_sitter::StreamingIterator::advance(&mut captures);
                     continue;
                 };

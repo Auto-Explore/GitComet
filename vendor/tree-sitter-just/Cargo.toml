@@ -46,4 +46,4 @@ tree-sitter-build = { path = "../tree-sitter-build" }
 # whoever regenerates this grammar wants to run -- builds the same version the
 # workspace does.
 [dev-dependencies]
-tree-sitter = "0.26.13"
+tree-sitter = "0.27.0"
