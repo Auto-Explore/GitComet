@@ -466,20 +466,6 @@ impl GitCometView {
                                     cx.notify();
                                 }
                             }
-                            TerminalBackendEvent::ClipboardStore(data) => {
-                                crate::clipboard::write_text(
-                                    cx,
-                                    data,
-                                    crate::clipboard::CopySource::TerminalProtocol,
-                                );
-                            }
-                            TerminalBackendEvent::ClipboardLoad => {
-                                if let Some(text) = crate::clipboard::read_text(cx)
-                                    && let Some(ref pty) = instance.pty_sender
-                                {
-                                    pty.write(text.into_bytes());
-                                }
-                            }
                             TerminalBackendEvent::Bell => {}
                             TerminalBackendEvent::Exit => unreachable!(
                                 "terminal exit events are handled before instance updates"
@@ -1613,7 +1599,26 @@ fn terminal_tab_default_title() -> String {
 /// default on Windows, e.g. `C:\Program Files\PowerShell\7\pwsh.exe`)
 /// collapse to the program stem ("pwsh"); anything else is a deliberate
 /// application-set title and passes through untouched.
+/// Longest tab title kept from an OSC 0/2 title change. Titles come from
+/// whatever runs in the terminal, so they are bounded like any other
+/// program-controlled display string.
+const MAX_TERMINAL_TITLE_CHARS: usize = 200;
+
+/// Strip control characters and cap the length of a program-set title.
+///
+/// The emulator hands the raw OSC payload through; GPUI renders text rather
+/// than interpreting escapes, so the risk is a title that hides or spoofs the
+/// tab label with embedded controls or unbounded length, not injection.
+fn sanitize_terminal_title(title: &str) -> String {
+    title
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(MAX_TERMINAL_TITLE_CHARS)
+        .collect()
+}
+
 fn friendly_terminal_title(title: String) -> String {
+    let title = sanitize_terminal_title(&title);
     let Some(program) = title
         .contains(['\\', '/'])
         .then(|| title.rsplit(['\\', '/']).next())
@@ -1778,5 +1783,31 @@ fn terminal_clipboard_shortcut_action(
         Some(action)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod terminal_title_tests {
+    use super::{MAX_TERMINAL_TITLE_CHARS, friendly_terminal_title, sanitize_terminal_title};
+
+    #[test]
+    fn program_set_titles_lose_control_characters() {
+        assert_eq!(
+            sanitize_terminal_title("build\u{1b}[2J\u{7}done\r\n"),
+            "build[2Jdone"
+        );
+        assert_eq!(
+            friendly_terminal_title("C:\\Windows\\pwsh.exe\u{0}".to_string()),
+            "pwsh"
+        );
+    }
+
+    #[test]
+    fn program_set_titles_are_capped() {
+        let long = "x".repeat(MAX_TERMINAL_TITLE_CHARS * 3);
+        assert_eq!(
+            friendly_terminal_title(long).chars().count(),
+            MAX_TERMINAL_TITLE_CHARS
+        );
     }
 }
