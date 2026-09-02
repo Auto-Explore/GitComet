@@ -27,6 +27,7 @@ pub const GIT_COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
 pub const GITCOMET_ASKPASS_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PROMPT_LOG";
 pub const GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV: &str =
     "GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG";
+const GITCOMET_ASKPASS_PROMPT_INPUT_ENV: &str = "GITCOMET_ASKPASS_PROMPT_INPUT";
 
 /// A written askpass script plus its prompt log paths, cleaned up on drop.
 ///
@@ -35,6 +36,7 @@ pub const GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV: &str =
 pub struct AskPassScript {
     _dir: tempfile::TempDir,
     path: PathBuf,
+    prompt_input_path: PathBuf,
     host_prompt_log_path: PathBuf,
     passphrase_prompt_log_path: PathBuf,
 }
@@ -187,30 +189,39 @@ fi
 /// command. `EnableDelayedExpansion` is on from the first line for that reason.
 pub const WINDOWS_ASKPASS_SCRIPT: &[u8] = br#"@echo off
 setlocal EnableDelayedExpansion
-set "prompt=%~1"
-if not "%GITCOMET_ASKPASS_PROMPT_LOG%"=="" (
-  echo !prompt! | findstr /I /C:"authenticity of host" /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
+rem A .cmd launched by Command is invoked as: cmd.exe /c ""script" "prompt""
+rem Reading the first argument directly would substitute the untrusted prompt
+rem back into batch syntax.
+rem Instead, take it from cmd's original command line via delayed expansion,
+rem remove everything through the script/prompt boundary, then trim the final "".
+set "cmdcmdline="
+set "prompt=!cmdcmdline:*" "=!"
+set "prompt=!prompt:~0,-2!"
+set "findstr=!SystemRoot!\System32\findstr.exe"
+> "!GITCOMET_ASKPASS_PROMPT_INPUT!" echo(!prompt!
+if not "!GITCOMET_ASKPASS_PROMPT_LOG!"=="" (
+  "!findstr!" /I /C:"authenticity of host" /C:"continue connecting" /C:"yes/no" /C:"fingerprint" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
   if not errorlevel 1 (
-    >>"%GITCOMET_ASKPASS_PROMPT_LOG%" echo !prompt!
+    >>"!GITCOMET_ASKPASS_PROMPT_LOG!" echo(!prompt!
   )
 )
-if not "%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%"=="" (
-  echo !prompt! | findstr /I "passphrase" >nul
+if not "!GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG!"=="" (
+  "!findstr!" /I "passphrase" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
   if not errorlevel 1 (
-    >>"%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%" echo !prompt!
+    >>"!GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG!" echo(!prompt!
   )
 )
-if /I "%GITCOMET_AUTH_KIND%"=="username_password" (
-  echo !prompt! | findstr /I "username" >nul
+if /I "!GITCOMET_AUTH_KIND!"=="username_password" (
+  "!findstr!" /I "username" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
   if not errorlevel 1 (
-    echo %GITCOMET_AUTH_USERNAME%
+    echo(!GITCOMET_AUTH_USERNAME!
     exit /b 0
   )
-  echo %GITCOMET_AUTH_SECRET%
+  echo(!GITCOMET_AUTH_SECRET!
   exit /b 0
 )
-if /I "%GITCOMET_AUTH_KIND%"=="passphrase_cached" (
-  set "cache_size=%GITCOMET_AUTH_CACHE_SIZE%"
+if /I "!GITCOMET_AUTH_KIND!"=="passphrase_cached" (
+  set "cache_size=!GITCOMET_AUTH_CACHE_SIZE!"
   if "!cache_size!"=="" set "cache_size=0"
   set /a cache_last=!cache_size!-1
   if !cache_last! GEQ 0 (
@@ -225,14 +236,14 @@ if /I "%GITCOMET_AUTH_KIND%"=="passphrase_cached" (
   )
   exit /b 0
 )
-if /I "%GITCOMET_AUTH_KIND%"=="host_verification" (
-  echo !prompt! | findstr /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
+if /I "!GITCOMET_AUTH_KIND!"=="host_verification" (
+  "!findstr!" /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" "!GITCOMET_ASKPASS_PROMPT_INPUT!" >nul
   if not errorlevel 1 (
-    echo %GITCOMET_AUTH_SECRET%
+    echo(!GITCOMET_AUTH_SECRET!
   )
   exit /b 0
 )
-echo %GITCOMET_AUTH_SECRET%
+echo(!GITCOMET_AUTH_SECRET!
 "#;
 
 pub fn askpass_script_contents() -> &'static [u8] {
@@ -250,10 +261,12 @@ pub fn create_askpass_script() -> std::io::Result<AskPassScript> {
     #[cfg(not(windows))]
     let script_name = "gitcomet-askpass.sh";
     let path = dir.path().join(script_name);
+    let prompt_input_path = dir.path().join("gitcomet-askpass-prompt-input.txt");
     let host_prompt_log_path = dir.path().join("gitcomet-askpass-host-prompt.log");
     let passphrase_prompt_log_path = dir.path().join("gitcomet-askpass-passphrase-prompt.log");
 
     fs::write(&path, askpass_script_contents())?;
+    fs::write(&prompt_input_path, b"")?;
     fs::write(&host_prompt_log_path, b"")?;
     fs::write(&passphrase_prompt_log_path, b"")?;
 
@@ -269,6 +282,7 @@ pub fn create_askpass_script() -> std::io::Result<AskPassScript> {
     Ok(AskPassScript {
         _dir: dir,
         path,
+        prompt_input_path,
         host_prompt_log_path,
         passphrase_prompt_log_path,
     })
@@ -285,6 +299,10 @@ pub fn configure_git_auth_prompt(
     cmd.env(
         GITCOMET_ASKPASS_PROMPT_LOG_ENV,
         &askpass.host_prompt_log_path,
+    );
+    cmd.env(
+        GITCOMET_ASKPASS_PROMPT_INPUT_ENV,
+        &askpass.prompt_input_path,
     );
     cmd.env(
         GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV,
@@ -396,8 +414,16 @@ mod tests {
             );
         }
         assert!(
-            script.contains("echo !prompt!"),
+            script.contains("echo(!prompt!"),
             "the prompt is still inspected"
+        );
+        assert!(
+            !script.contains("%~1"),
+            "expanding the prompt argument directly re-parses its metacharacters"
+        );
+        assert!(
+            script.contains("!cmdcmdline:"),
+            "the prompt must be read from cmd's original command line"
         );
     }
 
@@ -429,25 +455,27 @@ mod tests {
             "Password for 'https://user&echo pwned>\"{}\"&x@example.invalid': ",
             marker.display()
         );
-        let output = Command::new(askpass.path())
-            .arg(&prompt)
-            .env(GITCOMET_AUTH_KIND_ENV, GITCOMET_AUTH_KIND_USERNAME_PASSWORD)
-            .env(GITCOMET_AUTH_USERNAME_ENV, "user")
-            .env(GITCOMET_AUTH_SECRET_ENV, "s3cret")
-            .env(
-                GITCOMET_ASKPASS_PROMPT_LOG_ENV,
-                askpass.host_prompt_log_path(),
-            )
-            .env(
-                GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV,
-                askpass.passphrase_prompt_log_path(),
-            )
-            .output()
-            .expect("run askpass helper");
+        let auth = PromptAuth::Explicit(StagedGitAuth {
+            kind: GitAuthKind::UsernamePassword,
+            username: Some("user".to_string()),
+            secret: "s3cret".to_string(),
+        });
+        let mut command = Command::new(askpass.path());
+        command.arg(&prompt).env("PATH", "");
+        configure_git_auth_prompt(&mut command, Some(&auth), &askpass);
+        let output = command.output().expect("run askpass helper");
 
         assert!(
             !marker.exists(),
-            "metacharacters in the prompt were executed by cmd"
+            "metacharacters in the prompt were executed by cmd; status: {:?}, stdout: {:?}, stderr: {:?}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "askpass helper wrote an error: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "s3cret");
     }

@@ -1087,9 +1087,22 @@ mod tests {
         let remote = workdir.join("remote.txt");
         let merged = workdir.join("merged.txt");
         std::fs::write(&remote, b"theirs\n").unwrap();
+        let powershell = PathBuf::from(
+            std::env::var_os("SystemRoot").expect("SystemRoot should be defined on Windows"),
+        )
+        .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        assert!(
+            powershell.is_file(),
+            "Windows PowerShell should exist at {}",
+            powershell.display()
+        );
+        let custom_cmd = format!(
+            r#""{}" -NoProfile -Command "[System.IO.File]::WriteAllBytes($env:MERGED, [System.IO.File]::ReadAllBytes($env:REMOTE))""#,
+            powershell.display()
+        );
 
         let output = run_custom_mergetool_command(
-            r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllBytes($env:MERGED, [System.IO.File]::ReadAllBytes($env:REMOTE))""#,
+            &custom_cmd,
             workdir,
             Path::new("base.txt"),
             Path::new("local.txt"),
