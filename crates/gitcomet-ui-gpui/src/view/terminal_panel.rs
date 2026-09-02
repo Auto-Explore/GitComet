@@ -466,20 +466,6 @@ impl GitCometView {
                                     cx.notify();
                                 }
                             }
-                            TerminalBackendEvent::ClipboardStore(data) => {
-                                crate::clipboard::write_text(
-                                    cx,
-                                    data,
-                                    crate::clipboard::CopySource::TerminalProtocol,
-                                );
-                            }
-                            TerminalBackendEvent::ClipboardLoad => {
-                                if let Some(text) = crate::clipboard::read_text(cx)
-                                    && let Some(ref pty) = instance.pty_sender
-                                {
-                                    pty.write(text.into_bytes());
-                                }
-                            }
                             TerminalBackendEvent::Bell => {}
                             TerminalBackendEvent::Exit => unreachable!(
                                 "terminal exit events are handled before instance updates"
