@@ -79,8 +79,8 @@ fn suggested_worktree_path_places_new_worktrees_beside_the_current_one() {
     let repo = repo_with_worktrees(RepoId(1));
 
     assert_eq!(
-        workspace_picker::suggested_worktree_path(&repo, "feature"),
-        "/tmp/ws/feature"
+        PathBuf::from(workspace_picker::suggested_worktree_path(&repo, "feature")),
+        PathBuf::from("/tmp/ws").join("feature")
     );
 }
 
@@ -90,8 +90,8 @@ fn suggested_worktree_path_flattens_branch_shaped_queries() {
     let repo = repo_with_worktrees(RepoId(1));
 
     assert_eq!(
-        workspace_picker::suggested_worktree_path(&repo, "feat/x"),
-        "/tmp/ws/feat-x"
+        PathBuf::from(workspace_picker::suggested_worktree_path(&repo, "feat/x")),
+        PathBuf::from("/tmp/ws").join("feat-x")
     );
 }
 
@@ -341,7 +341,11 @@ fn workspace_picker_create_row_opens_the_add_dialog_prefilled(cx: &mut gpui::Tes
             host.worktree_ref_source_target_for_tests().to_string(),
         )
     });
-    assert_eq!(path, "/tmp/ws/shiny", "path should be prefilled from query");
+    assert_eq!(
+        PathBuf::from(path),
+        PathBuf::from("/tmp/ws").join("shiny"),
+        "path should be prefilled from query"
+    );
     // `git worktree add <path> main` fails when main is checked out elsewhere;
     // with no reference git creates a new branch off HEAD, which is intended.
     assert_eq!(
