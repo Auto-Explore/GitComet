@@ -10,11 +10,18 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
 
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
 
 const PASSPHRASE: &str = "correct horse battery staple";
+
+// Both tests reset the process-wide staged-auth and session-passphrase slots.
+fn auth_test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|error| error.into_inner())
+}
 
 fn run_git(repo: &Path, args: &[&str]) {
     let mut cmd = Command::new("git");
@@ -83,6 +90,7 @@ fn missing_ssh_signing_passphrase_preserves_the_observed_prompt() {
         eprintln!("skipping: ssh-keygen with `-Y sign` is unavailable");
         return;
     }
+    let _auth_guard = auth_test_lock();
     test_git_env::ensure_initialized();
     clear_staged_git_auth();
     clear_session_passphrase();
@@ -109,6 +117,7 @@ fn successful_ssh_signing_passphrase_is_reused_for_the_session() {
         eprintln!("skipping: ssh-keygen with `-Y sign` is unavailable");
         return;
     }
+    let _auth_guard = auth_test_lock();
     test_git_env::ensure_initialized();
     clear_staged_git_auth();
     clear_session_passphrase();
