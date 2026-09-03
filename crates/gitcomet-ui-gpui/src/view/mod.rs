@@ -37,6 +37,8 @@ use gpui::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(test)]
+use std::cell::Cell;
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::ops::Range;
@@ -372,15 +374,58 @@ pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: 
     element
 }
 
-// Only use these wrappers for views that remain mounted while their parent is mounted.
-// Parent-controlled mount/unmount boundaries, like collapsible panes, must rebuild their child.
+// A cached view reuses its previous frame's layout and paint whenever the frame
+// was requested through `notify` on some other view (spinner ticks, store
+// updates elsewhere) and its own bounds, content mask and text style are
+// unchanged; `window.refresh()` frames (hover changes) bypass every cache.
+//
+// Unmounting is safe: GPUI keeps only the element states accessed during a
+// frame, so a pane collapsed for one frame loses its cache entry and renders
+// from scratch when it returns. The wrapper needs a definite size, which the
+// helpers below provide; the view's own root must fill it (`size_full`), since
+// a cached root is laid out against the wrapper's bounds rather than stretched
+// by a flex parent.
+#[cfg(test)]
+thread_local! {
+    static STABLE_CACHED_VIEWS_ENABLED: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+struct StableCachedViewsTestGuard(bool);
+
+#[cfg(test)]
+impl Drop for StableCachedViewsTestGuard {
+    fn drop(&mut self) {
+        STABLE_CACHED_VIEWS_ENABLED.with(|enabled| enabled.set(self.0));
+    }
+}
+
+#[cfg(test)]
+fn enable_stable_cached_views_for_test() -> StableCachedViewsTestGuard {
+    let previous = STABLE_CACHED_VIEWS_ENABLED.with(|enabled| enabled.replace(true));
+    StableCachedViewsTestGuard(previous)
+}
+
+fn stable_cached_views_enabled() -> bool {
+    #[cfg(test)]
+    {
+        STABLE_CACHED_VIEWS_ENABLED.with(Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        true
+    }
+}
+
 fn stable_cached_view<V: Render>(view: Entity<V>, style: StyleRefinement) -> AnyElement {
     let view = AnyView::from(view);
-    // GPUI's cached mount path skips some test-only debug bounds and paint tracking.
-    if cfg!(test) {
-        view.into_any_element()
-    } else {
+    // Most visual tests need uncached mounts because GPUI's reuse path does not
+    // replay test-only debug bounds. Focused cache-invalidation tests opt in so
+    // production cache behavior remains covered.
+    if stable_cached_views_enabled() {
         view.cached(style).into_any_element()
+    } else {
+        view.into_any_element()
     }
 }
 

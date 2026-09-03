@@ -68,7 +68,7 @@ pub(crate) fn collect_treesitter_injection_matches_for_line_window_at(
                     let pattern_ix = m.pattern_index;
                     let is_combined = highlight.is_combined_injection_pattern(pattern_ix);
                     for capture in m
-                        .captures
+                        .captures()
                         .iter()
                         .filter(|capture| capture.index == injection_content_capture_ix)
                     {
@@ -250,7 +250,7 @@ pub(crate) fn injection_language_for_match(
                 .and_then(injection_language_from_name)
                 .or_else(|| {
                     setting.capture_id.and_then(|capture_id| {
-                        query_capture_text(query_match.captures, capture_id as u32, input)
+                        query_capture_text(query_match.captures(), capture_id as u32, input)
                             .and_then(injection_language_from_name)
                     })
                 })
@@ -260,7 +260,7 @@ pub(crate) fn injection_language_for_match(
             .into_iter()
             .flatten()
             .find_map(|capture_ix| {
-                query_capture_text(query_match.captures, capture_ix, input)
+                query_capture_text(query_match.captures(), capture_ix, input)
                     .and_then(injection_language_from_name)
             })
     })

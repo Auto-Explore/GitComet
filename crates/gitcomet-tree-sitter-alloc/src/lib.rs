@@ -119,12 +119,12 @@ fn install_before_main() {
 pub fn install_mimalloc_allocator() {
     INSTALL.call_once(|| {
         unsafe {
-            tree_sitter::set_allocator(
-                Some(tree_sitter_malloc),
-                Some(tree_sitter_calloc),
-                Some(tree_sitter_realloc),
-                Some(tree_sitter_free),
-            );
+            tree_sitter::set_allocator(Some(tree_sitter::Allocator {
+                malloc: tree_sitter_malloc,
+                calloc: tree_sitter_calloc,
+                realloc: tree_sitter_realloc,
+                free: tree_sitter_free,
+            }));
         }
         #[cfg(test)]
         HOOK_INSTALL_COUNT.fetch_add(1, Ordering::SeqCst);

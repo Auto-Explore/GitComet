@@ -281,7 +281,7 @@ fn collect_layer_captures(
             // the order of what survived.
             let mut seq: u32 = 0;
             while let Some((m, capture_ix)) = captures.get() {
-                if let Some(capture) = m.captures.get(*capture_ix)
+                if let Some(capture) = m.captures().get(*capture_ix)
                     && let Some(kind) = capture_kinds.get(capture.index as usize).copied().flatten()
                 {
                     let range = clamp_to_len(capture.node.byte_range(), text_len);
@@ -410,7 +410,7 @@ fn parse_injection_layers(
                 if let Some(language) = injection_language_for_match(rope, query, m, language_ix) {
                     let pattern_ix = m.pattern_index;
                     let is_combined = spec.is_combined_injection_pattern(pattern_ix);
-                    for capture in m.captures.iter().filter(|c| c.index == content_ix) {
+                    for capture in m.captures().iter().filter(|c| c.index == content_ix) {
                         if let Some(range) =
                             normalized_injection_content_byte_range(capture.node, rope.len())
                             && !range.is_empty()
@@ -511,7 +511,7 @@ fn injection_language_for_match(
 ) -> Option<DiffSyntaxLanguage> {
     let capture_text = |capture_ix: u32| -> Option<String> {
         query_match
-            .captures
+            .captures()
             .iter()
             .find(|capture| capture.index == capture_ix)
             .map(|capture| rope.text_for_range(capture.node.byte_range()))

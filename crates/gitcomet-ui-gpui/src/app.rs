@@ -366,19 +366,12 @@ pub(crate) fn take_window_grab_started_within(now: Instant, max_age: Duration) -
     })
 }
 
-#[cfg(target_os = "windows")]
-pub(crate) fn begin_window_move(window: &Window) {
-    note_window_grab_started();
-    if let Some(hwnd) = window_hwnd(window)
-        && gitcomet_win32_window_utils::begin_window_move(hwnd)
-    {
-        return;
-    }
-
-    window.start_window_move();
-}
-
-#[cfg(not(target_os = "windows"))]
+/// Hand the title-bar drag to the platform. On Windows this goes through GPUI's
+/// `start_window_move` (a posted `WM_NCLBUTTONDOWN`/`HTCAPTION`) rather than the
+/// `SC_MOVE` system command GitComet used to post itself: GPUI tracks that drag
+/// and synthesizes the `WM_LBUTTONUP` the modal move loop swallows, so the app
+/// sees a complete press/release pair after every move, and the native
+/// restore-on-drag for maximized windows works the same either way.
 pub(crate) fn begin_window_move(window: &Window) {
     note_window_grab_started();
     window.start_window_move();
@@ -458,6 +451,7 @@ fn run_windowed_app(
 
     application.run(move |cx: &mut App| {
         cx.set_global(clean_shutdown_tracker);
+        crate::ui_probe::start_if_enabled(cx);
         if let Some(on_shutdown) = on_shutdown {
             cx.on_app_quit(move |_cx| {
                 on_shutdown();
@@ -529,42 +523,38 @@ fn open_gitcomet_window(
     let ui_scale_percent = ui_scale.percent;
     let intercept_native_close = view_config.view_mode == GitCometViewMode::Normal;
 
-    cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(min_size),
-            titlebar: Some(TitlebarOptions {
-                title: Some(window_title.into()),
-                appears_transparent: true,
-                traffic_light_position: Some(window_traffic_light_position(ui_scale_percent)),
-            }),
-            app_id: Some(app_id),
-            window_decorations: Some(WindowDecorations::Client),
-            // Client-side decorations inset a rounded frame into the surface;
-            // the pixels outside it must show the desktop, not a solid fill.
-            window_background: if cfg!(target_os = "macos") {
-                WindowBackgroundAppearance::Opaque
-            } else {
-                WindowBackgroundAppearance::Transparent
+    crate::ui_probe::time_section("open main window", || {
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(min_size),
+                titlebar: Some(TitlebarOptions {
+                    title: Some(window_title.into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(window_traffic_light_position(ui_scale_percent)),
+                }),
+                app_id: Some(app_id),
+                window_decorations: Some(WindowDecorations::Client),
+                window_background: main_window_background_appearance(),
+                is_movable: true,
+                is_resizable: true,
+                ..Default::default()
             },
-            is_movable: true,
-            is_resizable: true,
-            ..Default::default()
-        },
-        move |window, cx| {
-            ui_scale::apply_to_window(window, ui_scale_percent);
-            if intercept_native_close {
-                window.on_window_should_close(cx, |window, cx| {
-                    close_window_or_warn(window, cx);
-                    false
-                });
-            }
-            let (store, events) = AppStore::new(Arc::clone(&backend));
-            cx.new(|cx| {
-                GitCometView::new_with_config(store, events, view_config.clone(), window, cx)
-            })
-        },
-    )
+            move |window, cx| {
+                ui_scale::apply_to_window(window, ui_scale_percent);
+                if intercept_native_close {
+                    window.on_window_should_close(cx, |window, cx| {
+                        close_window_or_warn(window, cx);
+                        false
+                    });
+                }
+                let (store, events) = AppStore::new(Arc::clone(&backend));
+                cx.new(|cx| {
+                    GitCometView::new_with_config(store, events, view_config.clone(), window, cx)
+                })
+            },
+        )
+    })
     .unwrap_or_else(|err| {
         panic!(
             "failed to open main GitComet window: {err}\n\
@@ -573,6 +563,31 @@ fn open_gitcomet_window(
              For per-adapter details, relaunch with RUST_LOG=info."
         )
     })
+}
+
+/// Client-side decorations inset a rounded frame into the surface; the pixels
+/// outside it must show the desktop, not a solid fill, so every platform but
+/// macOS asks for a transparent surface.
+///
+/// `GITCOMET_WINDOW_BACKGROUND=opaque|transparent` overrides the choice. It is
+/// a diagnostic knob: on Windows a transparent surface changes how the
+/// compositor blends the window, so this is the quickest way to tell whether
+/// that is what makes a build feel slow.
+pub(crate) fn main_window_background_appearance() -> WindowBackgroundAppearance {
+    let default = if cfg!(target_os = "macos") {
+        WindowBackgroundAppearance::Opaque
+    } else {
+        WindowBackgroundAppearance::Transparent
+    };
+    match std::env::var("GITCOMET_WINDOW_BACKGROUND") {
+        Ok(value) if value.trim().eq_ignore_ascii_case("opaque") => {
+            WindowBackgroundAppearance::Opaque
+        }
+        Ok(value) if value.trim().eq_ignore_ascii_case("transparent") => {
+            WindowBackgroundAppearance::Transparent
+        }
+        _ => default,
+    }
 }
 
 fn current_or_default_ui_scale_percent(cx: &mut App) -> u32 {

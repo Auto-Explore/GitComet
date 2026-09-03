@@ -414,8 +414,7 @@ fn expanded_settings_sections_render_scrollable_list_containers(cx: &mut gpui::T
         ),
     ] {
         let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-            settings.expanded_section = Some(section);
-            cx.notify();
+            settings.set_expanded_section(Some(section), cx);
         });
         settings_cx.run_until_parked();
         settings_cx.update(|window, app| {
@@ -457,8 +456,7 @@ fn expanded_diff_content_mode_section_renders_before_scroll_sync_row(
     settings_cx.run_until_parked();
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-        settings.expanded_section = Some(SettingsSection::DiffContentMode);
-        cx.notify();
+        settings.set_expanded_section(Some(SettingsSection::DiffContentMode), cx);
     });
     settings_cx.run_until_parked();
     settings_cx.update(|window, app| {
@@ -510,8 +508,7 @@ fn expanded_theme_section_renders_theme_utilities_and_opens_theme_guide(
     settings_cx.run_until_parked();
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-        settings.expanded_section = Some(SettingsSection::Theme);
-        cx.notify();
+        settings.set_expanded_section(Some(SettingsSection::Theme), cx);
     });
     settings_cx.run_until_parked();
     settings_cx.update(|window, app| {
@@ -566,8 +563,7 @@ fn expanded_history_columns_section_renders_detail_container(cx: &mut gpui::Test
     settings_cx.run_until_parked();
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-        settings.expanded_section = Some(SettingsSection::GitLogColumns);
-        cx.notify();
+        settings.set_expanded_section(Some(SettingsSection::GitLogColumns), cx);
     });
     settings_cx.run_until_parked();
     settings_cx.update(|window, app| {
@@ -610,8 +606,7 @@ fn expanded_git_log_default_mode_section_renders_modes_in_order_and_updates_sele
     settings_cx.run_until_parked();
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-        settings.expanded_section = Some(SettingsSection::GitLogDefaultMode);
-        cx.notify();
+        settings.set_expanded_section(Some(SettingsSection::GitLogDefaultMode), cx);
     });
     settings_cx.run_until_parked();
     settings_cx.update(|window, app| {
@@ -702,8 +697,7 @@ fn expanded_git_log_default_mode_section_renders_before_history_columns_row(
     settings_cx.run_until_parked();
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-        settings.expanded_section = Some(SettingsSection::GitLogDefaultMode);
-        cx.notify();
+        settings.set_expanded_section(Some(SettingsSection::GitLogDefaultMode), cx);
     });
     settings_cx.run_until_parked();
     settings_cx.update(|window, app| {
@@ -750,8 +744,7 @@ fn expanded_auto_fetch_tags_section_renders_detail_container(cx: &mut gpui::Test
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
         settings.history_show_tags = true;
-        settings.expanded_section = Some(SettingsSection::GitLogTagFetch);
-        cx.notify();
+        settings.set_expanded_section(Some(SettingsSection::GitLogTagFetch), cx);
     });
     settings_cx.run_until_parked();
     settings_cx.update(|window, app| {
@@ -862,6 +855,64 @@ fn custom_external_editor_renders_detail_container(cx: &mut gpui::TestAppContext
             .is_some(),
         "expected custom external editor mode to render its detail container"
     );
+}
+
+#[gpui::test]
+fn external_editor_detection_waits_for_the_row_to_expand(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.run_until_parked();
+
+    // Opening the window must not pay for the installed-editor scan: the list
+    // holds only the fixed entries (and the saved editor, if any) until the row
+    // is expanded.
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, _cx| {
+        assert!(settings.external_editor_options_loading());
+        assert!(
+            settings
+                .external_editor_options
+                .iter()
+                .all(|option| !matches!(
+                    option.kind,
+                    crate::external_editor::ExternalEditorOptionKind::Detected(_)
+                )),
+            "no detected editors before the row expands: {:?}",
+            settings.external_editor_options
+        );
+    });
+
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.toggle_section(SettingsSection::ExternalCodeEditor, cx);
+    });
+    settings_cx.run_until_parked();
+
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, _cx| {
+        assert!(!settings.external_editor_options_loading());
+        let expected = crate::external_editor::external_editor_options_from_detected(
+            settings.external_editor_setting.as_ref(),
+            crate::external_editor::detect_external_editors(),
+        );
+        assert_eq!(
+            settings.external_editor_options.as_ref(),
+            expected.as_slice()
+        );
+    });
 }
 
 #[gpui::test]
@@ -1081,8 +1132,7 @@ fn settings_dropdowns_fit_without_inner_scroll(cx: &mut gpui::TestAppContext) {
         (SettingsSection::Diff, "Diff scroll sync"),
     ] {
         let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-            settings.expanded_section = Some(section);
-            cx.notify();
+            settings.set_expanded_section(Some(section), cx);
         });
         settings_cx.run_until_parked();
         settings_cx.update(|window, app| {
@@ -1356,7 +1406,7 @@ fn settings_window_root_view_renders_visible_scrollbar(cx: &mut gpui::TestAppCon
         let _ = settings_window.update(app, |settings, _window, cx| {
             settings.ui_font_options = synthetic_fonts.clone();
             settings.ui_font_family = synthetic_fonts[0].clone();
-            settings.expanded_section = Some(SettingsSection::UiFont);
+            settings.set_expanded_section(Some(SettingsSection::UiFont), cx);
             settings.settings_window_scroll = ScrollHandle::default();
             settings.ui_font_scroll = UniformListScrollHandle::default();
             cx.notify();
@@ -1499,26 +1549,26 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
     settings_cx.run_until_parked();
 
     let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
-            settings.ui_font_options = synthetic_fonts.clone();
-            settings.ui_font_family = synthetic_fonts[0].clone();
-            settings.expanded_section = Some(SettingsSection::UiFont);
-            settings.git_executable_mode = GitExecutableMode::Custom;
-            settings.runtime_info.app_version_display =
-                "GitComet v0.0.0-overflow-regression-build-with-extra-layout-metadata".into();
-            settings.runtime_info.operating_system =
-                "linux (gnu-linux-overflow-regression-platform with verbose wrapping metadata, x86_64)"
-                    .into();
-            settings.runtime_info.git.version_display =
-                "git version 2.51.0 (overflow-regression-build-with-very-long-metadata)".into();
-            settings.runtime_info.git.compatibility = GitCompatibility::Unknown;
-            settings.runtime_info.git.detail = Some(
-                "This deliberately long compatibility detail must wrap inside the Git executable card without shrinking the settings containers into narrow blocks."
-                    .into(),
-            );
-            settings.settings_window_scroll = ScrollHandle::default();
-            settings.ui_font_scroll = UniformListScrollHandle::default();
-            cx.notify();
-        });
+        settings.ui_font_options = synthetic_fonts.clone();
+        settings.ui_font_family = synthetic_fonts[0].clone();
+        settings.set_expanded_section(Some(SettingsSection::UiFont), cx);
+        settings.git_executable_mode = GitExecutableMode::Custom;
+        settings.runtime_info.app_version_display =
+            "GitComet v0.0.0-overflow-regression-build-with-extra-layout-metadata".into();
+        settings.runtime_info.operating_system =
+            "linux (gnu-linux-overflow-regression-platform with verbose wrapping metadata, x86_64)"
+                .into();
+        settings.runtime_info.git.version_display =
+            "git version 2.51.0 (overflow-regression-build-with-very-long-metadata)".into();
+        settings.runtime_info.git.compatibility = GitCompatibility::Unknown;
+        settings.runtime_info.git.detail = Some(
+            "This deliberately long compatibility detail must wrap inside the Git executable card without shrinking the settings containers into narrow blocks."
+                .into(),
+        );
+        settings.settings_window_scroll = ScrollHandle::default();
+        settings.ui_font_scroll = UniformListScrollHandle::default();
+        cx.notify();
+    });
     settings_cx.run_until_parked();
     settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_MIN_WIDTH_PX), px(1200.0)));
     settings_cx.run_until_parked();
@@ -1548,7 +1598,7 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
             settings.select_category(category, cx);
             // The General page keeps a dropdown expanded to exercise wrapping.
             if category == SettingsCategory::General {
-                settings.expanded_section = Some(SettingsSection::UiFont);
+                settings.set_expanded_section(Some(SettingsSection::UiFont), cx);
             }
             cx.notify();
         });
@@ -2640,7 +2690,7 @@ fn ui_font_dropdown_wheel_scrolls_inner_list_before_outer_window(cx: &mut gpui::
         let _ = settings_window.update(app, |settings, _window, cx| {
             settings.ui_font_options = synthetic_fonts.clone();
             settings.ui_font_family = synthetic_fonts[0].clone();
-            settings.expanded_section = Some(SettingsSection::UiFont);
+            settings.set_expanded_section(Some(SettingsSection::UiFont), cx);
             settings.settings_window_scroll = ScrollHandle::default();
             settings.ui_font_scroll = UniformListScrollHandle::default();
             cx.notify();

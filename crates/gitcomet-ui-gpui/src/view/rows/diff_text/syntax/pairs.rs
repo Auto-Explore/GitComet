@@ -293,7 +293,7 @@ fn partner_of_delimiter(
     // `has_error`: the latter is true for the whole subtree, so one stray `<`
     // among a hundred paragraphs would disqualify the enclosing element, whose
     // own first and last children are still its tags.
-    let child_count = parent.child_count();
+    let child_count = parent.child_count() as usize;
     if child_count >= PAIR_SCAN_BOUNDARY_CHECK_MIN_CHILDREN
         && !parent.is_error()
         && let Some(pair) = outer_pair_among_children(&parent, source_ranges_equal)
@@ -414,7 +414,7 @@ fn outer_pair_among_children(
 ) -> Option<SyntaxPair> {
     let child_count = node.child_count();
     let first = node.child(0)?;
-    let last = node.child(u32::try_from(child_count.checked_sub(1)?).ok()?)?;
+    let last = node.child(child_count.checked_sub(1)?)?;
     if !delimits_whole_node(node, &first.byte_range(), &last.byte_range()) {
         return None;
     }
@@ -461,7 +461,7 @@ fn enclosing_pair_among_children(
     // This node-local fact avoids the grammar-wide false positive where Python
     // has `string_start` somewhere in its grammar but a module's 100,000 direct
     // statement children are ordinary named nodes.
-    let child_count = node.child_count();
+    let child_count = node.child_count() as usize;
     if child_count >= PAIR_SCAN_BOUNDARY_CHECK_MIN_CHILDREN {
         // `is_error` for the reason given in `partner_of_delimiter`: a parse
         // error anywhere below must not disqualify this node's own boundary.
