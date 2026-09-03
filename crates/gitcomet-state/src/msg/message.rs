@@ -1,7 +1,7 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
-    ConflictFileLoadMode, DefaultTagType, GitOperationOuterOutcome, RepoId, SidebarDataRequest,
-    SidebarMode,
+    BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, GitOperationOuterOutcome,
+    RepoId, SidebarDataRequest, SidebarMode,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -11,9 +11,10 @@ use gitcomet_core::git_operation::{GitOperationEvent, GitOperationId};
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
-    CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, InteractiveRebaseEntry,
-    PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision,
-    SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease,
+    InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
+    SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
+    SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -46,6 +47,13 @@ pub enum RepoActionKind {
     ApplyStash,
     PopStash,
     DropStash,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BranchExistsChoice {
+    Cancel,
+    CheckoutExisting,
+    OverwriteAndCheckout,
 }
 
 impl RepoActionKind {
@@ -529,6 +537,7 @@ pub enum Msg {
         remote: String,
         branch: String,
         local_branch: String,
+        mode: CheckoutRemoteBranchMode,
     },
     CheckoutCommit {
         repo_id: RepoId,
@@ -554,11 +563,23 @@ pub enum Msg {
         repo_id: RepoId,
         name: String,
         target: String,
+        /// Reset the branch to `target` first when a branch with this name
+        /// already exists, instead of failing with "already exists".
+        force: bool,
+    },
+    ResolveBranchExistsPrompt {
+        prompt: BranchExistsPromptState,
+        choice: BranchExistsChoice,
+    },
+    ShowBranchExistsPrompt {
+        prompt: BranchExistsPromptState,
     },
     RenameBranch {
         repo_id: RepoId,
         old_name: String,
         new_name: String,
+        /// Replace an existing `new_name` instead of failing with "already exists".
+        force: bool,
     },
     DeleteBranch {
         repo_id: RepoId,
@@ -1294,6 +1315,19 @@ pub enum InternalMsg {
     RepoActionFinished {
         repo_id: RepoId,
         action: RepoActionKind,
+        result: Result<(), Error>,
+    },
+    /// The action ran into an existing branch; open the collision prompt.
+    BranchAlreadyExists {
+        action: RepoActionKind,
+        prompt: BranchExistsPromptState,
+    },
+    /// The action was carried out in (or redirected to) another worktree that
+    /// has the branch checked out; on success that worktree is opened.
+    RepoActionFinishedInWorktree {
+        repo_id: RepoId,
+        action: RepoActionKind,
+        worktree_path: PathBuf,
         result: Result<(), Error>,
     },
     CommitFinished {

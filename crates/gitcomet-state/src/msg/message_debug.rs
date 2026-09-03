@@ -482,6 +482,23 @@ impl std::fmt::Debug for InternalMsg {
                 .field("action", action)
                 .field("result", result)
                 .finish(),
+            InternalMsg::BranchAlreadyExists { action, prompt } => f
+                .debug_struct("BranchAlreadyExists")
+                .field("action", action)
+                .field("prompt", prompt)
+                .finish(),
+            InternalMsg::RepoActionFinishedInWorktree {
+                repo_id,
+                action,
+                worktree_path,
+                result,
+            } => f
+                .debug_struct("RepoActionFinishedInWorktree")
+                .field("repo_id", repo_id)
+                .field("action", action)
+                .field("worktree_path", worktree_path)
+                .field("result", result)
+                .finish(),
             InternalMsg::CommitFinished { repo_id, result } => f
                 .debug_struct("CommitFinished")
                 .field("repo_id", repo_id)

@@ -5,6 +5,7 @@ mod add_repo_menu;
 mod add_to_gitignore_prompt;
 mod app_menu;
 mod author_filter;
+mod branch_exists_prompt;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
 mod cherry_pick_commit_confirm;
@@ -542,6 +543,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::RebaseOntoConfirm { .. }
             | PopoverKind::RebaseReword { .. }
+            | PopoverKind::BranchExistsPrompt { .. }
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::DeleteBranchesConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
@@ -827,6 +829,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
+        | PopoverKind::BranchExistsPrompt { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
@@ -894,6 +897,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
+        PopoverKind::BranchExistsPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
         PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
         PopoverKind::PullReconcilePrompt { .. } | PopoverKind::AddToGitignorePrompt { .. } => {

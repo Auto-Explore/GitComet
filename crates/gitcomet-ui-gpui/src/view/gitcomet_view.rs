@@ -1358,6 +1358,7 @@ impl GitCometView {
             pending_unsaved_file_edits_flush: None,
             pending_quit_other_views: Vec::new(),
             pending_pull_reconcile_prompt: None,
+            pending_branch_exists_prompt: initial_state.branch_exists_prompt.clone(),
             pending_force_delete_branch_prompt: None,
             pending_force_delete_branch_centered: false,
             pending_force_remove_worktree_prompt: None,

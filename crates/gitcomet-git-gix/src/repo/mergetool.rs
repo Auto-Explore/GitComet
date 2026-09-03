@@ -1081,7 +1081,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn test_run_custom_mergetool_command_windows_executes_quoted_powershell_payload() {
+    fn test_run_custom_mergetool_command_windows_executes_quoted_cmd_payload() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
         let remote = workdir.join("remote.txt");
@@ -1089,7 +1089,7 @@ mod tests {
         std::fs::write(&remote, b"theirs\n").unwrap();
 
         let output = run_custom_mergetool_command(
-            r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllBytes($env:MERGED, [System.IO.File]::ReadAllBytes($env:REMOTE))""#,
+            r#"cmd /D /S /C "copy /Y "%REMOTE%" "%MERGED%" >NUL""#,
             workdir,
             Path::new("base.txt"),
             Path::new("local.txt"),
@@ -1107,8 +1107,8 @@ mod tests {
         assert_eq!(std::fs::read(&merged).unwrap(), b"theirs\n");
         let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
         assert!(
-            !stdout.contains("[System.IO.File]"),
-            "powershell payload should execute, not be echoed as a string expression"
+            !stdout.contains("copy /Y"),
+            "cmd payload should execute, not be echoed as a string expression"
         );
     }
 

@@ -8,10 +8,11 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
-    BlameLine, CancellationToken, CommandOutput, CommitOperationOutcome, ConflictFileStages,
-    ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, MergetoolResult, PullMode,
-    RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext, SafePushAfterCommitDecision,
-    SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    BlameLine, CancellationToken, CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome,
+    ConflictFileStages, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry,
+    MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext,
+    SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
+    SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -627,6 +628,14 @@ impl GitRepository for GixRepo {
         self.rename_branch_impl(old_name, new_name)
     }
 
+    fn rename_branch_force(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.rename_branch_force_impl(old_name, new_name)
+    }
+
+    fn branch_checked_out_in_other_worktree(&self, name: &str) -> Result<Option<PathBuf>> {
+        self.branch_checked_out_in_other_worktree_impl(name)
+    }
+
     fn delete_branch(&self, name: &str) -> Result<()> {
         self.delete_branch_impl(name)
     }
@@ -639,8 +648,18 @@ impl GitRepository for GixRepo {
         self.checkout_branch_impl(name)
     }
 
-    fn checkout_remote_branch(&self, remote: &str, branch: &str, local_branch: &str) -> Result<()> {
-        self.checkout_remote_branch_impl(remote, branch, local_branch)
+    fn create_branch_force_and_checkout(&self, name: &str, target: &CommitId) -> Result<()> {
+        self.create_branch_force_and_checkout_impl(name, target)
+    }
+
+    fn checkout_remote_branch(
+        &self,
+        remote: &str,
+        branch: &str,
+        local_branch: &str,
+        mode: CheckoutRemoteBranchMode,
+    ) -> Result<()> {
+        self.checkout_remote_branch_impl(remote, branch, local_branch, mode)
     }
 
     fn checkout_commit(&self, id: &CommitId) -> Result<()> {

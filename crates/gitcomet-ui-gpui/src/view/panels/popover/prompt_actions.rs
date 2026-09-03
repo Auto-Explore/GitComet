@@ -80,6 +80,12 @@ impl PopoverHost {
                 remote,
                 branch,
             } => checkout_remote_branch_prompt::panel(self, repo_id, remote, branch, cx),
+            PopoverKind::BranchExistsPrompt {
+                repo_id,
+                name,
+                target,
+                operation,
+            } => branch_exists_prompt::panel(self, repo_id, name, target, operation, cx),
             PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
             PopoverKind::CommitPrompt { repo_id } => commit_prompt::panel(self, repo_id, cx),
             PopoverKind::StashPickerPrompt { repo_id, purpose } => {
@@ -779,6 +785,7 @@ impl PopoverHost {
         if is_centered {
             let top_offset = scaled_px(80.0);
             let scrim_close = cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                this.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
                 if !this.dismiss_hook_activity_workflow(window, cx) {
                     this.close_popover_and_restore_focus(window, cx);
                 }

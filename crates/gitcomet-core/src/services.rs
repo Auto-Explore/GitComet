@@ -147,6 +147,12 @@ pub enum ResetMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckoutRemoteBranchMode {
+    Create,
+    Overwrite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteUrlKind {
     Fetch,
     Push,
@@ -653,10 +659,36 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()>;
+    /// Create the local branch `name` at `target`, or reset it there when a
+    /// branch with that name already exists, and check it out. The git
+    /// equivalent is `git checkout --no-track -B <name> <target>`; like a fresh
+    /// branch the result tracks nothing, so an existing upstream is cleared.
+    fn create_branch_force_and_checkout(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "force branch creation and checkout is not implemented for this backend",
+        )))
+    }
     fn rename_branch(&self, _old_name: &str, _new_name: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "branch renaming is not implemented for this backend",
         )))
+    }
+    /// `git branch -M <old> <new>`. When `new_name` is HEAD here (git refuses
+    /// `-M` then) the branch is reset to `old_name`'s commit with a safe
+    /// checkout and `old_name` is deleted, detaching any worktree still on it.
+    /// Fails like git when `new_name` is checked out in another worktree; find
+    /// it with `branch_checked_out_in_other_worktree` and rename from there.
+    fn rename_branch_force(&self, _old_name: &str, _new_name: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "forced branch renaming is not implemented for this backend",
+        )))
+    }
+    /// Canonical, validated path of the other worktree whose HEAD is `name`.
+    /// Defaults to `Ok(None)` (like `head_path_is_gitlink`) so backends without
+    /// worktrees fall through to a plain checkout. Implementations must not
+    /// return a path that is outside this repository.
+    fn branch_checked_out_in_other_worktree(&self, _name: &str) -> Result<Option<PathBuf>> {
+        Ok(None)
     }
     fn delete_branch(&self, name: &str) -> Result<()>;
     fn delete_branch_force(&self, _name: &str) -> Result<()> {
@@ -670,6 +702,7 @@ pub trait GitRepository: Send + Sync {
         _remote: &str,
         _branch: &str,
         _local_branch: &str,
+        _mode: CheckoutRemoteBranchMode,
     ) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "remote branch checkout is not implemented for this backend",
@@ -1414,9 +1447,9 @@ impl GitBackend for UnavailableGitBackend {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlameLine, CommandOutput, ConflictSide, GitBackend, GitRepository, PullMode, RemoteUrlKind,
-        ResetMode, SafePushAfterCommitTarget, UnavailableGitBackend, decode_utf8_optional,
-        validate_conflict_resolution_text,
+        BlameLine, CheckoutRemoteBranchMode, CommandOutput, ConflictSide, GitBackend,
+        GitRepository, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
+        UnavailableGitBackend, decode_utf8_optional, validate_conflict_resolution_text,
     };
     use crate::domain::{
         Branch, CommitDetails, CommitId, DiffArea, DiffTarget, HistoryMode, LogCursor, LogPage,
@@ -1482,7 +1515,13 @@ mod tests {
         assert_unsupported(repo.conflict_file_stages(path));
         assert_unsupported(repo.conflict_session(path));
         assert_unsupported(repo.delete_branch_force("feature"));
-        assert_unsupported(repo.checkout_remote_branch("origin", "main", "feature"));
+        assert_unsupported(repo.rename_branch_force("feature", "main"));
+        assert_unsupported(repo.checkout_remote_branch(
+            "origin",
+            "main",
+            "feature",
+            CheckoutRemoteBranchMode::Create,
+        ));
         assert_unsupported(repo.commit_amend("message"));
         assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
         assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));

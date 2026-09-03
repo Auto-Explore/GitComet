@@ -1023,6 +1023,7 @@ fn create_rename_and_delete_branch_emit_effects() {
             repo_id: RepoId(1),
             old_name: "feature".to_string(),
             new_name: "renamed-feature".to_string(),
+            force: false,
         },
     );
     assert!(matches!(
@@ -1031,6 +1032,7 @@ fn create_rename_and_delete_branch_emit_effects() {
             repo_id: RepoId(1),
             old_name,
             new_name,
+            force: false,
         }] if old_name == "feature" && new_name == "renamed-feature"
     ));
 
@@ -2023,12 +2025,14 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             remote: "origin".to_string(),
             branch: "feature".to_string(),
             local_branch: "feature".to_string(),
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
         },
     );
     assert!(matches!(
         effects.as_slice(),
         [Effect::CheckoutRemoteBranch {
             repo_id: RepoId(1),
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
             ..
         }]
     ));
@@ -2064,6 +2068,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             repo_id,
             name: "feature/new".to_string(),
             target: "HEAD".to_string(),
+            force: false,
         },
     );
     assert!(matches!(
@@ -2071,8 +2076,31 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         [Effect::CreateBranchAndCheckout {
             repo_id: RepoId(1),
             target,
+            force: false,
             ..
         }] if target == "HEAD"
+    ));
+
+    // The force flag travels with the message: an overwrite request still
+    // reaches the effect layer, just marked.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CreateBranchAndCheckout {
+            repo_id,
+            name: "feature/new".to_string(),
+            target: "HEAD".to_string(),
+            force: true,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateBranchAndCheckout {
+            repo_id: RepoId(1),
+            force: true,
+            ..
+        }]
     ));
 
     let effects = reduce(
@@ -2163,7 +2191,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     ));
 
     assert_eq!(
-        state.repos[0].local_actions_in_flight, 9,
+        state.repos[0].local_actions_in_flight, 10,
         "expected begin_local_action for all routed local-action messages"
     );
 
@@ -2442,6 +2470,186 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             ..
         }]
     ));
+}
+
+#[test]
+fn branch_collision_prompt_choices_emit_exact_follow_up_actions() {
+    fn seeded_state(repo_id: RepoId) -> AppState {
+        let mut state = AppState::default();
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(repo_id);
+        state
+    }
+
+    let repo_id = RepoId(1);
+    let prompt = crate::model::BranchExistsPromptState {
+        repo_id,
+        name: "feature".to_string(),
+        target: "origin/feature-one".to_string(),
+        operation: crate::model::BranchExistsPromptOperation::CreateBranch,
+    };
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: prompt.clone(),
+            choice: crate::msg::BranchExistsChoice::Cancel,
+        },
+    );
+    assert!(effects.is_empty());
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: prompt.clone(),
+            choice: crate::msg::BranchExistsChoice::CheckoutExisting,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CheckoutBranch { repo_id: id, name }]
+            if *id == repo_id && name == "feature"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let remote_prompt = crate::model::BranchExistsPromptState {
+        repo_id,
+        name: "feature".to_string(),
+        target: "upstream/feature-two".to_string(),
+        operation: crate::model::BranchExistsPromptOperation::CheckoutRemoteBranch {
+            remote: "upstream".to_string(),
+            branch: "feature-two".to_string(),
+        },
+    };
+    let mut state = seeded_state(repo_id);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ShowBranchExistsPrompt {
+            prompt: remote_prompt.clone(),
+        },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.branch_exists_prompt, Some(remote_prompt.clone()));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: remote_prompt,
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CheckoutRemoteBranch {
+            repo_id: id,
+            remote,
+            branch,
+            local_branch,
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
+        }] if *id == repo_id
+            && remote == "upstream"
+            && branch == "feature-two"
+            && local_branch == "feature"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: prompt.clone(),
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateBranchAndCheckout {
+            repo_id: id,
+            name,
+            target,
+            force: true,
+        }] if *id == repo_id
+            && name == "feature"
+            && target == "origin/feature-one"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let rename_prompt = crate::model::BranchExistsPromptState {
+        repo_id,
+        name: "feature".to_string(),
+        target: "old".to_string(),
+        operation: crate::model::BranchExistsPromptOperation::RenameBranch {
+            old_name: "old".to_string(),
+        },
+    };
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(rename_prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: rename_prompt,
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RenameBranch {
+            repo_id: id,
+            old_name,
+            new_name,
+            force: true,
+        }] if *id == repo_id && old_name == "old" && new_name == "feature"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let stale_prompt = crate::model::BranchExistsPromptState {
+        name: "different".to_string(),
+        ..prompt.clone()
+    };
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: stale_prompt,
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.branch_exists_prompt, Some(prompt));
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
 }
 
 #[test]

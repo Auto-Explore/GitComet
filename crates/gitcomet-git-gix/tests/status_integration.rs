@@ -4,7 +4,7 @@ use gitcomet_core::domain::{
     FileDiffText, FileDiffTextSource, FileStatusKind,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
-use gitcomet_core::services::GitBackend;
+use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::services::{ConflictSide, InteractiveRebaseAction, InteractiveRebaseEntry};
 use gitcomet_git_gix::GixBackend;
 use std::fs;

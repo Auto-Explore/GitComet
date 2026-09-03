@@ -66,6 +66,7 @@ impl GitCometView {
         let prev_had_repos = !self.state.repos.is_empty();
         let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
+        let prev_branch_exists_prompt = self.state.branch_exists_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let prev_submodule_trust_check = self.state.submodule_trust_check_pending;
         let next_banner_error = next.banner_error.clone();
@@ -363,6 +364,9 @@ impl GitCometView {
         if prev_auth_prompt != self.state.auth_prompt {
             self.auth_prompt_key = None;
         }
+        if prev_branch_exists_prompt != self.state.branch_exists_prompt {
+            self.pending_branch_exists_prompt = self.state.branch_exists_prompt.clone();
+        }
         if prev_submodule_trust_prompt != self.state.submodule_trust_prompt {
             self.pending_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         }
@@ -403,6 +407,7 @@ impl GitCometView {
         git_runtime_changed
             || prev_banner_error != next_banner_error
             || prev_auth_prompt != self.state.auth_prompt
+            || prev_branch_exists_prompt != self.state.branch_exists_prompt
     }
 }
 
