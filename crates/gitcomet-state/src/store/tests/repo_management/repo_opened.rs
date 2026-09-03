@@ -1264,7 +1264,7 @@ fn state_with_action_in_flight(repo_id: RepoId, workdir: &str) -> AppState {
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
-            workdir: PathBuf::from(workdir),
+            workdir: super::reducer::normalize_repo_path(PathBuf::from(workdir)),
         },
     ));
     state.active_repo = Some(repo_id);
@@ -1314,7 +1314,7 @@ fn repo_action_finished_in_worktree_opens_new_tab_and_finishes_action() {
     let id_alloc = AtomicU64::new(2);
     let repo_id = RepoId(1);
     let mut state = state_with_action_in_flight(repo_id, "/tmp/repo");
-    let worktree = PathBuf::from("/tmp/repo-feature-worktree");
+    let worktree = super::reducer::normalize_repo_path(PathBuf::from("/tmp/repo-feature-worktree"));
 
     let effects = reduce(
         &mut repos,
@@ -1351,7 +1351,7 @@ fn repo_action_finished_in_worktree_activates_existing_tab() {
     let repo_id = RepoId(1);
     let worktree_repo_id = RepoId(2);
     let mut state = state_with_action_in_flight(repo_id, "/tmp/repo");
-    let worktree = PathBuf::from("/tmp/repo-feature-worktree");
+    let worktree = super::reducer::normalize_repo_path(PathBuf::from("/tmp/repo-feature-worktree"));
     state.repos.push(RepoState::new_opening(
         worktree_repo_id,
         RepoSpec {
