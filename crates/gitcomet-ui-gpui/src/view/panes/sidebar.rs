@@ -253,10 +253,13 @@ pub(in super::super) struct SidebarPaneView {
     /// When the request was made. Bounded so an unresolvable reveal expires
     /// instead of firing at some unrelated later moment.
     pending_file_browser_reveal_at: Option<std::time::Instant>,
+    #[cfg(test)]
+    pub(in crate::view) render_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SidebarNotifyFingerprint {
+    sidebar_mode: SidebarMode,
     active_repo_id: Option<RepoId>,
     repo_fingerprint: Option<BranchSidebarFingerprint>,
     open_repo_workdirs_count: usize,
@@ -289,6 +292,7 @@ impl SidebarNotifyFingerprint {
             .map(|r| r.diff_state.diff_target_rev)
             .unwrap_or(0);
         Self {
+            sidebar_mode: state.sidebar_mode,
             active_repo_id,
             repo_fingerprint,
             open_repo_workdirs_count,
@@ -449,6 +453,8 @@ impl SidebarPaneView {
             collapsed_popover_section: None,
             pending_file_browser_reveal: None,
             pending_file_browser_reveal_at: None,
+            #[cfg(test)]
+            render_count: 0,
         };
         this.dispatch_sidebar_data_request_if_needed(cx);
         // Reflect any already-active repo's stored search query on first mount.
@@ -462,8 +468,9 @@ impl SidebarPaneView {
     }
 
     /// Sync the section this pane should render as collapsed-rail popover content.
-    /// No `cx.notify()`: the root re-renders (and re-embeds this pane) whenever the
-    /// value changes, so an extra notify would only cause a redundant paint.
+    /// Notifies on change: the expanded pane is mounted as a cached view, which
+    /// only re-renders when it is marked dirty, so a silent field change could
+    /// leave a stale frame on screen.
     pub(in super::super) fn set_collapsed_popover_section(
         &mut self,
         section: Option<CollapsedSidebarSection>,
@@ -474,6 +481,7 @@ impl SidebarPaneView {
         }
         self.collapsed_popover_section = section;
         self.reset_collapsed_popover_filter(cx);
+        cx.notify();
     }
 
     fn toggle_file_search_option(
@@ -933,10 +941,13 @@ impl SidebarPaneView {
             SidebarMode::Files => self.render_file_browser_content(theme, cx),
         };
 
+        // `size_full`, not just `h_full`: mounted as a cached view this is laid
+        // out as a root against the pane's bounds, where an auto width would
+        // shrink to the content instead of stretching like a flex child does.
         div()
             .flex()
             .flex_col()
-            .h_full()
+            .size_full()
             .min_h(px(0.0))
             .child(tab_bar)
             .child(content)
@@ -2687,6 +2698,10 @@ impl SidebarPaneView {
 
 impl Render for SidebarPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.render_count += 1;
+        }
         match self.collapsed_popover_section {
             Some(section) => self.render_collapsed_popover(section, window, cx),
             None => self.sidebar(cx).into_any_element(),
@@ -3163,6 +3178,16 @@ mod tests {
         let initial = SidebarNotifyFingerprint::from_state(&state);
 
         state.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
+
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_sidebar_mode() {
+        let mut state = AppState::default();
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.sidebar_mode = SidebarMode::Files;
 
         assert_ne!(SidebarNotifyFingerprint::from_state(&state), initial);
     }

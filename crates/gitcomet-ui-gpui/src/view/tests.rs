@@ -3049,8 +3049,14 @@ fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
     });
 }
 
+/// The full-chrome layout keeps every large pane behind a `stable_cached_*`
+/// boundary so a frame requested by one view (a spinner tick in the title bar,
+/// a store update in the main pane) does not re-render the others. The bottom
+/// status bar and the overlay hosts stay uncached: their paint ranges are
+/// recorded after a focused TextInput registers its platform input handler,
+/// and replaying them during a Wayland text-input redraw has panicked before.
 #[test]
-fn full_chrome_layout_only_caches_always_mounted_subviews() {
+fn full_chrome_layout_caches_the_pane_subviews() {
     let splash_source = include_str!("splash.rs");
     let normalized: String = splash_source
         .chars()
@@ -3087,26 +3093,46 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
         "expected both full-chrome main pane mount sites to stay cached"
     );
     assert!(
-        normalized.contains("d.child(self.sidebar_pane.clone())"),
-        "expected the collapsible sidebar pane to mount directly"
+        normalized.contains("d.child(stable_cached_fill_view(self.sidebar_pane.clone()"),
+        "expected the expanded sidebar pane to mount behind the stable cache boundary"
     );
     assert!(
-        normalized.contains(".child(self.details_pane.clone())"),
-        "expected the collapsible details pane to mount directly"
-    );
-    assert!(
-        !normalized.contains("stable_cached_fill_view(self.sidebar_pane.clone())"),
-        "sidebar pane must stay outside the stable cache boundary"
-    );
-    assert!(
-        !normalized.contains("stable_cached_fill_view(self.details_pane.clone())"),
-        "details pane must stay outside the stable cache boundary"
+        normalized.contains(".child(stable_cached_fill_view(self.details_pane.clone()"),
+        "expected the expanded details pane to mount behind the stable cache boundary"
     );
     assert!(
         !normalized.contains(
             "stable_cached_fixed_height_view(self.bottom_status_bar.clone(),components::Tab::container_height("
         ),
         "bottom status bar must stay outside the stable cache boundary"
+    );
+}
+
+#[gpui::test]
+fn cached_sidebar_rerenders_when_the_mode_changes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let _cache_guard = enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Branches;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    sync_view_snapshot(cx, &view);
+    let renders_before =
+        cx.update(|_window, app| view.read(app).sidebar_pane.read(app).render_count);
+
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    let renders_after =
+        cx.update(|_window, app| view.read(app).sidebar_pane.read(app).render_count);
+
+    assert!(
+        renders_after > renders_before,
+        "the cached sidebar must be dirtied by a Branches/Files mode change"
     );
 }
 

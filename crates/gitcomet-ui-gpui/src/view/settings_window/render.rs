@@ -753,32 +753,42 @@ impl Render for SettingsWindowView {
                         ))
                         .child(external_editor_row);
                     if self.expanded_section == Some(SettingsSection::ExternalCodeEditor) {
-                        let list = uniform_list(
-                            "settings_window_external_code_editor_list",
-                            self.external_editor_options.len(),
-                            cx.processor(Self::render_external_editor_option_rows),
-                        )
-                        .w_full()
-                        .min_w(px(0.0))
-                        .h_full()
-                        .min_h(px(0.0))
-                        .track_scroll(&self.external_editor_scroll)
-                        .on_scroll_wheel({
-                            let scroll = self.external_editor_scroll.clone();
-                            move |event, window, cx| {
-                                if uniform_list_should_stop_scroll_propagation(
-                                    &scroll, event, window,
-                                ) {
-                                    cx.stop_propagation();
-                                }
-                            }
-                        })
-                        .into_any_element();
+                        let (item_count, list) = if self.external_editor_options_loading() {
+                            (
+                                1,
+                                self.empty_dropdown_list("Detecting installed editors…", theme),
+                            )
+                        } else {
+                            (
+                                self.external_editor_options.len(),
+                                uniform_list(
+                                    "settings_window_external_code_editor_list",
+                                    self.external_editor_options.len(),
+                                    cx.processor(Self::render_external_editor_option_rows),
+                                )
+                                .w_full()
+                                .min_w(px(0.0))
+                                .h_full()
+                                .min_h(px(0.0))
+                                .track_scroll(&self.external_editor_scroll)
+                                .on_scroll_wheel({
+                                    let scroll = self.external_editor_scroll.clone();
+                                    move |event, window, cx| {
+                                        if uniform_list_should_stop_scroll_propagation(
+                                            &scroll, event, window,
+                                        ) {
+                                            cx.stop_propagation();
+                                        }
+                                    }
+                                })
+                                .into_any_element(),
+                            )
+                        };
                         general_card = general_card.child(self.dropdown_list_container(
                             "settings_window_external_code_editor_list_container",
                             "settings_window_external_code_editor_scrollbar",
                             self.external_editor_scroll.clone(),
-                            self.external_editor_options.len(),
+                            item_count,
                             SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
                             SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
                             list,
