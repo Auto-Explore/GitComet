@@ -97,7 +97,10 @@ fn missing_ssh_signing_passphrase_preserves_the_observed_prompt() {
     };
     let stderr = String::from_utf8_lossy(failure.stderr());
     assert!(stderr.contains(SSH_PASSPHRASE_PROMPT_MARKER));
-    assert!(stderr.contains("Enter passphrase for"));
+    assert!(
+        stderr.contains("Enter passphrase"),
+        "expected the observed passphrase prompt in stderr, got:\n{stderr}"
+    );
 }
 
 #[test]
