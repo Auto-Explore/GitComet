@@ -1,6 +1,7 @@
 use gitcomet_core::auth::askpass::{
-    GIT_COMMAND_TIMEOUT_ENV, append_host_prompt_to_stderr, configure_git_auth_prompt,
-    create_askpass_script, remember_successful_prompt_auth, take_pending_git_auth,
+    GIT_COMMAND_TIMEOUT_ENV, append_host_prompt_to_stderr, append_passphrase_prompt_to_stderr,
+    configure_git_auth_prompt, create_askpass_script, remember_successful_prompt_auth,
+    take_pending_git_auth,
 };
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -433,7 +434,12 @@ fn command_may_require_auth(cmd: &Command) -> bool {
                 let _ = args.next();
             }
             value if value.starts_with('-') => {}
-            "clone" | "fetch" | "pull" | "push" | "submodule" | "ls-remote" | "commit" => {
+            // Network commands need credentials. The remaining commands can
+            // create signatures and, with `gpg.format = ssh`, invoke
+            // `ssh-keygen -Y sign`, which also obtains its passphrase through
+            // askpass.
+            "clone" | "fetch" | "pull" | "push" | "submodule" | "ls-remote" | "commit"
+            | "commit-tree" | "tag" | "merge" | "rebase" | "cherry-pick" | "revert" | "am" => {
                 return true;
             }
             _ => return false,
@@ -827,6 +833,9 @@ fn run_command_with_timeout(
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
+        if !status.success() {
+            append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
+        }
     }
 
     if cancelled {
@@ -1082,6 +1091,9 @@ where
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
+        if !status.success() {
+            append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
+        }
     }
 
     if cancelled {
@@ -2162,6 +2174,27 @@ mod tests {
         let mut log = Command::new("git");
         log.args(["log", "--oneline", "-n", "1"]);
         assert!(!command_may_require_auth(&log));
+    }
+
+    #[test]
+    fn command_may_require_auth_covers_ssh_signing_commands() {
+        for args in [
+            vec!["commit-tree", "-S", "HEAD^{tree}", "-m", "message"],
+            vec!["tag", "-s", "v1", "HEAD"],
+            vec!["merge", "--no-ff", "topic"],
+            vec!["rebase", "--continue"],
+            vec!["cherry-pick", "abc123"],
+            vec!["revert", "--no-edit", "abc123"],
+            vec!["am", "--3way"],
+        ] {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg("/tmp/repo").args(&args);
+            assert!(
+                command_may_require_auth(&cmd),
+                "expected askpass for `git {}`",
+                args.join(" ")
+            );
+        }
     }
 
     #[test]

@@ -16,6 +16,11 @@ pub const GITCOMET_AUTH_KIND_PASSPHRASE: &str = "passphrase";
 pub const GITCOMET_AUTH_KIND_PASSPHRASE_CACHED: &str = "passphrase_cached";
 pub const GITCOMET_AUTH_KIND_HOST_VERIFICATION: &str = "host_verification";
 
+/// Marker added to a failed Git command when the askpass helper observed an
+/// SSH key passphrase prompt. This lets the state layer classify SSH signing
+/// failures without depending on platform-specific `ssh-keygen` wording.
+pub const SSH_PASSPHRASE_PROMPT_MARKER: &str = "SSH key passphrase prompt:";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitAuthKind {
     UsernamePassword,

@@ -6,7 +6,9 @@ use crate::model::{
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 #[cfg(test)]
 use gitcomet_core::auth::stage_git_auth;
-use gitcomet_core::auth::{GitAuthKind, StagedGitAuth, clear_staged_git_auth};
+use gitcomet_core::auth::{
+    GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, clear_staged_git_auth,
+};
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
@@ -1488,9 +1490,13 @@ pub(super) fn detect_auth_prompt_kind_from_message(message: &str) -> Option<Auth
     }
 
     let passphrase = lower.contains("could not read passphrase")
-        || lower.contains("enter passphrase for key")
+        // OpenSSH uses "for key '<path>'", while ssh-keygen signing uses
+        // "for \"<path>\"".
+        || lower.contains("enter passphrase for")
         || lower.contains("read_passphrase")
         || lower.contains("passphrase for key")
+        || lower.contains("incorrect passphrase supplied to decrypt private key")
+        || lower.contains(&SSH_PASSPHRASE_PROMPT_MARKER.to_ascii_lowercase())
         || (lower.contains("passphrase") && lower.contains("terminal prompts disabled"));
     let ssh_publickey = lower.contains("permission denied (publickey")
         || (lower.contains("could not read from remote repository") && lower.contains("publickey"));
@@ -2702,6 +2708,25 @@ mod tests {
             Some(crate::model::AuthPromptKind::HostVerification)
         );
         assert!(detect_auth_prompt_kind_from_message("git status failed").is_none());
+
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(
+                "git commit failed: error: Load key \"C:\\Users\\dev\\.ssh\\id_ed25519\": incorrect passphrase supplied to decrypt private key\nfatal: failed to write commit object"
+            ),
+            Some(crate::model::AuthPromptKind::Passphrase)
+        );
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(
+                "git tag failed: Enter passphrase for \"/home/dev/.ssh/id_ed25519\":"
+            ),
+            Some(crate::model::AuthPromptKind::Passphrase)
+        );
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(&format!(
+                "git commit failed\n{SSH_PASSPHRASE_PROMPT_MARKER}\nEnter passphrase for key"
+            )),
+            Some(crate::model::AuthPromptKind::Passphrase)
+        );
 
         let structured = Error::new(ErrorKind::Git(GitFailure::new(
             "git fetch origin",
