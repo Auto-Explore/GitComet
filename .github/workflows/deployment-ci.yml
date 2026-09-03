@@ -184,7 +184,7 @@ jobs:
           grep -Fq 'gnome-keyring-daemon --start --components=secrets' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'libsecret-1-0' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'runs-on: ubuntu-24.04' .github/workflows/deploy-microsoft-store.yml
-          grep -Fq 'actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'dotnet-version: "9.0.x"' .github/workflows/deploy-microsoft-store.yml
           grep -Fq "Microsoft.NETCore.App 9" .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4' .github/workflows/deploy-microsoft-store.yml

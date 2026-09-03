@@ -1,4 +1,5 @@
 use super::history_mode::HistoryScopeSetting;
+#[cfg(unix)]
 use super::paths::hex_encode;
 use super::repos::SESSION_REPOS_SNAPSHOT_CACHE;
 use super::survey::SurveyPromptSession;

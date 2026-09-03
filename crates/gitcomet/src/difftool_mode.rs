@@ -615,7 +615,9 @@ fn resolve_labels(config: &DifftoolConfig) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::path::Path;
+    use std::path::PathBuf;
 
     fn write_file(path: &std::path::Path, content: &str) {
         std::fs::write(path, content).expect("write fixture file");
@@ -625,6 +627,7 @@ mod tests {
         std::fs::write(path, content).expect("write fixture bytes");
     }
 
+    #[cfg(unix)]
     fn create_git_root_marker(repo_root: &Path) {
         let git_dir = repo_root.join(".git");
         std::fs::create_dir_all(&git_dir).expect("create git dir marker");

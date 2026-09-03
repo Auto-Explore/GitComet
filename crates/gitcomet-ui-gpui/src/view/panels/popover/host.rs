@@ -1337,11 +1337,38 @@ impl PopoverHost {
         cx.stop_propagation();
     }
 
+    pub(super) fn resolve_open_branch_exists_prompt(&self, choice: BranchExistsChoice) -> bool {
+        let Some(PopoverKind::BranchExistsPrompt {
+            repo_id,
+            name,
+            target,
+            operation,
+        }) = self.popover.as_ref()
+        else {
+            return false;
+        };
+
+        self.store.dispatch(Msg::ResolveBranchExistsPrompt {
+            prompt: BranchExistsPromptState {
+                repo_id: *repo_id,
+                name: name.clone(),
+                target: target.clone(),
+                operation: operation.clone(),
+            },
+            choice,
+        });
+        true
+    }
+
     pub(in crate::view) fn dismiss_prompt_popover(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel) {
+            self.close_popover(cx);
+            return;
+        }
         if self.popover.as_ref().is_some_and(popover_is_confirm_dialog) {
             self.close_popover(cx);
             return;
@@ -1751,6 +1778,7 @@ impl PopoverHost {
                 repo_id,
                 name,
                 target,
+                force: false,
             });
         } else {
             self.store.dispatch(Msg::CreateBranch {
@@ -1768,7 +1796,7 @@ impl PopoverHost {
         };
         self.create_branch_input.read_with(cx, |input, _| {
             let new_name = input.text().trim();
-            !new_name.is_empty() && new_name != name
+            is_submittable_branch_name(new_name) && new_name != name
         })
     }
 
@@ -1784,13 +1812,14 @@ impl PopoverHost {
         let new_name = self
             .create_branch_input
             .read_with(cx, |input, _| input.text().trim().to_string());
-        if new_name.is_empty() || new_name == name {
+        if !is_submittable_branch_name(&new_name) || new_name == name {
             return;
         }
         self.store.dispatch(Msg::RenameBranch {
             repo_id,
             old_name: name,
             new_name,
+            force: false,
         });
         self.dismiss_inline_popover(window, cx);
     }
@@ -1993,19 +2022,42 @@ impl PopoverHost {
             })
             .unwrap_or(false);
         if local_branch_exists {
-            self.push_toast(
-                components::ToastKind::Error,
-                format!("Branch already exists: {local_branch}"),
-                cx,
-            );
+            self.store.dispatch(Msg::ShowBranchExistsPrompt {
+                prompt: BranchExistsPromptState {
+                    repo_id,
+                    name: local_branch,
+                    target: format!("{remote}/{branch}"),
+                    operation: BranchExistsPromptOperation::CheckoutRemoteBranch { remote, branch },
+                },
+            });
             return;
         }
 
+        self.dispatch_checkout_remote_branch(
+            repo_id,
+            remote,
+            branch,
+            local_branch,
+            CheckoutRemoteBranchMode::Create,
+            cx,
+        );
+    }
+
+    pub(super) fn dispatch_checkout_remote_branch(
+        &mut self,
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+        local_branch: String,
+        mode: CheckoutRemoteBranchMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
         self.store.dispatch(Msg::CheckoutRemoteBranch {
             repo_id,
             remote,
             branch,
             local_branch,
+            mode,
         });
         self.main_pane.update(cx, |pane, cx| {
             pane.rebuild_diff_cache(cx);
@@ -2176,6 +2228,12 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Branch-collision prompts are also held in shared state. Replacing one
+        // without resolving it leaves that state occupied, so the same
+        // collision cannot emit a fresh prompt later.
+        if self.popover.as_ref() != Some(&kind) {
+            self.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
+        }
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         // The anchor stays hovered behind the opened surface; keep its

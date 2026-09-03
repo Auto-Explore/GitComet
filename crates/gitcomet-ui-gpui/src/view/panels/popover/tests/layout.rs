@@ -46,6 +46,21 @@ fn application_menu_is_wide_enough_for_editor_action_and_shortcut() {
 }
 
 #[test]
+fn branch_exists_prompt_uses_the_wide_dialog_layout() {
+    let scale = ui_scale::UiScale::from_percent(100);
+    let dialog = popover_width_spec(&PopoverKind::BranchExistsPrompt {
+        repo_id: RepoId(1),
+        name: "feature".to_string(),
+        target: "origin/a-long-feature-branch".to_string(),
+        operation: BranchExistsPromptOperation::CreateBranch,
+    })
+    .expect("branch-exists dialog width");
+
+    assert_eq!(dialog.preferred_px(scale), px(540.0));
+    assert_eq!(dialog.min_px(scale), px(540.0));
+}
+
+#[test]
 fn choose_popover_anchor_corner_prefers_side_with_more_space() {
     assert_eq!(
         choose_popover_anchor_corner(Anchor::TopRight, px(260.0), px(640.0), px(420.0),),

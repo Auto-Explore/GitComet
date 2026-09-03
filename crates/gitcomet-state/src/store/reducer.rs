@@ -8,14 +8,18 @@ mod repo_management;
 mod util;
 
 use crate::model::{
-    AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, PendingCommitRetry, RepoId,
-    SubmoduleAddProgressState, SubmoduleTrustCheckOperation, SubmoduleTrustCheckState,
-    SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
+    AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, BranchExistsPromptOperation,
+    PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
+    SubmoduleTrustCheckState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
-use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList};
+use crate::msg::{
+    BranchExistsChoice, ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList,
+};
 use crate::store::repo_load_trace;
 use gitcomet_core::auth::StagedGitAuth;
-use gitcomet_core::services::{GitRepository, SafePushAfterCommitContext};
+use gitcomet_core::services::{
+    CheckoutRemoteBranchMode, GitRepository, SafePushAfterCommitContext,
+};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -1057,6 +1061,7 @@ fn reduce_inner(
                 && matches!(
                     message.as_ref(),
                     crate::msg::InternalMsg::RepoActionFinished { .. }
+                        | crate::msg::InternalMsg::RepoActionFinishedInWorktree { .. }
                 );
             let previous_diagnostic_len = suppress_nested_diagnostics
                 .then(|| {
@@ -1352,12 +1357,19 @@ fn reduce_inner(
             remote,
             branch,
             local_branch,
+            mode,
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::checkout_remote_branch(repo_id, remote, branch, local_branch)
+            actions_emit_effects::checkout_remote_branch(
+                repo_id,
+                remote,
+                branch,
+                local_branch,
+                mode,
+            )
         }
         Msg::CheckoutCommit { repo_id, commit_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -1392,20 +1404,94 @@ fn reduce_inner(
             repo_id,
             name,
             target,
+            force,
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::create_branch_and_checkout(repo_id, name, target)
+            actions_emit_effects::create_branch_and_checkout(repo_id, name, target, force)
+        }
+        Msg::ResolveBranchExistsPrompt { prompt, choice } => {
+            if state.branch_exists_prompt.as_ref() != Some(&prompt) {
+                return Vec::new();
+            }
+            state.branch_exists_prompt = None;
+
+            match choice {
+                BranchExistsChoice::Cancel => Vec::new(),
+                BranchExistsChoice::CheckoutExisting => {
+                    if let Some(repo_state) = state
+                        .repos
+                        .iter_mut()
+                        .find(|repo| repo.id == prompt.repo_id)
+                    {
+                        repo_state.set_detached_head_commit(None);
+                    }
+                    begin_head_changing_local_action(state, prompt.repo_id);
+                    actions_emit_effects::checkout_branch(prompt.repo_id, prompt.name)
+                }
+                BranchExistsChoice::OverwriteAndCheckout => {
+                    if let Some(repo_state) = state
+                        .repos
+                        .iter_mut()
+                        .find(|repo| repo.id == prompt.repo_id)
+                    {
+                        repo_state.set_detached_head_commit(None);
+                    }
+                    begin_head_changing_local_action(state, prompt.repo_id);
+                    match prompt.operation {
+                        BranchExistsPromptOperation::CreateBranch => {
+                            actions_emit_effects::create_branch_and_checkout(
+                                prompt.repo_id,
+                                prompt.name,
+                                prompt.target,
+                                true,
+                            )
+                        }
+                        BranchExistsPromptOperation::CheckoutRemoteBranch { remote, branch } => {
+                            actions_emit_effects::checkout_remote_branch(
+                                prompt.repo_id,
+                                remote,
+                                branch,
+                                prompt.name,
+                                CheckoutRemoteBranchMode::Overwrite,
+                            )
+                        }
+                        BranchExistsPromptOperation::RenameBranch { old_name } => {
+                            actions_emit_effects::rename_branch(
+                                prompt.repo_id,
+                                old_name,
+                                prompt.name,
+                                true,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Msg::ShowBranchExistsPrompt { prompt } => {
+            if state.repos.iter().any(|repo| repo.id == prompt.repo_id) {
+                state.branch_exists_prompt = Some(prompt);
+            }
+            Vec::new()
         }
         Msg::RenameBranch {
             repo_id,
             old_name,
             new_name,
+            force,
         } => {
-            begin_local_action(state, repo_id);
-            actions_emit_effects::rename_branch(repo_id, old_name, new_name)
+            if force {
+                // Replacing the checked-out branch moves HEAD's commit.
+                if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                    repo_state.set_detached_head_commit(None);
+                }
+                begin_head_changing_local_action(state, repo_id);
+            } else {
+                begin_local_action(state, repo_id);
+            }
+            actions_emit_effects::rename_branch(repo_id, old_name, new_name, force)
         }
         Msg::DeleteBranch { repo_id, name } => {
             begin_local_action(state, repo_id);
@@ -2407,6 +2493,27 @@ fn reduce_inner(
             action,
             result,
         }) => external_and_history::repo_action_finished(repos, state, repo_id, action, result),
+        Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists { action, prompt }) => {
+            external_and_history::branch_already_exists(repos, state, action, prompt)
+        }
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id,
+            action,
+            worktree_path,
+            result,
+        }) => {
+            // Open first so the origin tab is inactive when its action finishes and
+            // only refreshes its primary state instead of reloading everything.
+            let mut effects = if result.is_ok() {
+                repo_management::open_repo(repos, id_alloc, state, worktree_path)
+            } else {
+                Vec::new()
+            };
+            effects.extend(external_and_history::repo_action_finished(
+                repos, state, repo_id, action, result,
+            ));
+            effects
+        }
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
             let pending_commit = state
                 .repos

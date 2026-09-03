@@ -31,6 +31,27 @@ impl Render for GitCometView {
             self.schedule_ui_settings_persist(cx);
         }
 
+        if self
+            .pending_branch_exists_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+        {
+            let prompt = self
+                .pending_branch_exists_prompt
+                .take()
+                .expect("branch-exists prompt checked above");
+            self.open_popover_centered(
+                PopoverKind::BranchExistsPrompt {
+                    repo_id: prompt.repo_id,
+                    name: prompt.name,
+                    target: prompt.target,
+                    operation: prompt.operation,
+                },
+                window,
+                cx,
+            );
+        }
+
         if let Some(repo_id) = self.pending_pull_reconcile_prompt.take()
             && self.active_repo_id() == Some(repo_id)
         {
