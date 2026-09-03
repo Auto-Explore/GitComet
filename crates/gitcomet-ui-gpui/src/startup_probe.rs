@@ -100,7 +100,7 @@ fn config() -> &'static StartupProbeConfig {
     })
 }
 
-fn env_flag(key: &str) -> bool {
+pub(crate) fn env_flag(key: &str) -> bool {
     env::var(key)
         .ok()
         .as_deref()
@@ -114,7 +114,7 @@ fn env_usize(key: &str) -> Option<usize> {
         .and_then(|value| value.trim().parse::<usize>().ok())
 }
 
-fn parse_bool_flag(value: &str) -> bool {
+pub(crate) fn parse_bool_flag(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn parse_bool_flag_rejects_other_values() {
-        for value in ["0", "false", "no", "", "maybe"] {
+        for value in ["0", "false", "no", "off", "", "maybe"] {
             assert!(!parse_bool_flag(value), "expected {value:?} to be falsy");
         }
     }

@@ -237,6 +237,7 @@ impl DetailsPaneView {
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
             repo.history_state.worktree_selection_rev.hash(&mut hasher);
+            repo.history_state.range_files_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.recent_commit_messages_rev.hash(&mut hasher);
@@ -1779,8 +1780,15 @@ mod tests {
         let after_details = DetailsPaneView::notify_fingerprint(&state);
         assert_ne!(after_details, after_selected);
 
+        state.repos[0].history_state.range_files_rev = 1;
+        let after_range_files = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_range_files, after_details);
+
         state.repos[0].merge_message_rev = 1;
-        assert_ne!(DetailsPaneView::notify_fingerprint(&state), after_details);
+        assert_ne!(
+            DetailsPaneView::notify_fingerprint(&state),
+            after_range_files
+        );
     }
 
     #[test]

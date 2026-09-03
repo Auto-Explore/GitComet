@@ -1148,7 +1148,12 @@ impl GitCometView {
                                 .min_h(px(0.0))
                                 .bg(theme.colors.surface.chrome)
                                 .when(!self.sidebar_collapsed, |d| {
-                                    d.child(self.sidebar_pane.clone())
+                                    // Cached so frames driven by another view's
+                                    // `notify` (a spinner tick in the title bar,
+                                    // a diff update) reuse the sidebar's layout
+                                    // and paint. The wrapper fills this div, so
+                                    // the width animation still re-lays it out.
+                                    d.child(stable_cached_fill_view(self.sidebar_pane.clone()))
                                 })
                                 .when(self.sidebar_collapsed, |d| {
                                     d.child(self.collapsed_sidebar_rail(theme, cx))
@@ -1210,12 +1215,9 @@ impl GitCometView {
                                             d.border_l_1().border_color(theme.colors.stroke.subtle)
                                         })
                                         .when(!self.details_collapsed, |d| {
-                                            d.child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_h(px(0.0))
-                                                    .child(self.details_pane.clone()),
-                                            )
+                                            d.child(div().flex_1().min_h(px(0.0)).child(
+                                                stable_cached_fill_view(self.details_pane.clone()),
+                                            ))
                                         }),
                                 )
                                 .child(

@@ -6,10 +6,7 @@ use gitcomet_core::process::{
 };
 use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
 use gitcomet_state::session::ExternalCodeEditorSetting;
-use gpui::{
-    Stateful, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
-    WindowOptions,
-};
+use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -347,6 +344,24 @@ impl GitExecutableMode {
     }
 }
 
+/// Where the External code editor dropdown's option list stands.
+///
+/// Detecting installed editors probes every PATH directory and walks IDE
+/// install roots (on Windows `Program Files\JetBrains`), which measured 2.6 s
+/// on the main thread when it ran in the constructor. The summary row only
+/// needs the saved setting, so the scan is deferred until the row is expanded
+/// and runs on a background thread; the dropdown shows a spinner until then.
+enum ExternalEditorOptionsState {
+    NotLoaded,
+    /// Keeps the result-delivery future alive while this view exists. The
+    /// blocking detector itself may finish after the view is dropped because
+    /// `smol::unblock` jobs are not cancellable once running.
+    Loading {
+        _task: gpui::Task<()>,
+    },
+    Loaded,
+}
+
 pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
@@ -357,6 +372,7 @@ pub(crate) struct SettingsWindowView {
     ui_font_options: Arc<[String]>,
     editor_font_options: Arc<[String]>,
     external_editor_options: Arc<[crate::external_editor::ExternalEditorOption]>,
+    external_editor_options_state: ExternalEditorOptionsState,
     settings_window_scroll: ScrollHandle,
     theme_scroll: UniformListScrollHandle,
     ui_font_scroll: UniformListScrollHandle,
@@ -500,13 +516,7 @@ fn settings_window_options_for_scale(
         titlebar: Some(settings_window_titlebar_options_for_scale(ui_scale_percent)),
         app_id: Some("gitcomet-settings".into()),
         window_decorations: Some(WindowDecorations::Client),
-        // Match the main window: the area outside the rounded client frame
-        // must be see-through.
-        window_background: if cfg!(target_os = "macos") {
-            WindowBackgroundAppearance::Opaque
-        } else {
-            WindowBackgroundAppearance::Transparent
-        },
+        window_background: crate::app::main_window_background_appearance(),
         is_movable: true,
         is_resizable: true,
         ..Default::default()
@@ -782,9 +792,15 @@ impl SettingsWindowView {
         let default_history_mode = ui_preferences.history.default_mode;
         let default_tag_type = ui_preferences.repository.default_tag_type;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
+        // Only the saved editor's entry is needed to render the summary row;
+        // installed editors are detected once the row is expanded, see
+        // `ensure_external_editor_options_loaded`.
         let external_editor_options: Arc<[crate::external_editor::ExternalEditorOption]> =
-            crate::external_editor::external_editor_options(external_editor_setting.as_ref())
-                .into();
+            crate::external_editor::external_editor_options_from_detected(
+                external_editor_setting.as_ref(),
+                Vec::new(),
+            )
+            .into();
         let (external_editor_custom_path_draft, external_editor_custom_arguments_draft) =
             match &external_editor_setting {
                 Some(ExternalCodeEditorSetting::Custom {
@@ -978,6 +994,7 @@ impl SettingsWindowView {
             ui_font_options: crate::font_preferences::ui_font_options(window),
             editor_font_options: crate::font_preferences::editor_font_options(window),
             external_editor_options,
+            external_editor_options_state: ExternalEditorOptionsState::NotLoaded,
             settings_window_scroll: ScrollHandle::default(),
             theme_scroll: UniformListScrollHandle::default(),
             ui_font_scroll: UniformListScrollHandle::default(),
@@ -1054,18 +1071,83 @@ impl SettingsWindowView {
         self.selected_category = category;
         // Collapse any expanded row so the new page starts clean, and scroll
         // the content pane back to the top.
-        self.expanded_section = None;
+        self.set_expanded_section(None, cx);
         self.settings_window_scroll
             .set_offset(gpui::point(px(0.0), px(0.0)));
         cx.notify();
     }
 
     fn toggle_section(&mut self, section: SettingsSection, cx: &mut gpui::Context<Self>) {
-        self.expanded_section = if self.expanded_section == Some(section) {
+        let next = if self.expanded_section == Some(section) {
             None
         } else {
             Some(section)
         };
+        self.set_expanded_section(next, cx);
+    }
+
+    fn set_expanded_section(
+        &mut self,
+        section: Option<SettingsSection>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.expanded_section == section {
+            return;
+        }
+        self.expanded_section = section;
+        if section == Some(SettingsSection::ExternalCodeEditor) {
+            self.ensure_external_editor_options_loaded(cx);
+        }
+        cx.notify();
+    }
+
+    /// Whether the External code editor dropdown is still waiting for the
+    /// installed-editor scan; it shows a static placeholder meanwhile.
+    pub(super) fn external_editor_options_loading(&self) -> bool {
+        !matches!(
+            self.external_editor_options_state,
+            ExternalEditorOptionsState::Loaded
+        )
+    }
+
+    /// Start the installed-editor scan the first time the dropdown needs it.
+    /// The scan runs on a background thread, and the option list is rebuilt
+    /// against the setting current at completion, so a change made in the
+    /// meantime is not clobbered.
+    fn ensure_external_editor_options_loaded(&mut self, cx: &mut gpui::Context<Self>) {
+        if !matches!(
+            self.external_editor_options_state,
+            ExternalEditorOptionsState::NotLoaded
+        ) {
+            return;
+        }
+        // The deterministic runtime (tests) has no background thread to wait
+        // for, so the list is complete by the time the expanded row draws.
+        if !crate::ui_runtime::current().uses_background_compute() {
+            let detected = crate::external_editor::detect_external_editors();
+            self.apply_detected_external_editors(detected, cx);
+            return;
+        }
+        let task = crate::ui_runtime::run_background_compute(
+            cx,
+            crate::external_editor::detect_external_editors,
+            |this, cx, detected| this.apply_detected_external_editors(detected, cx),
+        );
+        self.external_editor_options_state = ExternalEditorOptionsState::Loading { _task: task };
+    }
+
+    fn apply_detected_external_editors(
+        &mut self,
+        detected: Vec<crate::external_editor::DetectedExternalEditor>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.external_editor_options =
+            crate::external_editor::external_editor_options_from_detected(
+                self.external_editor_setting.as_ref(),
+                detected,
+            )
+            .into();
+        self.external_editor_options_state = ExternalEditorOptionsState::Loaded;
         cx.notify();
     }
 }
