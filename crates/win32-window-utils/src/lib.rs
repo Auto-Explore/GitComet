@@ -1,18 +1,22 @@
 use std::ptr::null;
 use std::sync::OnceLock;
+use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{FALSE, HWND, LPARAM, POINT, TRUE, WPARAM};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, FALSE, FILETIME, HANDLE, HWND, LPARAM, POINT, TRUE, WPARAM,
+};
 use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
 use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, SetConsoleCtrlHandler};
-use windows_sys::Win32::System::Threading::{ExitProcess, GetCurrentProcess, TerminateProcess};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+use windows_sys::Win32::System::Threading::{
+    ExitProcess, GetCurrentProcess, GetCurrentThreadId, GetThreadTimes, OpenThread,
+    THREAD_QUERY_LIMITED_INFORMATION, TerminateProcess,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnableMenuItem, GWL_STYLE, GetSystemMenu, GetWindowLongPtrW, HMENU, HTCAPTION, IsIconic,
-    IsZoomed, MENU_ITEM_FLAGS, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, PostMessageW, SC_CLOSE,
-    SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SW_RESTORE, SetForegroundWindow,
-    ShowWindowAsync, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenuEx,
-    WINDOW_STYLE, WM_NULL, WM_SYSCOMMAND, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
-    WS_THICKFRAME,
+    EnableMenuItem, GWL_STYLE, GetSystemMenu, GetWindowLongPtrW, HMENU, IsIconic, IsZoomed,
+    MENU_ITEM_FLAGS, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, PostMessageW, SC_CLOSE, SC_MAXIMIZE,
+    SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SW_RESTORE, SetForegroundWindow, ShowWindowAsync,
+    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenuEx, WINDOW_STYLE,
+    WM_NULL, WM_SYSCOMMAND, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows_sys::core::BOOL;
 
@@ -81,21 +85,69 @@ pub fn terminate_current_process(exit_code: u32) -> ! {
     }
 }
 
+/// A handle to a thread whose accumulated CPU time can be read from any other
+/// thread. Used by the UI responsiveness probe to report how busy the main
+/// thread is, independent of what the process as a whole is doing.
+pub struct ThreadCpuClock(HANDLE);
+
+// SAFETY: the wrapped value is a kernel handle opened with query-only access;
+// `GetThreadTimes` and `CloseHandle` are documented as safe to call on it from
+// any thread.
+unsafe impl Send for ThreadCpuClock {}
+unsafe impl Sync for ThreadCpuClock {}
+
+impl ThreadCpuClock {
+    /// Open the calling thread so its CPU time can be sampled later, from any
+    /// thread. Returns `None` if the handle cannot be opened.
+    pub fn for_current_thread() -> Option<Self> {
+        let handle = unsafe {
+            OpenThread(
+                THREAD_QUERY_LIMITED_INFORMATION,
+                FALSE,
+                GetCurrentThreadId(),
+            )
+        };
+        if handle.is_null() {
+            None
+        } else {
+            Some(Self(handle))
+        }
+    }
+
+    /// Kernel plus user CPU time the thread has consumed so far.
+    pub fn cpu_time(&self) -> Option<Duration> {
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut creation, mut exit, mut kernel, mut user) = (zero, zero, zero, zero);
+        let ok =
+            unsafe { GetThreadTimes(self.0, &mut creation, &mut exit, &mut kernel, &mut user) };
+        if ok == 0 {
+            return None;
+        }
+        Some(filetime_duration(kernel) + filetime_duration(user))
+    }
+}
+
+impl Drop for ThreadCpuClock {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+/// `FILETIME` counts 100-nanosecond ticks.
+fn filetime_duration(time: FILETIME) -> Duration {
+    let ticks = (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+    Duration::from_nanos(ticks.saturating_mul(100))
+}
+
 /// Restore a Win32 window from the maximized state.
 pub fn restore_window(hwnd: isize) -> bool {
     let hwnd = hwnd as HWND;
     unsafe { ShowWindowAsync(hwnd, SW_RESTORE) != 0 }
-}
-
-/// Begin a native Win32 window move for a client-side titlebar drag.
-pub fn begin_window_move(hwnd: isize) -> bool {
-    let hwnd = hwnd as HWND;
-    let command: WPARAM = (SC_MOVE as usize) + (HTCAPTION as usize);
-
-    unsafe {
-        let _ = ReleaseCapture();
-        PostMessageW(hwnd, WM_SYSCOMMAND, command, LPARAM::default()) != 0
-    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
