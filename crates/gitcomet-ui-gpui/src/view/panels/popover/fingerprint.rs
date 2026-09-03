@@ -173,6 +173,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
         | PopoverKind::MergeCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
+        | PopoverKind::BranchExistsPrompt { repo_id, .. }
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
@@ -251,6 +252,12 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         } => {
             repo.remotes_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
+        }
+
+        // Its worktree note reads the worktree list and HEAD.
+        PopoverKind::BranchExistsPrompt { .. } => {
+            repo.worktrees_rev.hash(hasher);
+            repo.head_branch_rev.hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -572,6 +579,18 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             83u8.hash(hasher);
             repo_id.hash(hasher);
             commit_id.hash(hasher);
+        }
+        PopoverKind::BranchExistsPrompt {
+            repo_id,
+            name,
+            target,
+            operation,
+        } => {
+            84u8.hash(hasher);
+            repo_id.hash(hasher);
+            name.hash(hasher);
+            target.hash(hasher);
+            operation.hash(hasher);
         }
         PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
             32u8.hash(hasher);

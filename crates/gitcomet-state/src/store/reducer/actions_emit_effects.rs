@@ -15,8 +15,8 @@ use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolver
 use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
-    CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitTarget,
+    CheckoutRemoteBranchMode, CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode,
+    RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
 };
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
@@ -31,12 +31,14 @@ pub(super) fn checkout_remote_branch(
     remote: String,
     branch: String,
     local_branch: String,
+    mode: CheckoutRemoteBranchMode,
 ) -> Vec<Effect> {
     vec![Effect::CheckoutRemoteBranch {
         repo_id,
         remote,
         branch,
         local_branch,
+        mode,
     }]
 }
 
@@ -82,19 +84,27 @@ pub(super) fn create_branch_and_checkout(
     repo_id: RepoId,
     name: String,
     target: String,
+    force: bool,
 ) -> Vec<Effect> {
     vec![Effect::CreateBranchAndCheckout {
         repo_id,
         name,
         target,
+        force,
     }]
 }
 
-pub(super) fn rename_branch(repo_id: RepoId, old_name: String, new_name: String) -> Vec<Effect> {
+pub(super) fn rename_branch(
+    repo_id: RepoId,
+    old_name: String,
+    new_name: String,
+    force: bool,
+) -> Vec<Effect> {
     vec![Effect::RenameBranch {
         repo_id,
         old_name,
         new_name,
+        force,
     }]
 }
 

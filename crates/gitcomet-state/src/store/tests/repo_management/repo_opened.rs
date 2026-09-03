@@ -399,6 +399,56 @@ fn repo_action_finished_err_records_diagnostic() {
 }
 
 #[test]
+fn create_branch_collision_opens_prompt_without_recording_a_repo_error() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].local_actions_in_flight = 1;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists {
+            action: crate::msg::RepoActionKind::CreateBranchAndCheckout,
+            prompt: crate::model::BranchExistsPromptState {
+                repo_id,
+                name: "feature".to_string(),
+                target: "origin/feature-one".to_string(),
+                operation: crate::model::BranchExistsPromptOperation::CreateBranch,
+            },
+        }),
+    );
+
+    assert_eq!(
+        state.branch_exists_prompt,
+        Some(crate::model::BranchExistsPromptState {
+            repo_id,
+            name: "feature".to_string(),
+            target: "origin/feature-one".to_string(),
+            operation: crate::model::BranchExistsPromptOperation::CreateBranch,
+        })
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(state.repos[0].feedback.last_error.is_none());
+    assert!(state.repos[0].feedback.diagnostics.is_empty());
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id: id } if *id == repo_id)),
+        "expected collision handling to refresh the potentially stale branch snapshot"
+    );
+}
+
+#[test]
 fn hook_activity_owns_wrapped_repo_action_failure_diagnostic() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -1206,5 +1256,172 @@ fn repo_opened_ok_loads_file_browser_for_active_repo_in_files_mode() {
             Effect::LoadFileBrowser { repo_id, .. } if *repo_id == repo1
         )),
         "expected RepoOpenedOk to load the file browser, got {effects:?}"
+    );
+}
+
+fn state_with_action_in_flight(repo_id: RepoId, workdir: &str) -> AppState {
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: super::reducer::normalize_repo_path(PathBuf::from(workdir)),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].local_actions_in_flight = 1;
+    state
+}
+
+#[test]
+fn rename_branch_collision_opens_prompt_without_recording_a_repo_error() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let repo_id = RepoId(1);
+    let mut state = state_with_action_in_flight(repo_id, "/tmp/repo");
+    let prompt = crate::model::BranchExistsPromptState {
+        repo_id,
+        name: "feature".to_string(),
+        target: "old".to_string(),
+        operation: crate::model::BranchExistsPromptOperation::RenameBranch {
+            old_name: "old".to_string(),
+        },
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::BranchAlreadyExists {
+            action: crate::msg::RepoActionKind::RenameBranch,
+            prompt: prompt.clone(),
+        }),
+    );
+
+    assert_eq!(state.branch_exists_prompt, Some(prompt));
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(state.repos[0].feedback.last_error.is_none());
+    assert!(state.repos[0].feedback.diagnostics.is_empty());
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id: id } if *id == repo_id))
+    );
+}
+
+#[test]
+fn repo_action_finished_in_worktree_opens_new_tab_and_finishes_action() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let repo_id = RepoId(1);
+    let mut state = state_with_action_in_flight(repo_id, "/tmp/repo");
+    let worktree = super::reducer::normalize_repo_path(PathBuf::from("/tmp/repo-feature-worktree"));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id,
+            action: crate::msg::RepoActionKind::CheckoutBranch,
+            worktree_path: worktree.clone(),
+            result: Ok(()),
+        }),
+    );
+
+    assert_eq!(state.repos.len(), 2);
+    let opened = state
+        .repos
+        .iter()
+        .find(|repo| repo.spec.workdir == worktree)
+        .expect("the worktree is opened as a tab");
+    assert_eq!(state.active_repo, Some(opened.id));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenRepo { repo_id: id, path } if *id == opened.id && *path == worktree
+    )));
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(state.repos[0].feedback.last_error.is_none());
+    assert!(state.repos[0].feedback.diagnostics.is_empty());
+}
+
+#[test]
+fn repo_action_finished_in_worktree_activates_existing_tab() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(3);
+    let repo_id = RepoId(1);
+    let worktree_repo_id = RepoId(2);
+    let mut state = state_with_action_in_flight(repo_id, "/tmp/repo");
+    let worktree = super::reducer::normalize_repo_path(PathBuf::from("/tmp/repo-feature-worktree"));
+    state.repos.push(RepoState::new_opening(
+        worktree_repo_id,
+        RepoSpec {
+            workdir: worktree.clone(),
+        },
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id,
+            action: crate::msg::RepoActionKind::CreateBranchAndCheckout,
+            worktree_path: worktree,
+            result: Ok(()),
+        }),
+    );
+
+    assert_eq!(
+        state.repos.len(),
+        2,
+        "no duplicate tab for an open worktree"
+    );
+    assert_eq!(state.active_repo, Some(worktree_repo_id));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { .. }))
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+}
+
+#[test]
+fn repo_action_finished_in_worktree_keeps_error_and_does_not_open_on_failure() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let repo_id = RepoId(1);
+    let mut state = state_with_action_in_flight(repo_id, "/tmp/repo");
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinishedInWorktree {
+            repo_id,
+            action: crate::msg::RepoActionKind::RenameBranch,
+            worktree_path: PathBuf::from("/tmp/repo-feature-worktree"),
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend(
+                    "local changes would be overwritten".into(),
+                ),
+            )),
+        }),
+    );
+
+    assert_eq!(state.repos.len(), 1, "a failed action opens nothing");
+    assert_eq!(state.active_repo, Some(repo_id));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::OpenRepo { .. }))
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(state.repos[0].feedback.last_error.is_some());
+    assert!(
+        state.repos[0]
+            .feedback
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == crate::model::DiagnosticKind::Error)
     );
 }

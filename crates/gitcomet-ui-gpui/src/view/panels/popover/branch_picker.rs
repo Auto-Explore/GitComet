@@ -475,6 +475,7 @@ pub(super) fn activate(
                 repo_id,
                 name,
                 target,
+                force: false,
             });
             this.close_popover(cx);
         }

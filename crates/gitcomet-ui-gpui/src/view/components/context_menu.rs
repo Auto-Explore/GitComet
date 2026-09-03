@@ -434,10 +434,12 @@ fn context_menu_icon_color(
     }
 
     // Semantic-ish mapping for common actions.
-    if matches!(
-        icon_path,
-        Some("icons/trash.svg") | Some("icons/repo_tab_close.svg")
-    ) || label.contains("Delete")
+    if label.starts_with("Force push")
+        || matches!(
+            icon_path,
+            Some("icons/trash.svg") | Some("icons/repo_tab_close.svg")
+        )
+        || label.contains("Delete")
         || label.contains("Drop")
         || label.contains("Remove")
     {
@@ -758,7 +760,16 @@ mod tests {
             theme.colors.accent.foreground
         );
         assert_eq!(
-            context_menu_icon_color(theme, false, "Force push", Some("icons/warning.svg")),
+            context_menu_icon_color(
+                theme,
+                false,
+                "Force push (with lease)…",
+                Some("icons/warning.svg")
+            ),
+            theme.colors.status.danger.foreground
+        );
+        assert_eq!(
+            context_menu_icon_color(theme, false, "Discard changes", Some("icons/warning.svg")),
             theme.colors.status.warning.foreground
         );
     }

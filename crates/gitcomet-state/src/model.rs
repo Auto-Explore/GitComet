@@ -601,6 +601,7 @@ pub struct AppState {
     pub notifications: Vec<AppNotification>,
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
+    pub branch_exists_prompt: Option<BranchExistsPromptState>,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
     /// A submodule trust check is running in the background. Set the moment the
     /// add/update/load is triggered and cleared when the check resolves, so the
@@ -611,6 +612,21 @@ pub struct AppState {
     pub git_log_settings: GitLogSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum BranchExistsPromptOperation {
+    CreateBranch,
+    CheckoutRemoteBranch { remote: String, branch: String },
+    RenameBranch { old_name: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchExistsPromptState {
+    pub repo_id: RepoId,
+    pub name: String,
+    pub target: String,
+    pub operation: BranchExistsPromptOperation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
