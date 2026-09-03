@@ -13,9 +13,9 @@ use super::{
     GITCOMET_AUTH_CACHE_SECRET_ENV_PREFIX, GITCOMET_AUTH_CACHE_SIZE_ENV, GITCOMET_AUTH_KIND_ENV,
     GITCOMET_AUTH_KIND_HOST_VERIFICATION, GITCOMET_AUTH_KIND_PASSPHRASE,
     GITCOMET_AUTH_KIND_PASSPHRASE_CACHED, GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
-    GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind, StagedGitAuth,
-    load_session_passphrases, remember_passphrase_prompt_from_staged_git_auth,
-    take_staged_git_auth,
+    GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind,
+    SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, load_session_passphrases,
+    remember_passphrase_prompt_from_staged_git_auth, take_staged_git_auth,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -192,11 +192,15 @@ setlocal EnableDelayedExpansion
 rem A .cmd launched by Command is invoked as: cmd.exe /c ""script" "prompt""
 rem Reading the first argument directly would substitute the untrusted prompt
 rem back into batch syntax.
-rem Instead, take it from cmd's original command line via delayed expansion,
-rem remove everything through the script/prompt boundary, then trim the final "".
+rem Instead, take it from cmd's original command line via delayed expansion.
+rem Git for Windows may invoke a no-space helper path without quotes, while
+rem Command quotes it when a parent directory contains spaces. Strip either
+rem form using only constant delimiters, then canonicalize quotes so the same
+rem key prompt has a stable session-cache key on every invocation.
 set "cmdcmdline="
-set "prompt=!cmdcmdline:*" "=!"
-set "prompt=!prompt:~0,-2!"
+set "prompt=!cmdcmdline:*gitcomet-askpass.cmd =!"
+set "prompt=!prompt:*" "=!"
+set "prompt=!prompt:"=!"
 set "findstr=!SystemRoot!\System32\findstr.exe"
 > "!GITCOMET_ASKPASS_PROMPT_INPUT!" echo(!prompt!
 if not "!GITCOMET_ASKPASS_PROMPT_LOG!"=="" (
@@ -364,6 +368,32 @@ pub fn remember_successful_prompt_auth(auth: Option<&PromptAuth>, askpass: &AskP
     }
 }
 
+/// Appends a passphrase prompt observed by askpass to a failed command's
+/// stderr. SSH signing otherwise reports only an "incorrect passphrase"
+/// error, which is not enough to know that Git attempted an interactive
+/// prompt.
+pub fn append_passphrase_prompt_to_stderr(stderr: &mut Vec<u8>, askpass: &AskPassScript) {
+    let Some(prompt) = last_logged_passphrase_prompt(askpass) else {
+        return;
+    };
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return;
+    }
+
+    if String::from_utf8_lossy(stderr).contains(SSH_PASSPHRASE_PROMPT_MARKER) {
+        return;
+    }
+
+    if !stderr.is_empty() && !stderr.ends_with(b"\n") {
+        stderr.push(b'\n');
+    }
+    stderr.extend_from_slice(SSH_PASSPHRASE_PROMPT_MARKER.as_bytes());
+    stderr.push(b'\n');
+    stderr.extend_from_slice(prompt.as_bytes());
+    stderr.push(b'\n');
+}
+
 /// Appends the logged SSH host-verification prompt to byte stderr when the
 /// child did not already echo it.
 ///
@@ -442,6 +472,25 @@ mod tests {
                 rest = &rest[index + "$prompt".len()..];
             }
         }
+    }
+
+    #[test]
+    fn append_passphrase_prompt_replays_logged_prompt_once() {
+        let askpass = create_askpass_script().expect("askpass script");
+        std::fs::write(
+            askpass.passphrase_prompt_log_path(),
+            "Enter passphrase for \"C:\\Users\\dev\\.ssh\\id_ed25519\": \n",
+        )
+        .expect("write prompt log");
+        let mut stderr =
+            b"Load key: incorrect passphrase supplied to decrypt private key\n".to_vec();
+
+        append_passphrase_prompt_to_stderr(&mut stderr, &askpass);
+        append_passphrase_prompt_to_stderr(&mut stderr, &askpass);
+
+        let rendered = String::from_utf8(stderr).expect("utf-8 stderr");
+        assert_eq!(rendered.matches(SSH_PASSPHRASE_PROMPT_MARKER).count(), 1);
+        assert!(rendered.contains("Enter passphrase for"));
     }
 
     /// Runs the real helper the way git does — the prompt as one argument —
