@@ -6,7 +6,6 @@ use super::{
 };
 use crate::util::{
     git_command_failed_error, run_git_parsed_stdout, run_git_parsed_stdout_cancellable,
-    run_git_raw_output,
 };
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictResolverStrategy, ConflictSession, canonicalize_stage_parts,
@@ -96,20 +95,20 @@ impl GixRepo {
     }
 
     pub(super) fn diff_unified_impl(&self, target: &DiffTarget) -> Result<String> {
-        let label = "git diff";
-        let output = run_git_raw_output(self.build_unified_diff_command(target), label)?;
-
-        // git diff exits 1 when there are differences — that is not a failure.
-        let ok_exit = output.status.success() || output.status.code() == Some(1);
-        if !ok_exit {
-            return Err(git_command_failed_error(label, output));
-        }
-
-        String::from_utf8(output.stdout).map_err(|_| {
-            Error::new(ErrorKind::Backend(
-                "git diff produced non-UTF-8 output".to_string(),
-            ))
-        })
+        run_git_parsed_stdout(
+            self.build_unified_diff_command(target),
+            "git diff",
+            true,
+            |stdout| {
+                Diff::read_unified_text(stdout)
+                    .map(|(text, _notice)| text)
+                    .map_err(|err| {
+                        Error::new(ErrorKind::Backend(format!(
+                            "failed to read unified git diff output: {err}"
+                        )))
+                    })
+            },
+        )
     }
 
     pub(super) fn diff_parsed_impl(&self, target: &DiffTarget) -> Result<Diff> {
@@ -123,9 +122,9 @@ impl GixRepo {
             "git diff",
             true,
             move |stdout| {
-                Diff::from_unified_reader(target, BufReader::new(stdout)).map_err(|err| {
+                Diff::from_unified_reader(target, stdout).map_err(|err| {
                     Error::new(ErrorKind::Backend(format!(
-                        "git diff produced non-UTF-8 output: {err}"
+                        "failed to parse unified git diff output: {err}"
                     )))
                 })
             },
@@ -150,9 +149,9 @@ impl GixRepo {
             true,
             cancellation,
             move |stdout| {
-                Diff::from_unified_reader(target, BufReader::new(stdout)).map_err(|err| {
+                Diff::from_unified_reader(target, stdout).map_err(|err| {
                     Error::new(ErrorKind::Backend(format!(
-                        "git diff produced non-UTF-8 output: {err}"
+                        "failed to parse unified git diff output: {err}"
                     )))
                 })
             },
@@ -733,39 +732,47 @@ impl GixRepo {
         };
         let new = gix_revision_path_blob_entry_optional(&repo, &new_revision, &path)?;
 
-        let (prefix, body_text, blob) = match (old, new) {
-            (None, Some(new)) => {
-                let new_text = decode_utf8_bytes(new.bytes)?;
-                (
-                    UnifiedBlobPrefix::Add,
-                    new_text,
-                    UnifiedBlobDiff {
-                        mode: new.mode,
-                        short_id: new.short_id,
-                    },
-                )
-            }
-            (Some(old), None) => {
-                let old_text = decode_utf8_bytes(old.bytes)?;
-                (
-                    UnifiedBlobPrefix::Remove,
-                    old_text,
-                    UnifiedBlobDiff {
-                        mode: old.mode,
-                        short_id: old.short_id,
-                    },
-                )
-            }
+        let (prefix, blob) = match (old, new) {
+            (None, Some(new)) => (
+                UnifiedBlobPrefix::Add,
+                UnifiedBlobDiff {
+                    object_id: new.object_id,
+                    size: new.size,
+                    mode: new.mode,
+                    short_id: new.short_id,
+                },
+            ),
+            (Some(old), None) => (
+                UnifiedBlobPrefix::Remove,
+                UnifiedBlobDiff {
+                    object_id: old.object_id,
+                    size: old.size,
+                    mode: old.mode,
+                    short_id: old.short_id,
+                },
+            ),
             _ => return Ok(None),
         };
+        // Check the cheap header before asking gix to inflate the blob.
+        if !Diff::fits_unified_limits(blob.size, 0) {
+            return Ok(None);
+        }
+        let Some(body_bytes) = gix_blob_bytes_from_object_id_optional(&repo, blob.object_id)?
+        else {
+            return Ok(None);
+        };
+        // Binary blob: `git diff` answers with "Binary files ... differ".
+        let Ok(body_text) = String::from_utf8(body_bytes) else {
+            return Ok(None);
+        };
 
-        Ok(Some(build_simple_commit_path_diff(
+        Ok(build_simple_commit_path_diff(
             target.clone(),
             &path,
             body_text.as_str(),
             prefix,
             &blob,
-        )))
+        ))
     }
 }
 
@@ -918,12 +925,15 @@ enum IndexUnconflictedBlobId {
 }
 
 struct RevisionPathBlobEntry {
-    bytes: Vec<u8>,
+    object_id: gix::ObjectId,
+    size: u64,
     mode: gix::objs::tree::EntryMode,
     short_id: String,
 }
 
 struct UnifiedBlobDiff {
+    object_id: gix::ObjectId,
+    size: u64,
     mode: gix::objs::tree::EntryMode,
     short_id: String,
 }
@@ -932,11 +942,6 @@ struct UnifiedBlobDiff {
 enum UnifiedBlobPrefix {
     Add,
     Remove,
-}
-
-fn decode_utf8_bytes(bytes: Vec<u8>) -> Result<String> {
-    String::from_utf8(bytes)
-        .map_err(|_| Error::new(ErrorKind::Unsupported("file is not valid UTF-8")))
 }
 
 fn gix_blob_bytes_from_object_id_optional(
@@ -1080,12 +1085,20 @@ fn gix_revision_path_blob_entry_optional(
         return Ok(None);
     };
 
-    let Some(bytes) = gix_blob_bytes_from_object_id_optional(repo, entry.object_id())? else {
+    let object_id = entry.object_id();
+    let Some(header) = repo
+        .try_find_header(object_id)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_header: {e}"))))?
+    else {
         return Ok(None);
     };
+    if header.kind() != gix::objs::Kind::Blob {
+        return Ok(None);
+    }
 
     Ok(Some(RevisionPathBlobEntry {
-        bytes,
+        object_id,
+        size: header.size(),
         mode: entry.mode(),
         short_id: entry.id().shorten_or_id().to_string(),
     }))
@@ -1353,21 +1366,14 @@ fn build_simple_commit_path_diff(
     body_text: &str,
     prefix: UnifiedBlobPrefix,
     blob: &UnifiedBlobDiff,
-) -> Diff {
+) -> Option<Diff> {
     let path_text = path.to_string_lossy();
     let line_count = unified_body_line_count(body_text);
     let mut mode_buf = [0u8; 6];
     let mode_text =
         std::str::from_utf8(blob.mode.as_bytes(&mut mode_buf).as_ref()).unwrap_or("100644");
     let header_capacity = path_text.len().saturating_mul(4).saturating_add(96);
-    let body_capacity = body_text.len().saturating_add(line_count);
-    let missing_newline_marker = usize::from(!body_text.is_empty() && !body_text.ends_with('\n'))
-        .saturating_mul("\\ No newline at end of file\n".len());
-    let mut text = String::with_capacity(
-        header_capacity
-            .saturating_add(body_capacity)
-            .saturating_add(missing_newline_marker),
-    );
+    let mut text = String::with_capacity(header_capacity);
 
     text.push_str("diff --git a/");
     text.push_str(path_text.as_ref());
@@ -1408,8 +1414,30 @@ fn build_simple_commit_path_diff(
         }
     }
 
+    let missing_newline = !body_text.is_empty() && !body_text.ends_with('\n');
+    let body_byte_count = (body_text.len() as u64)
+        .saturating_add(line_count as u64)
+        .saturating_add(if missing_newline {
+            1 + "\\ No newline at end of file\n".len() as u64
+        } else {
+            0
+        });
+    let unified_byte_count = (text.len() as u64).saturating_add(body_byte_count);
+    let unified_line_count = text
+        .as_bytes()
+        .iter()
+        .filter(|&&byte| byte == b'\n')
+        .count()
+        .saturating_add(line_count)
+        .saturating_add(usize::from(missing_newline));
+    // Too large to build here; `git diff` renders it truncated instead.
+    if !Diff::fits_unified_limits(unified_byte_count, unified_line_count) {
+        return None;
+    }
+    text.reserve(body_byte_count as usize);
+
     append_prefixed_unified_body(&mut text, prefix, body_text);
-    Diff::from_unified_owned(target, text)
+    Some(Diff::from_unified_owned(target, text))
 }
 
 fn append_prefixed_unified_body(target: &mut String, prefix: UnifiedBlobPrefix, text: &str) {

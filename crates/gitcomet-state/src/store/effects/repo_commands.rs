@@ -218,7 +218,14 @@ fn normalize_worktree_relative_path(path: &Path) -> Result<PathBuf, Error> {
     for component in path.components() {
         match component {
             Component::CurDir => {}
-            Component::Normal(part) => normalized.push(part),
+            Component::Normal(part) => {
+                if gitcomet_core::path_utils::is_git_metadata_component(part) {
+                    return Err(Error::new(ErrorKind::Backend(
+                        "refusing to write inside .git".to_string(),
+                    )));
+                }
+                normalized.push(part);
+            }
             Component::ParentDir => {
                 if !normalized.pop() {
                     return Err(Error::new(ErrorKind::Backend(
@@ -344,47 +351,46 @@ pub(super) fn schedule_append_gitignore_patterns(
         RepoCommandKind::AppendGitignorePatterns {
             patterns: command_patterns,
         },
-        move |repo| {
-            // Routed through the same guard as every other worktree write, even
-            // though the name is a constant, so the invariant holds by
-            // construction rather than by reading this function.
-            let relative_path = normalize_worktree_relative_path(Path::new(GITIGNORE_FILE_NAME))?;
-            let full = repo.spec().workdir.join(&relative_path);
-
-            // Read bytes and convert explicitly: `read_to_string` would report a
-            // Latin-1 `.gitignore` as a bare `InvalidData` I/O error, which tells
-            // the user nothing about what to do next. Never rewrite it lossily.
-            let existing = match std::fs::read(&full) {
-                Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "{GITIGNORE_FILE_NAME} is not valid UTF-8; edit it manually"
-                    )))
-                })?,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-                Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
-            };
-
-            let Some(updated) = gitcomet_core::gitignore::append_patterns(&existing, &patterns)
-            else {
-                return Ok(CommandOutput {
-                    command: format!("Update {GITIGNORE_FILE_NAME}"),
-                    stdout: gitcomet_core::gitignore::NOTHING_TO_ADD.to_string(),
-                    stderr: String::new(),
-                    exit_code: Some(0),
-                });
-            };
-
-            std::fs::write(&full, updated.as_bytes())
-                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-            Ok(CommandOutput {
-                command: format!("Update {GITIGNORE_FILE_NAME}"),
-                stdout: String::new(),
-                stderr: String::new(),
-                exit_code: Some(0),
-            })
-        },
+        move |repo| append_gitignore_patterns_in_workdir(&repo.spec().workdir, &patterns),
     );
+}
+
+fn append_gitignore_patterns_in_workdir(
+    workdir: &Path,
+    patterns: &[String],
+) -> Result<CommandOutput, Error> {
+    let (_, full) = resolve_worktree_save_target(workdir, Path::new(GITIGNORE_FILE_NAME))?;
+
+    // Read bytes and convert explicitly: `read_to_string` would report a
+    // Latin-1 `.gitignore` as a bare `InvalidData` I/O error, which tells
+    // the user nothing about what to do next. Never rewrite it lossily.
+    let existing = match std::fs::read(&full) {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
+            Error::new(ErrorKind::Backend(format!(
+                "{GITIGNORE_FILE_NAME} is not valid UTF-8; edit it manually"
+            )))
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+    };
+
+    let Some(updated) = gitcomet_core::gitignore::append_patterns(&existing, patterns) else {
+        return Ok(CommandOutput {
+            command: format!("Update {GITIGNORE_FILE_NAME}"),
+            stdout: gitcomet_core::gitignore::NOTHING_TO_ADD.to_string(),
+            stderr: String::new(),
+            exit_code: Some(0),
+        });
+    };
+
+    std::fs::write(&full, updated.as_bytes()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    Ok(CommandOutput {
+        command: format!("Update {GITIGNORE_FILE_NAME}"),
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: Some(0),
+    })
 }
 
 pub(super) fn schedule_export_patch(
@@ -1576,9 +1582,41 @@ pub(super) fn schedule_launch_mergetool(
 
 #[cfg(test)]
 mod worktree_save_target_tests {
-    use super::resolve_worktree_save_target;
+    use super::{append_gitignore_patterns_in_workdir, resolve_worktree_save_target};
     use gitcomet_core::error::ErrorKind;
     use std::path::Path;
+
+    #[test]
+    fn git_metadata_paths_are_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for path in [".git/hooks/pre-commit", "a/../.git/config", "./.GIT/config"] {
+            assert!(
+                resolve_worktree_save_target(dir.path(), Path::new(path)).is_err(),
+                "{path:?} must be rejected"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gitignore_append_through_symlink_out_of_workdir_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside dir");
+        let victim = outside.path().join("victim");
+        std::fs::write(&victim, "original\n").expect("write victim");
+        std::os::unix::fs::symlink(&victim, dir.path().join(".gitignore")).expect("symlink");
+
+        let err = append_gitignore_patterns_in_workdir(dir.path(), &["secret".to_string()])
+            .expect_err("symlinked .gitignore");
+        let ErrorKind::Backend(message) = err.kind() else {
+            panic!("expected a backend refusal, got {err:?}");
+        };
+        assert!(message.contains("symlink"), "{message}");
+        assert_eq!(
+            std::fs::read_to_string(&victim).expect("victim"),
+            "original\n"
+        );
+    }
 
     #[test]
     fn nested_relative_path_resolves_under_workdir() {

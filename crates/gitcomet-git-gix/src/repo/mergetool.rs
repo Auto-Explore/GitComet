@@ -5,7 +5,9 @@ use super::mergetool_builtin::{
 use super::{GixRepo, conflict_stages::gix_index_stage_blob_bytes_optional};
 use crate::util::{bytes_to_text_preserving_utf8, fnv1a_64, run_git_simple, stable_path_bytes};
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::path_utils::{
+    canonicalize_or_original, symlink_free_write_target, validated_repo_relative_path,
+};
 use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
@@ -37,6 +39,12 @@ impl GixRepo {
     /// 5. Reads back the merged file and stages it on success.
     pub(super) fn launch_mergetool_impl(&self, path: &Path) -> Result<MergetoolResult> {
         let workdir = &self.spec.workdir;
+        // Keep the caller's slash-separated repository path for index and Git
+        // operations. Rebuilding it is only for filesystem access, where
+        // Windows needs native separators.
+        let filesystem_path = validated_mergetool_path(path)?;
+        reject_symlink_conflict(workdir, &filesystem_path, path)?;
+        let merged_path = mergetool_worktree_target(workdir, &filesystem_path)?;
         let repo = self.reopen_repo()?;
         let MergetoolConfig {
             tool_name,
@@ -57,8 +65,6 @@ impl GixRepo {
         let base_path = &stage_paths.base;
         let local_path = &stage_paths.local;
         let remote_path = &stage_paths.remote;
-        let merged_path = workdir.join(normalize_path_for_platform(path));
-
         // 4. Snapshot merged contents before tool invocation so we can
         //    detect actual content changes when trustExitCode is false.
         let pre_merged_state = if trust_exit_code {
@@ -141,7 +147,19 @@ impl GixRepo {
         };
 
         // 5. Determine success
-        let post_merged_state = read_merged_file_state(&merged_path)?;
+        // The tool may leave a symlink here, so re-check before reading. It has
+        // already run: report that rather than losing its output.
+        let post_merged_state = match mergetool_worktree_target(workdir, &filesystem_path) {
+            Ok(merged_path) => read_merged_file_state(&merged_path)?,
+            Err(err) => {
+                return Ok(MergetoolResult {
+                    tool_name,
+                    success: false,
+                    merged_contents: None,
+                    output: append_stderr_note(cmd_output, &err.to_string()),
+                });
+            }
+        };
         let tool_success = if trust_exit_code {
             output.status.success()
         } else {
@@ -574,11 +592,8 @@ impl Drop for StagePaths {
             return;
         }
         for path in [&self.base, &self.local, &self.remote] {
-            let path = stage_path_to_fs_path(&self.workdir, path);
-            match std::fs::remove_file(path) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => {}
+            if let Ok(path) = stage_path_to_fs_path(&self.workdir, path) {
+                let _ = std::fs::remove_file(path);
             }
         }
     }
@@ -623,7 +638,7 @@ fn build_stage_paths(
     write_to_temp: bool,
     keep_temporaries: bool,
 ) -> Result<StagePaths> {
-    let normalized_conflict_path = normalize_path_for_platform(conflict_path);
+    let normalized_conflict_path = validated_mergetool_path(conflict_path)?;
     let (mut merge_base, ext) = split_merged_path_and_extension(&normalized_conflict_path);
     let pid = std::process::id();
 
@@ -727,24 +742,60 @@ fn build_stage_variant_file_name(
     name
 }
 
-fn normalize_path_for_platform(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        normalized.push(component.as_os_str());
-    }
-    normalized
+fn validated_mergetool_path(path: &Path) -> Result<PathBuf> {
+    validated_repo_relative_path(path).map_err(|err| {
+        Error::new(ErrorKind::Backend(format!(
+            "invalid mergetool conflict path '{}': {err}",
+            path.display()
+        )))
+    })
 }
 
-fn stage_path_to_fs_path(workdir: &Path, stage_path: &Path) -> PathBuf {
+/// Git's mergetool never runs a tool on a symlink conflict; it asks for a side.
+/// Say so rather than reporting the generic containment refusal.
+fn reject_symlink_conflict(workdir: &Path, path: &Path, label: &Path) -> Result<()> {
+    let is_symlink = std::fs::symlink_metadata(workdir.join(path))
+        .is_ok_and(|metadata| metadata.file_type().is_symlink());
+    if is_symlink {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "'{}' is a symbolic-link conflict; a merge tool cannot merge a symlink. \
+             Resolve it by taking the local or remote side.",
+            label.display()
+        ))));
+    }
+    Ok(())
+}
+
+fn append_stderr_note(mut output: CommandOutput, note: &str) -> CommandOutput {
+    if !output.stderr.is_empty() && !output.stderr.ends_with('\n') {
+        output.stderr.push('\n');
+    }
+    output.stderr.push_str(note);
+    output.stderr.push('\n');
+    output
+}
+
+fn mergetool_worktree_target(workdir: &Path, path: &Path) -> Result<PathBuf> {
+    symlink_free_write_target(workdir, path).map_err(|err| {
+        Error::new(ErrorKind::Backend(format!(
+            "unsafe mergetool conflict path '{}': {err}",
+            path.display()
+        )))
+    })
+}
+
+/// Where a stage temporary lives: `mergetool.writeToTemp` gives an absolute
+/// path, a relative one goes through the worktree guard.
+fn stage_path_to_fs_path(workdir: &Path, stage_path: &Path) -> Result<PathBuf> {
     if stage_path.is_absolute() {
-        stage_path.to_path_buf()
+        Ok(stage_path.to_path_buf())
     } else {
-        workdir.join(stage_path)
+        mergetool_worktree_target(workdir, stage_path)
     }
 }
 
 fn write_stage_bytes(workdir: &Path, stage_path: &Path, bytes: &[u8]) -> Result<()> {
-    let path = stage_path_to_fs_path(workdir, stage_path);
+    let path = stage_path_to_fs_path(workdir, stage_path)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
     }
@@ -1034,8 +1085,8 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_path_for_platform_preserves_components() {
-        let normalized = normalize_path_for_platform(Path::new("docs/nested/file.txt"));
+    fn test_mergetool_path_validation_preserves_relative_components() {
+        let normalized = validated_mergetool_path(Path::new("docs/nested/file.txt")).unwrap();
         let components: Vec<String> = normalized
             .components()
             .map(|component| {
@@ -1054,6 +1105,30 @@ mod tests {
                 "file.txt".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn test_build_stage_paths_rejects_paths_outside_worktree_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        for path in ["../outside.txt", "/outside.txt", ".git/config"] {
+            assert!(
+                build_stage_paths(tmp.path(), Path::new(path), false, false).is_err(),
+                "{path:?} must be rejected"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_write_stage_bytes_does_not_follow_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = tmp.path().join("victim");
+        std::fs::write(&victim, b"keep").unwrap();
+        let stage_path = Path::new("file_BASE_test.txt");
+        std::os::unix::fs::symlink(&victim, tmp.path().join(stage_path)).unwrap();
+
+        assert!(write_stage_bytes(tmp.path(), stage_path, b"replace").is_err());
+        assert_eq!(std::fs::read(victim).unwrap(), b"keep");
     }
 
     #[cfg(windows)]

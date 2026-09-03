@@ -11,6 +11,7 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::remote_url::validate_remote_url;
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
@@ -96,6 +97,7 @@ impl GixRepo {
         url: &str,
         path: &Path,
     ) -> Result<SubmoduleTrustDecision> {
+        validate_remote_url(url)?;
         let repo = self.reopen_repo()?;
         let Some(target) =
             trust_target_from_raw_source(repo_workdir_for_submodule_trust(&repo), path, url)?
@@ -164,6 +166,7 @@ impl GixRepo {
         force: bool,
         approved_sources: &[SubmoduleTrustTarget],
     ) -> Result<CommandOutput> {
+        validate_remote_url(url)?;
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo);
         let git_dir = repo.git_dir().to_path_buf();
@@ -1667,6 +1670,9 @@ fn trust_target_from_submodule(
     let url = submodule
         .url()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule url: {e}"))))?;
+    // .gitmodules ships with the repository, so hold its URL to the same
+    // allowlist as the Add dialog rather than to Git's protocol policy alone.
+    validate_remote_url(&bytes_to_text_preserving_utf8(url.to_bstring().as_ref()))?;
     trust_target_from_url(current_repo_workdir, full_submodule_path, &url)
 }
 
@@ -1903,6 +1909,31 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_submodule_urls_survive_validation() {
+        // The URL is validated after gix re-serializes it, so every shape a
+        // real .gitmodules carries has to come back through unchanged enough.
+        for source in [
+            "../sibling.git",
+            "./nested.git",
+            "sub/other.git",
+            "/srv/git/repo.git",
+            "https://example.com/org/repo.git",
+            "http://git.internal/org/repo.git",
+            "ssh://git@example.com/org/repo.git",
+            "git@example.com:org/repo.git",
+            "file:///srv/git/repo.git",
+        ] {
+            let url = gix::url::parse(source.as_bytes().as_bstr()).expect(source);
+            let rendered = bytes_to_text_preserving_utf8(url.to_bstring().as_ref());
+            assert!(
+                validate_remote_url(&rendered).is_ok(),
+                "{source} rendered as {rendered}"
+            );
+        }
+    }
     use super::{
         GixRepo, allow_file_submodule_transport, is_git_config_contention_error,
         push_submodule_add_args, remove_submodule_git_dir, resolve_submodule_logical_name,

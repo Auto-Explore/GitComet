@@ -7,6 +7,7 @@ use gitcomet_core::auth::askpass::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::{bytes_to_text_preserving_utf8, git_command};
+use gitcomet_core::remote_url::validate_remote_url;
 use gitcomet_core::services::CommandOutput;
 use gitcomet_core::text_utils::redact_url_userinfo;
 use rustc_hash::FxHashMap;
@@ -28,8 +29,6 @@ use gitcomet_core::auth::{
 };
 
 const GIT_COMMAND_WAIT_POLL: Duration = Duration::from_millis(100);
-const ALLOWED_CLONE_URL_SCHEMES: [&str; 4] = ["https", "ssh", "git", "file"];
-
 struct ActiveCloneHandle {
     cancel_requested: AtomicBool,
     child: Mutex<Option<Child>>,
@@ -121,74 +120,6 @@ fn active_clones() -> &'static Mutex<FxHashMap<PathBuf, Arc<ActiveCloneHandle>>>
     static ACTIVE_CLONES: OnceLock<Mutex<FxHashMap<PathBuf, Arc<ActiveCloneHandle>>>> =
         OnceLock::new();
     ACTIVE_CLONES.get_or_init(|| Mutex::new(FxHashMap::default()))
-}
-
-fn is_windows_drive_path(url: &str) -> bool {
-    let bytes = url.as_bytes();
-    bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && (bytes[2] == b'\\' || bytes[2] == b'/')
-}
-
-fn explicit_url_scheme_end(url: &str) -> Option<usize> {
-    if is_windows_drive_path(url) {
-        return None;
-    }
-
-    let mut chars = url.char_indices();
-    let (_, first) = chars.next()?;
-    if !first.is_ascii_alphabetic() {
-        return None;
-    }
-
-    for (idx, ch) in chars {
-        if ch == ':' {
-            return Some(idx);
-        }
-        if !(ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')) {
-            return None;
-        }
-    }
-
-    None
-}
-
-fn validate_clone_url(url: &str) -> Result<(), Error> {
-    let url = url.trim();
-    if url.is_empty() {
-        return Err(Error::new(ErrorKind::Backend(
-            "clone URL cannot be empty".to_string(),
-        )));
-    }
-
-    // Schemeless inputs (`/tmp/repo.git`, `git@host:org/repo.git`, `C:\\repo`)
-    // are handed to git as-is, so this is the only place an option-looking
-    // value would be caught before `git clone` parses it as one.
-    if url.starts_with('-') {
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "clone URL cannot start with '-': {url:?}"
-        ))));
-    }
-
-    let Some(scheme_end) = explicit_url_scheme_end(url) else {
-        return Ok(());
-    };
-
-    let scheme = url[..scheme_end].to_ascii_lowercase();
-    if !ALLOWED_CLONE_URL_SCHEMES.contains(&scheme.as_str()) {
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "unsupported clone URL scheme `{scheme}` (allowed: https, ssh, git, file)"
-        ))));
-    }
-
-    if !url[scheme_end..].starts_with("://") {
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "invalid clone URL format for `{scheme}`; expected `{scheme}://...`"
-        ))));
-    }
-
-    Ok(())
 }
 
 /// The label shown in the command log and in failure messages; the URL is
@@ -316,7 +247,7 @@ pub(super) fn schedule_clone_repo(
     executor.spawn(move || {
         let _registration = registration;
 
-        if let Err(err) = validate_clone_url(&url) {
+        if let Err(err) = validate_remote_url(&url) {
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
@@ -539,32 +470,7 @@ mod tests {
             .any(|(k, v)| k == OsStr::new(key) && v.is_none())
     }
 
-    #[test]
-    fn validate_clone_url_accepts_allowlisted_schemes() {
-        assert!(validate_clone_url("https://example.com/org/repo.git").is_ok());
-        assert!(validate_clone_url("ssh://git@example.com/org/repo.git").is_ok());
-        assert!(validate_clone_url("git://example.com/org/repo.git").is_ok());
-        assert!(validate_clone_url("file:///tmp/repo.git").is_ok());
-    }
-
-    #[test]
-    fn validate_clone_url_rejects_unallowlisted_schemes() {
-        assert!(validate_clone_url("ext::sh -c touch /tmp/pwned").is_err());
-        assert!(validate_clone_url("http://example.com/org/repo.git").is_err());
-    }
-
-    #[test]
-    fn validate_clone_url_keeps_schemeless_inputs_working() {
-        assert!(validate_clone_url("/tmp/repo.git").is_ok());
-        assert!(validate_clone_url("git@github.com:org/repo.git").is_ok());
-        assert!(validate_clone_url("C:\\repos\\repo.git").is_ok());
-    }
-
-    #[test]
-    fn validate_clone_url_rejects_malformed_allowlisted_schemes() {
-        assert!(validate_clone_url("ssh:git@example.com/org/repo.git").is_err());
-    }
-
+    /// Scheme coverage lives with the validator; this pins the clone-only shape.
     #[test]
     fn validate_clone_url_rejects_option_like_inputs() {
         for url in [
@@ -573,7 +479,7 @@ mod tests {
             "--upload-pack=touch /tmp/pwned",
             "  --template=/tmp/x",
         ] {
-            let err = validate_clone_url(url).expect_err(url);
+            let err = validate_remote_url(url).expect_err(url);
             assert!(
                 err.to_string().contains("cannot start with '-'"),
                 "{url}: {err}"
@@ -604,6 +510,8 @@ mod tests {
         assert_eq!(
             args,
             [
+                std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new("protocol.ext.allow=never"),
                 std::ffi::OsStr::new("-c"),
                 std::ffi::OsStr::new("color.ui=false"),
                 std::ffi::OsStr::new("clone"),

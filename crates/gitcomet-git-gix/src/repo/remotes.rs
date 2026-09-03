@@ -6,6 +6,7 @@ use crate::util::{
 };
 use gitcomet_core::domain::{CommitId, Remote, RemoteBranch, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::remote_url::validate_remote_url;
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, ForcePushLease, PullMode, RemoteUrlKind, Result,
     SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
@@ -924,6 +925,7 @@ impl GixRepo {
         url: &str,
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(name, "remote name")?;
+        validate_remote_url(url)?;
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("remote").arg("add").arg("--").arg(name).arg(url);
@@ -945,6 +947,7 @@ impl GixRepo {
         kind: RemoteUrlKind,
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(name, "remote name")?;
+        validate_remote_url(url)?;
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("remote").arg("set-url");

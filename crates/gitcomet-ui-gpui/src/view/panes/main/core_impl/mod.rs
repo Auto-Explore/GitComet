@@ -406,9 +406,9 @@ impl MainPaneView {
             save_payload.total_conflicts,
             save_payload.resolved_conflicts,
         );
-        let full_path = repo.spec.workdir.join(&path);
         self.finish_focused_mergetool_output(
-            &full_path,
+            &repo.spec.workdir,
+            &path,
             FocusedMergetoolOutput::Write(output.as_bytes()),
             exit_code,
             cx,
@@ -427,9 +427,9 @@ impl MainPaneView {
             cx.quit();
             return;
         };
-        let full_path = repo.spec.workdir.join(path);
         self.finish_focused_mergetool_output(
-            &full_path,
+            &repo.spec.workdir,
+            path,
             FocusedMergetoolOutput::Write(bytes),
             FOCUSED_MERGETOOL_EXIT_SUCCESS,
             cx,
@@ -447,9 +447,9 @@ impl MainPaneView {
             cx.quit();
             return;
         };
-        let full_path = repo.spec.workdir.join(path);
         self.finish_focused_mergetool_output(
-            &full_path,
+            &repo.spec.workdir,
+            path,
             FocusedMergetoolOutput::Delete,
             FOCUSED_MERGETOOL_EXIT_SUCCESS,
             cx,
@@ -458,12 +458,13 @@ impl MainPaneView {
 
     fn finish_focused_mergetool_output(
         &self,
+        workdir: &std::path::Path,
         path: &std::path::Path,
         output: FocusedMergetoolOutput<'_>,
         success_exit_code: i32,
         cx: &mut gpui::Context<Self>,
     ) {
-        match apply_focused_mergetool_output(path, output) {
+        match apply_focused_mergetool_output(workdir, path, output) {
             Ok(()) => self.set_focused_mergetool_exit_code(success_exit_code),
             Err(err) => {
                 let operation = match output {

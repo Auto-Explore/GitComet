@@ -1352,6 +1352,98 @@ fn diff_parsed_commit_added_file_matches_git_show_output() {
 }
 
 #[test]
+fn diff_parsed_commit_added_binary_file_falls_back_to_git_diff() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "docs/logo.bin", vec![0_u8, 159, 146, 150, 0, 255]);
+    run_git(repo, &["add", "docs/logo.bin"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "add binary"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let diff = opened
+        .diff_parsed(&DiffTarget::Commit {
+            commit_id: CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into()),
+            path: Some(PathBuf::from("docs/logo.bin")),
+        })
+        .expect("a binary blob must render through git diff");
+    assert!(
+        diff.lines
+            .iter()
+            .any(|line| line.text.as_ref().starts_with("Binary files ")),
+        "{:?}",
+        diff.lines
+    );
+}
+
+#[test]
+fn diff_parsed_commit_added_file_truncates_at_the_unified_line_limit() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    let oversized_lines = vec![b'\n'; Diff::MAX_UNIFIED_LINES + 1];
+    write(repo, "docs/too-many-lines.txt", oversized_lines);
+    run_git(repo, &["add", "docs/too-many-lines.txt"]);
+    run_git(
+        repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add large file",
+        ],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let target = DiffTarget::Commit {
+        commit_id: CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into()),
+        path: Some(PathBuf::from("docs/too-many-lines.txt")),
+    };
+
+    // Too large for the synthetic fast path: `git diff` renders it truncated.
+    for diff in [
+        opened.diff_parsed(&target).expect("regular"),
+        opened
+            .diff_parsed_cancellable(&target, &CancellationToken::new())
+            .expect("cancellable"),
+    ] {
+        assert_eq!(diff.lines.len(), Diff::MAX_UNIFIED_LINES + 1);
+        let notice = diff.lines.last().expect("notice row");
+        assert_eq!(notice.kind, DiffLineKind::Header);
+        assert!(
+            notice
+                .text
+                .as_ref()
+                .starts_with(Diff::TRUNCATION_NOTICE_PREFIX),
+            "{:?}",
+            notice.text.as_ref()
+        );
+    }
+}
+
+#[test]
 fn diff_parsed_commit_deleted_file_matches_git_show_output() {
     if !require_git_shell_for_status_integration_tests() {
         return;
