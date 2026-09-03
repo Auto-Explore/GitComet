@@ -1320,7 +1320,6 @@ pub struct RepoState {
 
     pub open: Loadable<()>,
     pub history_state: HistoryState,
-    pub fetch_prune_deleted_remote_tracking_branches: bool,
     pub head_branch: Loadable<String>,
     pub detached_head_commit: Option<CommitId>,
     pub head_branch_rev: u64,
@@ -1428,7 +1427,6 @@ impl RepoState {
             commit_in_flight: 0,
             open: Loadable::Loading,
             history_state: HistoryState::default(),
-            fetch_prune_deleted_remote_tracking_branches: true,
             head_branch: Loadable::NotLoaded,
             detached_head_commit: None,
             head_branch_rev: 0,

@@ -5,7 +5,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let repo_disabled = active_repo_id.is_none();
     let pull_disabled = this
         .active_repo()
-        .is_none_or(|repo| !head_branch_has_live_upstream(repo));
+        .is_none_or(|repo| !matches!(pull_request(repo), PullRequest::Pull));
     let repo_id = active_repo_id.unwrap_or(RepoId(0));
     let tracking_branch_name = super::active_branch_tracking_upstream_name(this);
 

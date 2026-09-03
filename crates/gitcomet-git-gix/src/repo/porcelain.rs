@@ -7,6 +7,7 @@ use crate::util::{
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::{CommitOperationOutcome, Result};
+use gix::bstr::ByteSlice as _;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
 use std::io::Write as _;
@@ -172,18 +173,29 @@ fn checkout_remote_branch_missing_error(remote: &str, branch: &str) -> Error {
     )))
 }
 
+/// `target` is an arbitrary rev-parse expression - a commit id, a tag, a local
+/// branch, or a remote-tracking branch the sidebar may have listed before it
+/// was pruned. Only the last is worth a refresh hint.
+fn branch_target_missing_error(repo: &gix::Repository, target: &str) -> Error {
+    let names_remote_branch = repo.remote_names().iter().any(|remote| {
+        target
+            .strip_prefix(remote.to_str_lossy().as_ref())
+            .and_then(|rest| rest.strip_prefix('/'))
+            .is_some_and(|branch| !branch.is_empty())
+    });
+    if names_remote_branch {
+        create_branch_error(format!(
+            "Branch source '{target}' no longer exists. Refresh remote branches and try again."
+        ))
+    } else {
+        create_branch_error(format!("fatal: not a valid object name: '{target}'"))
+    }
+}
+
 fn resolve_branch_target_commit_id(repo: &gix::Repository, target: &str) -> Result<gix::ObjectId> {
     let object = repo
         .rev_parse_single(target)
-        .map_err(|_| {
-            if target == "HEAD" {
-                create_branch_error("fatal: not a valid object name: 'HEAD'")
-            } else {
-                create_branch_error(format!(
-                    "Branch source '{target}' no longer exists. Refresh remote branches and try again."
-                ))
-            }
-        })?
+        .map_err(|_| branch_target_missing_error(repo, target))?
         .object()
         .map_err(|e| {
             Error::new(ErrorKind::Backend(format!(

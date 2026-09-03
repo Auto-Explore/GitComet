@@ -1129,11 +1129,6 @@ fn reduce_inner(
         Msg::SetHistoryAuthorFilter { repo_id, author } => {
             external_and_history::set_history_author_filter(state, repo_id, author)
         }
-        Msg::SetFetchPruneDeletedRemoteTrackingBranches { repo_id, enabled } => {
-            repo_management::set_fetch_prune_deleted_remote_tracking_branches(
-                state, repo_id, enabled,
-            )
-        }
         Msg::LoadMoreHistory { repo_id } => external_and_history::load_more_history(state, repo_id),
         Msg::SelectCommit { repo_id, commit_id } => {
             effects::select_commit(state, repo_id, commit_id)

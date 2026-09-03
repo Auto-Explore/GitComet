@@ -114,10 +114,6 @@ fn session_file_persist_lock_is_shared_by_session_writers() {
         let repo = path.with_file_name("history-scope-repo");
         persist_repo_history_scope_to_path(&repo, LogScope::AllBranches, &path)
     });
-    assert_session_writer_waits_for_shared_lock("persist-fetch-prune", |path| {
-        let repo = path.with_file_name("fetch-prune-repo");
-        persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(&repo, true, &path)
-    });
     assert_session_writer_waits_for_shared_lock("persist-survey-opened", |path| {
         persist_survey_prompt_opened_to_path(&path, "survey", 123)
     });
@@ -173,10 +169,8 @@ fn load_repo_session_preferences_collects_current_and_legacy_history_settings() 
     let session_file = dir.join("session.json");
     let repo_mode = dir.join("repo-mode");
     let repo_legacy = dir.join("repo-legacy");
-    let repo_fetch = dir.join("repo-fetch");
     let _ = fs::create_dir_all(&repo_mode);
     let _ = fs::create_dir_all(&repo_legacy);
-    let _ = fs::create_dir_all(&repo_fetch);
 
     assert_eq!(
         load_repo_session_preferences_from_path(&dir.join("missing.json")),
@@ -195,12 +189,6 @@ fn load_repo_session_preferences_collects_current_and_legacy_history_settings() 
         .expect("persist explicit history mode");
     persist_repo_history_scope_to_path(&repo_legacy, LogScope::CurrentBranch, &session_file)
         .expect("persist legacy history scope");
-    persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
-        &repo_fetch,
-        true,
-        &session_file,
-    )
-    .expect("persist fetch-prune setting");
 
     let loaded = load_repo_session_preferences_from_path(&session_file);
     assert_eq!(loaded.default_history_mode, Some(HistoryMode::MergesOnly));
@@ -213,12 +201,6 @@ fn load_repo_session_preferences_collects_current_and_legacy_history_settings() 
             .repo_history_scopes
             .get(&path_storage_key(&repo_legacy)),
         Some(&HistoryMode::FirstParent)
-    );
-    assert_eq!(
-        loaded
-            .repo_fetch_prune_deleted_remote_tracking_branches
-            .get(&path_storage_key(&repo_fetch)),
-        Some(&true)
     );
 }
 
@@ -301,8 +283,6 @@ fn persist_repo_history_modes_batch_skips_empty_and_unchanged_updates() {
     .expect("persist default history mode");
     persist_repo_history_scope_to_path(&repo_b, LogScope::CurrentBranch, &session_file)
         .expect("persist legacy history scope");
-    persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(&repo_c, true, &session_file)
-        .expect("persist fetch-prune setting");
     persist_repo_history_mode_to_path(&repo_a, HistoryMode::FirstParent, &session_file)
         .expect("persist repo_a history mode");
 
@@ -351,12 +331,6 @@ fn persist_repo_history_modes_batch_skips_empty_and_unchanged_updates() {
     assert_eq!(
         loaded.repo_history_scopes.get(&path_storage_key(&repo_b)),
         Some(&HistoryMode::FirstParent)
-    );
-    assert_eq!(
-        loaded
-            .repo_fetch_prune_deleted_remote_tracking_branches
-            .get(&path_storage_key(&repo_c)),
-        Some(&true)
     );
 }
 

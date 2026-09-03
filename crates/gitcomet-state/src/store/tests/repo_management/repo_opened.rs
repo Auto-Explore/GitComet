@@ -1,67 +1,6 @@
 use super::*;
 
 #[test]
-fn set_fetch_prune_deleted_remote_tracking_branches_updates_and_noops() {
-    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
-
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
-    );
-    let initial = state.repos[0].fetch_prune_deleted_remote_tracking_branches;
-    let target = !initial;
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::SetFetchPruneDeletedRemoteTrackingBranches {
-            repo_id: RepoId(1),
-            enabled: target,
-        },
-    );
-    assert!(effects.is_empty());
-    assert_eq!(
-        state.repos[0].fetch_prune_deleted_remote_tracking_branches,
-        target
-    );
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::SetFetchPruneDeletedRemoteTrackingBranches {
-            repo_id: RepoId(1),
-            enabled: target,
-        },
-    );
-    assert!(effects.is_empty());
-    assert_eq!(
-        state.repos[0].fetch_prune_deleted_remote_tracking_branches,
-        target
-    );
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::SetFetchPruneDeletedRemoteTrackingBranches {
-            repo_id: RepoId(999),
-            enabled: !target,
-        },
-    );
-    assert!(effects.is_empty());
-    assert_eq!(
-        state.repos[0].fetch_prune_deleted_remote_tracking_branches,
-        target
-    );
-}
-
-#[test]
 fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);

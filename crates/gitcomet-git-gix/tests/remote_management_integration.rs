@@ -1937,3 +1937,312 @@ fn remote_deletion_preserves_fetch_tracking_when_pushurl_is_different() {
         );
     }
 }
+
+/// Set up a work repo with one commit pushed to a bare remote named `remote_name`.
+fn init_work_repo_with_remote(
+    root: &Path,
+    remote_name: &str,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    fs::create_dir_all(&remote_repo).expect("create remote repo dir");
+    fs::create_dir_all(&work_repo).expect("create work repo dir");
+    run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
+    run_git(&work_repo, &["init", "-b", "main"]);
+    configure_repo_with_user(&work_repo);
+
+    fs::write(work_repo.join("file.txt"), "base\n").expect("write base file");
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    let remote_url = git_remote_url(&remote_repo);
+    run_git(
+        &work_repo,
+        &["remote", "add", remote_name, remote_url.as_str()],
+    );
+    run_git(&work_repo, &["push", "-u", remote_name, "main"]);
+    (remote_repo, work_repo)
+}
+
+fn ref_exists(repo: &Path, ref_name: &str) -> bool {
+    run_git_status(repo, &["show-ref", "--verify", "--quiet", ref_name]).success()
+}
+
+#[test]
+fn pruning_fetch_all_preserves_tags_from_explicit_fetch_refspecs() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let (_remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
+
+    // `--no-prune-tags` only disables Git's implicit tag refspec. This explicit
+    // destination used to let `git fetch --all --prune` delete the tag.
+    run_git(
+        &work_repo,
+        &[
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/tags/*:refs/tags/*",
+        ],
+    );
+    run_git(&work_repo, &["update-ref", "refs/tags/local-only", "HEAD"]);
+    run_git(
+        &work_repo,
+        &["update-ref", "refs/remotes/origin/deleted", "HEAD"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    opened
+        .fetch_all_with_output_prune(true)
+        .expect("fetch all with pruning");
+
+    assert!(
+        ref_exists(&work_repo, "refs/tags/local-only"),
+        "branch pruning must never delete a tag selected by a configured refspec"
+    );
+    assert!(
+        !ref_exists(&work_repo, "refs/remotes/origin/deleted"),
+        "the same fetch must still prune stale remote-tracking branches"
+    );
+}
+
+#[test]
+fn pruning_fetch_all_keeps_upstreams_of_remotes_it_does_not_fetch() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let (_remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
+
+    // A second remote that `git fetch --all` never contacts, so it says nothing
+    // about whether its branches still exist.
+    let skipped_repo = dir.path().join("skipped.git");
+    fs::create_dir_all(&skipped_repo).expect("create skipped remote dir");
+    run_git(&skipped_repo, &["init", "--bare", "-b", "main"]);
+    let skipped_url = git_remote_url(&skipped_repo);
+    run_git(
+        &work_repo,
+        &["remote", "add", "skipped", skipped_url.as_str()],
+    );
+    run_git(
+        &work_repo,
+        &["config", "remote.skipped.skipFetchAll", "true"],
+    );
+    run_git(&work_repo, &["branch", "offline", "main"]);
+    run_git(&work_repo, &["config", "branch.offline.remote", "skipped"]);
+    run_git(
+        &work_repo,
+        &["config", "branch.offline.merge", "refs/heads/offline"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    opened
+        .fetch_all_with_output_prune(true)
+        .expect("fetch all with pruning");
+
+    assert_eq!(
+        run_git_capture(&work_repo, &["config", "--get", "branch.offline.remote"]).trim(),
+        "skipped",
+        "a fetch that skips a remote must not unlink upstreams pointing at it"
+    );
+}
+
+#[test]
+fn pruning_pull_refuses_to_retarget_a_deleted_upstream_at_another_branch() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let (remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
+
+    // `wip` tracks `origin/pr-123`; `origin/wip` exists but is a different
+    // branch the user never asked to merge.
+    run_git(&work_repo, &["checkout", "-q", "-b", "wip"]);
+    run_git(&work_repo, &["push", "-q", "origin", "wip:pr-123"]);
+    fs::write(work_repo.join("other.txt"), "other\n").expect("write other file");
+    run_git(&work_repo, &["add", "other.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "other"],
+    );
+    run_git(&work_repo, &["push", "-q", "origin", "wip"]);
+    run_git(&work_repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    run_git(&work_repo, &["config", "branch.wip.remote", "origin"]);
+    run_git(
+        &work_repo,
+        &["config", "branch.wip.merge", "refs/heads/pr-123"],
+    );
+    run_git(&work_repo, &["fetch", "-q", "origin"]);
+    run_git(&remote_repo, &["update-ref", "-d", "refs/heads/pr-123"]);
+
+    let head_before = run_git_capture(&work_repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    let err = opened
+        .pull_with_output_prune(PullMode::Default, true)
+        .expect_err("pull must not fall back to another remote branch");
+
+    assert!(
+        err.to_string().contains("origin/pr-123 no longer exists"),
+        "expected the deleted upstream to be named, got: {err}"
+    );
+    assert_eq!(
+        run_git_capture(&work_repo, &["rev-parse", "HEAD"]).trim(),
+        head_before,
+        "a deleted upstream must never merge a different remote branch"
+    );
+    assert!(
+        !run_git_status(&work_repo, &["config", "--get", "branch.wip.merge"]).success(),
+        "the deleted upstream must be unlinked, not retargeted"
+    );
+}
+
+#[test]
+fn pruning_pull_prunes_inside_the_pull_when_the_remote_only_maps_tracking_refs() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let (_remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
+    run_git(
+        &work_repo,
+        &["update-ref", "refs/remotes/origin/deleted", "HEAD"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    let output = opened
+        .pull_with_output_prune(PullMode::Default, true)
+        .expect("pull with branch pruning");
+
+    assert_eq!(
+        output.command, "git pull --prune",
+        "a remote whose refspecs only map refs/remotes/ needs one fetch, not two"
+    );
+    assert!(
+        !ref_exists(&work_repo, "refs/remotes/origin/deleted"),
+        "the pull must still prune stale remote-tracking branches"
+    );
+}
+
+#[test]
+fn pruning_pull_branch_merges_the_pruned_tracking_ref_without_a_second_fetch() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let (remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
+
+    run_git(&work_repo, &["checkout", "-q", "-b", "feature"]);
+    fs::write(work_repo.join("feature.txt"), "feature\n").expect("write feature file");
+    run_git(&work_repo, &["add", "feature.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+    run_git(&work_repo, &["push", "-q", "origin", "feature"]);
+    let remote_feature = run_git_capture(&remote_repo, &["rev-parse", "refs/heads/feature"])
+        .trim()
+        .to_string();
+    run_git(&work_repo, &["checkout", "-q", "main"]);
+    run_git(&work_repo, &["branch", "-q", "-D", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    let output = opened
+        .pull_branch_with_output_prune("origin", "feature", true)
+        .expect("pull the named remote branch");
+
+    assert_eq!(
+        output.command, "git fetch origin --prune && git merge refs/remotes/origin/feature",
+        "a refspec that maps every branch makes the prune fetch authoritative"
+    );
+    assert_eq!(
+        run_git_capture(&work_repo, &["rev-parse", "HEAD"]).trim(),
+        remote_feature
+    );
+}
+
+#[test]
+fn pruning_pull_keeps_tags_when_the_remote_name_cannot_be_a_config_key() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let (_remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "a=b");
+
+    // `git -c remote.a=b.pruneTags=false` parses as `remote.a` = `b.pruneTags=false`,
+    // so tag pruning can only be suppressed by keeping it out of the pull.
+    run_git(&work_repo, &["config", "remote.a=b.pruneTags", "true"]);
+    run_git(&work_repo, &["update-ref", "refs/tags/local-only", "HEAD"]);
+    run_git(
+        &work_repo,
+        &["update-ref", "refs/remotes/a=b/deleted", "HEAD"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    opened
+        .pull_with_output_prune(PullMode::Default, true)
+        .expect("pull with branch pruning");
+
+    assert!(
+        ref_exists(&work_repo, "refs/tags/local-only"),
+        "branch pruning must never delete a local tag"
+    );
+    assert!(
+        !ref_exists(&work_repo, "refs/remotes/a=b/deleted"),
+        "the same pull must still prune stale remote-tracking branches"
+    );
+}
+
+#[test]
+fn delete_remote_branch_succeeds_when_the_upstream_cleanup_cannot_write_config() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let (_remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
+    run_git(&work_repo, &["checkout", "-q", "-b", "feature"]);
+    run_git(&work_repo, &["push", "-q", "-u", "origin", "feature"]);
+    run_git(&work_repo, &["checkout", "-q", "main"]);
+
+    // A held config lock - another Git process, say - makes
+    // `git branch --unset-upstream` fail after the branch has already been
+    // deleted on the remote.
+    let config_lock = work_repo.join(".git").join("config.lock");
+    fs::write(&config_lock, "").expect("hold the config lock");
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    let output = opened.delete_remote_branch_with_output("origin", "feature");
+
+    fs::remove_file(&config_lock).expect("release the config lock");
+
+    let output = output.expect("a completed remote deletion must not be reported as a failure");
+    assert!(
+        output.stderr.contains("Could not unlink"),
+        "the failed cleanup belongs in the output, got: {:?}",
+        output.stderr
+    );
+    assert!(
+        !ref_exists(&work_repo, "refs/remotes/origin/feature"),
+        "the remote branch deletion itself must still take effect"
+    );
+}

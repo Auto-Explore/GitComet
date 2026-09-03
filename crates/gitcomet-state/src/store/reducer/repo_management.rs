@@ -430,13 +430,6 @@ fn open_repo_with_mode(
             .get(&workdir_key)
             .cloned()
             .flatten();
-        if let Some(enabled) = session_preferences
-            .repo_fetch_prune_deleted_remote_tracking_branches
-            .get(&workdir_key)
-            .copied()
-        {
-            repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
-        }
         repo_state.last_active_at = Some(now);
         repo_state
     });
@@ -526,13 +519,6 @@ pub(super) fn restore_session(
                 .get(&workdir_key)
                 .cloned()
                 .flatten();
-            if let Some(enabled) = session_preferences
-                .repo_fetch_prune_deleted_remote_tracking_branches
-                .get(&workdir_key)
-                .copied()
-            {
-                repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
-            }
             repo_state
         };
         repo_state.set_open(Loadable::NotLoaded);
@@ -948,35 +934,6 @@ fn fill_set_active_repo_inline_impl(
     if let Some(effect) = persist_effect {
         effects.push(effect);
     }
-}
-
-pub(super) fn set_fetch_prune_deleted_remote_tracking_branches(
-    state: &mut AppState,
-    repo_id: RepoId,
-    enabled: bool,
-) -> Vec<Effect> {
-    let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-
-    let workdir = {
-        let repo_state = &mut state.repos[repo_ix];
-        if repo_state.fetch_prune_deleted_remote_tracking_branches == enabled {
-            return Vec::new();
-        }
-
-        repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
-        repo_state.spec.workdir.clone()
-    };
-    let persist_result =
-        session::persist_repo_fetch_prune_deleted_remote_tracking_branches(&workdir, enabled);
-    handle_session_persist_result(
-        state,
-        Some(repo_id),
-        "updating fetch prune settings",
-        persist_result,
-    );
-    Vec::new()
 }
 
 pub(super) fn reorder_repo_tabs(

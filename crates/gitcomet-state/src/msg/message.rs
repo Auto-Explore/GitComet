@@ -246,10 +246,6 @@ pub enum Msg {
         repo_id: RepoId,
         author: Option<String>,
     },
-    SetFetchPruneDeletedRemoteTrackingBranches {
-        repo_id: RepoId,
-        enabled: bool,
-    },
     LoadMoreHistory {
         repo_id: RepoId,
     },

@@ -348,20 +348,21 @@ impl GitCometView {
                 // TODO: Open remote branch picker
             }
             "pull" => {
-                if let Some(repo) = self.active_repo()
-                    && head_branch_has_live_upstream(repo)
-                {
-                    let repo_id = repo.id;
-                    self.store.dispatch(Msg::Pull {
+                let Some(repo) = self.active_repo() else {
+                    return;
+                };
+                let repo_id = repo.id;
+                match pull_request(repo) {
+                    PullRequest::Pull => self.store.dispatch(Msg::Pull {
                         repo_id,
                         mode: PullMode::Default,
-                    });
-                } else {
-                    self.push_toast(
+                    }),
+                    PullRequest::NoRemotes => self.push_toast(
                         components::ToastKind::Error,
-                        "Cannot pull: current branch has no remote upstream".to_string(),
+                        "Cannot pull: no remotes configured".to_string(),
                         cx,
-                    );
+                    ),
+                    PullRequest::NotReady => {}
                 }
             }
             "push" => {
@@ -393,11 +394,15 @@ impl GitCometView {
                     return;
                 };
                 let repo_id = repo.id;
-                let has_live_upstream = head_branch_has_live_upstream(repo);
-                if !has_live_upstream {
+                if !head_branch_has_live_upstream(repo) {
+                    let reason = if head_is_detached(repo) {
+                        "HEAD is detached"
+                    } else {
+                        "current branch has no remote upstream"
+                    };
                     self.push_toast(
                         components::ToastKind::Error,
-                        "Cannot force push: current branch has no remote upstream".to_string(),
+                        format!("Cannot force push: {reason}"),
                         cx,
                     );
                     return;

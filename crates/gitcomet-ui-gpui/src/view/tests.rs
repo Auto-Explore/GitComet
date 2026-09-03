@@ -357,6 +357,63 @@ fn a_selected_remote_branch_is_invalidated_only_after_a_ready_refresh_omits_it()
     assert!(selected_remote_branch_is_missing(&state, Some(&selected)));
 }
 
+#[test]
+fn pull_request_offers_a_pull_for_a_branch_that_was_never_pushed() {
+    let repo = repo_with_push_state(
+        None,
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: None,
+        }])),
+    );
+
+    assert!(!head_branch_has_live_upstream(&repo));
+    assert_eq!(
+        pull_request(&repo),
+        PullRequest::Pull,
+        "the backend pulls from the preferred remote and sets the upstream"
+    );
+}
+
+#[test]
+fn pull_request_allows_a_detached_head_and_reports_a_repo_without_remotes() {
+    let mut detached = repo_with_push_state(None, Loadable::Loading);
+    detached.head_branch = Loadable::Ready("HEAD".to_string());
+    assert!(head_is_detached(&detached));
+    assert_eq!(pull_request(&detached), PullRequest::Pull);
+
+    let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
+    assert_eq!(pull_request(&no_remotes), PullRequest::NoRemotes);
+}
+
+#[test]
+fn a_selected_remote_branch_survives_a_remote_name_containing_a_slash() {
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/nested-remote"),
+        },
+    );
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "forks/alice".to_string(),
+        name: "main".to_string(),
+        target: CommitId("deadbeef".into()),
+    }]));
+    let state = AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    };
+    let selected = SelectedBranch {
+        repo_id,
+        section: BranchSection::Remote,
+        name: "forks/alice/main".to_string(),
+    };
+
+    assert!(!selected_remote_branch_is_missing(&state, Some(&selected)));
+}
+
 #[gpui::test]
 fn folder_drag_marks_repository_bar_available_and_tracks_hover_emphasis(
     cx: &mut gpui::TestAppContext,

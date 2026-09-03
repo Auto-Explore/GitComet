@@ -543,6 +543,9 @@ impl Render for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == pull_picker_invoker.as_ref());
         let pull_tracking_branch_name = tracking_branch_name.clone();
+        let pull_request_ready = self
+            .active_repo()
+            .is_some_and(|repo| !matches!(pull_request(repo), PullRequest::NotReady));
         let pull_menu_icon_color = if pull_picker_active {
             theme.colors.accent.foreground
         } else {
@@ -559,14 +562,28 @@ impl Render for ActionBarView {
             .id("pull")
             .child(
                 components::SplitButton::new(
-                    pull_main.on_click(theme, cx, |this, _e, _w, _cx| {
-                        if let Some(repo_id) = this.active_repo_id() {
-                            this.store.dispatch(Msg::Pull {
-                                repo_id,
-                                mode: PullMode::Default,
-                            });
-                        }
-                    }),
+                    pull_main.disabled(!pull_request_ready).on_click(
+                        theme,
+                        cx,
+                        |this, _e, _w, cx| {
+                            let Some(repo) = this.active_repo() else {
+                                return;
+                            };
+                            let repo_id = repo.id;
+                            match pull_request(repo) {
+                                PullRequest::Pull => this.store.dispatch(Msg::Pull {
+                                    repo_id,
+                                    mode: PullMode::Default,
+                                }),
+                                PullRequest::NoRemotes => this.push_toast(
+                                    components::ToastKind::Error,
+                                    "Cannot pull: no remotes configured".to_string(),
+                                    cx,
+                                ),
+                                PullRequest::NotReady => {}
+                            }
+                        },
+                    ),
                     pull_menu.on_click_with_bounds(
                         theme,
                         cx,
