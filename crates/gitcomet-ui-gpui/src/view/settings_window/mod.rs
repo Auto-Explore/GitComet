@@ -218,6 +218,7 @@ enum SettingsCategory {
     Diff,
     FileEditing,
     GitLog,
+    Remotes,
     Tags,
     GitExecutable,
     Environment,
@@ -232,6 +233,7 @@ impl SettingsCategory {
         SettingsCategory::Diff,
         SettingsCategory::FileEditing,
         SettingsCategory::GitLog,
+        SettingsCategory::Remotes,
         SettingsCategory::Tags,
         SettingsCategory::GitExecutable,
         SettingsCategory::Environment,
@@ -246,6 +248,7 @@ impl SettingsCategory {
             Self::Diff => "Diff",
             Self::FileEditing => "File editing",
             Self::GitLog => "Git log",
+            Self::Remotes => "Remotes",
             Self::Tags => "Tags",
             Self::GitExecutable => "Git executable",
             Self::Environment => "Environment",
@@ -261,6 +264,7 @@ impl SettingsCategory {
             Self::Diff => "icons/swap.svg",
             Self::FileEditing => "icons/pencil.svg",
             Self::GitLog => "icons/history.svg",
+            Self::Remotes => "icons/cloud.svg",
             Self::Tags => "icons/tag.svg",
             Self::GitExecutable => "icons/git_branch.svg",
             Self::Environment => "icons/computer.svg",
@@ -276,6 +280,7 @@ impl SettingsCategory {
             Self::Diff => "settings_window_nav_diff",
             Self::FileEditing => "settings_window_nav_file_editing",
             Self::GitLog => "settings_window_nav_git_log",
+            Self::Remotes => "settings_window_nav_remotes",
             Self::Tags => "settings_window_nav_tags",
             Self::GitExecutable => "settings_window_nav_git_executable",
             Self::Environment => "settings_window_nav_environment",
@@ -304,6 +309,7 @@ impl SettingsCategory {
                 "git log default history mode history columns relative dates show tags graph \
                  author sha"
             }
+            Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
             Self::Tags => "tags automatically fetch tags",
             Self::GitExecutable => "git executable custom path system path version",
             Self::Environment => "environment build operating system app version",
@@ -410,6 +416,7 @@ pub(crate) struct SettingsWindowView {
     history_tag_fetch_mode: GitLogTagFetchMode,
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
+    prune_deleted_remote_branches_on_fetch: bool,
     current_view: SettingsView,
     selected_category: SettingsCategory,
     search_query: String,
@@ -791,6 +798,9 @@ impl SettingsWindowView {
         let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
         let default_history_mode = ui_preferences.history.default_mode;
         let default_tag_type = ui_preferences.repository.default_tag_type;
+        let prune_deleted_remote_branches_on_fetch = ui_preferences
+            .remotes
+            .prune_deleted_remote_branches_on_fetch;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
         // Only the saved editor's entry is needed to render the summary row;
         // installed editors are detected once the row is expanded, see
@@ -1032,6 +1042,7 @@ impl SettingsWindowView {
             history_tag_fetch_mode,
             default_history_mode,
             default_tag_type,
+            prune_deleted_remote_branches_on_fetch,
             current_view: SettingsView::Root,
             selected_category: SettingsCategory::General,
             search_query: String::new(),

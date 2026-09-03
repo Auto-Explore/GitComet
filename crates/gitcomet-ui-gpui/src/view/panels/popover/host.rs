@@ -1,5 +1,29 @@
 use super::*;
 
+fn missing_checkout_remote_branch(
+    state: &AppState,
+    popover: Option<&PopoverKind>,
+) -> Option<String> {
+    let Some(PopoverKind::CheckoutRemoteBranchPrompt {
+        repo_id,
+        remote,
+        branch,
+    }) = popover
+    else {
+        return None;
+    };
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == *repo_id) else {
+        return Some(format!("{remote}/{branch}"));
+    };
+    let Loadable::Ready(branches) = &repo.remote_branches else {
+        return None;
+    };
+    (!branches
+        .iter()
+        .any(|candidate| candidate.remote == *remote && candidate.name == *branch))
+    .then(|| format!("{remote}/{branch}"))
+}
+
 impl PopoverHost {
     #[cfg(test)]
     pub(in crate::view) fn create_branch_input_focus_handle_for_test(
@@ -164,6 +188,17 @@ impl PopoverHost {
             }
             this.commit_prompt_message_drafts
                 .retain(|repo_id, _| this.state.repos.iter().any(|repo| repo.id == *repo_id));
+
+            if let Some(branch) = missing_checkout_remote_branch(&this.state, this.popover.as_ref())
+            {
+                this.close_popover(cx);
+                this.push_toast(
+                    components::ToastKind::Warning,
+                    format!("Remote branch {branch} no longer exists."),
+                    cx,
+                );
+                return;
+            }
 
             // Prefill the squash prompt from the message preview when it lands,
             // rather than in the render path, so the generated message never

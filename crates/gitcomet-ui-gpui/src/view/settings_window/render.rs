@@ -1591,6 +1591,36 @@ impl Render for SettingsWindowView {
                         }
                     }
 
+                    let remotes_card = self
+                        .card("settings_window_remotes_card", "Remotes", theme)
+                        .child(
+                            self.toggle_row(
+                                "settings_window_prune_deleted_remote_branches",
+                                "Automatically prune deleted remote branches on every fetch",
+                                self.prune_deleted_remote_branches_on_fetch,
+                                theme,
+                            )
+                            .border_color(no_separator)
+                            .on_click(cx.listener(
+                                |this, _e: &ClickEvent, _window, cx| {
+                                    this.set_prune_deleted_remote_branches_on_fetch(
+                                        !this.prune_deleted_remote_branches_on_fetch,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_2()
+                                .text_xs()
+                                .text_color(theme.colors.foreground.secondary)
+                                .child(
+                                    "Also applies to the fetch performed by Pull and Pull into current. Local branches whose fetched upstream was deleted are unlinked, but local branches and tags are never deleted.",
+                                ),
+                        );
+
                     let tags_card = self
                         .card("settings_window_tags_card", "Tags", theme)
                         .child(
@@ -1865,6 +1895,7 @@ impl Render for SettingsWindowView {
                         SettingsCategory::Diff => diff_card,
                         SettingsCategory::FileEditing => file_editing_card,
                         SettingsCategory::GitLog => git_log_card,
+                        SettingsCategory::Remotes => remotes_card,
                         SettingsCategory::Tags => tags_card,
                         SettingsCategory::GitExecutable => git_executable_card,
                         SettingsCategory::Environment => environment_card,

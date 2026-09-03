@@ -159,10 +159,31 @@ fn create_branch_already_exists_error(branch: &str) -> Error {
     create_branch_error(format!("fatal: a branch named '{branch}' already exists"))
 }
 
+fn checkout_remote_branch_missing_error(remote: &str, branch: &str) -> Error {
+    Error::new(ErrorKind::Git(GitFailure::new(
+        "git checkout --track",
+        GitFailureId::CommandFailed,
+        Some(128),
+        Vec::new(),
+        Vec::new(),
+        Some(format!(
+            "Remote branch {remote}/{branch} no longer exists. Refresh remote branches and try again."
+        )),
+    )))
+}
+
 fn resolve_branch_target_commit_id(repo: &gix::Repository, target: &str) -> Result<gix::ObjectId> {
     let object = repo
         .rev_parse_single(target)
-        .map_err(|_| create_branch_error(format!("fatal: not a valid object name: '{target}'")))?
+        .map_err(|_| {
+            if target == "HEAD" {
+                create_branch_error("fatal: not a valid object name: 'HEAD'")
+            } else {
+                create_branch_error(format!(
+                    "Branch source '{target}' no longer exists. Refresh remote branches and try again."
+                ))
+            }
+        })?
         .object()
         .map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
@@ -528,6 +549,11 @@ impl GixRepo {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(branch, "branch name")?;
         validate_ref_like_arg(local_branch, "branch name")?;
+
+        let repo = self.reopen_repo()?;
+        if !Self::remote_tracking_branch_exists_in_repo(&repo, remote, branch)? {
+            return Err(checkout_remote_branch_missing_error(remote, branch));
+        }
 
         let upstream = format!("{remote}/{branch}");
         if self.checkout_remote_branch_can_reuse_local_branch(remote, branch, local_branch)? {

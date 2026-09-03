@@ -327,6 +327,9 @@ impl SidebarPaneView {
 
             this.notify_fingerprint = next_fingerprint;
             this.state = next;
+            if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
+                this.selected_branch = None;
+            }
             this.dispatch_sidebar_data_request_if_needed(cx);
 
             // Reflect the newly-active repo's stored search query in the input.

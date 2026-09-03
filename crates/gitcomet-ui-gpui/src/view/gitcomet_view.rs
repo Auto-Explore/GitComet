@@ -348,22 +348,61 @@ impl GitCometView {
                 // TODO: Open remote branch picker
             }
             "pull" => {
-                if let Some(repo_id) = self.active_repo_id() {
+                if let Some(repo) = self.active_repo()
+                    && head_branch_has_live_upstream(repo)
+                {
+                    let repo_id = repo.id;
                     self.store.dispatch(Msg::Pull {
                         repo_id,
                         mode: PullMode::Default,
                     });
+                } else {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        "Cannot pull: current branch has no remote upstream".to_string(),
+                        cx,
+                    );
                 }
             }
             "push" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::Push { repo_id });
+                let Some(repo) = self.active_repo() else {
+                    return;
+                };
+                let repo_id = repo.id;
+                match push_request(repo) {
+                    PushRequest::Push => self.store.dispatch(Msg::Push { repo_id }),
+                    PushRequest::SetUpstream { remote } => {
+                        if let Some(window) = window {
+                            self.open_popover_centered(
+                                PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
+                                window,
+                                cx,
+                            );
+                        }
+                    }
+                    PushRequest::NoRemotes => self.push_toast(
+                        components::ToastKind::Error,
+                        "Cannot push: no remotes configured".to_string(),
+                        cx,
+                    ),
+                    PushRequest::NotReady => {}
                 }
             }
             "force-push" => {
-                if let Some(repo_id) = self.active_repo_id()
-                    && let Some(window) = window
-                {
+                let Some(repo) = self.active_repo() else {
+                    return;
+                };
+                let repo_id = repo.id;
+                let has_live_upstream = head_branch_has_live_upstream(repo);
+                if !has_live_upstream {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        "Cannot force push: current branch has no remote upstream".to_string(),
+                        cx,
+                    );
+                    return;
+                }
+                if let Some(window) = window {
                     self.open_popover_centered(
                         PopoverKind::ForcePushConfirm { repo_id },
                         window,
@@ -835,11 +874,17 @@ impl GitCometView {
         let history_show_tags = ui_preferences.history.show_tags;
         let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
         let default_tag_type = ui_preferences.repository.default_tag_type;
+        let remote_settings = RemoteSettings {
+            prune_deleted_remote_branches_on_fetch: ui_preferences
+                .remotes
+                .prune_deleted_remote_branches_on_fetch,
+        };
         store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: history_show_tags,
             tag_fetch_mode: history_tag_fetch_mode,
         });
         store.dispatch(Msg::SetDefaultTagType(default_tag_type));
+        store.dispatch(Msg::SetRemoteSettings(remote_settings));
         let saved_open_repos = ui_session.open_repos.clone();
         let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;

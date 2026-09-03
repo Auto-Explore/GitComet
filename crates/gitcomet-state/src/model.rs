@@ -76,6 +76,19 @@ impl GitLogSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoteSettings {
+    pub prune_deleted_remote_branches_on_fetch: bool,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self {
+            prune_deleted_remote_branches_on_fetch: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RepoLoadsInFlight {
     in_flight: u32,
@@ -609,6 +622,7 @@ pub struct AppState {
     pub submodule_trust_check_pending: Option<SubmoduleTrustCheckState>,
     pub git_runtime: GitRuntimeState,
     pub git_log_settings: GitLogSettings,
+    pub remote_settings: RemoteSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
 }

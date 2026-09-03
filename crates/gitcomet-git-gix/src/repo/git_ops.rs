@@ -148,6 +148,10 @@ impl GixRepo {
 
     fn list_branches_cli_with_tracking(&self) -> Result<Vec<Branch>> {
         let mut cmd = self.git_workdir_cmd();
+        // `%(upstream:track)` contains words such as "ahead", "behind", and
+        // "gone". Keep this machine-parsed command independent of the user's
+        // Git locale.
+        cmd.env("LC_ALL", "C");
         cmd.arg("for-each-ref")
             .arg("--format=%(refname:short)\t%(objectname)\t%(upstream:short)\t%(upstream:track)")
             .arg("refs/heads");
@@ -305,7 +309,15 @@ fn parse_local_branches_for_each_ref(output: &str) -> Result<Vec<Branch>> {
                 target_hex
             )))
         })?;
-        let upstream = parse_upstream_short(upstream_short);
+        // Git keeps branch.<name>.remote/merge after fetch --prune removes the
+        // corresponding remote-tracking ref and reports that configuration as
+        // `[gone]`.  The domain model's upstream is operational: callers use
+        // `Some` to decide whether Pull and Push can target a real tracking
+        // branch.  Do not expose a configured-but-missing ref as live.
+        let upstream_gone = matches!(upstream_track.trim(), "[gone]" | "gone");
+        let upstream = (!upstream_gone)
+            .then(|| parse_upstream_short(upstream_short))
+            .flatten();
         let divergence = upstream.as_ref().and_then(|_| {
             if upstream_track.trim().is_empty() {
                 Some(UpstreamDivergence {
@@ -786,5 +798,16 @@ mod tests {
                 behind: 0,
             })
         );
+    }
+
+    #[test]
+    fn parse_local_branches_for_each_ref_treats_gone_upstream_as_untracked() {
+        let branches = parse_local_branches_for_each_ref(
+            "feature\t0123456789abcdef0123456789abcdef01234567\torigin/feature\t[gone]\n",
+        )
+        .expect("parse branch output");
+
+        assert_eq!(branches[0].upstream, None);
+        assert_eq!(branches[0].divergence, None);
     }
 }

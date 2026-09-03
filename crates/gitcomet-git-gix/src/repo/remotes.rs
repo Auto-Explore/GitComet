@@ -151,13 +151,105 @@ fn run_git_command_with_optional_output(
     )
 }
 
+fn combine_command_outputs(command: impl Into<String>, outputs: &[CommandOutput]) -> CommandOutput {
+    CommandOutput {
+        command: command.into(),
+        stdout: outputs
+            .iter()
+            .map(|output| output.stdout.trim_end())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        stderr: outputs
+            .iter()
+            .map(|output| output.stderr.trim_end())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        exit_code: Some(0),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ConfiguredRemoteUpstream {
+    local_branch: String,
+    remote: String,
+    remote_branch: String,
+    tracking_ref: Option<String>,
+}
+
+enum UpstreamCleanupScope<'a> {
+    All,
+    Remote(&'a str),
+    RemoteBranches {
+        remote: &'a str,
+        branches: &'a [String],
+    },
+}
+
+impl UpstreamCleanupScope<'_> {
+    fn includes(&self, upstream: &ConfiguredRemoteUpstream) -> bool {
+        match self {
+            Self::All => true,
+            Self::Remote(remote) => upstream.remote == *remote,
+            Self::RemoteBranches { remote, branches } => {
+                upstream.remote == *remote
+                    && branches
+                        .iter()
+                        .any(|branch| branch == &upstream.remote_branch)
+            }
+        }
+    }
+}
+
+fn append_unlinked_upstreams(
+    mut output: CommandOutput,
+    unlinked_branches: &[String],
+) -> CommandOutput {
+    if unlinked_branches.is_empty() {
+        return output;
+    }
+    if !output.stdout.is_empty() && !output.stdout.ends_with('\n') {
+        output.stdout.push('\n');
+    }
+    output
+        .stdout
+        .push_str("Unlinked deleted upstream branches:\n");
+    for branch in unlinked_branches {
+        output.stdout.push_str("- ");
+        output.stdout.push_str(branch);
+        output.stdout.push('\n');
+    }
+    output
+}
+
 impl GixRepo {
     fn best_effort_delete_reference(&self, ref_name: &str) {
-        let repo = self._repo.to_thread_local();
+        let Ok(repo) = self.reopen_repo() else {
+            return;
+        };
         let Ok(Some(reference)) = repo.try_find_reference(ref_name) else {
             return;
         };
         let _ = reference.delete();
+    }
+
+    fn remote_fetch_and_push_urls_match(&self, remote_name: &str) -> bool {
+        let Ok(repo) = self.reopen_repo() else {
+            return false;
+        };
+        let Ok(remote) = repo.find_remote(remote_name) else {
+            return false;
+        };
+        let fetch_urls = remote
+            .urls(gix::remote::Direction::Fetch)
+            .map(|url| url.to_bstring())
+            .collect::<Vec<_>>();
+        let push_urls = remote
+            .urls(gix::remote::Direction::Push)
+            .map(|url| url.to_bstring())
+            .collect::<Vec<_>>();
+        !fetch_urls.is_empty() && fetch_urls == push_urls
     }
 
     fn preferred_remote_name(&self) -> Result<Option<String>> {
@@ -180,6 +272,225 @@ impl GixRepo {
         Ok(Some(head.to_string()))
     }
 
+    /// Return only configured fetch refspecs whose destinations are in the
+    /// remote-tracking namespace, plus the negative refspecs that constrain
+    /// them. Supplying these refspecs explicitly keeps `--prune` from applying
+    /// to configured destinations such as `refs/tags/*` or `refs/notes/*`.
+    fn remote_tracking_fetch_refspecs(&self, remote_name: &str) -> Result<Vec<String>> {
+        let repo = self.reopen_repo()?;
+        let remote = repo.find_remote(remote_name).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "gix find_remote {remote_name}: {e}"
+            )))
+        })?;
+        let mut tracking = Vec::new();
+        let mut exclusions = Vec::new();
+
+        for refspec in remote.refspecs(gix::remote::Direction::Fetch) {
+            let refspec = refspec.to_ref();
+            let serialized = refspec.to_bstring();
+            if refspec
+                .destination()
+                .is_some_and(|destination| destination.starts_with(b"refs/remotes/"))
+            {
+                tracking.push(serialized.to_str_lossy().into_owned());
+            } else if serialized.starts_with(b"^") {
+                exclusions.push(serialized.to_str_lossy().into_owned());
+            }
+        }
+
+        // Git applies negative refspecs to the complete positive set regardless
+        // of their configuration order, so appending them preserves the remote's
+        // exclusions while keeping every prunable destination under refs/remotes.
+        // Negative-only command lines are invalid and cannot prune anything.
+        if !tracking.is_empty() {
+            tracking.extend(exclusions);
+        }
+        Ok(tracking)
+    }
+
+    /// Configured branch upstreams. `tracking_ref` is populated only when the
+    /// remote's positive and negative fetch refspecs map this upstream locally.
+    fn configured_remote_upstreams(
+        &self,
+        scope: UpstreamCleanupScope<'_>,
+    ) -> Result<Vec<ConfiguredRemoteUpstream>> {
+        let repo = self.reopen_repo()?;
+        let refs = repo
+            .references()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+        let iter = refs
+            .local_branches()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))))?;
+        let mut upstreams = Vec::new();
+
+        for reference in iter {
+            let reference = reference
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let local_branch = reference.name().shorten().to_str_lossy().into_owned();
+            let Some(gix::remote::Name::Symbol(remote)) =
+                reference.remote_name(gix::remote::Direction::Fetch)
+            else {
+                continue;
+            };
+            let remote = remote.into_owned();
+            let remote_ref = match reference.remote_ref_name(gix::remote::Direction::Fetch) {
+                Some(Ok(name)) => name,
+                Some(Err(_)) | None => continue,
+            };
+            let Some(remote_branch) = remote_ref
+                .as_bstr()
+                .strip_prefix(b"refs/heads/")
+                .map(|name| name.to_str_lossy().into_owned())
+                .filter(|name| !name.is_empty())
+            else {
+                continue;
+            };
+            let tracking_ref = reference
+                .remote_tracking_ref_name(gix::remote::Direction::Fetch)
+                .and_then(std::result::Result::ok)
+                .map(|name| name.as_bstr().to_str_lossy().into_owned());
+            let upstream = ConfiguredRemoteUpstream {
+                local_branch,
+                remote,
+                remote_branch,
+                tracking_ref,
+            };
+            if !scope.includes(&upstream) {
+                continue;
+            }
+            upstreams.push(upstream);
+        }
+
+        upstreams.sort_unstable_by(|left, right| left.local_branch.cmp(&right.local_branch));
+        Ok(upstreams)
+    }
+
+    fn configured_upstreams_with_tracking_presence(
+        &self,
+        upstreams: Vec<ConfiguredRemoteUpstream>,
+        expected_to_exist: bool,
+    ) -> Result<Vec<ConfiguredRemoteUpstream>> {
+        let repo = self.reopen_repo()?;
+        let mut matching = Vec::new();
+        for upstream in upstreams {
+            // Without a matching fetch refspec, a fetch was not authoritative
+            // for this configured upstream. It is neither present nor missing
+            // for automatic cleanup purposes.
+            let Some(tracking_ref) = upstream.tracking_ref.as_deref() else {
+                continue;
+            };
+            let tracking_exists = repo
+                .try_find_reference(tracking_ref)
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "gix try_find upstream reference: {e}"
+                    )))
+                })?
+                .is_some();
+            if tracking_exists == expected_to_exist {
+                matching.push(upstream);
+            }
+        }
+        Ok(matching)
+    }
+
+    fn best_effort_unlink_upstreams_pruned_during_failed_fetch(
+        &self,
+        tracked_before_fetch: Vec<ConfiguredRemoteUpstream>,
+    ) {
+        if tracked_before_fetch.is_empty() {
+            return;
+        }
+        if let Ok(disappeared) =
+            self.configured_upstreams_with_tracking_presence(tracked_before_fetch, false)
+        {
+            let _ = self.unlink_remote_upstreams(disappeared);
+        }
+    }
+
+    /// Configured branch upstreams whose authoritative remote-tracking
+    /// destination no longer exists locally.
+    fn missing_configured_remote_upstreams(
+        &self,
+        scope: UpstreamCleanupScope<'_>,
+    ) -> Result<Vec<ConfiguredRemoteUpstream>> {
+        let upstreams = self.configured_remote_upstreams(scope)?;
+        self.configured_upstreams_with_tracking_presence(upstreams, false)
+    }
+
+    fn unlink_remote_upstreams(
+        &self,
+        upstreams: Vec<ConfiguredRemoteUpstream>,
+    ) -> Result<Vec<String>> {
+        let mut unlinked = Vec::with_capacity(upstreams.len());
+        let mut failures = Vec::new();
+
+        for upstream in upstreams {
+            if let Err(error) = validate_ref_like_arg(&upstream.local_branch, "branch name") {
+                failures.push(format!("{}: {error}", upstream.local_branch));
+                continue;
+            }
+            let label = format!("git branch --unset-upstream {}", upstream.local_branch);
+            let mut cmd = self.git_workdir_cmd();
+            cmd.arg("branch")
+                .arg("--unset-upstream")
+                .arg("--")
+                .arg(&upstream.local_branch);
+            match run_git_simple(cmd, &label) {
+                Ok(()) => unlinked.push(upstream.local_branch),
+                Err(error) => failures.push(format!("{}: {error}", upstream.local_branch)),
+            }
+        }
+
+        if failures.is_empty() {
+            Ok(unlinked)
+        } else {
+            Err(Error::new(ErrorKind::Backend(format!(
+                "Remote pruning completed, but GitComet could not unlink some deleted upstreams: {}",
+                failures.join("; ")
+            ))))
+        }
+    }
+
+    fn unlink_missing_remote_upstreams(
+        &self,
+        scope: UpstreamCleanupScope<'_>,
+    ) -> Result<Vec<String>> {
+        let missing = self.missing_configured_remote_upstreams(scope)?;
+        self.unlink_remote_upstreams(missing)
+    }
+
+    /// Unlink an exact, explicitly deleted remote destination. Unlike fetch
+    /// pruning, a successful delete (or an `ls-remote` confirmation) remains
+    /// authoritative even when a narrow fetch refspec excludes the branch.
+    fn unlink_configured_remote_upstreams(
+        &self,
+        scope: UpstreamCleanupScope<'_>,
+    ) -> Result<Vec<String>> {
+        let configured = self.configured_remote_upstreams(scope)?;
+        self.unlink_remote_upstreams(configured)
+    }
+
+    /// Return branches confirmed absent from the endpoint represented by the
+    /// remote-tracking refs, removing those refs as a side effect. A successful
+    /// push is sufficient proof only when fetch and push resolve to the same
+    /// endpoint; otherwise query the fetch endpoint before unlinking anything.
+    fn prune_tracking_refs_after_successful_push_delete(
+        &self,
+        remote: &str,
+        branches: &[String],
+    ) -> Vec<String> {
+        if self.remote_fetch_and_push_urls_match(remote) {
+            for branch in branches {
+                self.best_effort_delete_reference(&format!("refs/remotes/{remote}/{branch}"));
+            }
+            return branches.to_vec();
+        }
+
+        self.prune_missing_remote_tracking_refs(remote, branches)
+    }
+
     fn branch_upstream(&self, branch_name: &str) -> Result<Option<Upstream>> {
         validate_ref_like_arg(branch_name, "branch name")?;
 
@@ -198,6 +509,20 @@ impl GixRepo {
                 Some(Err(_)) | None => return Ok(None),
             };
 
+        let Some(mut tracking_ref) = repo
+            .try_find_reference(tracking_ref_name.as_ref())
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "gix try_find upstream reference: {e}"
+                )))
+            })?
+        else {
+            return Ok(None);
+        };
+        if tracking_ref.peel_to_id().is_err() {
+            return Ok(None);
+        }
+
         let upstream_short = tracking_ref_name.shorten().to_str_lossy().into_owned();
         let Some((remote, upstream_branch)) = parse_short_remote_branch_name(&upstream_short)
         else {
@@ -208,10 +533,6 @@ impl GixRepo {
             remote: remote.to_string(),
             branch: upstream_branch.to_string(),
         }))
-    }
-
-    fn branch_has_upstream(&self, branch: &str) -> Result<bool> {
-        Ok(self.branch_upstream(branch)?.is_some())
     }
 
     pub(super) fn list_remotes_impl(&self) -> Result<Vec<Remote>> {
@@ -252,7 +573,11 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Vec<RemoteBranch>> {
         cancellation.check_cancelled()?;
-        let repo = self._repo.to_thread_local();
+        // Fetch and prune run through the Git CLI, outside gix. Reopen the
+        // repository so this refresh cannot reuse a packed-refs snapshot from
+        // before the command and resurrect already-pruned tracking branches in
+        // the UI.
+        let repo = self.reopen_repo()?;
         let refs = repo
             .references()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
@@ -277,6 +602,12 @@ impl GixRepo {
                     .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel branch: {e}"))))?
                     .detach(),
             };
+            let Ok(object) = repo.find_object(target) else {
+                continue;
+            };
+            if object.peel_to_commit().is_err() {
+                continue;
+            }
 
             branches.push(RemoteBranch {
                 remote: remote.to_string(),
@@ -290,7 +621,7 @@ impl GixRepo {
         Ok(branches)
     }
 
-    fn fetch_all_with_optional_output_impl(
+    fn fetch_all_command_with_optional_output_impl(
         &self,
         prune: bool,
         capture_output: bool,
@@ -299,16 +630,92 @@ impl GixRepo {
         cmd.arg("fetch").arg("--all");
         if prune {
             cmd.arg("--prune");
+        } else {
+            cmd.arg("--no-prune");
         }
+        cmd.arg("--no-prune-tags");
         run_git_command_with_optional_output(
             cmd,
             if prune {
-                "git fetch --all --prune"
+                "git fetch --all --prune --no-prune-tags"
             } else {
-                "git fetch --all"
+                "git fetch --all --no-prune --no-prune-tags"
             },
             capture_output,
         )
+    }
+
+    fn fetch_all_with_optional_output_impl(
+        &self,
+        prune: bool,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
+        let tracked_before_fetch = if prune {
+            let configured = self.configured_remote_upstreams(UpstreamCleanupScope::All)?;
+            self.configured_upstreams_with_tracking_presence(configured, true)?
+        } else {
+            Vec::new()
+        };
+        let output = match self.fetch_all_command_with_optional_output_impl(prune, capture_output) {
+            Ok(output) => output,
+            Err(error) => {
+                self.best_effort_unlink_upstreams_pruned_during_failed_fetch(tracked_before_fetch);
+                return Err(error);
+            }
+        };
+        if !prune {
+            return Ok(output);
+        }
+        let unlinked = self.unlink_missing_remote_upstreams(UpstreamCleanupScope::All)?;
+        Ok(append_unlinked_upstreams(output, &unlinked))
+    }
+
+    fn prune_remote_tracking_refs_command_with_optional_output_impl(
+        &self,
+        remote: &str,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(remote, "remote name")?;
+        let label = format!("git fetch {remote} --prune --no-prune-tags");
+        let refspecs = self.remote_tracking_fetch_refspecs(remote)?;
+        if refspecs.is_empty() {
+            // With no configured destination under refs/remotes, this remote
+            // cannot authoritatively prune a remote-tracking ref.
+            return Ok(CommandOutput::empty_success(label));
+        }
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("fetch")
+            .arg("--prune")
+            .arg("--no-prune-tags")
+            .arg("--")
+            .arg(remote);
+        for refspec in refspecs {
+            cmd.arg(refspec);
+        }
+        run_git_command_with_optional_output(cmd, &label, capture_output)
+    }
+
+    fn prune_remote_tracking_refs_with_optional_output_impl(
+        &self,
+        remote: &str,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
+        let configured = self.configured_remote_upstreams(UpstreamCleanupScope::Remote(remote))?;
+        let tracked_before_fetch =
+            self.configured_upstreams_with_tracking_presence(configured, true)?;
+        let output = match self
+            .prune_remote_tracking_refs_command_with_optional_output_impl(remote, capture_output)
+        {
+            Ok(output) => output,
+            Err(error) => {
+                self.best_effort_unlink_upstreams_pruned_during_failed_fetch(tracked_before_fetch);
+                return Err(error);
+            }
+        };
+        let unlinked =
+            self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remote(remote))?;
+        Ok(append_unlinked_upstreams(output, &unlinked))
     }
 
     pub(super) fn fetch_all_impl(&self, prune: bool) -> Result<()> {
@@ -323,15 +730,32 @@ impl GixRepo {
     fn pull_with_optional_output_impl(
         &self,
         mode: PullMode,
+        prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
         let branch = self.current_branch_name()?;
-        let has_upstream = match branch.as_deref() {
-            Some(branch) => self.branch_has_upstream(branch)?,
-            None => true,
+        let upstream = match branch.as_deref() {
+            Some(branch) => self.branch_upstream(branch)?,
+            None => None,
         };
+        let has_upstream = branch.is_none() || upstream.is_some();
+        let preferred_remote = if has_upstream {
+            None
+        } else {
+            self.preferred_remote_name()?
+        };
+        let pull_remote = upstream
+            .as_ref()
+            .map(|upstream| upstream.remote.as_str())
+            .or(preferred_remote.as_deref());
+        let cleanup_remote = pull_remote.map(str::to_owned);
 
         let mut cmd = self.git_workdir_cmd();
+        cmd.arg("-c").arg("fetch.pruneTags=false");
+        if let Some(remote) = pull_remote {
+            cmd.arg("-c")
+                .arg(format!("remote.{remote}.pruneTags=false"));
+        }
         cmd.arg("pull");
         match mode {
             // Be explicit about ff behavior so we don't create merge commits when a fast-forward
@@ -356,17 +780,26 @@ impl GixRepo {
 
         if !has_upstream
             && let Some(branch) = branch
-            && let Some(remote) = self.preferred_remote_name()?
+            && let Some(remote) = preferred_remote
         {
             validate_ref_like_arg(&remote, "remote name")?;
             validate_ref_like_arg(&branch, "branch name")?;
 
-            cmd.arg("--").arg(&remote).arg(&branch);
+            let mut outputs = Vec::new();
+            if prune {
+                outputs.push(self.prune_remote_tracking_refs_with_optional_output_impl(
+                    &remote,
+                    capture_output,
+                )?);
+            }
+
+            cmd.arg("--no-prune").arg("--").arg(&remote).arg(&branch);
             let output = run_git_command_with_optional_output(
                 cmd,
-                &format!("git pull {remote} {branch}"),
+                &format!("git pull --no-prune {remote} {branch}"),
                 capture_output,
             )?;
+            outputs.push(output);
 
             let mut set_upstream = self.git_workdir_cmd();
             set_upstream
@@ -374,20 +807,59 @@ impl GixRepo {
                 .arg("--set-upstream-to")
                 .arg(format!("{remote}/{branch}"))
                 .arg("--")
-                .arg(branch);
+                .arg(&branch);
             run_git_simple(set_upstream, "git branch --set-upstream-to")?;
-            return Ok(output);
+            return Ok(combine_command_outputs(
+                if prune {
+                    format!("git fetch {remote} --prune && git pull {remote} {branch}")
+                } else {
+                    format!("git pull --no-prune {remote} {branch}")
+                },
+                &outputs,
+            ));
         }
 
-        run_git_command_with_optional_output(cmd, "git pull", capture_output)
+        let mut outputs = Vec::new();
+        if prune && let Some(remote) = cleanup_remote.as_deref() {
+            outputs.push(
+                self.prune_remote_tracking_refs_with_optional_output_impl(remote, capture_output)?,
+            );
+        }
+
+        // Integrate with pruning disabled after the dedicated fetch above. A
+        // configured non-tracking destination (notably refs/tags/*) is still
+        // fetched normally, but can never be deleted by this pull.
+        cmd.arg("--no-prune");
+        let output =
+            run_git_command_with_optional_output(cmd, "git pull --no-prune", capture_output)?;
+        if outputs.is_empty() {
+            return Ok(output);
+        }
+        outputs.push(output);
+        Ok(combine_command_outputs(
+            format!(
+                "git fetch {} --prune && git pull --no-prune",
+                cleanup_remote.as_deref().unwrap_or_default()
+            ),
+            &outputs,
+        ))
     }
 
     pub(super) fn pull_impl(&self, mode: PullMode) -> Result<()> {
-        self.pull_with_optional_output_impl(mode, false).map(|_| ())
+        self.pull_with_optional_output_impl(mode, true, false)
+            .map(|_| ())
     }
 
     pub(super) fn pull_with_output_impl(&self, mode: PullMode) -> Result<CommandOutput> {
-        self.pull_with_optional_output_impl(mode, true)
+        self.pull_with_optional_output_impl(mode, true, true)
+    }
+
+    pub(super) fn pull_with_output_prune_impl(
+        &self,
+        mode: PullMode,
+        prune: bool,
+    ) -> Result<CommandOutput> {
+        self.pull_with_optional_output_impl(mode, prune, true)
     }
 
     fn push_set_upstream_with_optional_output_impl(
@@ -574,18 +1046,20 @@ impl GixRepo {
         self.push_after_commit_target_with_optional_output_impl(target, true, true)
     }
 
-    fn fetch_remote_branch_tip_for_safe_push(
+    fn fetch_remote_branch_tip_with_output(
         &self,
         remote: &str,
         branch: &str,
-    ) -> Result<Option<CommitId>> {
+    ) -> Result<Option<(CommitId, CommandOutput)>> {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(branch, "branch name")?;
 
         let remote_ref = format!("refs/heads/{branch}");
-        let label = format!("git fetch --refmap= {remote} {remote_ref}");
+        let label = format!("git fetch --no-prune --refmap= {remote} {remote_ref}");
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("fetch")
+            .arg("--no-prune")
+            .arg("--no-prune-tags")
             .arg("--no-tags")
             .arg("--refmap=")
             .arg("--")
@@ -598,6 +1072,12 @@ impl GixRepo {
             }
             return Err(git_command_failed_error(&label, output));
         }
+        let fetch_output = CommandOutput {
+            command: label,
+            stdout: bytes_to_text_preserving_utf8(&output.stdout),
+            stderr: bytes_to_text_preserving_utf8(&output.stderr),
+            exit_code: output.status.code(),
+        };
 
         let label = "git rev-parse --verify FETCH_HEAD^{commit}";
         let mut cmd = self.git_workdir_cmd();
@@ -614,7 +1094,17 @@ impl GixRepo {
             .to_string();
         let tip = CommitId(tip.into());
         validate_hex_commit_id(&tip)?;
-        Ok(Some(tip))
+        Ok(Some((tip, fetch_output)))
+    }
+
+    fn fetch_remote_branch_tip_for_safe_push(
+        &self,
+        remote: &str,
+        branch: &str,
+    ) -> Result<Option<CommitId>> {
+        Ok(self
+            .fetch_remote_branch_tip_with_output(remote, branch)?
+            .map(|(tip, _)| tip))
     }
 
     fn commit_is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
@@ -869,17 +1359,60 @@ impl GixRepo {
         remote: &str,
         branch: &str,
     ) -> Result<CommandOutput> {
+        self.pull_branch_with_output_prune_impl(remote, branch, false)
+    }
+
+    pub(super) fn pull_branch_with_output_prune_impl(
+        &self,
+        remote: &str,
+        branch: &str,
+        prune: bool,
+    ) -> Result<CommandOutput> {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(branch, "branch name")?;
 
-        let command_str = format!("git pull --no-rebase --ff {remote} {branch}");
+        if prune {
+            let prune_output =
+                self.prune_remote_tracking_refs_with_optional_output_impl(remote, true)?;
+            let Some((tip, fetch_output)) =
+                self.fetch_remote_branch_tip_with_output(remote, branch)?
+            else {
+                // The explicit fetch is authoritative even when configured
+                // refspecs exclude this branch. Remove a stale row and unlink
+                // any branch configured to track the now-confirmed deletion.
+                self.best_effort_delete_reference(&format!("refs/remotes/{remote}/{branch}"));
+                let deleted = [branch.to_string()];
+                let _ =
+                    self.unlink_configured_remote_upstreams(UpstreamCleanupScope::RemoteBranches {
+                        remote,
+                        branches: &deleted,
+                    });
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "Remote branch {remote}/{branch} no longer exists. Fetch completed and removed its stale reference."
+                ))));
+            };
+            let merge_output = self.merge_ref_with_output_impl(tip.as_ref())?;
+            return Ok(combine_command_outputs(
+                format!(
+                    "git fetch {remote} --prune && git fetch {remote} refs/heads/{branch} && git merge {tip}"
+                ),
+                &[prune_output, fetch_output, merge_output],
+            ));
+        }
+
+        let command_str = format!("git pull --no-rebase --ff --no-prune {remote} {branch}");
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("-c")
             .arg("color.ui=false")
+            .arg("-c")
+            .arg("fetch.pruneTags=false")
+            .arg("-c")
+            .arg(format!("remote.{remote}.pruneTags=false"))
             .arg("--no-pager")
             .arg("pull")
             .arg("--no-rebase")
             .arg("--ff")
+            .arg("--no-prune")
             .arg("--")
             .arg(remote)
             .arg(branch);
@@ -1027,10 +1560,16 @@ impl GixRepo {
             .arg(branch);
         let output = run_git_with_output(cmd, &label)?;
 
-        let refname = format!("refs/remotes/{remote}/{branch}");
-        self.best_effort_delete_reference(&refname);
+        let deleted = [branch.to_string()];
+        let deleted_from_fetch =
+            self.prune_tracking_refs_after_successful_push_delete(remote, &deleted);
+        let unlinked =
+            self.unlink_configured_remote_upstreams(UpstreamCleanupScope::RemoteBranches {
+                remote,
+                branches: &deleted_from_fetch,
+            })?;
 
-        Ok(output)
+        Ok(append_unlinked_upstreams(output, &unlinked))
     }
 
     /// Delete several branches on `remote` with one `git push --delete`.
@@ -1059,11 +1598,15 @@ impl GixRepo {
 
         match run_git_with_output(cmd, &label) {
             Ok(output) => {
-                for branch in branches {
-                    let refname = format!("refs/remotes/{remote}/{branch}");
-                    self.best_effort_delete_reference(&refname);
-                }
-                Ok(output)
+                let deleted_from_fetch =
+                    self.prune_tracking_refs_after_successful_push_delete(remote, branches);
+                let unlinked = self.unlink_configured_remote_upstreams(
+                    UpstreamCleanupScope::RemoteBranches {
+                        remote,
+                        branches: &deleted_from_fetch,
+                    },
+                )?;
+                Ok(append_unlinked_upstreams(output, &unlinked))
             }
             // How much a failed batch deleted depends on why it failed: a
             // refspec naming a ref the remote does not have is rejected before
@@ -1072,27 +1615,37 @@ impl GixRepo {
             // instead of guessing — guessing either way is wrong, and pruning
             // blindly would erase rows for branches that still exist.
             Err(batch_error) => {
-                self.prune_missing_remote_tracking_refs(remote, branches);
+                let missing = self.prune_missing_remote_tracking_refs(remote, branches);
+                let _ =
+                    self.unlink_configured_remote_upstreams(UpstreamCleanupScope::RemoteBranches {
+                        remote,
+                        branches: &missing,
+                    });
                 Err(batch_error)
             }
         }
     }
 
     /// Drop the local remote-tracking ref for each of `branches` that no longer
-    /// exists on `remote`.
+    /// exists on `remote`, and refresh refs that still exist there.
     ///
-    /// Best-effort throughout: a failure here only leaves a stale row until the
-    /// next fetch, so it must never turn a partial success into an error.
-    fn prune_missing_remote_tracking_refs(&self, remote: &str, branches: &[String]) {
+    /// The refresh matters when `remote.<name>.pushurl` differs: Git itself
+    /// removes a remote-tracking ref after a successful push deletion, even
+    /// though that ref represents the fetch endpoint where the branch may still
+    /// be live. Best-effort throughout: a failure here must never turn a partial
+    /// push success into an error.
+    fn prune_missing_remote_tracking_refs(&self, remote: &str, branches: &[String]) -> Vec<String> {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("ls-remote").arg("--heads").arg("--").arg(remote);
         for branch in branches {
             cmd.arg(format!("refs/heads/{branch}"));
         }
         let Ok(output) = run_git_with_output(cmd, "git ls-remote --heads") else {
-            return;
+            return Vec::new();
         };
 
+        let mut missing = Vec::new();
+        let mut present = Vec::new();
         for branch in branches {
             let refname = format!("refs/heads/{branch}");
             let still_on_remote = output.stdout.lines().any(|line| {
@@ -1101,12 +1654,35 @@ impl GixRepo {
             });
             if !still_on_remote {
                 self.best_effort_delete_reference(&format!("refs/remotes/{remote}/{branch}"));
+                missing.push(branch.clone());
+            } else {
+                present.push(branch);
             }
         }
+
+        if !present.is_empty() {
+            let mut cmd = self.git_workdir_cmd();
+            cmd.arg("fetch")
+                .arg("--no-prune")
+                .arg("--no-prune-tags")
+                .arg("--no-tags")
+                .arg("--")
+                .arg(remote);
+            for branch in present {
+                cmd.arg(format!(
+                    "+refs/heads/{branch}:refs/remotes/{remote}/{branch}"
+                ));
+            }
+            let _ = run_git_with_output(cmd, "git fetch live remote-tracking branches");
+        }
+        missing
     }
 
     pub(super) fn prune_merged_branches_with_output_impl(&self) -> Result<CommandOutput> {
-        let fetch_output = self.fetch_all_with_output_impl(true)?;
+        // Keep configured upstreams intact until merged local branches have
+        // been selected: that command intentionally uses a missing upstream as
+        // one of its deletion criteria. Surviving branches are unlinked below.
+        let fetch_output = self.fetch_all_command_with_optional_output_impl(true, true)?;
 
         let mut merged_cmd = self.git_workdir_cmd();
         merged_cmd
@@ -1190,12 +1766,14 @@ impl GixRepo {
             }
         }
 
-        Ok(CommandOutput {
+        let output = CommandOutput {
             command: "git prune merged branches".to_string(),
             stdout,
             stderr,
             exit_code: Some(0),
-        })
+        };
+        let unlinked = self.unlink_missing_remote_upstreams(UpstreamCleanupScope::All)?;
+        Ok(append_unlinked_upstreams(output, &unlinked))
     }
 }
 

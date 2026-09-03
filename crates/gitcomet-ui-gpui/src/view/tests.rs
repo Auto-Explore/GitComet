@@ -240,6 +240,123 @@ fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
     }
 }
 
+fn repo_with_push_state(
+    upstream: Option<Upstream>,
+    remotes: Loadable<Arc<Vec<Remote>>>,
+) -> RepoState {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/push-request"),
+        },
+    );
+    repo.head_branch = Loadable::Ready("feature".to_string());
+    repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: "feature".to_string(),
+        target: CommitId("deadbeef".into()),
+        upstream,
+        divergence: None,
+    }]));
+    repo.remotes = remotes;
+    repo
+}
+
+#[test]
+fn push_request_uses_live_upstream_without_waiting_for_remote_list() {
+    let repo = repo_with_push_state(
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        }),
+        Loadable::Loading,
+    );
+
+    assert_eq!(push_request(&repo), PushRequest::Push);
+    assert!(head_branch_has_live_upstream(&repo));
+}
+
+#[test]
+fn push_request_offers_standard_remote_for_untracked_branch() {
+    let repo = repo_with_push_state(
+        None,
+        Loadable::Ready(Arc::new(vec![
+            Remote {
+                name: "backup".to_string(),
+                url: None,
+            },
+            Remote {
+                name: "origin".to_string(),
+                url: None,
+            },
+        ])),
+    );
+
+    assert_eq!(
+        push_request(&repo),
+        PushRequest::SetUpstream {
+            remote: "origin".to_string()
+        }
+    );
+    assert!(!head_branch_has_live_upstream(&repo));
+}
+
+#[test]
+fn push_request_uses_first_remote_when_origin_is_absent() {
+    let repo = repo_with_push_state(
+        None,
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "upstream".to_string(),
+            url: None,
+        }])),
+    );
+
+    assert_eq!(
+        push_request(&repo),
+        PushRequest::SetUpstream {
+            remote: "upstream".to_string()
+        }
+    );
+}
+
+#[test]
+fn push_request_distinguishes_no_remotes_from_loading_data() {
+    let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
+    let loading = repo_with_push_state(None, Loadable::Loading);
+
+    assert_eq!(push_request(&no_remotes), PushRequest::NoRemotes);
+    assert_eq!(push_request(&loading), PushRequest::NotReady);
+}
+
+#[test]
+fn a_selected_remote_branch_is_invalidated_only_after_a_ready_refresh_omits_it() {
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/selected-remote-branch"),
+        },
+    );
+    let selected = SelectedBranch {
+        repo_id,
+        section: BranchSection::Remote,
+        name: "origin/deleted".to_string(),
+    };
+    let mut state = AppState {
+        repos: vec![repo.clone()],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    };
+
+    assert!(
+        !selected_remote_branch_is_missing(&state, Some(&selected)),
+        "loading data is not proof that the selection disappeared"
+    );
+
+    repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+    state.repos[0] = repo;
+    assert!(selected_remote_branch_is_missing(&state, Some(&selected)));
+}
+
 #[gpui::test]
 fn folder_drag_marks_repository_bar_available_and_tracks_hover_emphasis(
     cx: &mut gpui::TestAppContext,
@@ -1475,7 +1592,7 @@ fn branch_sidebar_sorts_unsorted_remote_branches() {
 }
 
 #[test]
-fn remote_section_includes_tracked_upstream_without_remote_tracking_ref() {
+fn remote_section_excludes_upstream_without_remote_tracking_ref() {
     let mut repo = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1500,20 +1617,18 @@ fn remote_section_includes_tracked_upstream_without_remote_tracking_ref() {
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
 
     let rows = GitCometView::branch_sidebar_rows(&repo);
-    let tracked_row = rows.iter().find(|r| {
-        matches!(
-            r,
-            BranchSidebarRow::Branch {
-                section: BranchSection::Remote,
-                name,
-                is_upstream: true,
-                ..
-            } if name.as_ref() == "origin/feature"
-        )
-    });
     assert!(
-        tracked_row.is_some(),
-        "expected tracked upstream branch to be listed under Remote section"
+        rows.iter().all(|row| {
+            !matches!(
+                row,
+                BranchSidebarRow::Branch {
+                    section: BranchSection::Remote,
+                    name,
+                    ..
+                } if name.as_ref() == "origin/feature"
+            )
+        }),
+        "a configured upstream must not synthesize a missing remote branch"
     );
 }
 

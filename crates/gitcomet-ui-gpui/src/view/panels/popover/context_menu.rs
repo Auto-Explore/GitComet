@@ -1293,7 +1293,32 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::Push { repo_id } => {
-                self.store.dispatch(Msg::Push { repo_id });
+                let request = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .map(push_request)
+                    .unwrap_or(PushRequest::NotReady);
+                match request {
+                    PushRequest::Push => self.store.dispatch(Msg::Push { repo_id }),
+                    PushRequest::SetUpstream { remote } => {
+                        let anchor = self.popover_anchor_point();
+                        self.open_popover_at(
+                            PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
+                            anchor,
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+                    PushRequest::NoRemotes => self.push_toast(
+                        components::ToastKind::Error,
+                        "Cannot push: no remotes configured".to_string(),
+                        cx,
+                    ),
+                    PushRequest::NotReady => {}
+                }
             }
             ContextMenuAction::SetUpstreamBranch {
                 repo_id,

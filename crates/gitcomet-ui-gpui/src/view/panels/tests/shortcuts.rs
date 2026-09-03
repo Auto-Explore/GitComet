@@ -1351,7 +1351,16 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
         "gitcomet_ui_test_{}_repo_shortcuts",
         std::process::id()
     ));
-    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+        name: "main".to_string(),
+        target: commit_id.clone(),
+        upstream: Some(gitcomet_core::domain::Upstream {
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+        }),
+        divergence: None,
+    }]));
     apply_state(cx, &view, app_state_with_active_repo(repo));
 
     let pull_model =

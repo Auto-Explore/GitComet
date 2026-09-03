@@ -71,6 +71,7 @@ pub struct UiSession {
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
+    pub fetch_prune_deleted_remote_branches: Option<bool>,
     pub git_executable_path: Option<PathBuf>,
     pub external_code_editor: Option<ExternalCodeEditorSetting>,
 }
@@ -150,6 +151,7 @@ struct UiSessionFile {
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
     default_tag_type: Option<DefaultTagType>,
+    fetch_prune_deleted_remote_branches: Option<bool>,
     git_executable_path: Option<String>,
     external_code_editor: Option<ExternalCodeEditorSettingFile>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
@@ -263,6 +265,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,
+        fetch_prune_deleted_remote_branches: file.fetch_prune_deleted_remote_branches,
         git_executable_path: file
             .git_executable_path
             .as_deref()

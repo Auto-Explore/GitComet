@@ -889,6 +889,10 @@ pub trait GitRepository: Send + Sync {
         Ok(CommandOutput::empty_success("git pull"))
     }
 
+    fn pull_with_output_prune(&self, mode: PullMode, _prune: bool) -> Result<CommandOutput> {
+        self.pull_with_output(mode)
+    }
+
     fn push_with_output(&self) -> Result<CommandOutput> {
         self.push()?;
         Ok(CommandOutput::empty_success("git push"))
@@ -991,6 +995,15 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "pulling a specific remote branch is not implemented for this backend",
         )))
+    }
+
+    fn pull_branch_with_output_prune(
+        &self,
+        remote: &str,
+        branch: &str,
+        _prune: bool,
+    ) -> Result<CommandOutput> {
+        self.pull_branch_with_output(remote, branch)
     }
 
     fn merge_ref_with_output(&self, _reference: &str) -> Result<CommandOutput> {

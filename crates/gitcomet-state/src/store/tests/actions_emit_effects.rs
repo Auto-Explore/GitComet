@@ -343,21 +343,21 @@ fn pull_error_is_formatted_as_command_and_output() {
 }
 
 #[test]
-fn fetch_all_emits_effect_with_repo_prune_setting() {
+fn fetch_all_emits_effect_with_global_prune_setting() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
     let repo_id = RepoId(1);
     repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
-    let mut repo_state = RepoState::new_opening(
+    let repo_state = RepoState::new_opening(
         repo_id,
         RepoSpec {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.fetch_prune_deleted_remote_tracking_branches = false;
     state.repos.push(repo_state);
+    state.remote_settings.prune_deleted_remote_branches_on_fetch = false;
 
     let fetch_without_prune = reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
     assert!(matches!(
@@ -370,7 +370,7 @@ fn fetch_all_emits_effect_with_repo_prune_setting() {
     ));
     assert_eq!(state.repos[0].pull_in_flight, 1);
 
-    state.repos[0].fetch_prune_deleted_remote_tracking_branches = true;
+    state.remote_settings.prune_deleted_remote_branches_on_fetch = true;
     let fetch_with_prune = reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
     assert!(matches!(
         fetch_with_prune.as_slice(),
@@ -381,6 +381,63 @@ fn fetch_all_emits_effect_with_repo_prune_setting() {
         }]
     ));
     assert_eq!(state.repos[0].pull_in_flight, 2);
+}
+
+#[test]
+fn pull_variants_snapshot_the_global_remote_prune_setting() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    state.remote_settings.prune_deleted_remote_branches_on_fetch = false;
+    let pull = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Pull {
+            repo_id,
+            mode: PullMode::Rebase,
+        },
+    );
+    assert!(matches!(
+        pull.as_slice(),
+        [Effect::Pull {
+            repo_id: RepoId(1),
+            mode: PullMode::Rebase,
+            prune: false,
+            ..
+        }]
+    ));
+
+    state.remote_settings.prune_deleted_remote_branches_on_fetch = true;
+    let pull_branch = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PullBranch {
+            repo_id,
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        },
+    );
+    assert!(matches!(
+        pull_branch.as_slice(),
+        [Effect::PullBranch {
+            repo_id: RepoId(1),
+            remote,
+            branch,
+            prune: true,
+            ..
+        }] if remote == "origin" && branch == "feature"
+    ));
 }
 
 #[test]
@@ -4141,6 +4198,55 @@ fn repo_state_with_tags_loaded(repo_id: RepoId) -> RepoState {
         target: CommitId("abc123".into()),
     }]));
     repo_state
+}
+
+#[test]
+fn fetch_completion_reloads_remote_refs_and_loaded_tag_metadata() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let mut repo_state = repo_state_with_tags_loaded(repo_id);
+    repo_state.pull_in_flight = 1;
+    repo_state.set_remote_branches(Loadable::Ready(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "deleted".to_string(),
+        target: CommitId("abc123".into()),
+    }]));
+    repo_state.set_remote_tags(Loadable::Ready(vec![gitcomet_core::domain::RemoteTag {
+        remote: "origin".to_string(),
+        name: "v1.0.0".to_string(),
+        target: CommitId("abc123".into()),
+    }]));
+    state.repos.push(repo_state);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::FetchAll,
+            result: Ok(CommandOutput::empty_success("git fetch --all --prune")),
+        }),
+    );
+
+    assert!(matches!(state.repos[0].remote_branches, Loadable::Loading));
+    assert!(matches!(state.repos[0].tags, Loadable::Loading));
+    assert!(matches!(state.repos[0].remote_tags, Loadable::Loading));
+    assert!(effects.iter().any(
+        |effect| matches!(effect, Effect::LoadRemoteBranches { repo_id: id } if *id == repo_id)
+    ));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadTags { repo_id: id } if *id == repo_id))
+    );
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::LoadRemoteTags { repo_id: id } if *id == repo_id)
+        )
+    );
 }
 
 #[test]

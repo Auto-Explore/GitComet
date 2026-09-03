@@ -803,6 +803,7 @@ pub(super) fn schedule_pull(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     mode: PullMode,
+    prune: bool,
     tracking: Option<(String, String)>,
     auth: Option<StagedGitAuth>,
 ) {
@@ -820,7 +821,7 @@ pub(super) fn schedule_pull(
         repo_id,
         command,
         context,
-        move |repo| run_with_git_auth(auth, || repo.pull_with_output(mode)),
+        move |repo| run_with_git_auth(auth, || repo.pull_with_output_prune(mode, prune)),
     );
 }
 
@@ -831,6 +832,7 @@ pub(super) fn schedule_pull_branch(
     repo_id: RepoId,
     remote: String,
     branch: String,
+    prune: bool,
     local_branch: Option<String>,
     auth: Option<StagedGitAuth>,
 ) {
@@ -847,7 +849,11 @@ pub(super) fn schedule_pull_branch(
             branch: command_branch,
         },
         context,
-        move |repo| run_with_git_auth(auth, || repo.pull_branch_with_output(&remote, &branch)),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.pull_branch_with_output_prune(&remote, &branch, prune)
+            })
+        },
     );
 }
 

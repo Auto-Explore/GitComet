@@ -1,7 +1,7 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
-    ConflictFileLoadMode, DefaultTagType, GitOperationOuterOutcome, RepoId, SidebarDataRequest,
-    SidebarMode,
+    ConflictFileLoadMode, DefaultTagType, GitOperationOuterOutcome, RemoteSettings, RepoId,
+    SidebarDataRequest, SidebarMode,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -210,6 +210,7 @@ pub enum Msg {
         show_history_tags: bool,
         tag_fetch_mode: GitLogTagFetchMode,
     },
+    SetRemoteSettings(RemoteSettings),
     SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,

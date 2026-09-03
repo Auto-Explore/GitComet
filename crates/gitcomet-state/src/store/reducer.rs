@@ -987,6 +987,10 @@ fn reduce_inner(
             state.git_log_settings.tag_fetch_mode = tag_fetch_mode;
             Vec::new()
         }
+        Msg::SetRemoteSettings(settings) => {
+            state.remote_settings = settings;
+            Vec::new()
+        }
         Msg::SetDefaultTagType(tag_type) => {
             state.default_tag_type = tag_type;
             Vec::new()

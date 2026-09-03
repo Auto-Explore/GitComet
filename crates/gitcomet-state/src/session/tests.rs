@@ -2658,6 +2658,43 @@ fn persist_ui_settings_round_trips_commit_push_after_enabled() {
 }
 
 #[test]
+fn persist_ui_settings_round_trips_fetch_prune_deleted_remote_branches() {
+    let dir = env::temp_dir().join(format!(
+        "gitcomet-ui-settings-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    persist_to_path(
+        &path,
+        &UiSessionFile {
+            version: CURRENT_SESSION_FILE_VERSION,
+            open_repos: Vec::new(),
+            active_repo: None,
+            ..UiSessionFile::default()
+        },
+    )
+    .expect("seed session file");
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            fetch_prune_deleted_remote_branches: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist remote pruning setting");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.fetch_prune_deleted_remote_branches, Some(false));
+}
+
+#[test]
 fn persist_repo_history_scope_round_trips() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-repo-history-scope-test-{}-{}",
