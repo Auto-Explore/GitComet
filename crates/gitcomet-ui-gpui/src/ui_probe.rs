@@ -23,7 +23,7 @@
 //! and logged as their own lines.
 //!
 //! Everything here is inert unless the env var is set: the pinger thread is
-//! never started and gpui's frame tracing stays off.
+//! never started and gpui's profiler tracing stays off.
 
 use gitcomet_core::process::write_stderr_line;
 use std::fs::{File, OpenOptions};
@@ -135,7 +135,7 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
 
     // Do not turn on process-wide frame collection until a collector and the
     // pinger that drives it are both guaranteed to exist.
-    gpui::profiler::set_frame_trace_enabled(true);
+    gpui::profiler::set_trace_enabled(true);
 
     log_line(&format!(
         "ui-probe start os={} debug_assertions={} interval={}ms ping={}ms main_cpu={}",
@@ -151,7 +151,7 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
     ));
 
     cx.spawn(async move |_cx: &mut gpui::AsyncApp| {
-        let mut frames = gpui::profiler::FrameTimingCollector::new();
+        let mut frame_collector = gpui::profiler::FrameTimingCollector::new();
         let mut wake_latencies: Vec<Duration> = Vec::with_capacity(512);
         let mut interval_started = Instant::now();
         let mut cpu_sample_started = Instant::now();
@@ -180,7 +180,7 @@ pub(crate) fn start_if_enabled(cx: &mut gpui::App) {
 
             let summary = IntervalSummary::new(
                 now.duration_since(interval_started),
-                &frames.collect_unseen(),
+                &frame_collector.collect_unseen(),
                 &mut wake_latencies,
                 main_cpu_pct,
             );
@@ -258,24 +258,31 @@ struct IntervalSummary {
 impl IntervalSummary {
     fn new(
         wall: Duration,
-        frames: &[gpui::profiler::FrameTiming],
+        frame_events: &[gpui::profiler::FrameEvent],
         wake_latencies: &mut [Duration],
         main_cpu_pct: Option<f64>,
     ) -> Self {
-        let mut draws: Vec<Duration> = frames.iter().map(|f| f.draw_duration()).collect();
+        let mut draws = Vec::with_capacity(frame_events.len());
+        let mut dirty_to_draws = Vec::with_capacity(frame_events.len());
+        let mut invalidations = 0;
+        for event in frame_events {
+            let gpui::profiler::FrameEvent::Draw(frame) = event else {
+                continue;
+            };
+            draws.push(frame.draw_duration());
+            dirty_to_draws.extend(frame.dirty_to_draw_duration());
+            invalidations += frame.invalidations;
+        }
+
         draws.sort_unstable();
-        let mut dirty_to_draws: Vec<Duration> = frames
-            .iter()
-            .filter_map(|f| f.dirty_to_draw_duration())
-            .collect();
         dirty_to_draws.sort_unstable();
         wake_latencies.sort_unstable();
 
         Self {
             wall,
-            frames: frames.len(),
+            frames: draws.len(),
             slow_frames: draws.iter().filter(|d| **d > SLOW_FRAME).count(),
-            invalidations: frames.iter().map(|f| f.invalidations).sum(),
+            invalidations,
             draw: DurationStats::from_sorted(&draws),
             dirty_to_draw: DurationStats::from_sorted(&dirty_to_draws),
             wake: DurationStats::from_sorted(wake_latencies),

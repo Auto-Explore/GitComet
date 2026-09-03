@@ -3347,7 +3347,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3375,6 +3375,7 @@ dependencies = [
  "gpui_ce_shared_string",
  "gpui_ce_sum_tree",
  "gpui_ce_util",
+ "hdrhistogram",
  "heapless 0.9.3",
  "http",
  "image",
@@ -3419,7 +3420,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_apple"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "anyhow",
  "block",
@@ -3443,7 +3444,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_collections"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "gpui_ce_util",
  "indexmap",
@@ -3453,7 +3454,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_derive_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3463,7 +3464,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_linux"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3510,7 +3511,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macos"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3558,7 +3559,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macros"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -3569,7 +3570,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_media"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -3583,7 +3584,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_platform"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "console_error_panic_hook",
  "gpui-ce",
@@ -3596,7 +3597,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "gpui_ce_derive_refineable",
 ]
@@ -3604,7 +3605,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_scheduler"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "async-task",
  "backtrace",
@@ -3620,7 +3621,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "schemars",
  "serde",
@@ -3630,7 +3631,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_sum_tree"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "heapless 0.9.3",
  "log",
@@ -3641,7 +3642,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_util"
 version = "0.2.6"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "anyhow",
  "log",
@@ -3651,7 +3652,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_web"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3675,7 +3676,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3701,7 +3702,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_windows"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -3729,7 +3730,7 @@ dependencies = [
 [[package]]
 name = "gpui_xim"
 version = "0.4.0-gpui"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "ahash",
  "hashbrown 0.17.1",
@@ -3820,6 +3821,20 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.2.0",
+]
+
+[[package]]
+name = "hdrhistogram"
+version = "7.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f49d1053f4708f0af3cf9fc5bffc7e68a914a3c45becb231c80068c9c3f78bea"
+dependencies = [
+ "base64 0.22.1",
+ "byteorder",
+ "crossbeam-channel",
+ "flate2",
+ "nom 8.0.0",
+ "num-traits",
 ]
 
 [[package]]
@@ -9062,7 +9077,7 @@ checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
 [[package]]
 name = "xim-ctext"
 version = "0.3.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "encoding_rs",
 ]
@@ -9070,7 +9085,7 @@ dependencies = [
 [[package]]
 name = "xim-parser"
 version = "0.2.1"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=0e706e934b942fe62df704acbb433be774e9633b#0e706e934b942fe62df704acbb433be774e9633b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced#acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced"
 dependencies = [
  "bitflags 2.13.1",
 ]
