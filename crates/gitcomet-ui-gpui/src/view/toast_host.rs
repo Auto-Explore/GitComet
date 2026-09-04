@@ -180,6 +180,10 @@ fn apply_submodule_add_progress_sync(
     true
 }
 
+fn submodule_add_progress_url_label(url: &str) -> String {
+    gitcomet_core::text_utils::redact_url_userinfo(url)
+}
+
 impl ToastHost {
     pub(super) fn new(theme: AppTheme, root_view: WeakEntity<GitCometView>) -> Self {
         Self {
@@ -833,7 +837,7 @@ impl ToastHost {
                             div()
                                 .text_sm()
                                 .text_color(theme.colors.foreground.secondary)
-                                .child(progress.url.clone()),
+                                .child(submodule_add_progress_url_label(&progress.url)),
                         ),
                 ),
         );
@@ -1449,6 +1453,14 @@ mod tests {
 
         assert!(apply_submodule_add_progress_sync(&mut progress, &[]));
         assert!(progress.is_empty());
+    }
+
+    #[test]
+    fn submodule_progress_masks_url_credentials() {
+        let label =
+            submodule_add_progress_url_label("https://alice:secret@example.com/org/repo.git");
+        assert_eq!(label, "https://alice:***@example.com/org/repo.git");
+        assert!(!label.contains("secret"));
     }
 
     #[gpui::test]

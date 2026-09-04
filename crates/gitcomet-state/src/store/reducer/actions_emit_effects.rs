@@ -168,6 +168,7 @@ pub(super) fn add_submodule(
     name: Option<String>,
     force: bool,
     approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::AddSubmodule {
         repo_id,
@@ -177,6 +178,7 @@ pub(super) fn add_submodule(
         name,
         force,
         approved_sources,
+        remote_url_policy,
         auth: None,
     }]
 }
@@ -184,10 +186,12 @@ pub(super) fn add_submodule(
 pub(super) fn update_submodules(
     repo_id: RepoId,
     approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::UpdateSubmodules {
         repo_id,
         approved_sources,
+        remote_url_policy,
         auth: None,
     }]
 }
@@ -196,11 +200,13 @@ pub(super) fn load_submodule(
     repo_id: RepoId,
     path: PathBuf,
     approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::LoadSubmodule {
         repo_id,
         path,
         approved_sources,
+        remote_url_policy,
         auth: None,
     }]
 }
@@ -730,8 +736,18 @@ pub(super) fn delete_remote_tag(
     }]
 }
 
-pub(super) fn add_remote(repo_id: RepoId, name: String, url: String) -> Vec<Effect> {
-    vec![Effect::AddRemote { repo_id, name, url }]
+pub(super) fn add_remote(
+    repo_id: RepoId,
+    name: String,
+    url: String,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
+) -> Vec<Effect> {
+    vec![Effect::AddRemote {
+        repo_id,
+        name,
+        url,
+        remote_url_policy,
+    }]
 }
 
 pub(super) fn remove_remote(repo_id: RepoId, name: String) -> Vec<Effect> {
@@ -743,12 +759,14 @@ pub(super) fn set_remote_url(
     name: String,
     url: String,
     kind: RemoteUrlKind,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::SetRemoteUrl {
         repo_id,
         name,
         url,
         kind,
+        remote_url_policy,
     }]
 }
 

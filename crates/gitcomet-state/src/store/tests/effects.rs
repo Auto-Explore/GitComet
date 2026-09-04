@@ -365,6 +365,7 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
         Effect::CloneRepo {
             url: src.display().to_string(),
             dest: dest.clone(),
+            remote_url_policy: Default::default(),
             auth: None,
         },
     );
@@ -448,6 +449,7 @@ fn clone_repo_effect_abort_removes_partially_created_destination() {
         Effect::CloneRepo {
             url: local_file_url(&src),
             dest: dest.clone(),
+            remote_url_policy: Default::default(),
             auth: None,
         },
     );
@@ -5594,6 +5596,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 name: None,
                 force: false,
                 approved_sources: Vec::new(),
+                remote_url_policy: Default::default(),
                 auth: None,
             },
             1,
@@ -5602,6 +5605,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::UpdateSubmodules {
                 approved_sources: Vec::new(),
                 repo_id,
+                remote_url_policy: Default::default(),
                 auth: None,
             },
             1,
@@ -5888,6 +5892,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 name: "origin".to_string(),
                 url: "https://example.com/repo.git".to_string(),
+                remote_url_policy: Default::default(),
             },
             1,
         ),
@@ -5904,6 +5909,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 name: "origin".to_string(),
                 url: "https://example.com/repo.git".to_string(),
                 kind: gitcomet_core::services::RemoteUrlKind::Fetch,
+                remote_url_policy: Default::default(),
             },
             1,
         ),

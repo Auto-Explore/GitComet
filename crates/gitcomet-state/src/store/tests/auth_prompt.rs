@@ -1108,6 +1108,7 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
             name,
             url,
             kind: RemoteUrlKind::Push,
+            ..
         }] if name == "origin" && url == "https://example.com/repo.git"
     ));
 

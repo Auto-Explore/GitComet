@@ -183,6 +183,76 @@ const REMOTE_MARKDOWN_IMAGE_OPTIONS: &[(&str, RemoteMarkdownImagePolicy, &str)] 
     ),
 ];
 
+const REMOTE_PROTOCOL_OPTIONS: &[(&str, RemoteProtocol, &str, &str)] = &[
+    (
+        "settings_window_remote_protocol_https",
+        RemoteProtocol::Https,
+        "HTTPS",
+        "Encrypted HTTP transport (allowed by default).",
+    ),
+    (
+        "settings_window_remote_protocol_ssh",
+        RemoteProtocol::Ssh,
+        "SSH",
+        "Secure Shell transport (allowed by default).",
+    ),
+    (
+        "settings_window_remote_protocol_git",
+        RemoteProtocol::Git,
+        "Git",
+        "Native Git transport (allowed by default).",
+    ),
+    (
+        "settings_window_remote_protocol_file",
+        RemoteProtocol::File,
+        "File",
+        "Local file URL transport (allowed by default).",
+    ),
+    (
+        "settings_window_remote_protocol_http",
+        RemoteProtocol::Http,
+        "HTTP",
+        "Unencrypted HTTP transport.",
+    ),
+    (
+        "settings_window_remote_protocol_ftp",
+        RemoteProtocol::Ftp,
+        "FTP",
+        "Unencrypted FTP transport.",
+    ),
+    (
+        "settings_window_remote_protocol_ftps",
+        RemoteProtocol::Ftps,
+        "FTPS",
+        "FTP transport protected with TLS.",
+    ),
+    (
+        "settings_window_remote_protocol_git_ssh",
+        RemoteProtocol::GitSsh,
+        "git+ssh",
+        "Deprecated alias for SSH transport.",
+    ),
+    (
+        "settings_window_remote_protocol_ssh_git",
+        RemoteProtocol::SshGit,
+        "ssh+git",
+        "Deprecated alias for SSH transport.",
+    ),
+];
+
+fn remote_url_policy_settings_label(policy: RemoteUrlPolicy) -> String {
+    let labels = REMOTE_PROTOCOL_OPTIONS
+        .iter()
+        .filter(|(_, protocol, _, _)| policy.allows(*protocol))
+        .map(|(_, _, label, _)| *label)
+        .collect::<Vec<_>>();
+    if labels.is_empty() {
+        "No URL protocols".to_string()
+    } else {
+        labels.join(", ")
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
     Theme,
@@ -201,6 +271,7 @@ enum SettingsSection {
     GitLogDefaultMode,
     GitLogColumns,
     GitLogTagFetch,
+    AllowedRemoteProtocols,
     RemoteMarkdownImages,
 }
 
@@ -223,7 +294,9 @@ impl SettingsSection {
             Self::GitLogDefaultMode | Self::GitLogColumns | Self::GitLogTagFetch => {
                 SettingsCategory::GitLog
             }
-            Self::RemoteMarkdownImages => SettingsCategory::SecurityPrivacy,
+            Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
+                SettingsCategory::SecurityPrivacy
+            }
         }
     }
 }
@@ -322,7 +395,8 @@ impl SettingsCategory {
                  external code editor date timezone appearance"
             }
             Self::SecurityPrivacy => {
-                "security privacy remote markdown images load image tracking pixels updates \
+                "security privacy allowed remote protocols https http ssh git file ftp ftps \
+                 git+ssh ssh+git remote markdown images load image tracking pixels updates \
                  automatically check updates startup"
             }
             Self::Terminal => "terminal external terminal action bar terminal button opens",
@@ -419,6 +493,7 @@ pub(crate) struct SettingsWindowView {
     diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
     diff_view_mode_scroll: UniformListScrollHandle,
+    remote_protocols_scroll: UniformListScrollHandle,
     remote_markdown_images_scroll: UniformListScrollHandle,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
@@ -435,6 +510,7 @@ pub(crate) struct SettingsWindowView {
     diff_word_wrap: bool,
     diff_show_line_numbers: bool,
     auto_save_file_edits: bool,
+    remote_url_policy: RemoteUrlPolicy,
     remote_markdown_image_policy: RemoteMarkdownImagePolicy,
     check_for_updates_on_startup: bool,
     diff_scroll_sync: DiffScrollSync,
@@ -820,6 +896,7 @@ impl SettingsWindowView {
         let diff_word_wrap = ui_preferences.diff.word_wrap;
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
+        let remote_url_policy = ui_preferences.security.remote_url_policy;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
         let history_show_graph = ui_preferences.history.show_graph;
@@ -1050,6 +1127,7 @@ impl SettingsWindowView {
             diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
             diff_view_mode_scroll: UniformListScrollHandle::default(),
+            remote_protocols_scroll: UniformListScrollHandle::default(),
             remote_markdown_images_scroll: UniformListScrollHandle::default(),
             date_time_format,
             timezone,
@@ -1066,6 +1144,7 @@ impl SettingsWindowView {
             diff_word_wrap,
             diff_show_line_numbers,
             auto_save_file_edits,
+            remote_url_policy,
             remote_markdown_image_policy,
             check_for_updates_on_startup,
             diff_scroll_sync,

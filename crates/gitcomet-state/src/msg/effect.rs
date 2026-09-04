@@ -2,6 +2,7 @@ use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::git_operation::GitOperationId;
+use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     CheckoutRemoteBranchMode, ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode,
     RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
@@ -317,6 +318,7 @@ pub enum Effect {
     CloneRepo {
         url: String,
         dest: PathBuf,
+        remote_url_policy: RemoteUrlPolicy,
         auth: Option<StagedGitAuth>,
     },
     AbortCloneRepo {
@@ -351,9 +353,11 @@ pub enum Effect {
         branch: Option<String>,
         name: Option<String>,
         force: bool,
+        remote_url_policy: RemoteUrlPolicy,
     },
     CheckSubmoduleUpdateTrust {
         repo_id: RepoId,
+        remote_url_policy: RemoteUrlPolicy,
     },
     AddSubmodule {
         repo_id: RepoId,
@@ -363,21 +367,25 @@ pub enum Effect {
         name: Option<String>,
         force: bool,
         approved_sources: Vec<SubmoduleTrustTarget>,
+        remote_url_policy: RemoteUrlPolicy,
         auth: Option<StagedGitAuth>,
     },
     UpdateSubmodules {
         repo_id: RepoId,
         approved_sources: Vec<SubmoduleTrustTarget>,
+        remote_url_policy: RemoteUrlPolicy,
         auth: Option<StagedGitAuth>,
     },
     CheckSubmoduleLoadTrust {
         repo_id: RepoId,
         path: PathBuf,
+        remote_url_policy: RemoteUrlPolicy,
     },
     LoadSubmodule {
         repo_id: RepoId,
         path: PathBuf,
         approved_sources: Vec<SubmoduleTrustTarget>,
+        remote_url_policy: RemoteUrlPolicy,
         auth: Option<StagedGitAuth>,
     },
     ChangeSubmodulePointer {
@@ -598,6 +606,7 @@ pub enum Effect {
         repo_id: RepoId,
         name: String,
         url: String,
+        remote_url_policy: RemoteUrlPolicy,
     },
     RemoveRemote {
         repo_id: RepoId,
@@ -608,6 +617,7 @@ pub enum Effect {
         name: String,
         url: String,
         kind: RemoteUrlKind,
+        remote_url_policy: RemoteUrlPolicy,
     },
     CheckoutConflictSide {
         repo_id: RepoId,

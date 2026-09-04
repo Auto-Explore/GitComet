@@ -2715,21 +2715,26 @@ pub(super) enum FocusedMergetoolOutput<'a> {
     Delete,
 }
 
+/// Apply a focused-mergetool result to the repository-relative `path`. Resolved
+/// here, not at the call sites, so none of them can write through a symlink.
 pub(super) fn apply_focused_mergetool_output(
+    workdir: &std::path::Path,
     path: &std::path::Path,
     output: FocusedMergetoolOutput<'_>,
 ) -> std::io::Result<()> {
+    let relative = gitcomet_core::path_utils::validated_repo_relative_path(path)?;
+    let target = gitcomet_core::path_utils::symlink_free_write_target(workdir, &relative)?;
     match output {
         FocusedMergetoolOutput::Write(bytes) => {
-            if let Some(parent) = path
+            if let Some(parent) = target
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
             {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(path, bytes)
+            std::fs::write(&target, bytes)
         }
-        FocusedMergetoolOutput::Delete => match std::fs::remove_file(path) {
+        FocusedMergetoolOutput::Delete => match std::fs::remove_file(&target) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(err) => Err(err),

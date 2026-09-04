@@ -1,5 +1,55 @@
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+/// Normalize a repository path while refusing paths that can escape the
+/// worktree or address Git's private metadata.
+pub fn validated_repo_relative_path(path: &Path) -> io::Result<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        let name = match component {
+            Component::CurDir => continue,
+            Component::Normal(name) => name,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("repository path must be relative: {}", path.display()),
+                ));
+            }
+        };
+        if is_git_metadata_component(name) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("repository path cannot enter .git: {}", path.display()),
+            ));
+        }
+        normalized.push(name);
+    }
+
+    if normalized.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "repository path cannot be empty",
+        ));
+    }
+    Ok(normalized)
+}
+
+/// `.git` under any spelling the filesystem accepts, compared as bytes so a
+/// name that is not valid UTF-8 cannot slip past.
+pub fn is_git_metadata_component(component: &std::ffi::OsStr) -> bool {
+    let bytes = component.as_encoded_bytes();
+    #[cfg(windows)]
+    // NTFS: a stream after `:`, ignored trailing dots and spaces, and `git~1`.
+    let bytes = {
+        let bytes = bytes.split(|&byte| byte == b':').next().unwrap_or(bytes);
+        let end = bytes
+            .iter()
+            .rposition(|&byte| byte != b'.' && byte != b' ')
+            .map_or(0, |index| index + 1);
+        &bytes[..end]
+    };
+    bytes.eq_ignore_ascii_case(b".git") || (cfg!(windows) && bytes.eq_ignore_ascii_case(b"git~1"))
+}
 
 /// When a workdir path ends with ".git" and contains a `.git` entry (e.g.
 /// `/home/user/myrepo.git`), gix::open may misinterpret the workdir as the git
@@ -88,10 +138,36 @@ pub fn symlink_free_write_target(workdir: &Path, relative: &Path) -> io::Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{git_dir_for_workdir, symlink_free_write_target};
+    use super::{git_dir_for_workdir, symlink_free_write_target, validated_repo_relative_path};
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
+
+    #[test]
+    fn repository_relative_paths_reject_escape_and_git_metadata() {
+        assert_eq!(
+            validated_repo_relative_path(Path::new("docs/notes.md")).unwrap(),
+            Path::new("docs/notes.md")
+        );
+        assert_eq!(
+            validated_repo_relative_path(Path::new("./docs/notes.md")).unwrap(),
+            Path::new("docs/notes.md")
+        );
+        for path in [
+            "",
+            ".",
+            "../outside",
+            "docs/../../outside",
+            "/absolute",
+            ".git/config",
+            "src/.GiT/config",
+        ] {
+            assert!(
+                validated_repo_relative_path(Path::new(path)).is_err(),
+                "{path:?} must be rejected"
+            );
+        }
+    }
 
     #[test]
     fn symlink_free_write_target_accepts_regular_and_missing_paths() {

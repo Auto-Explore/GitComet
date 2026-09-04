@@ -412,6 +412,10 @@ fn expanded_settings_sections_render_scrollable_list_containers(cx: &mut gpui::T
             SettingsSection::DiffContentMode,
             "settings_window_diff_content_mode_list_container",
         ),
+        (
+            SettingsSection::AllowedRemoteProtocols,
+            "settings_window_remote_protocols_list_container",
+        ),
     ] {
         let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
             settings.set_expanded_section(Some(section), cx);
@@ -2309,6 +2313,75 @@ fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppCo
             .remote_settings
             .prune_deleted_remote_branches_on_fetch,
         "the Remotes setting should update the global store setting"
+    );
+}
+
+#[gpui::test]
+fn allowed_remote_protocol_toggle_reaches_the_main_window_and_store(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let observed_store = store.clone();
+    let (main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+
+    cx.update(|_window, app| {
+        let settings_policy = settings_window
+            .read_with(app, |settings, _cx| settings.remote_url_policy)
+            .expect("settings window should remain readable");
+        assert_eq!(settings_policy, RemoteUrlPolicy::default());
+        assert!(!settings_policy.allows(RemoteProtocol::Http));
+        assert_eq!(main_view.read(app).remote_url_policy, settings_policy);
+    });
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cx.update(|_window, app| {
+            main_view.update(app, |_view, cx| {
+                let _ = settings_window.update(cx, |settings, _window, cx| {
+                    settings.toggle_remote_protocol(RemoteProtocol::Http, cx);
+                });
+            });
+        });
+    }));
+    assert!(
+        result.is_ok(),
+        "the protocol toggle should not re-enter GitCometView updates"
+    );
+
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert!(
+            main_view
+                .read(app)
+                .remote_url_policy
+                .allows(RemoteProtocol::Http)
+        );
+        assert!(
+            settings_window
+                .read_with(app, |settings, _cx| settings
+                    .remote_url_policy
+                    .allows(RemoteProtocol::Http))
+                .expect("settings window should remain readable")
+        );
+    });
+    assert!(
+        observed_store
+            .snapshot()
+            .remote_url_policy
+            .allows(RemoteProtocol::Http),
+        "the command store must receive the new protocol policy"
     );
 }
 

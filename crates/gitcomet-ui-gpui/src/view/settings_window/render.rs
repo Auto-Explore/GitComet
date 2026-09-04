@@ -437,6 +437,19 @@ impl Render for SettingsWindowView {
                             this.set_diff_show_line_numbers(!this.diff_show_line_numbers, cx);
                         }));
 
+                    let allowed_remote_protocols_row = self
+                        .summary_row(
+                            "settings_window_allowed_remote_protocols",
+                            "Allowed remote protocols",
+                            remote_url_policy_settings_label(self.remote_url_policy).into(),
+                            self.expanded_section
+                                == Some(SettingsSection::AllowedRemoteProtocols),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::AllowedRemoteProtocols, cx);
+                        }));
+
                     let remote_markdown_images_row = self
                         .summary_row(
                             "settings_window_remote_markdown_images",
@@ -1235,6 +1248,56 @@ impl Render for SettingsWindowView {
                             "Security / Privacy",
                             theme,
                         )
+                        .child(
+                            div()
+                                .px_2()
+                                .pt_1()
+                                .pb_3()
+                                .text_xs()
+                                .text_color(theme.colors.foreground.secondary)
+                                .child(
+                                    "Only selected built-in URL protocols may be passed to Git. Custom remote helpers stay blocked. Local paths and SCP-style SSH locations remain available.",
+                                ),
+                        )
+                        .child(allowed_remote_protocols_row);
+
+                    if self.expanded_section == Some(SettingsSection::AllowedRemoteProtocols) {
+                        let list = uniform_list(
+                            "settings_window_remote_protocols_list",
+                            REMOTE_PROTOCOL_OPTIONS.len(),
+                            cx.processor(Self::render_remote_protocol_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.remote_protocols_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.remote_protocols_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
+                        security_privacy_card = security_privacy_card.child(
+                            self.dropdown_list_container(
+                                "settings_window_remote_protocols_list_container",
+                                "settings_window_remote_protocols_scrollbar",
+                                self.remote_protocols_scroll.clone(),
+                                REMOTE_PROTOCOL_OPTIONS.len(),
+                                SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                                SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                                list,
+                                theme,
+                            ),
+                        );
+                    }
+
+                    security_privacy_card = security_privacy_card
                         .child(
                             div()
                                 .px_2()

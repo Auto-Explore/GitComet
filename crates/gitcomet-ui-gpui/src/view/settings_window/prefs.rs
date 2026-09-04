@@ -40,6 +40,12 @@ impl SettingsWindowView {
             diff_reveal_whitespace_chars: Some(self.diff_reveal_whitespace_chars),
             diff_word_wrap: Some(self.diff_word_wrap),
             diff_show_line_numbers: Some(self.diff_show_line_numbers),
+            allowed_remote_protocols: Some(
+                self.remote_url_policy
+                    .allowed_protocols()
+                    .map(|protocol| protocol.key().to_string())
+                    .collect(),
+            ),
             remote_markdown_image_policy: Some(self.remote_markdown_image_policy.key().to_string()),
             check_for_updates_on_startup: Some(self.check_for_updates_on_startup),
             auto_save_file_edits: Some(self.auto_save_file_edits),
@@ -785,6 +791,21 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_remote_markdown_image_policy(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn toggle_remote_protocol(
+        &mut self,
+        protocol: RemoteProtocol,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let allowed = !self.remote_url_policy.allows(protocol);
+        self.remote_url_policy.set_allowed(protocol, allowed);
+        let next = self.remote_url_policy;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_remote_url_policy(next, cx);
         });
         cx.notify();
     }

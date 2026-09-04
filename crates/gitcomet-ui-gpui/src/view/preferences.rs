@@ -112,6 +112,7 @@ impl RemoteMarkdownImagePolicy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SecurityPreferences {
     pub(super) remote_markdown_images: RemoteMarkdownImagePolicy,
+    pub(super) remote_url_policy: RemoteUrlPolicy,
     pub(super) check_for_updates_on_startup: bool,
 }
 
@@ -119,6 +120,7 @@ impl Default for SecurityPreferences {
     fn default() -> Self {
         Self {
             remote_markdown_images: RemoteMarkdownImagePolicy::AlwaysLoad,
+            remote_url_policy: RemoteUrlPolicy::default(),
             check_for_updates_on_startup: true,
         }
     }
@@ -288,6 +290,13 @@ impl UiPreferences {
                     .as_deref()
                     .and_then(RemoteMarkdownImagePolicy::from_key)
                     .unwrap_or_default(),
+                remote_url_policy: session
+                    .allowed_remote_protocols
+                    .as_ref()
+                    .map(|protocols| {
+                        RemoteUrlPolicy::from_keys(protocols.iter().map(String::as_str))
+                    })
+                    .unwrap_or_default(),
                 check_for_updates_on_startup: session.check_for_updates_on_startup.unwrap_or(true),
             },
             merge_tool: MergeToolPreferences {
@@ -342,6 +351,10 @@ mod tests {
             preferences.security.remote_markdown_images,
             RemoteMarkdownImagePolicy::AlwaysLoad
         );
+        assert_eq!(
+            preferences.security.remote_url_policy,
+            RemoteUrlPolicy::default()
+        );
         assert!(preferences.security.check_for_updates_on_startup);
     }
 
@@ -349,12 +362,33 @@ mod tests {
     fn security_preferences_are_parsed_from_session() {
         let preferences = UiPreferences::from_session(&session::UiSession {
             remote_markdown_image_policy: Some("ask".to_string()),
+            allowed_remote_protocols: Some(
+                ["https", "http"].into_iter().map(str::to_string).collect(),
+            ),
             check_for_updates_on_startup: Some(false),
             ..Default::default()
         });
         assert_eq!(
             preferences.security.remote_markdown_images,
             RemoteMarkdownImagePolicy::AskBeforeLoading
+        );
+        assert!(
+            preferences
+                .security
+                .remote_url_policy
+                .allows(RemoteProtocol::Https)
+        );
+        assert!(
+            preferences
+                .security
+                .remote_url_policy
+                .allows(RemoteProtocol::Http)
+        );
+        assert!(
+            !preferences
+                .security
+                .remote_url_policy
+                .allows(RemoteProtocol::Ssh)
         );
         assert!(!preferences.security.check_for_updates_on_startup);
     }

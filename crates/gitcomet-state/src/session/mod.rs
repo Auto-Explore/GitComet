@@ -6,7 +6,6 @@ use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::{env, fs, io};
@@ -49,6 +48,7 @@ pub struct UiSession {
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
     pub remote_markdown_image_policy: Option<String>,
+    pub allowed_remote_protocols: Option<BTreeSet<String>>,
     pub check_for_updates_on_startup: Option<bool>,
     pub auto_save_file_edits: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
@@ -131,6 +131,7 @@ struct UiSessionFile {
     diff_word_wrap: Option<bool>,
     diff_show_line_numbers: Option<bool>,
     remote_markdown_image_policy: Option<String>,
+    allowed_remote_protocols: Option<BTreeSet<String>>,
     check_for_updates_on_startup: Option<bool>,
     auto_save_file_edits: Option<bool>,
     mergetool_auto_advance: Option<bool>,
@@ -248,6 +249,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_word_wrap: file.diff_word_wrap,
         diff_show_line_numbers: file.diff_show_line_numbers,
         remote_markdown_image_policy: file.remote_markdown_image_policy,
+        allowed_remote_protocols: file.allowed_remote_protocols,
         check_for_updates_on_startup: file.check_for_updates_on_startup,
         auto_save_file_edits: file.auto_save_file_edits,
         mergetool_auto_advance: file.mergetool_auto_advance,
@@ -368,16 +370,9 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
 }
 
 fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-
     let contents = serde_json::to_vec(session).expect("serializing session file should succeed");
-
-    let mut tmp_file = tempfile::NamedTempFile::new_in(parent)?;
-    tmp_file.write_all(&contents)?;
-    tmp_file.flush()?;
-
-    tmp_file.persist(path).map(|_| ()).map_err(|err| err.error)
+    // Records every open repository path; keep it owner-only.
+    gitcomet_core::fs_utils::write_private_file(path, &contents)
 }
 
 fn default_session_file_path() -> Option<PathBuf> {

@@ -1,10 +1,10 @@
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictResolverStrategy};
 use gitcomet_core::domain::{
-    CommitId, DiffArea, DiffLineKind, DiffPreviewTextSide, DiffTarget, FileConflictKind,
+    CommitId, Diff, DiffArea, DiffLineKind, DiffPreviewTextSide, DiffTarget, FileConflictKind,
     FileDiffText, FileDiffTextSource, FileStatusKind,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
-use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend};
+use gitcomet_core::services::{CancellationToken, CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::services::{ConflictSide, InteractiveRebaseAction, InteractiveRebaseEntry};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
@@ -497,6 +497,48 @@ fn setup_both_modified_text_conflict(repo: &Path, path: &str, ours: &str, theirs
     run_git(repo, &["checkout", "-"]);
     write(repo, path, ours);
     run_git(repo, &["add", path]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+}
+
+#[cfg(unix)]
+fn setup_both_modified_symlink_conflict(repo: &Path, path: &str, ours: &str, theirs: &str) {
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "mergetool.guiDefault", "false"]);
+    run_git(repo, &["config", "merge.guitool", ""]);
+
+    let link = repo.join(path);
+    let relink = |target: &str| {
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(target, &link).expect("symlink");
+    };
+
+    write(repo, "base.txt", "base\n");
+    relink("base.txt");
+    run_git(repo, &["add", "-A"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    relink(theirs);
+    run_git(repo, &["add", "-A"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    relink(ours);
+    run_git(repo, &["add", "-A"]);
     run_git(
         repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", "ours"],
