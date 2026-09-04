@@ -46,9 +46,8 @@ fn private_file_parent(path: &Path) -> io::Result<&Path> {
         })
 }
 
-/// Open a private regular file for append without following a pre-existing
-/// symlink. Callers use this only inside a directory made private above, which
-/// also prevents an unprivileged cross-user check/open race.
+/// Open a private regular file for append without following a symlink, whether
+/// one is already there or is swapped in while this runs.
 pub fn open_private_append(path: &Path) -> io::Result<File> {
     ensure_private_dir(private_file_parent(path)?)?;
 

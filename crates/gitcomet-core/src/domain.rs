@@ -908,8 +908,10 @@ impl Diff {
 
         let mut notice = None;
         if bytes.len() as u64 > max_bytes {
-            // Bounded drain so Git can exit without SIGPIPE; never lose what we read.
-            let _ = std::io::copy(&mut (&mut reader).take(max_bytes), &mut std::io::sink());
+            // Drain to the end so Git exits normally rather than by SIGPIPE,
+            // whose non-zero status would outrank the diff we just read. A
+            // failure here must not cost us that diff either.
+            let _ = std::io::copy(&mut reader, &mut std::io::sink());
             bytes.truncate(Self::line_boundary_at_or_before(&bytes, max_bytes as usize));
             notice = Some(Self::truncation_notice(&format!("{max_bytes}-byte")));
         }
@@ -1231,6 +1233,22 @@ diff --git a/src/lib.rs b/src/lib.rs\r\n\
         .expect("a failing drain must not discard the diff");
         assert_eq!(text, "aa\n");
         assert!(notice.expect("notice").contains("5-byte"));
+    }
+
+    #[test]
+    fn unified_reader_drains_the_whole_reader_after_truncating() {
+        // The reader is a child Git pipe. Closing it early kills Git with
+        // SIGPIPE, and the non-zero exit outranks the diff we just parsed.
+        let mut reader = Cursor::new(vec![b'x'; 100]);
+        let (text, notice) = Diff::read_unified_text_with_limits(&mut reader, 4, 100).unwrap();
+
+        assert_eq!(text.len(), 4);
+        assert!(notice.is_some());
+        assert_eq!(
+            reader.position(),
+            100,
+            "Git must reach the end of its output and exit normally"
+        );
     }
 
     #[test]
