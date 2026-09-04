@@ -437,6 +437,43 @@ impl Render for SettingsWindowView {
                             this.set_diff_show_line_numbers(!this.diff_show_line_numbers, cx);
                         }));
 
+                    let remote_markdown_images_row = self
+                        .summary_row(
+                            "settings_window_remote_markdown_images",
+                            "Remote Markdown images",
+                            self.remote_markdown_image_policy.settings_label().into(),
+                            self.expanded_section == Some(SettingsSection::RemoteMarkdownImages),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::RemoteMarkdownImages, cx);
+                        }));
+
+                    let update_check_locked =
+                        crate::view::update_checks_disabled_by_environment();
+                    let update_check_effective =
+                        self.check_for_updates_on_startup && !update_check_locked;
+                    let mut update_check_row = self
+                        .toggle_row(
+                            "settings_window_check_for_updates_on_startup",
+                            "Automatically check for updates on startup",
+                            update_check_effective,
+                            theme,
+                        )
+                        .border_color(no_separator);
+                    if update_check_locked {
+                        update_check_row = update_check_row.opacity(0.6).cursor(CursorStyle::Arrow);
+                    } else {
+                        update_check_row = update_check_row.on_click(cx.listener(
+                            |this, _e: &ClickEvent, _window, cx| {
+                                this.set_check_for_updates_on_startup(
+                                    !this.check_for_updates_on_startup,
+                                    cx,
+                                );
+                            },
+                        ));
+                    }
+
                     let history_default_mode_row = self
                         .summary_row(
                             "settings_window_git_log_default_mode",
@@ -1192,6 +1229,76 @@ impl Render for SettingsWindowView {
                         );
                     }
 
+                    let mut security_privacy_card = self
+                        .card(
+                            "settings_window_security_privacy_card",
+                            "Security / Privacy",
+                            theme,
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pt_1()
+                                .pb_3()
+                                .text_xs()
+                                .text_color(theme.colors.foreground.secondary)
+                                .child(
+                                    "Repository-controlled HTTP/HTTPS images can act as tracking pixels and reveal that you opened a document. Safe relative images from the repository continue to load in every mode.",
+                                ),
+                        )
+                        .child(remote_markdown_images_row);
+
+                    if self.expanded_section == Some(SettingsSection::RemoteMarkdownImages) {
+                        let list = uniform_list(
+                            "settings_window_remote_markdown_images_list",
+                            REMOTE_MARKDOWN_IMAGE_OPTIONS.len(),
+                            cx.processor(Self::render_remote_markdown_image_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.remote_markdown_images_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.remote_markdown_images_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
+                        security_privacy_card = security_privacy_card.child(
+                            self.dropdown_list_container(
+                                "settings_window_remote_markdown_images_list_container",
+                                "settings_window_remote_markdown_images_scrollbar",
+                                self.remote_markdown_images_scroll.clone(),
+                                REMOTE_MARKDOWN_IMAGE_OPTIONS.len(),
+                                SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                                SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                                list,
+                                theme,
+                            ),
+                        );
+                    }
+
+                    security_privacy_card = security_privacy_card.child(update_check_row);
+                    if update_check_locked {
+                        security_privacy_card = security_privacy_card.child(
+                            div()
+                                .id("settings_window_update_check_environment_note")
+                                .px_2()
+                                .pb_3()
+                                .text_xs()
+                                .text_color(theme.colors.foreground.secondary)
+                                .child(
+                                    "Disabled by GITCOMET_NO_UPDATE_CHECK. Remove the environment variable and restart GitComet to change this setting.",
+                                ),
+                        );
+                    }
+
                     let mut change_tracking_card = self
                         .card(
                             "settings_window_change_tracking_card",
@@ -1890,6 +1997,7 @@ impl Render for SettingsWindowView {
 
                     let active_card = match active_category {
                         SettingsCategory::General => general_card,
+                        SettingsCategory::SecurityPrivacy => security_privacy_card,
                         SettingsCategory::Terminal => terminal_card,
                         SettingsCategory::ChangeTracking => change_tracking_card,
                         SettingsCategory::Diff => diff_card,

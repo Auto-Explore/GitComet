@@ -228,9 +228,16 @@ impl PopoverHost {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
             PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
-            PopoverKind::WebLinkMenu { url } => {
-                self.context_menu_view(PopoverKind::WebLinkMenu { url }, cx)
-            }
+            PopoverKind::WebLinkMenu {
+                url,
+                load_remote_image_url,
+            } => self.context_menu_view(
+                PopoverKind::WebLinkMenu {
+                    url,
+                    load_remote_image_url,
+                },
+                cx,
+            ),
             PopoverKind::CommitShaLinkMenu {
                 repo_id,
                 commit_id,

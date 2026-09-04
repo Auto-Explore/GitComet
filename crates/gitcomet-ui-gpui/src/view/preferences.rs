@@ -67,6 +67,63 @@ impl Default for DiffPreferences {
     }
 }
 
+/// Whether rendered Markdown may turn repository-controlled HTTP(S) image
+/// sources into network requests.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum RemoteMarkdownImagePolicy {
+    /// Preserve the historical behavior: remote pictures load as soon as the
+    /// rendered preview asks for them.
+    #[default]
+    AlwaysLoad,
+    /// Keep remote pictures inert until the user approves their URL in the
+    /// current preview target.
+    AskBeforeLoading,
+    /// Never make a request for a remote Markdown picture.
+    NeverLoad,
+}
+
+impl RemoteMarkdownImagePolicy {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::AlwaysLoad => "always",
+            Self::AskBeforeLoading => "ask",
+            Self::NeverLoad => "never",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "always" => Some(Self::AlwaysLoad),
+            "ask" => Some(Self::AskBeforeLoading),
+            "never" => Some(Self::NeverLoad),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn settings_label(self) -> &'static str {
+        match self {
+            Self::AlwaysLoad => "Always load",
+            Self::AskBeforeLoading => "Ask before loading",
+            Self::NeverLoad => "Never load",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SecurityPreferences {
+    pub(super) remote_markdown_images: RemoteMarkdownImagePolicy,
+    pub(super) check_for_updates_on_startup: bool,
+}
+
+impl Default for SecurityPreferences {
+    fn default() -> Self {
+        Self {
+            remote_markdown_images: RemoteMarkdownImagePolicy::AlwaysLoad,
+            check_for_updates_on_startup: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MergeToolPreferences {
     pub(super) auto_advance: bool,
@@ -152,6 +209,7 @@ pub(super) struct UiPreferences {
     pub(super) appearance: AppearancePreferences,
     pub(super) change_tracking: ChangeTrackingPreferences,
     pub(super) diff: DiffPreferences,
+    pub(super) security: SecurityPreferences,
     pub(super) merge_tool: MergeToolPreferences,
     pub(super) history: HistoryPreferences,
     pub(super) file_editing: FileEditingPreferences,
@@ -224,6 +282,14 @@ impl UiPreferences {
                 word_wrap: session.diff_word_wrap.unwrap_or(false),
                 show_line_numbers: session.diff_show_line_numbers.unwrap_or(true),
             },
+            security: SecurityPreferences {
+                remote_markdown_images: session
+                    .remote_markdown_image_policy
+                    .as_deref()
+                    .and_then(RemoteMarkdownImagePolicy::from_key)
+                    .unwrap_or_default(),
+                check_for_updates_on_startup: session.check_for_updates_on_startup.unwrap_or(true),
+            },
             merge_tool: MergeToolPreferences {
                 auto_advance: session.mergetool_auto_advance.unwrap_or(true),
                 collapse_unchanged: session.mergetool_collapse_unchanged.unwrap_or(false),
@@ -272,5 +338,24 @@ mod tests {
         assert!(preferences.history.show_graph);
         assert!(preferences.merge_tool.view_three_way);
         assert!(preferences.remotes.prune_deleted_remote_branches_on_fetch);
+        assert_eq!(
+            preferences.security.remote_markdown_images,
+            RemoteMarkdownImagePolicy::AlwaysLoad
+        );
+        assert!(preferences.security.check_for_updates_on_startup);
+    }
+
+    #[test]
+    fn security_preferences_are_parsed_from_session() {
+        let preferences = UiPreferences::from_session(&session::UiSession {
+            remote_markdown_image_policy: Some("ask".to_string()),
+            check_for_updates_on_startup: Some(false),
+            ..Default::default()
+        });
+        assert_eq!(
+            preferences.security.remote_markdown_images,
+            RemoteMarkdownImagePolicy::AskBeforeLoading
+        );
+        assert!(!preferences.security.check_for_updates_on_startup);
     }
 }

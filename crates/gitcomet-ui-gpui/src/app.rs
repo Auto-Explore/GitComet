@@ -56,6 +56,7 @@ actions!(
         InitializeRepository,
         SwitchRepository,
         ApplyPatch,
+        CheckForUpdates,
         ShowReflog,
         Close,
         CloseWindow,
@@ -478,6 +479,10 @@ fn run_windowed_app(
             #[cfg(target_os = "macos")]
             {
                 install_macos_app_menu(cx, Arc::clone(&backend));
+                cx.on_window_closed(|cx, _| {
+                    cx.defer(refresh_macos_app_menus);
+                })
+                .detach();
                 if let Some(open_urls_rx) = open_urls_rx {
                     register_macos_open_request_handler(cx, Arc::clone(&backend), open_urls_rx);
                 }
@@ -523,7 +528,7 @@ fn open_gitcomet_window(
     let ui_scale_percent = ui_scale.percent;
     let intercept_native_close = view_config.view_mode == GitCometViewMode::Normal;
 
-    crate::ui_probe::time_section("open main window", || {
+    let window = crate::ui_probe::time_section("open main window", || {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -562,7 +567,14 @@ fn open_gitcomet_window(
              If you just updated your system (kernel, mesa, or vulkan drivers), reboot. \
              For per-adapter details, relaunch with RUST_LOG=info."
         )
-    })
+    });
+
+    #[cfg(target_os = "macos")]
+    if intercept_native_close {
+        refresh_macos_app_menus(cx);
+    }
+
+    window
 }
 
 /// Client-side decorations inset a rounded frame into the surface; the pixels
@@ -833,6 +845,10 @@ fn install_macos_app_menu(cx: &mut App, backend: Arc<dyn GitBackend>) {
         cx.defer(prompt_apply_patch);
     });
 
+    cx.on_action(|_: &CheckForUpdates, cx| {
+        let _ = check_for_updates_in_active_or_existing_normal_window(cx);
+    });
+
     let clone_backend = Arc::clone(&backend);
     cx.on_action(move |_: &CloneRepository, cx| {
         let backend = Arc::clone(&clone_backend);
@@ -930,12 +946,23 @@ pub(crate) fn refresh_external_editor_app_surfaces_for_setting(
 }
 
 #[cfg(target_os = "macos")]
-fn macos_app_menus() -> Vec<Menu> {
-    macos_app_menus_with_external_editor(crate::external_editor::configured_setting().is_some())
+fn macos_app_menus(cx: &mut App) -> Vec<Menu> {
+    macos_app_menus_with_options(
+        crate::external_editor::configured_setting().is_some(),
+        find_normal_gitcomet_window(cx).is_some(),
+    )
 }
 
 #[cfg(target_os = "macos")]
 fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec<Menu> {
+    macos_app_menus_with_options(external_editor_configured, true)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_menus_with_options(
+    external_editor_configured: bool,
+    normal_window_available: bool,
+) -> Vec<Menu> {
     let mut file_items = vec![
         MenuItem::action("New Window", NewWindow),
         MenuItem::separator(),
@@ -970,6 +997,12 @@ fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec
             LocateFileInExplorer,
         ),
         MenuItem::action(crate::menu_labels::APPLY_PATCH, ApplyPatch),
+        MenuItem::action(crate::menu_labels::CHECK_FOR_UPDATES, CheckForUpdates).disabled(
+            manual_update_check_menu_disabled(
+                crate::view::update_checks_disabled_by_environment(),
+                normal_window_available,
+            ),
+        ),
         MenuItem::separator(),
         MenuItem::action("Close", Close),
         MenuItem::action("Close Window", CloseWindow),
@@ -1038,12 +1071,17 @@ fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec
 
 #[cfg(target_os = "macos")]
 pub(crate) fn refresh_macos_app_menus(cx: &mut App) {
-    cx.set_menus(macos_app_menus());
+    let menus = macos_app_menus(cx);
+    cx.set_menus(menus);
 }
 
 #[cfg(target_os = "macos")]
 fn refresh_macos_app_menus_for_external_editor(cx: &mut App, configured: bool) {
-    cx.set_menus(macos_app_menus_with_external_editor(configured));
+    let normal_window_available = find_normal_gitcomet_window(cx).is_some();
+    cx.set_menus(macos_app_menus_with_options(
+        configured,
+        normal_window_available,
+    ));
 }
 
 #[cfg(target_os = "macos")]
@@ -1190,6 +1228,28 @@ fn update_active_or_existing_normal_gitcomet_window<R>(
 ) -> Option<R> {
     let window = find_normal_gitcomet_window(cx)?;
     window.view.update(cx, f).ok()
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn check_for_updates_in_active_or_existing_normal_window(cx: &mut App) -> bool {
+    let Some(window) = find_normal_gitcomet_window(cx) else {
+        return false;
+    };
+    if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
+        activate_gitcomet_window(cx, window.handle);
+    }
+    window
+        .view
+        .update(cx, |view, cx| view.check_for_updates_manually(cx))
+        .is_ok()
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn manual_update_check_menu_disabled(
+    disabled_by_environment: bool,
+    normal_window_available: bool,
+) -> bool {
+    disabled_by_environment || !normal_window_available
 }
 
 fn normal_gitcomet_window_blocks_repository_management_actions(
@@ -2017,6 +2077,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn manual_update_menu_is_disabled_without_a_feedback_window() {
+        assert!(manual_update_check_menu_disabled(false, false));
+        assert!(manual_update_check_menu_disabled(true, true));
+        assert!(!manual_update_check_menu_disabled(false, true));
+    }
+
+    #[gpui::test]
+    fn manual_update_check_activates_its_feedback_window(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let main_window_id = cx.update(|window, app| {
+            let _ = window.draw(app);
+            window.activate_window();
+            window.window_handle().window_id()
+        });
+
+        cx.cx.update(crate::view::open_settings_window);
+        cx.run_until_parked();
+        let settings_window = cx.cx.update(|app| {
+            app.windows()
+                .into_iter()
+                .find(|window| window.window_id() != main_window_id)
+                .expect("Settings window should open")
+        });
+        cx.cx.update(|app| {
+            let _ = settings_window.update(app, |_view, window, _cx| window.activate_window());
+            assert_ne!(
+                app.active_window().map(|window| window.window_id()),
+                Some(main_window_id),
+                "Settings should own focus before the manual update check"
+            );
+            assert!(check_for_updates_in_active_or_existing_normal_window(app));
+            assert_eq!(
+                app.active_window().map(|window| window.window_id()),
+                Some(main_window_id),
+                "manual feedback must be shown in the window brought to the foreground"
+            );
+        });
+    }
+
     #[cfg(target_os = "macos")]
     fn menu_action_entries(menu: &Menu) -> Vec<(String, String)> {
         menu.items
@@ -2090,6 +2193,10 @@ mod tests {
                 (
                     crate::menu_labels::APPLY_PATCH.to_string(),
                     ApplyPatch.name().to_string(),
+                ),
+                (
+                    crate::menu_labels::CHECK_FOR_UPDATES.to_string(),
+                    CheckForUpdates.name().to_string(),
                 ),
                 ("Close".to_string(), Close.name().to_string()),
                 ("Close Window".to_string(), CloseWindow.name().to_string(),),

@@ -131,13 +131,14 @@ fn focused_diff_neutral_row_bg(theme: AppTheme) -> gpui::Rgba {
 ///
 /// A context/header/hunk row belongs to no diff kind and keeps the neutral wash.
 fn focused_diff_line_bg(theme: AppTheme, kind: DiffLineKind) -> gpui::Rgba {
-    match kind {
+    let background = match kind {
         DiffLineKind::Add => theme.colors.diff.added.focused_background,
         DiffLineKind::Remove => theme.colors.diff.removed.focused_background,
         DiffLineKind::Context | DiffLineKind::Header | DiffLineKind::Hunk => {
             focused_diff_neutral_row_bg(theme)
         }
-    }
+    };
+    crate::theme::composite_over(theme.colors.editor.background, background)
 }
 
 fn focused_collapsed_hunk_bg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
@@ -3774,7 +3775,13 @@ mod tests {
 
     #[test]
     fn focused_diff_row_backgrounds_are_semantic_and_not_text_selection() {
-        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+        for theme in [
+            AppTheme::gitcomet_dark(),
+            AppTheme::gitcomet_light(),
+            AppTheme::from_key(crate::theme::AMBER_DARK_THEME_KEY)
+                .expect("Amber Dark theme should load"),
+            AppTheme::from_key("tokyo_night").expect("Tokyo Night theme should load"),
+        ] {
             let text_selection_bg = with_alpha(
                 theme.colors.accent.foreground,
                 if theme.is_dark { 0.28 } else { 0.18 },
@@ -3786,12 +3793,50 @@ mod tests {
             let (remove_bg, _, _) = diff_line_colors(theme, DiffLineKind::Remove);
             let (context_bg, _, _) = diff_line_colors(theme, DiffLineKind::Context);
 
-            // The focused row is the diff palette's own token, not a tint mixed
-            // from the status palette: those greens and reds differ in every
-            // bundled theme, so deriving it there shifted the row's hue the
-            // moment it took focus.
-            assert_eq!(add_focus, theme.colors.diff.added.focused_background);
-            assert_eq!(remove_focus, theme.colors.diff.removed.focused_background);
+            // The focused row is the diff palette's own token flattened onto
+            // the editor surface, not a tint mixed from the status palette.
+            // Canvas-backed rows reuse the result, so it must already be opaque.
+            assert_eq!(
+                add_focus,
+                crate::theme::composite_over(
+                    theme.colors.editor.background,
+                    theme.colors.diff.added.focused_background,
+                )
+            );
+            assert_eq!(
+                remove_focus,
+                crate::theme::composite_over(
+                    theme.colors.editor.background,
+                    theme.colors.diff.removed.focused_background,
+                )
+            );
+            assert_eq!(
+                add_bg,
+                crate::theme::composite_over(
+                    theme.colors.editor.background,
+                    theme.colors.diff.added.background,
+                )
+            );
+            assert_eq!(
+                remove_bg,
+                crate::theme::composite_over(
+                    theme.colors.editor.background,
+                    theme.colors.diff.removed.background,
+                )
+            );
+            for background in [
+                add_bg,
+                remove_bg,
+                context_bg,
+                add_focus,
+                remove_focus,
+                neutral_focus,
+            ] {
+                assert_eq!(
+                    background.alpha, 1.0,
+                    "diff row backgrounds passed to the canvas must be opaque"
+                );
+            }
 
             assert_ne!(add_focus, text_selection_bg);
             assert_ne!(remove_focus, text_selection_bg);

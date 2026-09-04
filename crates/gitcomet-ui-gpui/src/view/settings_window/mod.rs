@@ -165,6 +165,24 @@ const DIFF_VIEW_MODE_OPTIONS: &[(&str, DiffViewMode, &str)] = &[
     ),
 ];
 
+const REMOTE_MARKDOWN_IMAGE_OPTIONS: &[(&str, RemoteMarkdownImagePolicy, &str)] = &[
+    (
+        "settings_window_remote_markdown_images_always",
+        RemoteMarkdownImagePolicy::AlwaysLoad,
+        "Load HTTP and HTTPS images automatically.",
+    ),
+    (
+        "settings_window_remote_markdown_images_ask",
+        RemoteMarkdownImagePolicy::AskBeforeLoading,
+        "Prompt before loading; approve one image or all images in the current preview.",
+    ),
+    (
+        "settings_window_remote_markdown_images_never",
+        RemoteMarkdownImagePolicy::NeverLoad,
+        "Never request or display HTTP and HTTPS images.",
+    ),
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
     Theme,
@@ -183,6 +201,7 @@ enum SettingsSection {
     GitLogDefaultMode,
     GitLogColumns,
     GitLogTagFetch,
+    RemoteMarkdownImages,
 }
 
 impl SettingsSection {
@@ -204,6 +223,7 @@ impl SettingsSection {
             Self::GitLogDefaultMode | Self::GitLogColumns | Self::GitLogTagFetch => {
                 SettingsCategory::GitLog
             }
+            Self::RemoteMarkdownImages => SettingsCategory::SecurityPrivacy,
         }
     }
 }
@@ -213,6 +233,7 @@ impl SettingsSection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsCategory {
     General,
+    SecurityPrivacy,
     Terminal,
     ChangeTracking,
     Diff,
@@ -228,6 +249,7 @@ enum SettingsCategory {
 impl SettingsCategory {
     const ALL: &'static [SettingsCategory] = &[
         SettingsCategory::General,
+        SettingsCategory::SecurityPrivacy,
         SettingsCategory::Terminal,
         SettingsCategory::ChangeTracking,
         SettingsCategory::Diff,
@@ -243,6 +265,7 @@ impl SettingsCategory {
     fn label(self) -> &'static str {
         match self {
             Self::General => "General",
+            Self::SecurityPrivacy => "Security / Privacy",
             Self::Terminal => "Terminal",
             Self::ChangeTracking => "Change tracking",
             Self::Diff => "Diff",
@@ -259,6 +282,7 @@ impl SettingsCategory {
     fn icon(self) -> &'static str {
         match self {
             Self::General => "icons/cog.svg",
+            Self::SecurityPrivacy => "icons/file_icons/lock.svg",
             Self::Terminal => "icons/terminal.svg",
             Self::ChangeTracking => "icons/file.svg",
             Self::Diff => "icons/swap.svg",
@@ -275,6 +299,7 @@ impl SettingsCategory {
     fn nav_id(self) -> &'static str {
         match self {
             Self::General => "settings_window_nav_general",
+            Self::SecurityPrivacy => "settings_window_nav_security_privacy",
             Self::Terminal => "settings_window_nav_terminal",
             Self::ChangeTracking => "settings_window_nav_change_tracking",
             Self::Diff => "settings_window_nav_diff",
@@ -295,6 +320,10 @@ impl SettingsCategory {
             Self::General => {
                 "general theme date format ui scale ui font editor font ligatures \
                  external code editor date timezone appearance"
+            }
+            Self::SecurityPrivacy => {
+                "security privacy remote markdown images load image tracking pixels updates \
+                 automatically check updates startup"
             }
             Self::Terminal => "terminal external terminal action bar terminal button opens",
             Self::ChangeTracking => "change tracking untracked files",
@@ -390,6 +419,7 @@ pub(crate) struct SettingsWindowView {
     diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
     diff_view_mode_scroll: UniformListScrollHandle,
+    remote_markdown_images_scroll: UniformListScrollHandle,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
@@ -405,6 +435,8 @@ pub(crate) struct SettingsWindowView {
     diff_word_wrap: bool,
     diff_show_line_numbers: bool,
     auto_save_file_edits: bool,
+    remote_markdown_image_policy: RemoteMarkdownImagePolicy,
+    check_for_updates_on_startup: bool,
     diff_scroll_sync: DiffScrollSync,
     history_show_graph: bool,
     history_show_author: bool,
@@ -788,6 +820,8 @@ impl SettingsWindowView {
         let diff_word_wrap = ui_preferences.diff.word_wrap;
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
+        let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
+        let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
         let history_show_graph = ui_preferences.history.show_graph;
         let history_show_author = ui_preferences.history.show_author;
         let history_show_date = ui_preferences.history.show_date;
@@ -1016,6 +1050,7 @@ impl SettingsWindowView {
             diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
             diff_view_mode_scroll: UniformListScrollHandle::default(),
+            remote_markdown_images_scroll: UniformListScrollHandle::default(),
             date_time_format,
             timezone,
             show_timezone,
@@ -1031,6 +1066,8 @@ impl SettingsWindowView {
             diff_word_wrap,
             diff_show_line_numbers,
             auto_save_file_edits,
+            remote_markdown_image_policy,
+            check_for_updates_on_startup,
             diff_scroll_sync,
             history_show_graph,
             history_show_author,

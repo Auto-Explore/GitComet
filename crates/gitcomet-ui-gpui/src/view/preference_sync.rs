@@ -1,6 +1,39 @@
 use super::*;
 
 impl GitCometView {
+    pub(in crate::view) fn set_remote_markdown_image_policy(
+        &mut self,
+        next: RemoteMarkdownImagePolicy,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_markdown_image_policy == next {
+            return;
+        }
+        self.remote_markdown_image_policy = next;
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.security.remote_markdown_images = next;
+        });
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_remote_markdown_image_policy(next, cx);
+        });
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_check_for_updates_on_startup(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.check_for_updates_on_startup == next {
+            return;
+        }
+        self.check_for_updates_on_startup = next;
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.security.check_for_updates_on_startup = next;
+        });
+        self.schedule_ui_settings_persist(cx);
+    }
+
     pub(super) fn ui_scale(&self) -> ui_scale::UiScale {
         ui_scale::UiScale::from_percent(self.ui_scale_percent)
     }

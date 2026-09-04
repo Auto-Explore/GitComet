@@ -2421,6 +2421,9 @@ impl MainPaneView {
         let wants_collapsed_diff =
             supports_diff_content_toggle && self.wants_collapsed_diff_view(is_file_preview);
 
+        if self.is_conflict_rendered_markdown_preview_active() {
+            self.ensure_conflict_markdown_preview_cache();
+        }
         let repo = self.active_repo();
         let conflict_target = (!inline_submodule_diff_active)
             .then_some(())
@@ -2462,7 +2465,6 @@ impl MainPaneView {
         let is_conflict_resolver = conflict_strategy.is_some();
         let is_conflict_compare = conflict_target_path.is_some() && conflict_strategy.is_none();
         let conflict_rendered_preview_active = self.is_conflict_rendered_preview_active();
-
         let rendered_preview_kind =
             super::super::diff_target_rendered_preview_kind(self.rendered_diff_target());
         let rendered_view_toggle_kind = super::super::main_diff_rendered_preview_toggle_kind(
@@ -2844,6 +2846,21 @@ impl MainPaneView {
             );
         }
 
+        if self.has_blocked_remote_markdown_images() {
+            controls = controls.child(
+                components::Button::new(
+                    "markdown_preview_load_all_remote_images",
+                    "Load all images",
+                )
+                .style(components::ButtonStyle::Outlined)
+                .on_click(theme, cx, |this, _e, window, cx| {
+                    this.approve_all_remote_markdown_images(cx);
+                    this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                })
+                .debug_selector(|| "markdown_preview_load_all_remote_images".to_string()),
+            );
+        }
+
         if let Some(repo_id) = repo_id {
             // The full text resolver gets its own settings menu under the cog
             // (section 30); everything else keeps the diff actions menu.
@@ -2993,6 +3010,8 @@ impl MainPaneView {
                                             ui_scale_percent,
                                             editor_font_family: editor_font_family.clone().into(),
                                             image_base_dir,
+                                            remote_image_access: self
+                                                .markdown_remote_image_access(Some(cx.entity())),
                                             picture_sizes: std::sync::Arc::clone(
                                                 &self.worktree_markdown_preview_picture_sizes,
                                             ),

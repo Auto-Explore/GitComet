@@ -1,205 +1,209 @@
 {
-  "name": "Tokyo Night",
+  "name": "Amber Dark",
+  "author": "Akmal",
   "themes": [
     {
-      "key": "tokyo_night",
-      "name": "Tokyo Night",
+      "key": "amber_dark",
+      "name": "Amber Dark",
       "appearance": "dark",
       "colors": {
         "surface": {
           "canvas": "#0d0f13ff",
-          "chrome": "#202434ff",
-          "panel": "#1d2130ff",
-          "raised": "#232738ff",
-          "input": "#2a2d3eff"
+          "chrome": "#1a1e29ff",
+          "panel": "#161922ff",
+          "raised": "#1e2230ff",
+          "input": "#252836ff"
         },
         "foreground": {
-          "primary": "#cad2f3ff",
-          "secondary": "#636b90ff",
+          "primary": "#e7e8ecff",
+          "secondary": "#8b8fa3ff",
           "disabled": {
-            "hex": "#636b90ff",
+            "hex": "#8b8fa3ff",
             "alpha": 0.62
           },
-          "placeholder": "#7d819caa",
+          "placeholder": "#8b8fa380",
           "emphasis": "#ffffffff"
         },
         "stroke": {
-          "subtle": "#ffffff10",
-          "default": "#2b3044ff",
-          "control": "#2b3044ff"
+          "subtle": "#ffffff0d",
+          "default": "#2a2e3bff",
+          "control": "#2a2e3bff"
         },
         "interaction": {
           "hover_overlay": {
-            "hex": "#cad2f3ff",
+            "hex": "#e7e8ecff",
             "alpha": 0.07
           },
           "pressed_overlay": {
-            "hex": "#cad2f3ff",
+            "hex": "#e7e8ecff",
             "alpha": 0.11
           },
-          "hover_background": "#262b3eff",
+          "hover_background": "#1e2230ff",
           "pressed_background": {
-            "hex": "#7aa2f7ff",
-            "alpha": 0.18
+            "hex": "#e3a64bff",
+            "alpha": 0.15
           },
-          "selected_background": "#2a3050ff",
-          "selected_foreground": "#cad2f3ff",
-          "selected_indicator": "#7aa2f7ff",
+          "selected_background": {
+            "hex": "#e3a64bff",
+            "alpha": 0.32
+          },
+          "selected_foreground": "#e7e8ecff",
+          "selected_indicator": "#e3a64bff",
           "focus_ring": {
-            "hex": "#89ddffff",
-            "alpha": 0.82
+            "hex": "#e3a64bff",
+            "alpha": 0.55
           },
           "focus_background": {
-            "hex": "#89ddffff",
-            "alpha": 0.24
+            "hex": "#e3a64bff",
+            "alpha": 0.16
           }
         },
         "accent": {
-          "foreground": "#7aa2f7ff",
-          "solid": "#7aa2f7ff",
+          "foreground": "#e3a64bff",
+          "solid": "#e3a64bff",
           "on_solid": "#0d0f13ff",
           "subtle_background": {
-            "hex": "#7aa2f7ff",
-            "alpha": 0.18
+            "hex": "#e3a64bff",
+            "alpha": 0.16
           }
         },
         "status": {
           "info": {
-            "foreground": "#7aa2f7ff",
+            "foreground": "#6cb8e8ff",
             "background": {
-              "hex": "#7aa2f7ff",
+              "hex": "#6cb8e8ff",
               "alpha": 0.18
             },
             "border": {
-              "hex": "#7aa2f7ff",
+              "hex": "#6cb8e8ff",
               "alpha": 0.48
             }
           },
           "success": {
-            "foreground": "#9ece6aff",
+            "foreground": "#5fa779ff",
             "background": {
-              "hex": "#9ece6aff",
+              "hex": "#5fa779ff",
               "alpha": 0.18
             },
             "border": {
-              "hex": "#9ece6aff",
+              "hex": "#5fa779ff",
               "alpha": 0.48
             }
           },
           "warning": {
-            "foreground": "#e0af68ff",
+            "foreground": "#e3a64bff",
             "background": {
-              "hex": "#e0af68ff",
+              "hex": "#e3a64bff",
               "alpha": 0.18
             },
             "border": {
-              "hex": "#e0af68ff",
+              "hex": "#e3a64bff",
               "alpha": 0.48
             }
           },
           "danger": {
-            "foreground": "#f7768eff",
+            "foreground": "#d87870ff",
             "background": {
-              "hex": "#f7768eff",
+              "hex": "#d87870ff",
               "alpha": 0.18
             },
             "border": {
-              "hex": "#f7768eff",
+              "hex": "#d87870ff",
               "alpha": 0.48
             }
           }
         },
         "editor": {
           "background": "#0d0f13ff",
-          "foreground": "#cad2f3ff",
+          "foreground": "#e7e8ecff",
           "gutter_background": "#0d0f13ff",
-          "line_number": "#636b90ff",
+          "line_number": "#8b8fa3ff",
           "cursor": {
-            "hex": "#cad2f3ff",
+            "hex": "#e7e8ecff",
             "alpha": 0.78
           },
           "selection_background": {
-            "hex": "#7aa2f7ff",
+            "hex": "#3b82f6ff",
             "alpha": 0.28
           },
           "search_match_background": {
-            "hex": "#e0af68ff",
+            "hex": "#e3a64bff",
             "alpha": 0.22
           },
-          "search_match_foreground": "#e0af68ff",
+          "search_match_foreground": "#e3a64bff",
           "bracket_match_background": {
-            "hex": "#ffc777ff",
-            "alpha": 0.32
+            "hex": "#e3a64bff",
+            "alpha": 0.28
           },
           "occurrence_highlight_background": {
-            "hex": "#bb9af7ff",
+            "hex": "#b8a8e8ff",
             "alpha": 0.26
           },
-          "indent_guide": "#ffffff10"
+          "indent_guide": "#ffffff0d"
         },
         "diff": {
           "added": {
-            "foreground": "#8ec46eff",
+            "foreground": "#5fa779ff",
             "background": {
-              "hex": "#8ec46eff",
+              "hex": "#5fa779ff",
               "alpha": 0.15
             },
             "word_background": {
-              "hex": "#8ec46eff",
+              "hex": "#5fa779ff",
               "alpha": 0.22
             },
             "focused_background": {
-              "hex": "#8ec46eff",
+              "hex": "#5fa779ff",
               "alpha": 0.20
             }
           },
           "removed": {
-            "foreground": "#ea7181ff",
+            "foreground": "#d87870ff",
             "background": {
-              "hex": "#ea7181ff",
+              "hex": "#d87870ff",
               "alpha": 0.15
             },
             "word_background": {
-              "hex": "#ea7181ff",
+              "hex": "#d87870ff",
               "alpha": 0.22
             },
             "focused_background": {
-              "hex": "#ea7181ff",
+              "hex": "#d87870ff",
               "alpha": 0.20
             }
           },
           "modified": {
-            "foreground": "#e1ad61ff",
+            "foreground": "#e3a64bff",
             "background": {
-              "hex": "#e1ad61ff",
+              "hex": "#e3a64bff",
               "alpha": 0.14
             },
             "word_background": {
-              "hex": "#e1ad61ff",
+              "hex": "#e3a64bff",
               "alpha": 0.22
             },
             "focused_background": {
-              "hex": "#e1ad61ff",
+              "hex": "#e3a64bff",
               "alpha": 0.20
             }
           }
         },
         "tooltip": {
-          "background": "#181923ff",
-          "foreground": "#cad2f3ff"
+          "background": "#1e2230ff",
+          "foreground": "#e7e8ecff"
         },
         "scrollbar": {
           "thumb": {
-            "hex": "#636b90ff",
+            "hex": "#8b8fa3ff",
             "alpha": 0.30
           },
           "thumb_hover": {
-            "hex": "#636b90ff",
+            "hex": "#8b8fa3ff",
             "alpha": 0.42
           },
           "thumb_pressed": {
-            "hex": "#636b90ff",
-            "alpha": 0.52
+            "hex": "#8b8fa3ff",
+            "alpha": 0.54
           }
         },
         "shadow": "#000000ff",
@@ -272,48 +276,48 @@
         ]
       },
       "syntax": {
-        "comment": "#565f89ff",
-        "comment_doc": "#6b7194ff",
-        "string": "#9ece6aff",
-        "string_escape": "#73dacae6",
-        "string_regex": "#ff9e64ff",
-        "string_special": "#ff9e64ff",
-        "keyword": "#bb9af7ff",
-        "keyword_control": "#bb9af7ff",
-        "preproc": "#bb9af7ff",
-        "number": "#ff9e64ff",
-        "boolean": "#ff9e64ff",
-        "function": "#7aa2f7ff",
-        "function_method": "#7dcfffff",
-        "function_special": "#7dcfffff",
-        "constructor": "#7aa2f7ff",
-        "type": "#2ac3deff",
-        "type_builtin": "#2ac3deff",
-        "type_interface": "#2ac3deff",
-        "namespace": "#2ac3deff",
-        "variable": "#c0caf5ff",
-        "variable_parameter": "#e0af68ff",
-        "variable_special": "#f7768eff",
-        "variable_builtin": "#f7768eff",
-        "property": "#7aa2f7ff",
-        "label": "#7aa2f7ff",
-        "constant": "#ff9e64ff",
-        "constant_builtin": "#ff9e64ff",
-        "operator": "#89ddffff",
-        "punctuation": "#a9b1d6ff",
-        "punctuation_bracket": "#a9b1d6ff",
-        "punctuation_delimiter": "#a9b1d6ff",
-        "punctuation_special": "#89ddffff",
-        "punctuation_list_marker": "#7aa2f7ff",
-        "tag": "#7aa2f7ff",
-        "attribute": "#9ece6aff",
-        "markup_heading": "#bb9af7ff",
-        "markup_link": "#7aa2f7ff",
-        "text_literal": "#9ece6aff",
-        "diff_plus": "#9ece6aff",
-        "diff_minus": "#f7768eff",
-        "diff_delta": "#2ac3deff",
-        "lifetime": "#bb9af7ff"
+        "comment": "#6a6e80ff",
+        "comment_doc": "#6a6e80ff",
+        "string": "#a8c46eff",
+        "string_escape": "#a8c46eff",
+        "string_regex": "#a8c46eff",
+        "string_special": "#a8c46eff",
+        "keyword": "#e3a64bff",
+        "keyword_control": "#e3a64bff",
+        "preproc": "#b8a8e8ff",
+        "number": "#d4976eff",
+        "boolean": "#d4976eff",
+        "function": "#6cb8e8ff",
+        "function_method": "#6cb8e8ff",
+        "function_special": "#6cb8e8ff",
+        "constructor": "#6cb8e8ff",
+        "type": "#a8c46eff",
+        "type_builtin": "#a8c46eff",
+        "type_interface": "#a8c46eff",
+        "namespace": "#6cb8e8ff",
+        "variable": "#e7e8ecff",
+        "variable_parameter": "#e7e8ecff",
+        "variable_special": "#e7e8ecff",
+        "variable_builtin": "#6cb8e8ff",
+        "property": "#6cb8e8ff",
+        "label": "#6cb8e8ff",
+        "constant": "#d4a0b8ff",
+        "constant_builtin": "#d4a0b8ff",
+        "operator": "#7a7e90ff",
+        "punctuation": "#7a7e90ff",
+        "punctuation_bracket": "#7a7e90ff",
+        "punctuation_delimiter": "#7a7e90ff",
+        "punctuation_special": "#7a7e90ff",
+        "punctuation_list_marker": "#7a7e90ff",
+        "tag": "#a8c46eff",
+        "attribute": "#6cb8e8ff",
+        "markup_heading": "#6cb8e8ff",
+        "markup_link": "#6cb8e8ff",
+        "text_literal": "#a8c46eff",
+        "diff_plus": "#5fa779ff",
+        "diff_minus": "#d87870ff",
+        "diff_delta": "#6cb8e8ff",
+        "lifetime": "#6cb8e8ff"
       },
       "radii": {
         "panel": 8.0,

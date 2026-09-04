@@ -40,6 +40,8 @@ impl SettingsWindowView {
             diff_reveal_whitespace_chars: Some(self.diff_reveal_whitespace_chars),
             diff_word_wrap: Some(self.diff_word_wrap),
             diff_show_line_numbers: Some(self.diff_show_line_numbers),
+            remote_markdown_image_policy: Some(self.remote_markdown_image_policy.key().to_string()),
+            check_for_updates_on_startup: Some(self.check_for_updates_on_startup),
             auto_save_file_edits: Some(self.auto_save_file_edits),
             // Merge tool settings are managed from the resolver's cog menu;
             // None never overwrites the stored values.
@@ -766,6 +768,41 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_auto_save_file_edits(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_remote_markdown_image_policy(
+        &mut self,
+        next: RemoteMarkdownImagePolicy,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_markdown_image_policy == next {
+            return;
+        }
+        self.remote_markdown_image_policy = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_remote_markdown_image_policy(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_check_for_updates_on_startup(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if crate::view::update_checks_disabled_by_environment()
+            || self.check_for_updates_on_startup == next
+        {
+            return;
+        }
+        self.check_for_updates_on_startup = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_check_for_updates_on_startup(next, cx);
         });
         cx.notify();
     }

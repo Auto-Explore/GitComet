@@ -311,12 +311,100 @@ struct HistoryChipVisual {
     remote_branch_icon: gpui::Rgba,
 }
 
+fn relative_luminance(color: gpui::Rgba) -> f32 {
+    let linear_channel = |channel: f32| {
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+
+    0.2126 * linear_channel(color.red)
+        + 0.7152 * linear_channel(color.green)
+        + 0.0722 * linear_channel(color.blue)
+}
+
+fn contrast_ratio(a: gpui::Rgba, b: gpui::Rgba) -> f32 {
+    let a = relative_luminance(a);
+    let b = relative_luminance(b);
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Keeps the semantic foreground when it is readable on the actual chip fill.
+/// A custom theme can provide valid solid/selection pairs that stop being valid
+/// after the accent is reduced to a wash, so fall back to its strongest body
+/// foreground instead of assuming either semantic token still fits.
+fn readable_chip_foreground(
+    theme: AppTheme,
+    rendered_bg: gpui::Rgba,
+    preferred: gpui::Rgba,
+) -> gpui::Rgba {
+    const MIN_TEXT_CONTRAST: f32 = 4.5;
+
+    if contrast_ratio(preferred, rendered_bg) >= MIN_TEXT_CONTRAST {
+        return preferred;
+    }
+
+    [
+        theme.colors.foreground.primary,
+        theme.colors.foreground.emphasis,
+        theme.colors.accent.foreground,
+        theme.colors.accent.on_solid,
+    ]
+    .into_iter()
+    .max_by(|a, b| contrast_ratio(*a, rendered_bg).total_cmp(&contrast_ratio(*b, rendered_bg)))
+    .unwrap_or(preferred)
+}
+
+/// Active branch chips need two treatments because the theme's solid-accent
+/// foreground is not necessarily suitable for an accent overlay. Themes with
+/// a dark `on_solid` foreground (Amber Dark and Tokyo Night) get a subtly
+/// lifted, opaque accent surface; other themes retain the quieter overlay. Both
+/// paths resolve an opaque fill first and choose text/icons against that exact
+/// rendered colour, including for custom themes.
+fn active_branch_chip_visual(theme: AppTheme, context_menu_open: bool) -> HistoryChipVisual {
+    let on_solid = theme.colors.accent.on_solid;
+    let on_solid_is_dark =
+        on_solid.red * 0.2126 + on_solid.green * 0.7152 + on_solid.blue * 0.0722 < 0.5;
+
+    if on_solid_is_dark {
+        let lift = if context_menu_open { 0.16 } else { 0.08 };
+        let bg = crate::theme::mix_colors(theme.colors.accent.solid, gpui::rgba(0xffffffff), lift);
+        let foreground = readable_chip_foreground(theme, bg, on_solid);
+        return HistoryChipVisual {
+            border: with_alpha(foreground, if context_menu_open { 1.0 } else { 0.70 }),
+            bg,
+            text: foreground,
+            local_branch_icon: foreground,
+            remote_branch_icon: foreground,
+        };
+    }
+
+    let overlay = with_alpha(
+        theme.colors.accent.foreground,
+        if context_menu_open { 0.30 } else { 0.22 },
+    );
+    let bg = crate::theme::composite_over(theme.colors.surface.canvas, overlay);
+    let foreground = readable_chip_foreground(theme, bg, selected_branch_label_color(theme));
+    HistoryChipVisual {
+        border: if context_menu_open {
+            theme.colors.accent.foreground
+        } else {
+            with_alpha(theme.colors.accent.foreground, 0.85)
+        },
+        bg,
+        text: foreground,
+        local_branch_icon: foreground,
+        remote_branch_icon: foreground,
+    }
+}
+
 fn history_chip_visual(
     theme: AppTheme,
     kind: HistoryChipStyleKind,
     context_menu_open: bool,
 ) -> HistoryChipVisual {
-    let active_branch_icon = gpui::rgba(0xffffffff);
     let visual = match kind {
         HistoryChipStyleKind::Tag => HistoryChipVisual {
             border: with_alpha(theme.colors.accent.foreground, 0.35),
@@ -341,20 +429,9 @@ fn history_chip_visual(
             local_branch_icon: theme.colors.accent.on_solid,
             remote_branch_icon: with_alpha(theme.colors.accent.on_solid, 0.70),
         },
-        // The branch picked in the sidebar is tinted rather than merely
-        // re-bordered: on a busy ref column a border alone reads as noise, and
-        // this chip is the only thing marking which branch the revealed commit
-        // is the tip of. It stays short of the solid HEAD fill so the two
-        // remain distinguishable on the same row.
-        HistoryChipStyleKind::Branch { selected: true } => HistoryChipVisual {
-            border: with_alpha(theme.colors.accent.foreground, 0.85),
-            bg: with_alpha(theme.colors.accent.foreground, 0.22),
-            text: selected_branch_label_color(theme),
-            // Every branch-location glyph is an outline. Keep both layers of
-            // the combined computer/cloud glyph pure white on the active fill.
-            local_branch_icon: active_branch_icon,
-            remote_branch_icon: active_branch_icon,
-        },
+        // On a busy ref column a fill, rather than a border alone, is what makes
+        // the branch selected in the sidebar easy to find on its tip commit.
+        HistoryChipStyleKind::Branch { selected: true } => active_branch_chip_visual(theme, false),
         HistoryChipStyleKind::Branch { selected: false } => HistoryChipVisual {
             border: with_alpha(theme.colors.stroke.default, 0.90),
             bg: theme.colors.surface.raised,
@@ -385,13 +462,7 @@ fn history_chip_visual(
             local_branch_icon: theme.colors.accent.foreground,
             remote_branch_icon: theme.colors.foreground.secondary,
         },
-        HistoryChipStyleKind::Branch { .. } => HistoryChipVisual {
-            border: theme.colors.accent.foreground,
-            bg: with_alpha(theme.colors.accent.foreground, 0.30),
-            text: selected_branch_label_color(theme),
-            local_branch_icon: active_branch_icon,
-            remote_branch_icon: active_branch_icon,
-        },
+        HistoryChipStyleKind::Branch { .. } => active_branch_chip_visual(theme, true),
     }
 }
 
@@ -467,7 +538,7 @@ fn history_summary_color(
         // All the way to muted: against pure white/black on the related rows,
         // anything short of this left the two too close to separate at a glance.
         Some(false) => theme.colors.foreground.secondary,
-        None if is_selected_branch_tip => selected_branch_label_color(theme),
+        None if is_selected_branch_tip => full_contrast_text(theme),
         None => theme.colors.foreground.primary,
     }
 }
@@ -2243,9 +2314,38 @@ mod tests {
     }
 
     #[test]
-    fn active_branch_chip_icons_are_white_outlines() {
-        let white = gpui::rgba(0xffffffff);
-        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+    fn active_branch_chip_foregrounds_match_the_surface_they_use() {
+        let amber_dark = AppTheme::from_key(crate::theme::AMBER_DARK_THEME_KEY)
+            .expect("Amber Dark theme should load");
+        assert_eq!(
+            amber_dark.colors.accent.on_solid,
+            gpui::rgba(0x0d0f13ff),
+            "Amber Dark's active chip foreground should be near-black"
+        );
+
+        let assert_foreground = |visual: &HistoryChipVisual, expected| {
+            assert_eq!(visual.text, expected);
+            assert_eq!(HistoryBranchChipIcon::Local.color(visual), expected);
+            assert_eq!(HistoryBranchChipIcon::Remote.color(visual), expected);
+            assert_eq!(HistoryBranchChipIcon::LocalRemote.color(visual), expected);
+            assert_eq!(
+                HistoryBranchChipIcon::LocalRemote
+                    .foreground_layer(visual)
+                    .expect("the combined icon should paint its computer layer")
+                    .1,
+                expected
+            );
+            assert_eq!(visual.bg.alpha, 1.0);
+            assert!(
+                contrast_ratio(visual.text, visual.bg) >= 4.5,
+                "active branch chip text must remain readable on its resolved fill"
+            );
+        };
+
+        for theme in [
+            amber_dark,
+            AppTheme::from_key("tokyo_night").expect("Tokyo Night theme should load"),
+        ] {
             for visual in [
                 history_chip_visual(
                     theme,
@@ -2259,17 +2359,58 @@ mod tests {
                 ),
                 history_chip_visual(theme, HistoryChipStyleKind::Branch { selected: true }, true),
             ] {
-                assert_eq!(HistoryBranchChipIcon::Local.color(&visual), white);
-                assert_eq!(HistoryBranchChipIcon::Remote.color(&visual), white);
-                assert_eq!(HistoryBranchChipIcon::LocalRemote.color(&visual), white);
-                assert_eq!(
-                    HistoryBranchChipIcon::LocalRemote
-                        .foreground_layer(&visual)
-                        .expect("the combined icon should paint its computer layer")
-                        .1,
-                    white
-                );
+                assert_foreground(&visual, theme.colors.accent.on_solid);
             }
+        }
+
+        for theme in [
+            AppTheme::gitcomet_dark(),
+            AppTheme::gitcomet_light(),
+            AppTheme::from_key("sunset_veil").expect("Sunset Veil theme should load"),
+        ] {
+            for visual in [
+                history_chip_visual(
+                    theme,
+                    HistoryChipStyleKind::Branch { selected: true },
+                    false,
+                ),
+                history_chip_visual(
+                    theme,
+                    HistoryChipStyleKind::Branch { selected: false },
+                    true,
+                ),
+            ] {
+                assert_foreground(&visual, theme.colors.interaction.selected_foreground);
+            }
+        }
+
+        // A valid custom light theme can intentionally pair white text with a
+        // solid dark selection surface. Reducing its accent to a pale wash must
+        // not blindly carry that white foreground onto the resolved chip fill.
+        let mut custom_light = AppTheme::gitcomet_light();
+        custom_light.colors.surface.canvas = gpui::rgba(0xffffffff);
+        custom_light.colors.interaction.selected_foreground = gpui::rgba(0xffffffff);
+        custom_light.colors.accent.foreground = gpui::rgba(0x365bb7ff);
+        custom_light.colors.accent.solid = gpui::rgba(0x365bb7ff);
+        custom_light.colors.accent.on_solid = gpui::rgba(0xffffffff);
+
+        for visual in [
+            history_chip_visual(
+                custom_light,
+                HistoryChipStyleKind::Branch { selected: true },
+                false,
+            ),
+            history_chip_visual(
+                custom_light,
+                HistoryChipStyleKind::Branch { selected: false },
+                true,
+            ),
+        ] {
+            assert_ne!(
+                visual.text,
+                custom_light.colors.interaction.selected_foreground
+            );
+            assert_foreground(&visual, custom_light.colors.foreground.emphasis);
         }
     }
 
