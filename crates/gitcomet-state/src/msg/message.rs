@@ -1,7 +1,7 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
     BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, GitOperationOuterOutcome,
-    RepoId, SidebarDataRequest, SidebarMode,
+    RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -220,6 +220,7 @@ pub enum Msg {
         show_history_tags: bool,
         tag_fetch_mode: GitLogTagFetchMode,
     },
+    SetRemoteSettings(RemoteSettings),
     SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,
@@ -254,10 +255,6 @@ pub enum Msg {
     SetHistoryAuthorFilter {
         repo_id: RepoId,
         author: Option<String>,
-    },
-    SetFetchPruneDeletedRemoteTrackingBranches {
-        repo_id: RepoId,
-        enabled: bool,
     },
     LoadMoreHistory {
         repo_id: RepoId,

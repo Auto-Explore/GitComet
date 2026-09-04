@@ -1595,6 +1595,8 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
             "settings_window_file_editing_card",
         ),
         (SettingsCategory::GitLog, "settings_window_git_log_card"),
+        (SettingsCategory::Remotes, "settings_window_remotes_card"),
+        (SettingsCategory::Tags, "settings_window_tags_card"),
         (
             SettingsCategory::GitExecutable,
             "settings_window_git_executable",
@@ -2268,6 +2270,50 @@ fn auto_save_file_edits_toggle_reaches_the_main_window(cx: &mut gpui::TestAppCon
                 .expect("settings window should remain readable")
         );
     });
+}
+
+#[gpui::test]
+fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+
+    assert!(
+        store
+            .snapshot()
+            .remote_settings
+            .prune_deleted_remote_branches_on_fetch,
+        "remote pruning should default to enabled"
+    );
+
+    cx.update(|_window, app| {
+        let _ = settings_window.update(app, |settings, _window, cx| {
+            settings.set_prune_deleted_remote_branches_on_fetch(false, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    assert!(
+        !store
+            .snapshot()
+            .remote_settings
+            .prune_deleted_remote_branches_on_fetch,
+        "the Remotes setting should update the global store setting"
+    );
 }
 
 #[gpui::test]

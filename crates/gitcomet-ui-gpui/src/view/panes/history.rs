@@ -1158,6 +1158,9 @@ impl HistoryView {
             let changed = next_fingerprint != this.notify_fingerprint;
             let switched_repo = this.state.active_repo != next.active_repo;
             this.state = next;
+            if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
+                this.selected_branch = None;
+            }
 
             if switched_repo {
                 // These memos describe the selection in the tab we just left.

@@ -5724,6 +5724,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::Pull {
                 repo_id,
                 mode: PullMode::FastForwardOnly,
+                prune: true,
                 auth: None,
             },
             1,
@@ -5733,6 +5734,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
+                prune: true,
                 auth: None,
             },
             1,

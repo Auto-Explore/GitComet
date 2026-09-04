@@ -73,6 +73,7 @@ pub struct UiSession {
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
+    pub fetch_prune_deleted_remote_branches: Option<bool>,
     pub git_executable_path: Option<PathBuf>,
     pub external_code_editor: Option<ExternalCodeEditorSetting>,
 }
@@ -155,11 +156,13 @@ struct UiSessionFile {
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
     default_tag_type: Option<DefaultTagType>,
+    fetch_prune_deleted_remote_branches: Option<bool>,
     git_executable_path: Option<String>,
     external_code_editor: Option<ExternalCodeEditorSettingFile>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
+    #[serde(skip_serializing)]
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     survey_prompt: Option<SurveyPromptSession>,
 }
@@ -271,6 +274,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,
+        fetch_prune_deleted_remote_branches: file.fetch_prune_deleted_remote_branches,
         git_executable_path: file
             .git_executable_path
             .as_deref()
@@ -285,7 +289,6 @@ pub(crate) struct RepoSessionPreferences {
     pub(crate) repo_history_modes: BTreeMap<String, HistoryMode>,
     pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
     pub(crate) repo_history_author_filters: BTreeMap<String, Option<String>>,
-    pub(crate) repo_fetch_prune_deleted_remote_tracking_branches: BTreeMap<String, bool>,
 }
 
 #[cfg(test)]
@@ -355,9 +358,13 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
         }
         SESSION_FILE_VERSION_V2 => {
             let file = serde_json::from_value::<UiSessionFile>(value).ok()?;
-            Some(migrate_v2_file(file))
+            Some(migrate_legacy_repo_fetch_prune_setting(migrate_v2_file(
+                file,
+            )))
         }
-        SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value).ok(),
+        SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value)
+            .ok()
+            .map(migrate_legacy_repo_fetch_prune_setting),
         _ => None,
     }
 }

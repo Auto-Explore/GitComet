@@ -1,5 +1,37 @@
 use super::*;
 
+/// Why an open checkout prompt can no longer be satisfied.
+enum StaleCheckoutPrompt {
+    /// The repository the prompt belongs to is gone from state, e.g. its tab
+    /// was closed while the prompt was open.
+    RepoClosed,
+    BranchGone(String),
+}
+
+fn stale_checkout_remote_branch_prompt(
+    state: &AppState,
+    popover: Option<&PopoverKind>,
+) -> Option<StaleCheckoutPrompt> {
+    let Some(PopoverKind::CheckoutRemoteBranchPrompt {
+        repo_id,
+        remote,
+        branch,
+    }) = popover
+    else {
+        return None;
+    };
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == *repo_id) else {
+        return Some(StaleCheckoutPrompt::RepoClosed);
+    };
+    let Loadable::Ready(branches) = &repo.remote_branches else {
+        return None;
+    };
+    (!branches
+        .iter()
+        .any(|candidate| candidate.remote == *remote && candidate.name == *branch))
+    .then(|| StaleCheckoutPrompt::BranchGone(format!("{remote}/{branch}")))
+}
+
 impl PopoverHost {
     #[cfg(test)]
     pub(in crate::view) fn create_branch_input_focus_handle_for_test(
@@ -164,6 +196,21 @@ impl PopoverHost {
             }
             this.commit_prompt_message_drafts
                 .retain(|repo_id, _| this.state.repos.iter().any(|repo| repo.id == *repo_id));
+
+            // Closing clears `this.popover`, so the per-event work below still
+            // runs and simply finds no popover to fingerprint.
+            match stale_checkout_remote_branch_prompt(&this.state, this.popover.as_ref()) {
+                Some(StaleCheckoutPrompt::BranchGone(branch)) => {
+                    this.close_popover(cx);
+                    this.push_toast(
+                        components::ToastKind::Warning,
+                        format!("Remote branch {branch} no longer exists."),
+                        cx,
+                    );
+                }
+                Some(StaleCheckoutPrompt::RepoClosed) => this.close_popover(cx),
+                None => {}
+            }
 
             // Prefill the squash prompt from the message preview when it lands,
             // rather than in the render path, so the generated message never

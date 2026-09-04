@@ -1339,6 +1339,63 @@ fn create_branch_on_unborn_head_returns_structured_git_error() {
 }
 
 #[test]
+fn create_branch_error_hints_at_a_refresh_only_for_remote_branch_targets() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    std::fs::write(repo.join("file.txt"), "base\n").unwrap();
+    run_git(repo, &["add", "file.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    run_git(
+        repo,
+        &["remote", "add", "origin", "https://example.com/repo.git"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let err = opened
+        .create_branch(
+            "from-typo",
+            &gitcomet_core::domain::CommitId("no-such-ref".into()),
+        )
+        .expect_err("an unresolvable local target cannot be a branch source");
+    let ErrorKind::Git(failure) = err.kind() else {
+        unreachable!();
+    };
+    assert_eq!(
+        failure.detail(),
+        Some("fatal: not a valid object name: 'no-such-ref'"),
+        "a target that names no remote must keep Git's own diagnostic"
+    );
+
+    let err = opened
+        .create_branch(
+            "from-remote",
+            &gitcomet_core::domain::CommitId("origin/gone".into()),
+        )
+        .expect_err("a pruned remote branch cannot be a branch source");
+    let ErrorKind::Git(failure) = err.kind() else {
+        unreachable!();
+    };
+    assert_eq!(
+        failure.detail(),
+        Some(
+            "Branch source 'origin/gone' no longer exists. Refresh remote branches and try again."
+        )
+    );
+}
+
+#[test]
 fn create_branch_from_detached_head_using_head_revision() {
     if !require_git_shell_for_status_integration_tests() {
         return;

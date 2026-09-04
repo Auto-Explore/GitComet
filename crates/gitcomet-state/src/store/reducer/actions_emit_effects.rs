@@ -328,11 +328,7 @@ pub(super) fn fetch_all(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
-    let prune = state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .is_some_and(|repo_state| repo_state.fetch_prune_deleted_remote_tracking_branches);
+    let prune = state.remote_settings.prune_deleted_remote_branches_on_fetch;
     bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
     vec![Effect::FetchAll {
         repo_id,
@@ -369,6 +365,7 @@ pub(super) fn pull(
     vec![Effect::Pull {
         repo_id,
         mode,
+        prune: state.remote_settings.prune_deleted_remote_branches_on_fetch,
         auth: None,
     }]
 }
@@ -385,6 +382,7 @@ pub(super) fn pull_branch(
         repo_id,
         remote,
         branch,
+        prune: state.remote_settings.prune_deleted_remote_branches_on_fetch,
         auth: None,
     }]
 }
@@ -1093,6 +1091,27 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
+    let fetch_like_command = matches!(
+        &command,
+        RepoCommandKind::FetchAll
+            | RepoCommandKind::PruneMergedBranches
+            | RepoCommandKind::Pull { .. }
+            | RepoCommandKind::PullBranch { .. }
+    );
+    let refresh_remote_branches = fetch_like_command
+        || matches!(
+            &command,
+            RepoCommandKind::DeleteRemoteBranch { .. }
+                | RepoCommandKind::DeleteRemoteBranches { .. }
+                | RepoCommandKind::RemoveRemote { .. }
+        );
+    let refresh_synced_tag_metadata = command_succeeded && fetch_like_command;
+    let refresh_remote_tag_metadata = refresh_synced_tag_metadata
+        || command_succeeded
+            && matches!(
+                &command,
+                RepoCommandKind::PushTag { .. } | RepoCommandKind::DeleteRemoteTag { .. }
+            );
     let refresh_tags = command_succeeded
         && matches!(
             &command,
@@ -1107,6 +1126,12 @@ pub(super) fn repo_command_finished(
     };
 
     let mut extra_effects = Vec::new();
+    if refresh_remote_branches {
+        // A fetch may have updated or pruned refs even when a later phase failed.
+        // Hide the pre-command snapshot until the coalesced full refresh publishes
+        // a list that was read after the command completed.
+        repo_state.set_remote_branches(Loadable::Loading);
+    }
     match &command {
         RepoCommandKind::FetchAll
         | RepoCommandKind::PruneMergedBranches
@@ -1234,6 +1259,20 @@ pub(super) fn repo_command_finished(
         repo_state.set_tags(Loadable::NotLoaded);
         if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
             extra_effects.push(Effect::LoadTags { repo_id });
+        }
+    } else if refresh_synced_tag_metadata && !matches!(repo_state.tags, Loadable::NotLoaded) {
+        repo_state.set_tags(Loadable::Loading);
+        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+            extra_effects.push(Effect::LoadTags { repo_id });
+        }
+    }
+    if refresh_remote_tag_metadata && !matches!(repo_state.remote_tags, Loadable::NotLoaded) {
+        repo_state.set_remote_tags(Loadable::Loading);
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::REMOTE_TAGS)
+        {
+            extra_effects.push(Effect::LoadRemoteTags { repo_id });
         }
     }
     if matches!(

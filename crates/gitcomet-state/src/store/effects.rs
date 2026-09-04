@@ -2464,6 +2464,7 @@ pub(super) fn schedule_effect(
         Effect::Pull {
             repo_id,
             mode,
+            prune,
             auth,
         } => repo_commands::schedule_pull(
             executor,
@@ -2471,6 +2472,7 @@ pub(super) fn schedule_effect(
             msg_tx,
             repo_id,
             mode,
+            prune,
             tracking_branch_context(thread_state, repo_id),
             auth,
         ),
@@ -2478,6 +2480,7 @@ pub(super) fn schedule_effect(
             repo_id,
             remote,
             branch,
+            prune,
             auth,
         } => repo_commands::schedule_pull_branch(
             executor,
@@ -2486,6 +2489,7 @@ pub(super) fn schedule_effect(
             repo_id,
             remote,
             branch,
+            prune,
             current_branch_context(thread_state, repo_id),
             auth,
         ),

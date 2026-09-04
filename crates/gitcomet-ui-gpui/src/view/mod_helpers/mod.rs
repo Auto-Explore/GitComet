@@ -24,6 +24,134 @@ pub(in crate::view) struct SelectedBranch {
     pub(in crate::view) name: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum PushRequest {
+    Push,
+    SetUpstream { remote: String },
+    NoRemotes,
+    NotReady,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum PullRequest {
+    Pull,
+    NoRemotes,
+    NotReady,
+}
+
+pub(in crate::view) fn head_is_detached(repo: &RepoState) -> bool {
+    matches!(&repo.head_branch, Loadable::Ready(head) if head.is_empty() || head == "HEAD")
+}
+
+/// Whether the checked-out branch has a live remote-tracking upstream. A
+/// detached HEAD carries no branch to hold one, so this is false there and
+/// callers that can still act on a detached HEAD must check for it themselves.
+pub(in crate::view) fn head_branch_has_live_upstream(repo: &RepoState) -> bool {
+    let (Loadable::Ready(head), Loadable::Ready(branches)) = (&repo.head_branch, &repo.branches)
+    else {
+        return false;
+    };
+    branches
+        .iter()
+        .find(|branch| branch.name == *head)
+        .is_some_and(|branch| branch.upstream.is_some())
+}
+
+/// Decide whether Pull can run. It mirrors the backend, which pulls from the
+/// preferred remote and sets the upstream when a branch has none, and falls
+/// back to Git's own diagnostics on a detached HEAD. The only hard blocker is a
+/// repository with no remotes at all.
+pub(in crate::view) fn pull_request(repo: &RepoState) -> PullRequest {
+    let Loadable::Ready(head) = &repo.head_branch else {
+        return PullRequest::NotReady;
+    };
+    if head.is_empty() || head == "HEAD" {
+        return PullRequest::Pull;
+    }
+    let Loadable::Ready(branches) = &repo.branches else {
+        return PullRequest::NotReady;
+    };
+    if branches
+        .iter()
+        .find(|branch| branch.name == *head)
+        .is_some_and(|branch| branch.upstream.is_some())
+    {
+        return PullRequest::Pull;
+    }
+
+    let Loadable::Ready(remotes) = &repo.remotes else {
+        return PullRequest::NotReady;
+    };
+    if remotes.is_empty() {
+        return PullRequest::NoRemotes;
+    }
+    PullRequest::Pull
+}
+
+/// Decide whether an interactive Push can run immediately or first needs the
+/// existing set-upstream prompt. `Branch::upstream` contains only live tracking
+/// refs, so a pruned `[gone]` upstream follows the same path as a new branch.
+pub(in crate::view) fn push_request(repo: &RepoState) -> PushRequest {
+    let Loadable::Ready(head) = &repo.head_branch else {
+        return PushRequest::NotReady;
+    };
+    // Preserve Git's own detached-HEAD diagnostics; there is no local branch
+    // for which GitComet could offer to set an upstream.
+    if head.is_empty() || head == "HEAD" {
+        return PushRequest::Push;
+    }
+    let Loadable::Ready(branches) = &repo.branches else {
+        return PushRequest::NotReady;
+    };
+    let Some(branch) = branches.iter().find(|branch| branch.name == *head) else {
+        return PushRequest::NotReady;
+    };
+    if branch.upstream.is_some() {
+        return PushRequest::Push;
+    }
+
+    let Loadable::Ready(remotes) = &repo.remotes else {
+        return PushRequest::NotReady;
+    };
+    if remotes.is_empty() {
+        return PushRequest::NoRemotes;
+    }
+    let remote = remotes
+        .iter()
+        .find(|remote| remote.name == "origin")
+        .unwrap_or(&remotes[0])
+        .name
+        .clone();
+    PushRequest::SetUpstream { remote }
+}
+
+pub(in crate::view) fn selected_remote_branch_is_missing(
+    state: &AppState,
+    selected_branch: Option<&SelectedBranch>,
+) -> bool {
+    let Some(selected) = selected_branch else {
+        return false;
+    };
+    if selected.section != BranchSection::Remote {
+        return false;
+    }
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == selected.repo_id) else {
+        return true;
+    };
+    let Loadable::Ready(branches) = &repo.remote_branches else {
+        return false;
+    };
+    // A remote name can itself contain '/', so the selected row cannot be split
+    // into (remote, branch); match it against each remote branch's own label.
+    !branches.iter().any(|branch| {
+        selected
+            .name
+            .strip_prefix(branch.remote.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+            .is_some_and(|name| name == branch.name)
+    })
+}
+
 pub(in crate::view) fn selected_branch_label_color(theme: AppTheme) -> gpui::Rgba {
     theme.colors.interaction.selected_foreground
 }

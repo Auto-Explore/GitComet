@@ -187,6 +187,19 @@ pub(super) struct RepositoryPreferences {
     pub(super) default_tag_type: DefaultTagType,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct RemotePreferences {
+    pub(super) prune_deleted_remote_branches_on_fetch: bool,
+}
+
+impl Default for RemotePreferences {
+    fn default() -> Self {
+        Self {
+            prune_deleted_remote_branches_on_fetch: true,
+        }
+    }
+}
+
 /// Parsed, defaulted preferences shared by the root view and its child views.
 ///
 /// The on-disk session remains a backwards-compatible DTO of optional fields;
@@ -203,6 +216,7 @@ pub(super) struct UiPreferences {
     pub(super) history: HistoryPreferences,
     pub(super) file_editing: FileEditingPreferences,
     pub(super) repository: RepositoryPreferences,
+    pub(super) remotes: RemotePreferences,
     pub(super) terminal: TerminalPreferences,
 }
 
@@ -310,6 +324,11 @@ impl UiPreferences {
                 commit_push_after_enabled: session.commit_push_after_enabled.unwrap_or(false),
                 default_tag_type: session.default_tag_type.unwrap_or_default(),
             },
+            remotes: RemotePreferences {
+                prune_deleted_remote_branches_on_fetch: session
+                    .fetch_prune_deleted_remote_branches
+                    .unwrap_or(true),
+            },
             terminal: TerminalPreferences::from_ui_session(session),
         }
     }
@@ -327,6 +346,7 @@ mod tests {
         assert!(preferences.diff.show_line_numbers);
         assert!(preferences.history.show_graph);
         assert!(preferences.merge_tool.view_three_way);
+        assert!(preferences.remotes.prune_deleted_remote_branches_on_fetch);
         assert_eq!(
             preferences.security.remote_markdown_images,
             RemoteMarkdownImagePolicy::AlwaysLoad

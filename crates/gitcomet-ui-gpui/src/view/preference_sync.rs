@@ -692,6 +692,19 @@ impl GitCometView {
         self.store.dispatch(Msg::SetDefaultTagType(tag_type));
     }
 
+    pub(in crate::view) fn set_remote_prune_preference(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.remotes.prune_deleted_remote_branches_on_fetch = enabled;
+        });
+        self.store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
+            prune_deleted_remote_branches_on_fetch: enabled,
+        }));
+    }
+
     pub(in crate::view) fn set_default_history_mode_preference(
         &mut self,
         mode: gitcomet_core::domain::HistoryMode,

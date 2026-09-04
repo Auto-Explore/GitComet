@@ -557,6 +557,15 @@ impl GitRepository for GixRepo {
         self.pull_branch_with_output_impl(remote, branch)
     }
 
+    fn pull_branch_with_output_prune(
+        &self,
+        remote: &str,
+        branch: &str,
+        prune: bool,
+    ) -> Result<CommandOutput> {
+        self.pull_branch_with_output_prune_impl(remote, branch, prune)
+    }
+
     fn merge_ref_with_output(&self, reference: &str) -> Result<CommandOutput> {
         self.merge_ref_with_output_impl(reference)
     }
@@ -749,6 +758,10 @@ impl GitRepository for GixRepo {
 
     fn pull_with_output(&self, mode: PullMode) -> Result<CommandOutput> {
         self.pull_with_output_impl(mode)
+    }
+
+    fn pull_with_output_prune(&self, mode: PullMode, prune: bool) -> Result<CommandOutput> {
+        self.pull_with_output_prune_impl(mode, prune)
     }
 
     fn push(&self) -> Result<()> {

@@ -995,6 +995,10 @@ fn reduce_inner(
             state.git_log_settings.tag_fetch_mode = tag_fetch_mode;
             Vec::new()
         }
+        Msg::SetRemoteSettings(settings) => {
+            state.remote_settings = settings;
+            Vec::new()
+        }
         Msg::SetDefaultTagType(tag_type) => {
             state.default_tag_type = tag_type;
             Vec::new()
@@ -1133,11 +1137,6 @@ fn reduce_inner(
         }
         Msg::SetHistoryAuthorFilter { repo_id, author } => {
             external_and_history::set_history_author_filter(state, repo_id, author)
-        }
-        Msg::SetFetchPruneDeletedRemoteTrackingBranches { repo_id, enabled } => {
-            repo_management::set_fetch_prune_deleted_remote_tracking_branches(
-                state, repo_id, enabled,
-            )
         }
         Msg::LoadMoreHistory { repo_id } => external_and_history::load_more_history(state, repo_id),
         Msg::SelectCommit { repo_id, commit_id } => {

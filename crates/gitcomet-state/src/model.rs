@@ -77,6 +77,19 @@ impl GitLogSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoteSettings {
+    pub prune_deleted_remote_branches_on_fetch: bool,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self {
+            prune_deleted_remote_branches_on_fetch: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RepoLoadsInFlight {
     in_flight: u32,
@@ -612,6 +625,7 @@ pub struct AppState {
     pub git_runtime: GitRuntimeState,
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
+    pub remote_settings: RemoteSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
 }
@@ -1324,7 +1338,6 @@ pub struct RepoState {
 
     pub open: Loadable<()>,
     pub history_state: HistoryState,
-    pub fetch_prune_deleted_remote_tracking_branches: bool,
     pub head_branch: Loadable<String>,
     pub detached_head_commit: Option<CommitId>,
     pub head_branch_rev: u64,
@@ -1432,7 +1445,6 @@ impl RepoState {
             commit_in_flight: 0,
             open: Loadable::Loading,
             history_state: HistoryState::default(),
-            fetch_prune_deleted_remote_tracking_branches: true,
             head_branch: Loadable::NotLoaded,
             detached_head_commit: None,
             head_branch_rev: 0,

@@ -199,7 +199,7 @@ fn list_branches_reports_upstream_and_divergence() {
 }
 
 #[test]
-fn list_branches_gone_upstream_keeps_upstream_and_clears_divergence() {
+fn list_branches_gone_upstream_is_exposed_as_untracked() {
     if !require_git_shell_for_refs_integration_tests() {
         return;
     }
@@ -251,13 +251,7 @@ fn list_branches_gone_upstream_keeps_upstream_and_clears_divergence() {
         .find(|branch| branch.name == "feature")
         .expect("feature branch present");
 
-    assert_eq!(
-        feature.upstream,
-        Some(Upstream {
-            remote: "origin".to_string(),
-            branch: "feature".to_string(),
-        })
-    );
+    assert_eq!(feature.upstream, None);
     assert_eq!(feature.divergence, None);
 }
 
