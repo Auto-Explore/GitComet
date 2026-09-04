@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::panels::popover::context_menu::context_menu_shortcut_entry_ix;
 use crate::view::panels::tests::wait_for_main_pane_condition;
 use crate::view::panels::tests::{
     app_state_with_repo, opening_repo_state, push_test_state, set_test_file_status,
@@ -95,6 +96,19 @@ fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
             _ => None,
         });
 
+        let add_tag_ix = model
+            .items
+            .iter()
+            .position(|item| {
+                matches!(
+                    item,
+                    ContextMenuItem::Entry { label, .. } if label.as_ref() == "Add tag…"
+                )
+            })
+            .expect("expected Add tag… context menu entry");
+        assert!(!context_menu_entry_disabled(&model, "Add tag…"));
+        assert!(!model.entry_tooltips.contains_key(&add_tag_ix));
+
         let Some(ContextMenuAction::OpenPopover { kind }) = add_tag_action else {
             panic!("expected Add tag… to open a popover");
         };
@@ -109,6 +123,59 @@ fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
 
         assert_eq!(rid, repo_id);
         assert_eq!(target, commit_id.as_ref().to_string());
+    });
+}
+
+#[gpui::test]
+fn commit_menu_disables_add_tag_when_history_tags_are_hidden(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = commit_menu_test_repo(repo_id, &commit_id);
+            let mut state = app_state_with_repo(repo, repo_id);
+            Arc::make_mut(&mut state).git_log_settings.show_history_tags = false;
+            push_test_state(this, state, cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected commit context menu model");
+
+        let add_tag_ix = model
+            .items
+            .iter()
+            .position(|item| {
+                matches!(
+                    item,
+                    ContextMenuItem::Entry { label, .. } if label.as_ref() == "Add tag…"
+                )
+            })
+            .expect("expected Add tag… context menu entry");
+
+        assert!(context_menu_entry_disabled(&model, "Add tag…"));
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "T"), None);
+        assert_eq!(
+            model.entry_tooltips.get(&add_tag_ix).map(|t| t.as_ref()),
+            Some("Enable “Show tags in history view” in Settings > Git log to add tags.")
+        );
     });
 }
 

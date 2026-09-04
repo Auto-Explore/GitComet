@@ -316,6 +316,7 @@ fn history_chip_visual(
     kind: HistoryChipStyleKind,
     context_menu_open: bool,
 ) -> HistoryChipVisual {
+    let active_branch_icon = gpui::rgba(0xffffffff);
     let visual = match kind {
         HistoryChipStyleKind::Tag => HistoryChipVisual {
             border: with_alpha(theme.colors.accent.foreground, 0.35),
@@ -349,8 +350,10 @@ fn history_chip_visual(
             border: with_alpha(theme.colors.accent.foreground, 0.85),
             bg: with_alpha(theme.colors.accent.foreground, 0.22),
             text: selected_branch_label_color(theme),
-            local_branch_icon: theme.colors.accent.foreground,
-            remote_branch_icon: theme.colors.foreground.secondary,
+            // Every branch-location glyph is an outline. Keep both layers of
+            // the combined computer/cloud glyph pure white on the active fill.
+            local_branch_icon: active_branch_icon,
+            remote_branch_icon: active_branch_icon,
         },
         HistoryChipStyleKind::Branch { selected: false } => HistoryChipVisual {
             border: with_alpha(theme.colors.stroke.default, 0.90),
@@ -375,12 +378,19 @@ fn history_chip_visual(
         },
         // The menu-open state is deliberately stronger than sidebar selection,
         // so a selected branch still changes when its own menu is pinned open.
-        HistoryChipStyleKind::Tag | HistoryChipStyleKind::Branch { .. } => HistoryChipVisual {
+        HistoryChipStyleKind::Tag => HistoryChipVisual {
             border: theme.colors.accent.foreground,
             bg: with_alpha(theme.colors.accent.foreground, 0.30),
             text: selected_branch_label_color(theme),
             local_branch_icon: theme.colors.accent.foreground,
             remote_branch_icon: theme.colors.foreground.secondary,
+        },
+        HistoryChipStyleKind::Branch { .. } => HistoryChipVisual {
+            border: theme.colors.accent.foreground,
+            bg: with_alpha(theme.colors.accent.foreground, 0.30),
+            text: selected_branch_label_color(theme),
+            local_branch_icon: active_branch_icon,
+            remote_branch_icon: active_branch_icon,
         },
     }
 }
@@ -2229,6 +2239,37 @@ mod tests {
                 theme.colors.accent.on_solid,
                 "the combined computer must retain contrast on a solid HEAD chip"
             );
+        }
+    }
+
+    #[test]
+    fn active_branch_chip_icons_are_white_outlines() {
+        let white = gpui::rgba(0xffffffff);
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            for visual in [
+                history_chip_visual(
+                    theme,
+                    HistoryChipStyleKind::Branch { selected: true },
+                    false,
+                ),
+                history_chip_visual(
+                    theme,
+                    HistoryChipStyleKind::Branch { selected: false },
+                    true,
+                ),
+                history_chip_visual(theme, HistoryChipStyleKind::Branch { selected: true }, true),
+            ] {
+                assert_eq!(HistoryBranchChipIcon::Local.color(&visual), white);
+                assert_eq!(HistoryBranchChipIcon::Remote.color(&visual), white);
+                assert_eq!(HistoryBranchChipIcon::LocalRemote.color(&visual), white);
+                assert_eq!(
+                    HistoryBranchChipIcon::LocalRemote
+                        .foreground_layer(&visual)
+                        .expect("the combined icon should paint its computer layer")
+                        .1,
+                    white
+                );
+            }
         }
     }
 
