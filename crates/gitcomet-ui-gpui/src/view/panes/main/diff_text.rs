@@ -891,10 +891,24 @@ impl MainPaneView {
             .get(&(visible_ix, region))
             .and_then(|hitbox| self.diff_text_bounds_in_hitbox(hitbox, span));
         match anchor {
-            Some(bounds) => {
-                self.open_popover_for_bounds(PopoverKind::WebLinkMenu { url }, bounds, window, cx)
-            }
-            None => self.open_popover_at(PopoverKind::WebLinkMenu { url }, position, window, cx),
+            Some(bounds) => self.open_popover_for_bounds(
+                PopoverKind::WebLinkMenu {
+                    url,
+                    load_remote_image_url: None,
+                },
+                bounds,
+                window,
+                cx,
+            ),
+            None => self.open_popover_at(
+                PopoverKind::WebLinkMenu {
+                    url,
+                    load_remote_image_url: None,
+                },
+                position,
+                window,
+                cx,
+            ),
         }
         true
     }
@@ -907,16 +921,31 @@ impl MainPaneView {
     pub(in crate::view) fn open_markdown_preview_link_menu(
         &mut self,
         url: SharedString,
+        load_remote_image_url: Option<SharedString>,
         anchor_bounds: Option<Bounds<Pixels>>,
         position: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         match anchor_bounds {
-            Some(bounds) => {
-                self.open_popover_for_bounds(PopoverKind::WebLinkMenu { url }, bounds, window, cx)
-            }
-            None => self.open_popover_at(PopoverKind::WebLinkMenu { url }, position, window, cx),
+            Some(bounds) => self.open_popover_for_bounds(
+                PopoverKind::WebLinkMenu {
+                    url,
+                    load_remote_image_url,
+                },
+                bounds,
+                window,
+                cx,
+            ),
+            None => self.open_popover_at(
+                PopoverKind::WebLinkMenu {
+                    url,
+                    load_remote_image_url,
+                },
+                position,
+                window,
+                cx,
+            ),
         }
     }
 

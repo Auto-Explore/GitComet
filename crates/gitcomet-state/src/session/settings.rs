@@ -30,6 +30,8 @@ pub struct UiSettings {
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
+    pub remote_markdown_image_policy: Option<String>,
+    pub check_for_updates_on_startup: Option<bool>,
     pub auto_save_file_edits: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
@@ -116,6 +118,8 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, mergetool_show_line_numbers);
         apply_setting!(settings, file, mergetool_view_three_way);
         apply_setting!(settings, file, diff_word_wrap);
+        apply_setting!(settings, file, remote_markdown_image_policy);
+        apply_setting!(settings, file, check_for_updates_on_startup);
         apply_setting!(settings, file, auto_save_file_edits);
         apply_setting!(settings, file, diff_show_line_numbers);
         apply_setting!(settings, file, change_tracking_height);

@@ -2730,7 +2730,7 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
             assert!(
                 matches!(
                     popover,
-                    Some(PopoverKind::WebLinkMenu { ref url })
+                    Some(PopoverKind::WebLinkMenu { ref url, .. })
                         if url.as_ref() == "https://example.com/badge"
                 ),
                 "clicking a badge opens its link menu, got {popover:?}"
@@ -2740,6 +2740,151 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
                 "and the row underneath must not have started selecting text"
             );
         });
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+                cx,
+            );
+        });
+    });
+
+    // Keep two pictures in one paragraph so both remain inline and wrapped in
+    // their respective links.
+    let first_image_url = "https://images.example.invalid/one.svg";
+    let second_image_url = "https://images.example.invalid/two.svg";
+    let source = format!(
+        "[![one]({first_image_url})](https://example.com/one) \
+         [![two]({second_image_url})](https://example.com/two)\n"
+    );
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(108),
+        "markdown_linked_remote_image_approval",
+        &source,
+    );
+    let source_byte = *fixture
+        .picture_offsets()
+        .first()
+        .expect("the fixture carries a linked picture");
+    let retry = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_load_{source_byte}"
+        )))
+        .expect("Ask mode draws the linked image's Retry control");
+
+    // Mouse-down belongs to the enclosing link wrapper, so it opens a menu
+    // before the nested Retry control can receive a complete click.
+    simulate_counted_click(cx, retry.center(), 1);
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let popover = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests();
+        assert!(matches!(
+            popover,
+            Some(PopoverKind::WebLinkMenu {
+                ref url,
+                load_remote_image_url: Some(ref image_url),
+            }) if url.as_ref() == "https://example.com/one"
+                && image_url.as_ref() == first_image_url
+        ));
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let load_image = cx
+        .debug_bounds("context_menu_load_image")
+        .expect("a linked blocked image menu offers Load image")
+        .center();
+    cx.simulate_mouse_move(
+        load_image,
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_event(gpui::MouseUpEvent {
+        position: load_image,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.read(app);
+        assert_eq!(main_pane.approved_remote_markdown_image_urls.len(), 1);
+        assert!(
+            main_pane
+                .approved_remote_markdown_image_urls
+                .contains(first_image_url)
+        );
+        assert!(
+            !main_pane
+                .approved_remote_markdown_image_urls
+                .contains(second_image_url),
+            "Load image must approve only the image represented by the menu"
+        );
+    });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::NeverLoad,
+                cx,
+            );
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let blocked = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_load_{source_byte}_blocked_box"
+        )))
+        .expect("Never mode draws the linked image's blocked control");
+    simulate_counted_click(cx, blocked.center(), 1);
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        cx.debug_bounds("context_menu_load_image").is_none(),
+        "Never mode must not offer any path to approve the remote image"
+    );
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.read(app);
+        assert!(main_pane.approved_remote_markdown_image_urls.is_empty());
+        let popover = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests();
+        assert!(matches!(
+            popover,
+            Some(PopoverKind::WebLinkMenu {
+                load_remote_image_url: None,
+                ..
+            })
+        ));
     });
 
     fixture.cleanup();
@@ -4579,6 +4724,174 @@ fn a_picture_draws_at_the_size_its_skeleton_reserved(cx: &mut gpui::TestAppConte
 }
 
 #[gpui::test]
+fn ask_mode_blocks_remote_markdown_images_and_offers_approval_controls(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+                cx,
+            );
+        });
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(107),
+        "markdown_remote_image_approval",
+        concat!(
+            "<img alt=\"remote\" src=\"https://example.invalid/tracking.png\" ",
+            "width=\"120\" height=\"60\" />\n\n",
+            "<img alt=\"other\" src=\"https://example.invalid/other.png\" ",
+            "width=\"80\" height=\"40\" />\n",
+        ),
+    );
+    let row_ix = fixture.row_ix("remote");
+    let retry_selector = leaked_selector(format!("markdown_preview_block_image_load_{row_ix}"));
+    let retry_icon_selector = leaked_selector(format!(
+        "markdown_preview_block_image_load_{row_ix}_retry_icon"
+    ));
+    let blocked_icon_selector = leaked_selector(format!(
+        "markdown_preview_block_image_load_{row_ix}_blocked_icon"
+    ));
+
+    let retry = cx
+        .debug_bounds(retry_selector)
+        .expect("approval mode should draw a per-image Retry control");
+    assert!(
+        (retry.size.width - px(120.0)).abs() <= px(0.5)
+            && (retry.size.height - px(60.0)).abs() <= px(0.5),
+        "the blocked box should preserve the declared image size; got {retry:?}"
+    );
+    assert!(cx.debug_bounds(retry_icon_selector).is_some());
+    assert!(cx.debug_bounds(blocked_icon_selector).is_none());
+    assert!(
+        cx.debug_bounds("markdown_preview_load_all_remote_images")
+            .is_some(),
+        "the preview header should offer Load all images"
+    );
+    assert!(
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_block_image_{row_ix}"
+        )))
+        .is_none(),
+        "the remote image element must not be created before approval"
+    );
+
+    cx.simulate_click(retry.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            assert_eq!(pane.approved_remote_markdown_image_urls.len(), 1);
+            assert!(
+                pane.approved_remote_markdown_image_urls
+                    .contains("https://example.invalid/tracking.png"),
+                "clicking Retry should approve only that image's exact URL"
+            );
+            assert!(
+                !pane
+                    .approved_remote_markdown_image_urls
+                    .contains("https://example.invalid/other.png")
+            );
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::NeverLoad,
+                cx,
+            );
+            assert!(
+                pane.approved_remote_markdown_image_urls.is_empty(),
+                "changing policy should clear preview-scoped approvals"
+            );
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let blocked = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_block_image_load_{row_ix}_blocked_box"
+        )))
+        .expect("never-load mode should draw a blocked-image box");
+    assert!(
+        (blocked.size.width - px(120.0)).abs() <= px(0.5)
+            && (blocked.size.height - px(60.0)).abs() <= px(0.5),
+        "the never-load box should preserve the declared image size; got {blocked:?}"
+    );
+    assert!(cx.debug_bounds(blocked_icon_selector).is_some());
+    assert!(cx.debug_bounds(retry_icon_selector).is_none());
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn markdown_image_access_snapshots_share_approved_url_storage(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let first = pane.markdown_remote_image_access(None);
+        let second = pane.markdown_remote_image_access(None);
+        assert!(
+            Arc::ptr_eq(&first.approved_urls, &second.approved_urls),
+            "render snapshots should share approval storage instead of cloning every URL"
+        );
+    });
+}
+
+#[gpui::test]
+fn blocked_remote_image_summary_does_not_rescan_unchanged_document(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.set_remote_markdown_image_policy(
+                crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+                cx,
+            );
+        });
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(109),
+        "markdown_remote_image_summary_cache",
+        "![remote](https://example.invalid/tracking.png)\n",
+    );
+    crate::view::panes::main::reset_remote_markdown_image_row_visits_for_tests();
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.has_blocked_remote_markdown_images());
+        let after_first = crate::view::panes::main::remote_markdown_image_row_visits_for_tests();
+        assert!(pane.has_blocked_remote_markdown_images());
+        let after_second = crate::view::panes::main::remote_markdown_image_row_visits_for_tests();
+        assert_eq!(
+            after_second, after_first,
+            "an unchanged render must reuse the blocked-image summary"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
 fn markdown_below_eof_drag_selects_an_image_only_document(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let _clipboard_guard = lock_clipboard_test();
@@ -5465,7 +5778,7 @@ fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui
             assert!(
                 matches!(
                     popover,
-                    Some(PopoverKind::WebLinkMenu { ref url })
+                    Some(PopoverKind::WebLinkMenu { ref url, .. })
                         if url.as_ref() == "https://example.com/docs"
                 ),
                 "clicking a link should open its menu, got {popover:?}"

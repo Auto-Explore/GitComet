@@ -205,6 +205,7 @@ mod toast_host;
 mod tooltip;
 mod tooltip_host;
 mod update_check;
+pub(crate) use update_check::update_checks_disabled_by_environment;
 mod user_survey;
 mod word_diff;
 
@@ -226,7 +227,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
-use preferences::UiPreferences;
+use preferences::{RemoteMarkdownImagePolicy, UiPreferences};
 pub(in crate::view) use terminal_preferences::{
     ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
     TerminalPreferences, parse_terminal_args_multiline, resolve_embedded_shell_program,

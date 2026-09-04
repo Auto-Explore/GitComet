@@ -23,6 +23,13 @@ fn push_entry(
 }
 
 pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
+    model_with_update_checks_disabled(this, crate::view::update_checks_disabled_by_environment())
+}
+
+pub(super) fn model_with_update_checks_disabled(
+    this: &PopoverHost,
+    update_checks_disabled: bool,
+) -> ContextMenuModel {
     let active_repo_id = this.active_repo().map(|repo| repo.id);
     let active_repo_workdir = this.active_repo().map(|repo| repo.spec.workdir.clone());
     let external_editor_configured = crate::external_editor::configured_setting().is_some();
@@ -109,6 +116,15 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         AppMenuAction::ApplyPatch {
             repo_id: active_repo_id,
         },
+    );
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_check_for_updates",
+        crate::menu_labels::CHECK_FOR_UPDATES,
+        Shortcut::None,
+        update_checks_disabled,
+        AppMenuAction::CheckForUpdates,
     );
     items.push(ContextMenuItem::Separator);
 
@@ -215,6 +231,12 @@ pub(super) fn activate(
                     });
                 })
                 .detach();
+        }
+        AppMenuAction::CheckForUpdates => {
+            this.close_popover_and_restore_focus(window, cx);
+            let _ = this.root_view.update(cx, |root, cx| {
+                root.check_for_updates_manually(cx);
+            });
         }
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         AppMenuAction::InstallDesktopIntegration => {

@@ -19,6 +19,27 @@ pub(in crate::view) const FILE_EDITOR_MAX_TEXT_BYTES: usize = 32 * 1024 * 1024;
 const WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES: usize = 64 * 1024;
 const WORKTREE_PREVIEW_INDEX_LINE_CAPACITY_MAX: usize = 64 * 1024;
 
+#[cfg(test)]
+thread_local! {
+    static REMOTE_MARKDOWN_IMAGE_ROW_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn record_remote_markdown_image_row_visit() {
+    #[cfg(test)]
+    REMOTE_MARKDOWN_IMAGE_ROW_VISITS.with(|visits| visits.set(visits.get().saturating_add(1)));
+}
+
+#[cfg(test)]
+pub(in crate::view) fn reset_remote_markdown_image_row_visits_for_tests() {
+    REMOTE_MARKDOWN_IMAGE_ROW_VISITS.with(|visits| visits.set(0));
+}
+
+#[cfg(test)]
+pub(in crate::view) fn remote_markdown_image_row_visits_for_tests() -> usize {
+    REMOTE_MARKDOWN_IMAGE_ROW_VISITS.with(std::cell::Cell::get)
+}
+
 struct IndexedWorktreePreview {
     source_len: usize,
     line_starts: Arc<[usize]>,
@@ -361,6 +382,124 @@ pub(in crate::view) fn release_conflict_preview_render_images<T>(
 }
 
 impl MainPaneView {
+    fn current_remote_markdown_image_documents(&self) -> RemoteMarkdownImageDocumentSet {
+        if self.is_conflict_rendered_markdown_preview_active() {
+            let documents = &self.conflict_resolver.markdown_preview.documents;
+            return RemoteMarkdownImageDocumentSet::Conflict([
+                match &documents.base {
+                    Loadable::Ready(document) => Some(Arc::clone(document)),
+                    _ => None,
+                },
+                match &documents.ours {
+                    Loadable::Ready(document) => Some(Arc::clone(document)),
+                    _ => None,
+                },
+                match &documents.theirs {
+                    Loadable::Ready(document) => Some(Arc::clone(document)),
+                    _ => None,
+                },
+            ]);
+        } else if self.is_markdown_preview_active() && self.is_file_preview_active() {
+            if let Loadable::Ready(document) = &self.worktree_markdown_preview {
+                return RemoteMarkdownImageDocumentSet::Worktree(Arc::clone(document));
+            }
+        } else if self.is_markdown_preview_active()
+            && let Loadable::Ready(preview) = &self.file_markdown_preview
+        {
+            return RemoteMarkdownImageDocumentSet::Diff(Arc::clone(preview));
+        }
+        RemoteMarkdownImageDocumentSet::None
+    }
+
+    fn collect_remote_markdown_image_urls(
+        documents: &RemoteMarkdownImageDocumentSet,
+    ) -> FxHashSet<SharedString> {
+        fn collect(
+            document: &crate::view::markdown_preview::MarkdownPreviewDocument,
+            urls: &mut FxHashSet<SharedString>,
+        ) {
+            let mut add = |source: &str| {
+                if let Some(url) = crate::view::rows::markdown_preview_remote_image_url(source) {
+                    urls.insert(url);
+                }
+            };
+            for row in &document.rows {
+                record_remote_markdown_image_row_visit();
+                if let Some(image) = &row.image {
+                    add(image.source.as_ref());
+                }
+                for inline in row.inline_images.iter() {
+                    add(inline.image.source.as_ref());
+                }
+            }
+        }
+
+        let mut urls = FxHashSet::default();
+        match documents {
+            RemoteMarkdownImageDocumentSet::None => {}
+            RemoteMarkdownImageDocumentSet::Worktree(document) => collect(document, &mut urls),
+            RemoteMarkdownImageDocumentSet::Diff(preview) => {
+                collect(&preview.old, &mut urls);
+                collect(&preview.new, &mut urls);
+                collect(&preview.inline, &mut urls);
+            }
+            RemoteMarkdownImageDocumentSet::Conflict(documents) => {
+                for document in documents.iter().flatten() {
+                    collect(document, &mut urls);
+                }
+            }
+        }
+        urls
+    }
+
+    fn remote_markdown_image_summary(&self) -> (Arc<FxHashSet<SharedString>>, bool) {
+        let documents = self.current_remote_markdown_image_documents();
+        let mut cache = self.remote_markdown_image_summary_cache.borrow_mut();
+        let documents_changed = !cache.documents.has_same_identity(&documents);
+        if documents_changed {
+            cache.urls = Arc::new(Self::collect_remote_markdown_image_urls(&documents));
+            cache.documents = documents;
+        }
+
+        if documents_changed
+            || cache.approval_revision != self.remote_markdown_image_approval_revision
+        {
+            cache.has_blocked = cache
+                .urls
+                .iter()
+                .any(|url| !self.approved_remote_markdown_image_urls.contains(url));
+            cache.approval_revision = self.remote_markdown_image_approval_revision;
+        }
+
+        (Arc::clone(&cache.urls), cache.has_blocked)
+    }
+
+    fn current_remote_markdown_image_urls(&self) -> Arc<FxHashSet<SharedString>> {
+        self.remote_markdown_image_summary().0
+    }
+
+    pub(in crate::view) fn has_blocked_remote_markdown_images(&self) -> bool {
+        self.remote_markdown_image_policy == RemoteMarkdownImagePolicy::AskBeforeLoading
+            && self.remote_markdown_image_summary().1
+    }
+
+    pub(in crate::view) fn approve_all_remote_markdown_images(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_markdown_image_policy != RemoteMarkdownImagePolicy::AskBeforeLoading {
+            return;
+        }
+        let urls = self.current_remote_markdown_image_urls();
+        let previous_len = self.approved_remote_markdown_image_urls.len();
+        Arc::make_mut(&mut self.approved_remote_markdown_image_urls).extend(urls.iter().cloned());
+        if self.approved_remote_markdown_image_urls.len() != previous_len {
+            self.remote_markdown_image_approval_revision =
+                self.remote_markdown_image_approval_revision.wrapping_add(1);
+            cx.notify();
+        }
+    }
+
     fn cancel_conflict_image_preview_task(&mut self) {
         if let Some(cancel) = self.conflict_image_preview_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Release);
@@ -1054,12 +1193,18 @@ impl MainPaneView {
         }
         let document = Arc::clone(document);
         let base_dir = self.markdown_preview_image_base_dir();
+        let remote_image_access = self.markdown_remote_image_access(None);
 
         let mut resources = Vec::new();
         let mut push = |source: &str| {
             if let Some(resolved) =
                 crate::view::rows::markdown_preview_image_source(base_dir.as_deref(), source)
             {
+                if let crate::view::rows::MarkdownPreviewImageSource::Remote(url) = &resolved
+                    && !remote_image_access.permits(url)
+                {
+                    return;
+                }
                 resources.push(resolved.to_resource());
             }
         };

@@ -724,9 +724,10 @@ pub(in crate::view) use self::diff::{BlameRenderCtx, build_row_blame_paint};
 pub(in crate::view) use self::diff_canvas::blame_gutter_row_canvas;
 pub(in crate::view) use self::history::{
     MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, MarkdownPreviewQuery,
-    MarkdownPreviewRevealRequest, markdown_preview_alert_bar_color, markdown_preview_alert_label,
-    markdown_preview_flow_image, markdown_preview_highlighted_text, markdown_preview_image_source,
-    markdown_preview_inline_image, markdown_preview_marker_label, markdown_preview_reveal_offset_y,
+    MarkdownPreviewRevealRequest, MarkdownRemoteImageAccess, markdown_preview_alert_bar_color,
+    markdown_preview_alert_label, markdown_preview_flow_image, markdown_preview_highlighted_text,
+    markdown_preview_image_source, markdown_preview_inline_image, markdown_preview_marker_label,
+    markdown_preview_remote_image_url, markdown_preview_reveal_offset_y,
     markdown_preview_row_background, markdown_preview_row_extent,
     markdown_preview_styled_row_with_query, worktree_markdown_preview_bar_color,
 };

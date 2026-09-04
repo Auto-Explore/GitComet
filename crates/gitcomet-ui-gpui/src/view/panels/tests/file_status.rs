@@ -1673,7 +1673,7 @@ fn commit_details_message_url_click_opens_the_web_link_menu(cx: &mut gpui::TestA
     assert!(
         matches!(
             popover,
-            Some(PopoverKind::WebLinkMenu { ref url })
+            Some(PopoverKind::WebLinkMenu { ref url, .. })
                 if url.as_ref() == "https://example.com/issues/42"
         ),
         "clicking a URL should open the same menu the markdown preview shows, got {popover:?}"
@@ -1744,7 +1744,7 @@ fn commit_details_message_mailto_click_opens_the_web_link_menu(cx: &mut gpui::Te
     assert!(
         matches!(
             popover,
-            Some(PopoverKind::WebLinkMenu { ref url })
+            Some(PopoverKind::WebLinkMenu { ref url, .. })
                 if url.as_ref() == "mailto:maintainer@example.com"
         ),
         "clicking a mailto link should open the link menu, got {popover:?}"

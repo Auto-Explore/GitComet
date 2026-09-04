@@ -253,6 +253,10 @@ pub(crate) enum PopoverKind {
     /// commit message.
     WebLinkMenu {
         url: SharedString,
+        /// Exact remote image URL represented by a linked image, but only
+        /// while Ask mode is waiting for approval. Ordinary text links and
+        /// images under either other policy leave this empty.
+        load_remote_image_url: Option<SharedString>,
     },
     /// Actions for a commit id clicked in a commit message or a SHA field.
     CommitShaLinkMenu {
