@@ -1372,3 +1372,63 @@ fn remove_submodule_cleans_custom_logical_name_metadata() {
     assert!(local_submodule_config_entries(&parent_repo).is_empty());
     assert!(!parent_repo.join(".git/modules/custom").exists());
 }
+
+#[test]
+fn submodule_update_refuses_remote_helper_urls_from_gitmodules() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
+        return;
+    };
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+    add_submodule_raw(&parent_repo, &sub_repo, Path::new("mods/sub"), None);
+
+    // A URL the Add dialog refuses, reaching Git through .gitmodules instead.
+    fs::write(
+        parent_repo.join(".gitmodules"),
+        "[submodule \"mods/sub\"]\n\tpath = mods/sub\n\turl = hg::/tmp/gitcomet-pwned\n",
+    )
+    .expect("rewrite .gitmodules");
+    run_git(&parent_repo, &["add", ".gitmodules"]);
+    run_git(
+        &parent_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "hostile url"],
+    );
+    // A fresh clone has no local `submodule.<name>.url` and no module dir, so
+    // an update takes the URL straight from .gitmodules.
+    run_git(
+        &parent_repo,
+        &["submodule", "deinit", "-f", "--", "mods/sub"],
+    );
+    fs::remove_dir_all(parent_repo.join(".git/modules/mods")).expect("drop module dir");
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let path = Path::new("mods/sub");
+    for (label, result) in [
+        (
+            "update",
+            opened.update_submodules_with_output(&[]).map(|_| ()),
+        ),
+        (
+            "load",
+            opened.load_submodule_with_output(path, &[]).map(|_| ()),
+        ),
+        (
+            "check update trust",
+            opened.check_submodule_update_trust().map(|_| ()),
+        ),
+        (
+            "check load trust",
+            opened.check_submodule_load_trust(path).map(|_| ()),
+        ),
+    ] {
+        let err = result.expect_err(label);
+        assert!(err.to_string().contains("remote-helper"), "{label}: {err}");
+    }
+}

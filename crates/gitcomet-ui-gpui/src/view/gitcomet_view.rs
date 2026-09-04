@@ -832,11 +832,13 @@ impl GitCometView {
         let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
         let auto_save_file_edits = ui_preferences.file_editing.auto_save;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
+        let remote_url_policy = ui_preferences.security.remote_url_policy;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
         let commit_push_after_enabled = ui_preferences.repository.commit_push_after_enabled;
         let history_show_tags = ui_preferences.history.show_tags;
         let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
         let default_tag_type = ui_preferences.repository.default_tag_type;
+        store.dispatch(Msg::SetRemoteUrlPolicy(remote_url_policy));
         store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: history_show_tags,
             tag_fetch_mode: history_tag_fetch_mode,
@@ -1330,6 +1332,7 @@ impl GitCometView {
             diff_show_line_numbers,
             auto_save_file_edits,
             remote_markdown_image_policy,
+            remote_url_policy,
             check_for_updates_on_startup,
             update_check_in_flight: false,
             update_check_manual_feedback_requested: false,

@@ -2273,6 +2273,39 @@ mod tests {
     }
 
     #[test]
+    fn repository_git_commands_disable_the_ext_protocol() {
+        let cmd = git_workdir_cmd_for(Path::new("repo"));
+        let args = cmd.get_args().collect::<Vec<_>>();
+        assert!(args.windows(2).any(|args| {
+            args == [
+                std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new("protocol.ext.allow=never"),
+            ]
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_config_cannot_reenable_the_ext_protocol() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        run_git_test_setup(repo.path(), &["init", "--quiet"]);
+        run_git_test_setup(repo.path(), &["config", "protocol.ext.allow", "always"]);
+
+        let mut cmd = git_workdir_cmd_for(repo.path());
+        // Git's refusal text is translated; assert on the exit status.
+        let output = cmd
+            .env("LC_ALL", "C")
+            .args(["ls-remote", "ext::printf invoked"])
+            .output()
+            .expect("run git");
+        assert!(
+            !output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn configure_git_auth_prompt_sets_username_password_env() {
         let askpass = create_askpass_script().expect("askpass script creation");
         let mut cmd = Command::new("git");

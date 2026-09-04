@@ -2364,6 +2364,12 @@ fn persist_ui_settings_round_trips_security_preferences() {
     persist_ui_settings_to_path(
         UiSettings {
             remote_markdown_image_policy: Some("ask".to_string()),
+            allowed_remote_protocols: Some(
+                ["https", "ssh", "http"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
             check_for_updates_on_startup: Some(false),
             ..UiSettings::default()
         },
@@ -2373,6 +2379,15 @@ fn persist_ui_settings_round_trips_security_preferences() {
 
     let loaded = load_from_path(&path);
     assert_eq!(loaded.remote_markdown_image_policy.as_deref(), Some("ask"));
+    assert_eq!(
+        loaded.allowed_remote_protocols,
+        Some(
+            ["http", "https", "ssh"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        )
+    );
     assert_eq!(loaded.check_for_updates_on_startup, Some(false));
 }
 

@@ -1,6 +1,7 @@
 use crate::msg::{InternalMsg, Msg, RepoCommandKind};
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     CommandOutput, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, PullMode,
     RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
@@ -218,7 +219,14 @@ fn normalize_worktree_relative_path(path: &Path) -> Result<PathBuf, Error> {
     for component in path.components() {
         match component {
             Component::CurDir => {}
-            Component::Normal(part) => normalized.push(part),
+            Component::Normal(part) => {
+                if gitcomet_core::path_utils::is_git_metadata_component(part) {
+                    return Err(Error::new(ErrorKind::Backend(
+                        "refusing to write inside .git".to_string(),
+                    )));
+                }
+                normalized.push(part);
+            }
             Component::ParentDir => {
                 if !normalized.pop() {
                     return Err(Error::new(ErrorKind::Backend(
@@ -275,7 +283,17 @@ pub(super) struct AddSubmoduleRequest {
     pub(super) name: Option<String>,
     pub(super) force: bool,
     pub(super) approved_sources: Vec<SubmoduleTrustTarget>,
+    pub(super) remote_url_policy: RemoteUrlPolicy,
     pub(super) auth: Option<StagedGitAuth>,
+}
+
+pub(super) struct CheckSubmoduleAddTrustRequest {
+    pub(super) url: String,
+    pub(super) path: PathBuf,
+    pub(super) branch: Option<String>,
+    pub(super) name: Option<String>,
+    pub(super) force: bool,
+    pub(super) remote_url_policy: RemoteUrlPolicy,
 }
 
 pub(super) fn schedule_save_worktree_file(
@@ -344,47 +362,46 @@ pub(super) fn schedule_append_gitignore_patterns(
         RepoCommandKind::AppendGitignorePatterns {
             patterns: command_patterns,
         },
-        move |repo| {
-            // Routed through the same guard as every other worktree write, even
-            // though the name is a constant, so the invariant holds by
-            // construction rather than by reading this function.
-            let relative_path = normalize_worktree_relative_path(Path::new(GITIGNORE_FILE_NAME))?;
-            let full = repo.spec().workdir.join(&relative_path);
-
-            // Read bytes and convert explicitly: `read_to_string` would report a
-            // Latin-1 `.gitignore` as a bare `InvalidData` I/O error, which tells
-            // the user nothing about what to do next. Never rewrite it lossily.
-            let existing = match std::fs::read(&full) {
-                Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
-                    Error::new(ErrorKind::Backend(format!(
-                        "{GITIGNORE_FILE_NAME} is not valid UTF-8; edit it manually"
-                    )))
-                })?,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-                Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
-            };
-
-            let Some(updated) = gitcomet_core::gitignore::append_patterns(&existing, &patterns)
-            else {
-                return Ok(CommandOutput {
-                    command: format!("Update {GITIGNORE_FILE_NAME}"),
-                    stdout: gitcomet_core::gitignore::NOTHING_TO_ADD.to_string(),
-                    stderr: String::new(),
-                    exit_code: Some(0),
-                });
-            };
-
-            std::fs::write(&full, updated.as_bytes())
-                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-            Ok(CommandOutput {
-                command: format!("Update {GITIGNORE_FILE_NAME}"),
-                stdout: String::new(),
-                stderr: String::new(),
-                exit_code: Some(0),
-            })
-        },
+        move |repo| append_gitignore_patterns_in_workdir(&repo.spec().workdir, &patterns),
     );
+}
+
+fn append_gitignore_patterns_in_workdir(
+    workdir: &Path,
+    patterns: &[String],
+) -> Result<CommandOutput, Error> {
+    let (_, full) = resolve_worktree_save_target(workdir, Path::new(GITIGNORE_FILE_NAME))?;
+
+    // Read bytes and convert explicitly: `read_to_string` would report a
+    // Latin-1 `.gitignore` as a bare `InvalidData` I/O error, which tells
+    // the user nothing about what to do next. Never rewrite it lossily.
+    let existing = match std::fs::read(&full) {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
+            Error::new(ErrorKind::Backend(format!(
+                "{GITIGNORE_FILE_NAME} is not valid UTF-8; edit it manually"
+            )))
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+    };
+
+    let Some(updated) = gitcomet_core::gitignore::append_patterns(&existing, patterns) else {
+        return Ok(CommandOutput {
+            command: format!("Update {GITIGNORE_FILE_NAME}"),
+            stdout: gitcomet_core::gitignore::NOTHING_TO_ADD.to_string(),
+            stderr: String::new(),
+            exit_code: Some(0),
+        });
+    };
+
+    std::fs::write(&full, updated.as_bytes()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    Ok(CommandOutput {
+        command: format!("Update {GITIGNORE_FILE_NAME}"),
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: Some(0),
+    })
 }
 
 pub(super) fn schedule_export_patch(
@@ -503,6 +520,7 @@ pub(super) fn schedule_add_submodule(
         name,
         force,
         approved_sources,
+        remote_url_policy,
         auth,
     } = request;
     let command_url = url.clone();
@@ -525,13 +543,14 @@ pub(super) fn schedule_add_submodule(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.add_submodule_with_output(
+                repo.add_submodule_with_output_and_policy(
                     &url,
                     &path,
                     branch.as_deref(),
                     name.as_deref(),
                     force,
                     &approved_sources,
+                    remote_url_policy,
                 )
             })
         },
@@ -544,6 +563,7 @@ pub(super) fn schedule_update_submodules(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     approved_sources: Vec<SubmoduleTrustTarget>,
+    remote_url_policy: RemoteUrlPolicy,
     auth: Option<StagedGitAuth>,
 ) {
     let command_sources = approved_sources.clone();
@@ -557,7 +577,7 @@ pub(super) fn schedule_update_submodules(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.update_submodules_with_output(&approved_sources)
+                repo.update_submodules_with_output_and_policy(&approved_sources, remote_url_policy)
             })
         },
     );
@@ -568,14 +588,18 @@ pub(super) fn schedule_check_submodule_add_trust(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    url: String,
-    path: PathBuf,
-    branch: Option<String>,
-    name: Option<String>,
-    force: bool,
+    request: CheckSubmoduleAddTrustRequest,
 ) {
+    let CheckSubmoduleAddTrustRequest {
+        url,
+        path,
+        branch,
+        name,
+        force,
+        remote_url_policy,
+    } = request;
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_add_trust(&url, &path);
+        let result = repo.check_submodule_add_trust_with_policy(&url, &path, remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
@@ -596,9 +620,10 @@ pub(super) fn schedule_check_submodule_update_trust(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    remote_url_policy: RemoteUrlPolicy,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_update_trust();
+        let result = repo.check_submodule_update_trust_with_policy(remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result }),
@@ -612,9 +637,10 @@ pub(super) fn schedule_check_submodule_load_trust(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
+    remote_url_policy: RemoteUrlPolicy,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_load_trust(&path);
+        let result = repo.check_submodule_load_trust_with_policy(&path, remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
@@ -633,6 +659,7 @@ pub(super) fn schedule_load_submodule(
     repo_id: RepoId,
     path: PathBuf,
     approved_sources: Vec<SubmoduleTrustTarget>,
+    remote_url_policy: RemoteUrlPolicy,
     auth: Option<StagedGitAuth>,
 ) {
     let command_path = path.clone();
@@ -648,7 +675,11 @@ pub(super) fn schedule_load_submodule(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.load_submodule_with_output(&path, &approved_sources)
+                repo.load_submodule_with_output_and_policy(
+                    &path,
+                    &approved_sources,
+                    remote_url_policy,
+                )
             })
         },
     );
@@ -1417,6 +1448,7 @@ pub(super) fn schedule_add_remote(
     repo_id: RepoId,
     name: String,
     url: String,
+    remote_url_policy: RemoteUrlPolicy,
 ) {
     let command_name = name.clone();
     let command_url = url.clone();
@@ -1429,7 +1461,7 @@ pub(super) fn schedule_add_remote(
             name: command_name,
             url: command_url,
         },
-        move |repo| repo.add_remote_with_output(&name, &url),
+        move |repo| repo.add_remote_with_output_and_policy(&name, &url, remote_url_policy),
     );
 }
 
@@ -1459,6 +1491,7 @@ pub(super) fn schedule_set_remote_url(
     name: String,
     url: String,
     kind: RemoteUrlKind,
+    remote_url_policy: RemoteUrlPolicy,
 ) {
     let command_name = name.clone();
     let command_url = url.clone();
@@ -1472,7 +1505,9 @@ pub(super) fn schedule_set_remote_url(
             url: command_url,
             kind,
         },
-        move |repo| repo.set_remote_url_with_output(&name, &url, kind),
+        move |repo| {
+            repo.set_remote_url_with_output_and_policy(&name, &url, kind, remote_url_policy)
+        },
     );
 }
 
@@ -1576,9 +1611,41 @@ pub(super) fn schedule_launch_mergetool(
 
 #[cfg(test)]
 mod worktree_save_target_tests {
-    use super::resolve_worktree_save_target;
+    use super::{append_gitignore_patterns_in_workdir, resolve_worktree_save_target};
     use gitcomet_core::error::ErrorKind;
     use std::path::Path;
+
+    #[test]
+    fn git_metadata_paths_are_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for path in [".git/hooks/pre-commit", "a/../.git/config", "./.GIT/config"] {
+            assert!(
+                resolve_worktree_save_target(dir.path(), Path::new(path)).is_err(),
+                "{path:?} must be rejected"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gitignore_append_through_symlink_out_of_workdir_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside dir");
+        let victim = outside.path().join("victim");
+        std::fs::write(&victim, "original\n").expect("write victim");
+        std::os::unix::fs::symlink(&victim, dir.path().join(".gitignore")).expect("symlink");
+
+        let err = append_gitignore_patterns_in_workdir(dir.path(), &["secret".to_string()])
+            .expect_err("symlinked .gitignore");
+        let ErrorKind::Backend(message) = err.kind() else {
+            panic!("expected a backend refusal, got {err:?}");
+        };
+        assert!(message.contains("symlink"), "{message}");
+        assert_eq!(
+            std::fs::read_to_string(&victim).expect("victim"),
+            "original\n"
+        );
+    }
 
     #[test]
     fn nested_relative_path_resolves_under_workdir() {

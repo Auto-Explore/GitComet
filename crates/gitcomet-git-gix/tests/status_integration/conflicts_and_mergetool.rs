@@ -963,6 +963,71 @@ fn checkout_conflict_side_stages_resolution() {
     assert_eq!(on_disk, "theirs\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn launch_mergetool_reports_a_symlink_conflict_as_such() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_symlink_conflict(repo, "link", "ours.txt", "theirs.txt");
+    assert!(
+        fs::symlink_metadata(repo.join("link"))
+            .unwrap()
+            .is_symlink()
+    );
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    set_repo_local_mergetool_cmd_with_consent(repo, "fake", "true");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    // Git launches no tool here either, so the refusal must say what to do.
+    let err = opened
+        .launch_mergetool(Path::new("link"))
+        .expect_err("a symlink conflict has no mergetool");
+    let ErrorKind::Backend(message) = err.kind() else {
+        panic!("expected a backend refusal, got {err:?}");
+    };
+    assert!(message.contains("symbolic-link conflict"), "{message}");
+    assert!(message.contains("local or remote"), "{message}");
+}
+
+#[cfg(unix)]
+#[test]
+fn launch_mergetool_keeps_tool_output_when_the_result_is_a_symlink() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+    write(repo, "victim.txt", "keep\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    set_repo_local_mergetool_cmd_with_consent(
+        repo,
+        "fake",
+        "echo tool-ran; rm -f \"$MERGED\"; ln -s victim.txt \"$MERGED\"",
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened
+        .launch_mergetool(Path::new("a.txt"))
+        .expect("the tool ran; its output must survive an unsafe readback");
+    assert!(!result.success, "{result:?}");
+    assert!(result.output.stdout.contains("tool-ran"), "{result:?}");
+    assert_eq!(result.output.exit_code, Some(0));
+    assert!(result.merged_contents.is_none(), "{result:?}");
+    assert_eq!(
+        fs::read_to_string(repo.join("victim.txt")).unwrap(),
+        "keep\n"
+    );
+}
+
 #[test]
 fn launch_mergetool_trust_exit_false_detects_same_size_content_change() {
     if !require_git_shell_for_status_integration_tests() {
@@ -1674,6 +1739,18 @@ fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
     let opened = backend.open(repo).unwrap();
     let result = opened.launch_mergetool(Path::new("docs/note.txt")).unwrap();
     assert!(result.success, "{result:?}");
+    // On Windows the filesystem form uses backslashes, but gix index keys
+    // retain slashes. The REMOTE bytes prove those two path forms stayed apart.
+    assert_eq!(
+        result.merged_contents.as_deref(),
+        Some("theirs\n".as_bytes()),
+        "the nested conflict's REMOTE stage must reach the mergetool"
+    );
+    assert_eq!(
+        fs::read(repo.join("docs/note.txt")).unwrap(),
+        b"theirs\n",
+        "the mergetool must not stage an empty resolution for a nested path"
+    );
 
     let vars = read_stage_env_vars(&repo.join("docs/note.txt.env"));
     assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");

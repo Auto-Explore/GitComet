@@ -1,6 +1,7 @@
 use crate::conflict_session::ConflictSession;
 use crate::domain::*;
 use crate::error::{Error, ErrorKind};
+use crate::remote_url::RemoteUrlPolicy;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -878,6 +879,14 @@ pub trait GitRepository: Send + Sync {
             "git remote add is not implemented for this backend",
         )))
     }
+    fn add_remote_with_output_and_policy(
+        &self,
+        name: &str,
+        url: &str,
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.add_remote_with_output(name, url)
+    }
     fn remove_remote_with_output(&self, _name: &str) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git remote remove is not implemented for this backend",
@@ -892,6 +901,15 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "git remote set-url is not implemented for this backend",
         )))
+    }
+    fn set_remote_url_with_output_and_policy(
+        &self,
+        name: &str,
+        url: &str,
+        kind: RemoteUrlKind,
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.set_remote_url_with_output(name, url, kind)
     }
 
     fn fetch_all(&self) -> Result<()>;
@@ -1284,17 +1302,38 @@ pub trait GitRepository: Send + Sync {
             "submodule trust checks are not implemented for this backend",
         )))
     }
+    fn check_submodule_add_trust_with_policy(
+        &self,
+        url: &str,
+        path: &Path,
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_add_trust(url, path)
+    }
 
     fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule trust checks are not implemented for this backend",
         )))
     }
+    fn check_submodule_update_trust_with_policy(
+        &self,
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_update_trust()
+    }
 
     fn check_submodule_load_trust(&self, _path: &Path) -> Result<SubmoduleTrustDecision> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule trust checks are not implemented for this backend",
         )))
+    }
+    fn check_submodule_load_trust_with_policy(
+        &self,
+        path: &Path,
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_load_trust(path)
     }
 
     fn add_submodule_with_output(
@@ -1310,6 +1349,18 @@ pub trait GitRepository: Send + Sync {
             "submodule add is not implemented for this backend",
         )))
     }
+    fn add_submodule_with_output_and_policy(
+        &self,
+        url: &str,
+        path: &Path,
+        branch: Option<&str>,
+        name: Option<&str>,
+        force: bool,
+        approved_sources: &[SubmoduleTrustTarget],
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.add_submodule_with_output(url, path, branch, name, force, approved_sources)
+    }
 
     fn update_submodules_with_output(
         &self,
@@ -1318,6 +1369,13 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule update is not implemented for this backend",
         )))
+    }
+    fn update_submodules_with_output_and_policy(
+        &self,
+        approved_sources: &[SubmoduleTrustTarget],
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.update_submodules_with_output(approved_sources)
     }
 
     fn load_submodule_with_output(
@@ -1328,6 +1386,14 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule update is not implemented for this backend",
         )))
+    }
+    fn load_submodule_with_output_and_policy(
+        &self,
+        path: &Path,
+        approved_sources: &[SubmoduleTrustTarget],
+        _remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.load_submodule_with_output(path, approved_sources)
     }
 
     fn change_submodule_pointer_with_output(

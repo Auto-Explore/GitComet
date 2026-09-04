@@ -983,6 +983,10 @@ fn reduce_inner(
             state.git_runtime = runtime;
             Vec::new()
         }
+        Msg::SetRemoteUrlPolicy(policy) => {
+            state.remote_url_policy = policy;
+            Vec::new()
+        }
         Msg::SetGitLogSettings {
             show_history_tags,
             tag_fetch_mode,
@@ -1594,6 +1598,7 @@ fn reduce_inner(
                 branch,
                 name,
                 force,
+                remote_url_policy: state.remote_url_policy,
             }]
         }
         Msg::AddSubmoduleTrusted {
@@ -1615,6 +1620,7 @@ fn reduce_inner(
                 name,
                 force,
                 approved_sources,
+                state.remote_url_policy,
             )
         }
         Msg::UpdateSubmodules { repo_id } => {
@@ -1623,14 +1629,21 @@ fn reduce_inner(
                 repo_id,
                 operation: SubmoduleTrustCheckOperation::Update,
             });
-            vec![Effect::CheckSubmoduleUpdateTrust { repo_id }]
+            vec![Effect::CheckSubmoduleUpdateTrust {
+                repo_id,
+                remote_url_policy: state.remote_url_policy,
+            }]
         }
         Msg::UpdateSubmodulesTrusted {
             repo_id,
             approved_sources,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::update_submodules(repo_id, approved_sources)
+            actions_emit_effects::update_submodules(
+                repo_id,
+                approved_sources,
+                state.remote_url_policy,
+            )
         }
         Msg::LoadSubmodule { repo_id, path } => {
             state.submodule_trust_prompt = None;
@@ -1638,7 +1651,11 @@ fn reduce_inner(
                 repo_id,
                 operation: SubmoduleTrustCheckOperation::Load,
             });
-            vec![Effect::CheckSubmoduleLoadTrust { repo_id, path }]
+            vec![Effect::CheckSubmoduleLoadTrust {
+                repo_id,
+                path,
+                remote_url_policy: state.remote_url_policy,
+            }]
         }
         Msg::LoadSubmoduleTrusted {
             repo_id,
@@ -1646,7 +1663,12 @@ fn reduce_inner(
             approved_sources,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::load_submodule(repo_id, path, approved_sources)
+            actions_emit_effects::load_submodule(
+                repo_id,
+                path,
+                approved_sources,
+                state.remote_url_policy,
+            )
         }
         Msg::ConfirmSubmoduleTrustPrompt => {
             let Some(prompt) = state.submodule_trust_prompt.take() else {
@@ -1670,15 +1692,25 @@ fn reduce_inner(
                         name,
                         force,
                         prompt.sources,
+                        state.remote_url_policy,
                     )
                 }
                 SubmoduleTrustPromptOperation::Update => {
                     begin_local_action(state, prompt.repo_id);
-                    actions_emit_effects::update_submodules(prompt.repo_id, prompt.sources)
+                    actions_emit_effects::update_submodules(
+                        prompt.repo_id,
+                        prompt.sources,
+                        state.remote_url_policy,
+                    )
                 }
                 SubmoduleTrustPromptOperation::Load { path } => {
                     begin_local_action(state, prompt.repo_id);
-                    actions_emit_effects::load_submodule(prompt.repo_id, path, prompt.sources)
+                    actions_emit_effects::load_submodule(
+                        prompt.repo_id,
+                        path,
+                        prompt.sources,
+                        state.remote_url_policy,
+                    )
                 }
             }
         }
@@ -1931,7 +1963,7 @@ fn reduce_inner(
         } => actions_emit_effects::delete_remote_tag(repos, state, repo_id, remote, name),
         Msg::AddRemote { repo_id, name, url } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::add_remote(repo_id, name, url)
+            actions_emit_effects::add_remote(repo_id, name, url, state.remote_url_policy)
         }
         Msg::RemoveRemote { repo_id, name } => {
             begin_local_action(state, repo_id);
@@ -1944,7 +1976,7 @@ fn reduce_inner(
             kind,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::set_remote_url(repo_id, name, url, kind)
+            actions_emit_effects::set_remote_url(repo_id, name, url, kind, state.remote_url_policy)
         }
         Msg::CheckoutConflictSide {
             repo_id,
@@ -2314,6 +2346,7 @@ fn reduce_inner(
                         name,
                         force,
                         Vec::new(),
+                        state.remote_url_policy,
                     )
                 }
                 Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
@@ -2344,7 +2377,11 @@ fn reduce_inner(
             match result {
                 Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
                     begin_local_action(state, repo_id);
-                    actions_emit_effects::update_submodules(repo_id, Vec::new())
+                    actions_emit_effects::update_submodules(
+                        repo_id,
+                        Vec::new(),
+                        state.remote_url_policy,
+                    )
                 }
                 Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
                     state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
@@ -2372,7 +2409,12 @@ fn reduce_inner(
             match result {
                 Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
                     begin_local_action(state, repo_id);
-                    actions_emit_effects::load_submodule(repo_id, path, Vec::new())
+                    actions_emit_effects::load_submodule(
+                        repo_id,
+                        path,
+                        Vec::new(),
+                        state.remote_url_policy,
+                    )
                 }
                 Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
                     state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {

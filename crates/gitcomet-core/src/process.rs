@@ -172,6 +172,9 @@ pub fn normalize_git_executable_path(path: PathBuf) -> PathBuf {
 
 fn git_command_for_preference(preference: &GitExecutablePreference) -> Command {
     let mut command = background_command(preference.command_program());
+    // Repository config must not enable `ext::`, which runs an arbitrary
+    // command. Set in the one constructor so no call site can forget it.
+    command.arg("-c").arg("protocol.ext.allow=never");
     if let GitExecutablePreference::Custom(path) = preference
         && let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()

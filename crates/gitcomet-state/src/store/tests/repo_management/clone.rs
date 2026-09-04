@@ -25,6 +25,44 @@ fn clone_repo_sets_running_state_and_emits_effect() {
 }
 
 #[test]
+fn configured_remote_url_policy_is_carried_to_clone_effects() {
+    use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
+
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let policy = RemoteUrlPolicy::default().with_allowed(RemoteProtocol::Http, true);
+
+    assert!(
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SetRemoteUrlPolicy(policy),
+        )
+        .is_empty()
+    );
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: "http://git.internal/example.git".to_string(),
+            dest: PathBuf::from("/tmp/example"),
+        },
+    );
+
+    assert_eq!(state.remote_url_policy, policy);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloneRepo {
+            remote_url_policy,
+            ..
+        }] if *remote_url_policy == policy
+    ));
+}
+
+#[test]
 fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
