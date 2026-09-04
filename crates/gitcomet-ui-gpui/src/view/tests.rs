@@ -21,6 +21,18 @@ struct RecordingFailingBackend {
 }
 
 #[test]
+fn selected_sidebar_branch_colors_come_from_theme_interaction_tokens() {
+    let mut theme = AppTheme::gitcomet_dark();
+    let selected_background = gpui::rgba(0x12345678);
+    let selected_foreground = gpui::rgba(0xabcdefee);
+    theme.colors.interaction.selected_background = selected_background;
+    theme.colors.interaction.selected_foreground = selected_foreground;
+
+    assert_eq!(selected_branch_row_bg(theme), selected_background);
+    assert_eq!(selected_branch_label_color(theme), selected_foreground);
+}
+
+#[test]
 fn recent_repository_shortcut_is_not_a_diff_select_all_candidate() {
     let recent = gpui::Keystroke::parse("secondary-shift-a").expect("valid shortcut");
     let select_all = gpui::Keystroke::parse("secondary-a").expect("valid shortcut");
@@ -5024,6 +5036,11 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         .or_else(|| cx.debug_bounds("branch_group_1"))
         .or_else(|| cx.debug_bounds("branch_group_2"))
         .expect("the feat/ group renders a row");
+    assert_eq!(
+        group_row.size.height,
+        px(24.0),
+        "branch hierarchy rows must remain 24 px tall"
+    );
     let center = group_row.center();
     cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
     cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());

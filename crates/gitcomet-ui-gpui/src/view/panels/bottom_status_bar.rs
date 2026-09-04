@@ -4,6 +4,23 @@ use super::*;
 /// pane collapse toggles, the zoom control and the branding strip on one shared
 /// centerline, so every saved pixel goes to the content area.
 const BOTTOM_STATUS_BAR_HEIGHT_PX: f32 = 26.0;
+const PANE_TOGGLE_ICON_SIZE_PX: f32 = 16.0;
+
+fn sidebar_toggle_icon_path(collapsed: bool) -> &'static str {
+    if collapsed {
+        "icons/side_panel_left_expand.svg"
+    } else {
+        "icons/side_panel_left.svg"
+    }
+}
+
+fn details_toggle_icon_path(collapsed: bool) -> &'static str {
+    if collapsed {
+        "icons/side_panel_right_expand.svg"
+    } else {
+        "icons/side_panel_right.svg"
+    }
+}
 
 /// Shared shape for the branding links on the bar's trailing end. No plate and
 /// no outline — beside the wordmark and the version number these read as links,
@@ -206,13 +223,9 @@ impl Render for BottomStatusBarView {
 
         let sidebar_toggle = components::Button::new("sidebar_toggle", "")
             .start_slot(svg_icon(
-                if sidebar_collapsed {
-                    "icons/arrow_right.svg"
-                } else {
-                    "icons/arrow_left.svg"
-                },
+                sidebar_toggle_icon_path(sidebar_collapsed),
                 theme.colors.foreground.secondary,
-                scaled_px(12.0),
+                scaled_px(PANE_TOGGLE_ICON_SIZE_PX),
             ))
             .style(components::ButtonStyle::Transparent)
             .on_click(theme, cx, |this, _e, _w, cx| {
@@ -231,13 +244,9 @@ impl Render for BottomStatusBarView {
 
         let details_toggle = components::Button::new("details_toggle", "")
             .start_slot(svg_icon(
-                if details_collapsed {
-                    "icons/arrow_left.svg"
-                } else {
-                    "icons/arrow_right.svg"
-                },
+                details_toggle_icon_path(details_collapsed),
                 theme.colors.foreground.secondary,
-                scaled_px(12.0),
+                scaled_px(PANE_TOGGLE_ICON_SIZE_PX),
             ))
             .style(components::ButtonStyle::Transparent)
             .on_click(theme, cx, |this, _e, _w, cx| {
@@ -458,5 +467,27 @@ impl Render for BottomStatusBarView {
                             .child(version_link),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{details_toggle_icon_path, sidebar_toggle_icon_path};
+
+    #[test]
+    fn pane_toggle_arrows_only_appear_when_the_panel_is_collapsed() {
+        assert_eq!(sidebar_toggle_icon_path(false), "icons/side_panel_left.svg");
+        assert_eq!(
+            sidebar_toggle_icon_path(true),
+            "icons/side_panel_left_expand.svg"
+        );
+        assert_eq!(
+            details_toggle_icon_path(false),
+            "icons/side_panel_right.svg"
+        );
+        assert_eq!(
+            details_toggle_icon_path(true),
+            "icons/side_panel_right_expand.svg"
+        );
     }
 }

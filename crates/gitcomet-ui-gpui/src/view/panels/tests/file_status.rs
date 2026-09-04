@@ -2819,6 +2819,16 @@ fn status_file_right_click_opens_menu_without_opening_diff_or_changing_selection
             .unwrap_or_else(|| panic!("expected status row {row_selector} to be rendered"));
         let row_center = row_bounds.center();
         cx.simulate_mouse_move(row_center, None, gpui::Modifiers::default());
+        test_support::redraw(cx);
+        let action_selector = format!("status_row_action_{}_{}_{}", repo_id.0, section_label, ix);
+        let action_bounds = cx
+            .debug_bounds(Box::leak(action_selector.into_boxed_str()))
+            .expect("expected the hovered row action to be rendered");
+        assert_eq!(
+            action_bounds.right(),
+            row_bounds.right(),
+            "the per-file stage action must be flush with the row's right edge"
+        );
         cx.simulate_mouse_down(
             row_center,
             gpui::MouseButton::Right,

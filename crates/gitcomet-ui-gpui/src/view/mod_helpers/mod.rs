@@ -25,14 +25,11 @@ pub(in crate::view) struct SelectedBranch {
 }
 
 pub(in crate::view) fn selected_branch_label_color(theme: AppTheme) -> gpui::Rgba {
-    theme.colors.foreground.emphasis
+    theme.colors.interaction.selected_foreground
 }
 
 pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(
-        theme.colors.foreground.primary,
-        if theme.is_dark { 0.16 } else { 0.10 },
-    )
+    theme.colors.interaction.selected_background
 }
 
 /// Which ref a history row should mark as the one the sidebar selected.
