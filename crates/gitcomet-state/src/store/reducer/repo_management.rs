@@ -1074,6 +1074,7 @@ pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Ve
     vec![Effect::CloneRepo {
         url,
         dest,
+        remote_url_policy: state.remote_url_policy,
         auth: None,
     }]
 }

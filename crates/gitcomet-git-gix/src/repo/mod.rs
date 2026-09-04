@@ -7,6 +7,7 @@ use gitcomet_core::domain::{
     RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
+use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     BlameLine, CancellationToken, CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome,
     ConflictFileStages, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry,
@@ -903,7 +904,16 @@ impl GitRepository for GixRepo {
     }
 
     fn add_remote_with_output(&self, name: &str, url: &str) -> Result<CommandOutput> {
-        self.add_remote_with_output_impl(name, url)
+        self.add_remote_with_output_impl(name, url, RemoteUrlPolicy::default())
+    }
+
+    fn add_remote_with_output_and_policy(
+        &self,
+        name: &str,
+        url: &str,
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.add_remote_with_output_impl(name, url, remote_url_policy)
     }
 
     fn remove_remote_with_output(&self, name: &str) -> Result<CommandOutput> {
@@ -916,7 +926,17 @@ impl GitRepository for GixRepo {
         url: &str,
         kind: RemoteUrlKind,
     ) -> Result<CommandOutput> {
-        self.set_remote_url_with_output_impl(name, url, kind)
+        self.set_remote_url_with_output_impl(name, url, kind, RemoteUrlPolicy::default())
+    }
+
+    fn set_remote_url_with_output_and_policy(
+        &self,
+        name: &str,
+        url: &str,
+        kind: RemoteUrlKind,
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.set_remote_url_with_output_impl(name, url, kind, remote_url_policy)
     }
 
     fn push_set_upstream(&self, remote: &str, branch: &str) -> Result<()> {
@@ -1081,15 +1101,39 @@ impl GitRepository for GixRepo {
     }
 
     fn check_submodule_add_trust(&self, url: &str, path: &Path) -> Result<SubmoduleTrustDecision> {
-        self.check_submodule_add_trust_impl(url, path)
+        self.check_submodule_add_trust_impl(url, path, RemoteUrlPolicy::default())
+    }
+
+    fn check_submodule_add_trust_with_policy(
+        &self,
+        url: &str,
+        path: &Path,
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_add_trust_impl(url, path, remote_url_policy)
     }
 
     fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
-        self.check_submodule_update_trust_impl()
+        self.check_submodule_update_trust_impl(RemoteUrlPolicy::default())
+    }
+
+    fn check_submodule_update_trust_with_policy(
+        &self,
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_update_trust_impl(remote_url_policy)
     }
 
     fn check_submodule_load_trust(&self, path: &Path) -> Result<SubmoduleTrustDecision> {
-        self.check_submodule_load_trust_impl(path)
+        self.check_submodule_load_trust_impl(path, RemoteUrlPolicy::default())
+    }
+
+    fn check_submodule_load_trust_with_policy(
+        &self,
+        path: &Path,
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_load_trust_impl(path, remote_url_policy)
     }
 
     fn add_submodule_with_output(
@@ -1101,14 +1145,51 @@ impl GitRepository for GixRepo {
         force: bool,
         approved_sources: &[SubmoduleTrustTarget],
     ) -> Result<CommandOutput> {
-        self.add_submodule_with_output_impl(url, path, branch, name, force, approved_sources)
+        self.add_submodule_with_output_impl(
+            url,
+            path,
+            branch,
+            name,
+            force,
+            approved_sources,
+            RemoteUrlPolicy::default(),
+        )
+    }
+
+    fn add_submodule_with_output_and_policy(
+        &self,
+        url: &str,
+        path: &Path,
+        branch: Option<&str>,
+        name: Option<&str>,
+        force: bool,
+        approved_sources: &[SubmoduleTrustTarget],
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.add_submodule_with_output_impl(
+            url,
+            path,
+            branch,
+            name,
+            force,
+            approved_sources,
+            remote_url_policy,
+        )
     }
 
     fn update_submodules_with_output(
         &self,
         approved_sources: &[SubmoduleTrustTarget],
     ) -> Result<CommandOutput> {
-        self.update_submodules_with_output_impl(approved_sources)
+        self.update_submodules_with_output_impl(approved_sources, RemoteUrlPolicy::default())
+    }
+
+    fn update_submodules_with_output_and_policy(
+        &self,
+        approved_sources: &[SubmoduleTrustTarget],
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.update_submodules_with_output_impl(approved_sources, remote_url_policy)
     }
 
     fn load_submodule_with_output(
@@ -1116,7 +1197,16 @@ impl GitRepository for GixRepo {
         path: &Path,
         approved_sources: &[SubmoduleTrustTarget],
     ) -> Result<CommandOutput> {
-        self.load_submodule_with_output_impl(path, approved_sources)
+        self.load_submodule_with_output_impl(path, approved_sources, RemoteUrlPolicy::default())
+    }
+
+    fn load_submodule_with_output_and_policy(
+        &self,
+        path: &Path,
+        approved_sources: &[SubmoduleTrustTarget],
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<CommandOutput> {
+        self.load_submodule_with_output_impl(path, approved_sources, remote_url_policy)
     }
 
     fn change_submodule_pointer_with_output(

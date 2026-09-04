@@ -475,6 +475,7 @@ fn send_unavailable_git_effect_result(
             branch,
             name,
             force,
+            ..
         } => send(Msg::Internal(
             crate::msg::InternalMsg::SubmoduleAddTrustChecked {
                 repo_id,
@@ -486,7 +487,7 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::CheckSubmoduleUpdateTrust { repo_id } => send(Msg::Internal(
+        Effect::CheckSubmoduleUpdateTrust { repo_id, .. } => send(Msg::Internal(
             crate::msg::InternalMsg::SubmoduleUpdateTrustChecked {
                 repo_id,
                 result: Err(git_unavailable_error(runtime)),
@@ -927,7 +928,7 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::CheckSubmoduleLoadTrust { repo_id, path } => send(Msg::Internal(
+        Effect::CheckSubmoduleLoadTrust { repo_id, path, .. } => send(Msg::Internal(
             crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
                 repo_id,
                 path,
@@ -1295,7 +1296,9 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::AddRemote { repo_id, name, url } => send(Msg::Internal(
+        Effect::AddRemote {
+            repo_id, name, url, ..
+        } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::AddRemote { name, url },
@@ -1314,6 +1317,7 @@ fn send_unavailable_git_effect_result(
             name,
             url,
             kind,
+            ..
         } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -2234,9 +2238,12 @@ pub(super) fn schedule_effect(
         } => {
             repo_actions::schedule_delete_branches(executor, repos, msg_tx, repo_id, names, force);
         }
-        Effect::CloneRepo { url, dest, auth } => {
-            clone::schedule_clone_repo(executor, msg_tx, url, dest, auth)
-        }
+        Effect::CloneRepo {
+            url,
+            dest,
+            remote_url_policy,
+            auth,
+        } => clone::schedule_clone_repo(executor, msg_tx, url, dest, remote_url_policy, auth),
         Effect::AbortCloneRepo { dest } => clone::schedule_abort_clone_repo(msg_tx, dest),
         Effect::ExportPatch {
             repo_id,
@@ -2268,17 +2275,47 @@ pub(super) fn schedule_effect(
             branch,
             name,
             force,
+            remote_url_policy,
         } => {
             repo_commands::schedule_check_submodule_add_trust(
-                executor, repos, msg_tx, repo_id, url, path, branch, name, force,
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                repo_commands::CheckSubmoduleAddTrustRequest {
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                    remote_url_policy,
+                },
             );
         }
-        Effect::CheckSubmoduleUpdateTrust { repo_id } => {
-            repo_commands::schedule_check_submodule_update_trust(executor, repos, msg_tx, repo_id);
+        Effect::CheckSubmoduleUpdateTrust {
+            repo_id,
+            remote_url_policy,
+        } => {
+            repo_commands::schedule_check_submodule_update_trust(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                remote_url_policy,
+            );
         }
-        Effect::CheckSubmoduleLoadTrust { repo_id, path } => {
+        Effect::CheckSubmoduleLoadTrust {
+            repo_id,
+            path,
+            remote_url_policy,
+        } => {
             repo_commands::schedule_check_submodule_load_trust(
-                executor, repos, msg_tx, repo_id, path,
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                path,
+                remote_url_policy,
             );
         }
         Effect::AddSubmodule {
@@ -2289,6 +2326,7 @@ pub(super) fn schedule_effect(
             name,
             force,
             approved_sources,
+            remote_url_policy,
             auth,
         } => {
             repo_commands::schedule_add_submodule(
@@ -2303,6 +2341,7 @@ pub(super) fn schedule_effect(
                     name,
                     force,
                     approved_sources,
+                    remote_url_policy,
                     auth,
                 },
             );
@@ -2310,6 +2349,7 @@ pub(super) fn schedule_effect(
         Effect::UpdateSubmodules {
             repo_id,
             approved_sources,
+            remote_url_policy,
             auth,
         } => {
             repo_commands::schedule_update_submodules(
@@ -2318,6 +2358,7 @@ pub(super) fn schedule_effect(
                 msg_tx,
                 repo_id,
                 approved_sources,
+                remote_url_policy,
                 auth,
             );
         }
@@ -2325,6 +2366,7 @@ pub(super) fn schedule_effect(
             repo_id,
             path,
             approved_sources,
+            remote_url_policy,
             auth,
         } => {
             repo_commands::schedule_load_submodule(
@@ -2334,6 +2376,7 @@ pub(super) fn schedule_effect(
                 repo_id,
                 path,
                 approved_sources,
+                remote_url_policy,
                 auth,
             );
         }
@@ -2618,8 +2661,21 @@ pub(super) fn schedule_effect(
         } => repo_commands::schedule_delete_remote_tag(
             executor, repos, msg_tx, repo_id, remote, name, auth,
         ),
-        Effect::AddRemote { repo_id, name, url } => {
-            repo_commands::schedule_add_remote(executor, repos, msg_tx, repo_id, name, url);
+        Effect::AddRemote {
+            repo_id,
+            name,
+            url,
+            remote_url_policy,
+        } => {
+            repo_commands::schedule_add_remote(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                name,
+                url,
+                remote_url_policy,
+            );
         }
         Effect::RemoveRemote { repo_id, name } => {
             repo_commands::schedule_remove_remote(executor, repos, msg_tx, repo_id, name);
@@ -2629,8 +2685,16 @@ pub(super) fn schedule_effect(
             name,
             url,
             kind,
+            remote_url_policy,
         } => repo_commands::schedule_set_remote_url(
-            executor, repos, msg_tx, repo_id, name, url, kind,
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            name,
+            url,
+            kind,
+            remote_url_policy,
         ),
         Effect::CheckoutConflictSide {
             repo_id,

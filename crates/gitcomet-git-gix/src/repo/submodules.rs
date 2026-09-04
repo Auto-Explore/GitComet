@@ -11,7 +11,7 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::remote_url::validate_remote_url;
+use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
@@ -96,8 +96,9 @@ impl GixRepo {
         &self,
         url: &str,
         path: &Path,
+        remote_url_policy: RemoteUrlPolicy,
     ) -> Result<SubmoduleTrustDecision> {
-        validate_remote_url(url)?;
+        validate_remote_url_with_policy(url, remote_url_policy)?;
         let repo = self.reopen_repo()?;
         let Some(target) =
             trust_target_from_raw_source(repo_workdir_for_submodule_trust(&repo), path, url)?
@@ -114,11 +115,20 @@ impl GixRepo {
         }
     }
 
-    pub(super) fn check_submodule_update_trust_impl(&self) -> Result<SubmoduleTrustDecision> {
+    pub(super) fn check_submodule_update_trust_impl(
+        &self,
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo);
         let mut sources = BTreeMap::new();
-        collect_repo_untrusted_submodule_sources(&repo, trust_root, Path::new(""), &mut sources)?;
+        collect_repo_untrusted_submodule_sources(
+            &repo,
+            trust_root,
+            Path::new(""),
+            &mut sources,
+            remote_url_policy,
+        )?;
         if sources.is_empty() {
             Ok(SubmoduleTrustDecision::Proceed)
         } else {
@@ -131,6 +141,7 @@ impl GixRepo {
     pub(super) fn check_submodule_load_trust_impl(
         &self,
         path: &Path,
+        remote_url_policy: RemoteUrlPolicy,
     ) -> Result<SubmoduleTrustDecision> {
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo);
@@ -141,6 +152,7 @@ impl GixRepo {
             Path::new(""),
             path,
             &mut sources,
+            remote_url_policy,
         )?;
         if !found {
             return Err(Error::new(ErrorKind::Backend(format!(
@@ -165,8 +177,9 @@ impl GixRepo {
         name: Option<&str>,
         force: bool,
         approved_sources: &[SubmoduleTrustTarget],
+        remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
-        validate_remote_url(url)?;
+        validate_remote_url_with_policy(url, remote_url_policy)?;
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo);
         let git_dir = repo.git_dir().to_path_buf();
@@ -200,13 +213,20 @@ impl GixRepo {
     pub(super) fn update_submodules_with_output_impl(
         &self,
         approved_sources: &[SubmoduleTrustTarget],
+        remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo).to_path_buf();
         persist_submodule_trust_approvals(&trust_root, approved_sources)?;
 
         let mut outputs = Vec::new();
-        update_repo_submodules_recursive(&repo, &trust_root, Path::new(""), &mut outputs)?;
+        update_repo_submodules_recursive(
+            &repo,
+            &trust_root,
+            Path::new(""),
+            &mut outputs,
+            remote_url_policy,
+        )?;
 
         if outputs.is_empty() {
             Ok(CommandOutput::empty_success(
@@ -221,14 +241,21 @@ impl GixRepo {
         &self,
         path: &Path,
         approved_sources: &[SubmoduleTrustTarget],
+        remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo).to_path_buf();
         persist_submodule_trust_approvals(&trust_root, approved_sources)?;
 
         let mut outputs = Vec::new();
-        let found =
-            load_target_submodule_recursive(&repo, &trust_root, Path::new(""), path, &mut outputs)?;
+        let found = load_target_submodule_recursive(
+            &repo,
+            &trust_root,
+            Path::new(""),
+            path,
+            &mut outputs,
+            remote_url_policy,
+        )?;
         if !found {
             return Err(Error::new(ErrorKind::Backend(format!(
                 "submodule '{}' is not configured in this repository",
@@ -454,6 +481,7 @@ fn collect_repo_untrusted_submodule_sources(
     trust_root: &Path,
     prefix: &Path,
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
+    remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
     let Some(submodules) = repo
         .submodules()
@@ -470,14 +498,21 @@ fn collect_repo_untrusted_submodule_sources(
             .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
         let full_path = prefix.join(&relative_path);
 
-        if let Some(target) = trust_target_from_submodule(current_workdir, &full_path, &submodule)?
+        if let Some(target) =
+            trust_target_from_submodule(current_workdir, &full_path, &submodule, remote_url_policy)?
             && !submodule_source_trusted(trust_root, &target)?
         {
             out.insert(full_path.clone(), target);
         }
 
         if let Some(nested_repo) = open_configured_submodule_repo(&submodule)? {
-            collect_repo_untrusted_submodule_sources(&nested_repo, trust_root, &full_path, out)?;
+            collect_repo_untrusted_submodule_sources(
+                &nested_repo,
+                trust_root,
+                &full_path,
+                out,
+                remote_url_policy,
+            )?;
         }
     }
 
@@ -489,6 +524,7 @@ fn update_repo_submodules_recursive(
     trust_root: &Path,
     prefix: &Path,
     outputs: &mut Vec<CommandOutput>,
+    remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
     let Some(submodules) = repo
         .submodules()
@@ -505,7 +541,12 @@ fn update_repo_submodules_recursive(
             .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
         let full_path = prefix.join(&relative_path);
 
-        let local_target = trust_target_from_submodule(current_workdir, &full_path, &submodule)?;
+        let local_target = trust_target_from_submodule(
+            current_workdir,
+            &full_path,
+            &submodule,
+            remote_url_policy,
+        )?;
 
         let mut cmd = git_workdir_cmd_for(current_workdir);
         if let Some(target) = local_target.as_ref() {
@@ -526,7 +567,13 @@ fn update_repo_submodules_recursive(
         )?);
 
         if let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)? {
-            update_repo_submodules_recursive(&nested_repo, trust_root, &full_path, outputs)?;
+            update_repo_submodules_recursive(
+                &nested_repo,
+                trust_root,
+                &full_path,
+                outputs,
+                remote_url_policy,
+            )?;
         }
     }
 
@@ -539,6 +586,7 @@ fn collect_target_submodule_untrusted_sources(
     prefix: &Path,
     target_path: &Path,
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
+    remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
     let Some(submodules) = repo
         .submodules()
@@ -556,9 +604,12 @@ fn collect_target_submodule_untrusted_sources(
         let full_path = prefix.join(&relative_path);
 
         if full_path == target_path {
-            if let Some(target) =
-                trust_target_from_submodule(current_workdir, &full_path, &submodule)?
-                && !submodule_source_trusted(trust_root, &target)?
+            if let Some(target) = trust_target_from_submodule(
+                current_workdir,
+                &full_path,
+                &submodule,
+                remote_url_policy,
+            )? && !submodule_source_trusted(trust_root, &target)?
             {
                 out.insert(full_path.clone(), target);
             }
@@ -568,6 +619,7 @@ fn collect_target_submodule_untrusted_sources(
                     trust_root,
                     &full_path,
                     out,
+                    remote_url_policy,
                 )?;
             }
             return Ok(true);
@@ -581,6 +633,7 @@ fn collect_target_submodule_untrusted_sources(
                 &full_path,
                 target_path,
                 out,
+                remote_url_policy,
             )?
         {
             return Ok(true);
@@ -596,6 +649,7 @@ fn load_target_submodule_recursive(
     prefix: &Path,
     target_path: &Path,
     outputs: &mut Vec<CommandOutput>,
+    remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
     let Some(submodules) = repo
         .submodules()
@@ -613,8 +667,12 @@ fn load_target_submodule_recursive(
         let full_path = prefix.join(&relative_path);
 
         if full_path == target_path {
-            let local_target =
-                trust_target_from_submodule(current_workdir, &full_path, &submodule)?;
+            let local_target = trust_target_from_submodule(
+                current_workdir,
+                &full_path,
+                &submodule,
+                remote_url_policy,
+            )?;
             let mut cmd = git_workdir_cmd_for(current_workdir);
             if let Some(target) = local_target.as_ref() {
                 if !submodule_source_trusted(trust_root, target)? {
@@ -634,7 +692,13 @@ fn load_target_submodule_recursive(
             )?);
 
             if let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)? {
-                update_repo_submodules_recursive(&nested_repo, trust_root, &full_path, outputs)?;
+                update_repo_submodules_recursive(
+                    &nested_repo,
+                    trust_root,
+                    &full_path,
+                    outputs,
+                    remote_url_policy,
+                )?;
             }
             return Ok(true);
         }
@@ -647,6 +711,7 @@ fn load_target_submodule_recursive(
                 &full_path,
                 target_path,
                 outputs,
+                remote_url_policy,
             )?
         {
             return Ok(true);
@@ -1666,13 +1731,17 @@ fn trust_target_from_submodule(
     current_repo_workdir: &Path,
     full_submodule_path: &Path,
     submodule: &gix::Submodule<'_>,
+    remote_url_policy: RemoteUrlPolicy,
 ) -> Result<Option<SubmoduleTrustTarget>> {
     let url = submodule
         .url()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule url: {e}"))))?;
     // .gitmodules ships with the repository, so hold its URL to the same
     // allowlist as the Add dialog rather than to Git's protocol policy alone.
-    validate_remote_url(&bytes_to_text_preserving_utf8(url.to_bstring().as_ref()))?;
+    validate_remote_url_with_policy(
+        &bytes_to_text_preserving_utf8(url.to_bstring().as_ref()),
+        remote_url_policy,
+    )?;
     trust_target_from_url(current_repo_workdir, full_submodule_path, &url)
 }
 
@@ -1909,6 +1978,10 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 
 #[cfg(test)]
 mod tests {
+    use gitcomet_core::remote_url::{
+        RemoteProtocol, RemoteUrlPolicy, validate_remote_url_with_policy,
+    };
+
     use super::*;
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
     use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
@@ -1922,6 +1995,7 @@ mod tests {
     fn configured_submodule_urls_survive_validation() {
         // The URL is validated after gix re-serializes it, so every shape a
         // real .gitmodules carries has to come back through unchanged enough.
+        let policy = RemoteUrlPolicy::default().with_allowed(RemoteProtocol::Http, true);
         for source in [
             "../sibling.git",
             "./nested.git",
@@ -1936,7 +2010,7 @@ mod tests {
             let url = gix::url::parse(source.as_bytes().as_bstr()).expect(source);
             let rendered = bytes_to_text_preserving_utf8(url.to_bstring().as_ref());
             assert!(
-                validate_remote_url(&rendered).is_ok(),
+                validate_remote_url_with_policy(&rendered, policy).is_ok(),
                 "{source} rendered as {rendered}"
             );
         }

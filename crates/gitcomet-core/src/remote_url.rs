@@ -1,14 +1,135 @@
 use crate::error::{Error, ErrorKind};
 
-/// Transports Git implements itself. Every other `scheme://` is handed to a
-/// `git-remote-<scheme>` helper found on PATH.
-const ALLOWED_SCHEMES: [&str; 7] = ["https", "http", "ssh", "git", "file", "ftp", "ftps"];
-/// Git's own deprecated spellings of `ssh://`.
-const DEPRECATED_SSH_SCHEMES: [&str; 2] = ["git+ssh", "ssh+git"];
+/// A Git transport implemented by Git itself rather than a `git-remote-*`
+/// helper discovered on `PATH`.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum RemoteProtocol {
+    Https,
+    Ssh,
+    Git,
+    File,
+    Http,
+    Ftp,
+    Ftps,
+    GitSsh,
+    SshGit,
+}
+
+impl RemoteProtocol {
+    pub const ALL: [Self; 9] = [
+        Self::Https,
+        Self::Ssh,
+        Self::Git,
+        Self::File,
+        Self::Http,
+        Self::Ftp,
+        Self::Ftps,
+        Self::GitSsh,
+        Self::SshGit,
+    ];
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Https => "https",
+            Self::Ssh => "ssh",
+            Self::Git => "git",
+            Self::File => "file",
+            Self::Http => "http",
+            Self::Ftp => "ftp",
+            Self::Ftps => "ftps",
+            Self::GitSsh => "git+ssh",
+            Self::SshGit => "ssh+git",
+        }
+    }
+
+    pub fn from_key(raw: &str) -> Option<Self> {
+        match raw.to_ascii_lowercase().as_str() {
+            "https" => Some(Self::Https),
+            "ssh" => Some(Self::Ssh),
+            "git" => Some(Self::Git),
+            "file" => Some(Self::File),
+            "http" => Some(Self::Http),
+            "ftp" => Some(Self::Ftp),
+            "ftps" => Some(Self::Ftps),
+            "git+ssh" => Some(Self::GitSsh),
+            "ssh+git" => Some(Self::SshGit),
+            _ => None,
+        }
+    }
+}
+
+/// User-selected allowlist for explicit Git remote URL schemes.
+///
+/// Schemeless local paths and SCP-style SSH locations are outside this list
+/// and remain supported. Remote-helper syntax (`ext::...`, `hg::...`, and
+/// similar) is always rejected and cannot be enabled by this policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoteUrlPolicy {
+    allowed: u16,
+}
+
+impl RemoteUrlPolicy {
+    const fn bit(protocol: RemoteProtocol) -> u16 {
+        1 << protocol as u16
+    }
+
+    pub const fn none() -> Self {
+        Self { allowed: 0 }
+    }
+
+    pub fn from_keys<'a>(keys: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut policy = Self::none();
+        for key in keys {
+            if let Some(protocol) = RemoteProtocol::from_key(key) {
+                policy.set_allowed(protocol, true);
+            }
+        }
+        policy
+    }
+
+    pub const fn allows(self, protocol: RemoteProtocol) -> bool {
+        self.allowed & Self::bit(protocol) != 0
+    }
+
+    pub fn set_allowed(&mut self, protocol: RemoteProtocol, allowed: bool) {
+        let bit = Self::bit(protocol);
+        if allowed {
+            self.allowed |= bit;
+        } else {
+            self.allowed &= !bit;
+        }
+    }
+
+    pub fn with_allowed(mut self, protocol: RemoteProtocol, allowed: bool) -> Self {
+        self.set_allowed(protocol, allowed);
+        self
+    }
+
+    pub fn allowed_protocols(self) -> impl Iterator<Item = RemoteProtocol> {
+        RemoteProtocol::ALL
+            .into_iter()
+            .filter(move |protocol| self.allows(*protocol))
+    }
+}
+
+impl Default for RemoteUrlPolicy {
+    fn default() -> Self {
+        Self::none()
+            .with_allowed(RemoteProtocol::Https, true)
+            .with_allowed(RemoteProtocol::Ssh, true)
+            .with_allowed(RemoteProtocol::Git, true)
+            .with_allowed(RemoteProtocol::File, true)
+    }
+}
+
+/// Validate a remote using the secure default allowlist.
+pub fn validate_remote_url(url: &str) -> Result<(), Error> {
+    validate_remote_url_with_policy(url, RemoteUrlPolicy::default())
+}
 
 /// Validate a user-supplied Git remote source without rejecting local paths or
 /// SCP-style URLs such as `git@example.com:org/repo.git`.
-pub fn validate_remote_url(url: &str) -> Result<(), Error> {
+pub fn validate_remote_url_with_policy(url: &str, policy: RemoteUrlPolicy) -> Result<(), Error> {
     let url = url.trim();
     if url.is_empty() {
         return Err(invalid("remote URL cannot be empty"));
@@ -30,15 +151,32 @@ pub fn validate_remote_url(url: &str) -> Result<(), Error> {
         return Ok(());
     }
     let scheme = scheme.to_ascii_lowercase();
-    if ALLOWED_SCHEMES.contains(&scheme.as_str())
-        || DEPRECATED_SSH_SCHEMES.contains(&scheme.as_str())
-    {
-        return Ok(());
+    let Some(protocol) = RemoteProtocol::from_key(&scheme) else {
+        return Err(invalid(format!(
+            "unsupported remote URL scheme `{scheme}` (allowed: {})",
+            allowed_scheme_list(policy)
+        )));
+    };
+    if !policy.allows(protocol) {
+        return Err(invalid(format!(
+            "remote URL scheme `{scheme}` is blocked by Settings > Security / Privacy > Allowed remote protocols (allowed: {})",
+            allowed_scheme_list(policy)
+        )));
     }
-    Err(invalid(format!(
-        "unsupported remote URL scheme `{scheme}` (allowed: {})",
-        ALLOWED_SCHEMES.join(", ")
-    )))
+    Ok(())
+}
+
+fn allowed_scheme_list(policy: RemoteUrlPolicy) -> String {
+    let allowed = policy
+        .allowed_protocols()
+        .map(RemoteProtocol::key)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if allowed.is_empty() {
+        "none".to_string()
+    } else {
+        allowed
+    }
 }
 
 /// The transport name Git would take from `url`, plus the rest. Git's scan is
@@ -59,10 +197,12 @@ fn invalid(message: impl Into<String>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_remote_url;
+    use super::{
+        RemoteProtocol, RemoteUrlPolicy, validate_remote_url, validate_remote_url_with_policy,
+    };
 
     #[test]
-    fn accepts_supported_urls_and_path_forms() {
+    fn secure_defaults_accept_only_the_default_protocols_and_path_forms() {
         for url in [
             "https://example.com/org/repo.git",
             "ssh://git@example.com/org/repo.git",
@@ -75,13 +215,65 @@ mod tests {
         ] {
             assert!(validate_remote_url(url).is_ok(), "{url:?}");
         }
+
+        for url in [
+            "http://git.internal/team/repo.git",
+            "ftp://example.com/repo.git",
+            "ftps://example.com/repo.git",
+            "git+ssh://example.com/repo.git",
+            "ssh+git://example.com/repo.git",
+        ] {
+            assert!(validate_remote_url(url).is_err(), "{url:?}");
+        }
     }
 
     #[test]
-    fn rejects_remote_helper_names_that_are_not_uri_schemes() {
+    fn explicitly_allowed_builtin_protocols_are_accepted() {
+        let policy = RemoteUrlPolicy::default()
+            .with_allowed(RemoteProtocol::Http, true)
+            .with_allowed(RemoteProtocol::Ftp, true)
+            .with_allowed(RemoteProtocol::Ftps, true)
+            .with_allowed(RemoteProtocol::GitSsh, true)
+            .with_allowed(RemoteProtocol::SshGit, true);
+
+        for url in [
+            "http://git.internal/team/repo.git",
+            "ftp://example.com/repo.git",
+            "ftps://example.com/repo.git",
+            "git+ssh://example.com/repo.git",
+            "ssh+git://example.com/repo.git",
+        ] {
+            assert!(
+                validate_remote_url_with_policy(url, policy).is_ok(),
+                "{url:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn policy_round_trips_known_keys_and_ignores_unknown_ones() {
+        let policy = RemoteUrlPolicy::from_keys(["HTTPS", "http", "unknown"]);
+        assert!(policy.allows(RemoteProtocol::Https));
+        assert!(policy.allows(RemoteProtocol::Http));
+        assert!(!policy.allows(RemoteProtocol::Ssh));
+        assert_eq!(
+            policy
+                .allowed_protocols()
+                .map(RemoteProtocol::key)
+                .collect::<Vec<_>>(),
+            ["https", "http"]
+        );
+    }
+
+    #[test]
+    fn rejects_remote_helper_names_even_when_every_builtin_is_allowed() {
+        let policy = RemoteUrlPolicy::from_keys(RemoteProtocol::ALL.map(RemoteProtocol::key));
         // An empty or digit-led helper name still runs `git-remote-<name>`.
         for url in ["::sh -c id", "7z::sh -c whatever", "my-helper::x", "2::x"] {
-            assert!(validate_remote_url(url).is_err(), "{url:?}");
+            assert!(
+                validate_remote_url_with_policy(url, policy).is_err(),
+                "{url:?}"
+            );
         }
     }
 
@@ -98,21 +290,23 @@ mod tests {
     }
 
     #[test]
-    fn accepts_transports_git_implements_itself() {
+    fn accepts_schemeless_locations_independently_of_policy() {
+        let policy = RemoteUrlPolicy::none();
         for url in [
-            "http://git.internal/team/repo.git",
-            "ftp://example.com/repo.git",
-            "ftps://example.com/repo.git",
-            "git+ssh://example.com/repo.git",
-            "ssh+git://example.com/repo.git",
-            // An ssh alias named after a scheme, and Git's SCP-style form.
             "git:org/repo.git",
             "ssh:git@example.com/repo.git",
-            // A `::` inside an IPv6 literal is not remote-helper syntax.
-            "ssh://[::1]/org/repo.git",
+            "git@example.com:org/repo.git",
+            "/tmp/repo.git",
         ] {
-            assert!(validate_remote_url(url).is_ok(), "{url:?}");
+            assert!(
+                validate_remote_url_with_policy(url, policy).is_ok(),
+                "{url:?}"
+            );
         }
+
+        // A `::` inside an IPv6 literal is not remote-helper syntax, but the
+        // explicit SSH scheme still follows the user's policy.
+        assert!(validate_remote_url_with_policy("ssh://[::1]/org/repo.git", policy).is_err());
     }
 
     #[test]

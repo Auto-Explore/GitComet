@@ -1,6 +1,7 @@
 use crate::msg::{InternalMsg, Msg, RepoCommandKind};
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     CommandOutput, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, PullMode,
     RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
@@ -282,7 +283,17 @@ pub(super) struct AddSubmoduleRequest {
     pub(super) name: Option<String>,
     pub(super) force: bool,
     pub(super) approved_sources: Vec<SubmoduleTrustTarget>,
+    pub(super) remote_url_policy: RemoteUrlPolicy,
     pub(super) auth: Option<StagedGitAuth>,
+}
+
+pub(super) struct CheckSubmoduleAddTrustRequest {
+    pub(super) url: String,
+    pub(super) path: PathBuf,
+    pub(super) branch: Option<String>,
+    pub(super) name: Option<String>,
+    pub(super) force: bool,
+    pub(super) remote_url_policy: RemoteUrlPolicy,
 }
 
 pub(super) fn schedule_save_worktree_file(
@@ -509,6 +520,7 @@ pub(super) fn schedule_add_submodule(
         name,
         force,
         approved_sources,
+        remote_url_policy,
         auth,
     } = request;
     let command_url = url.clone();
@@ -531,13 +543,14 @@ pub(super) fn schedule_add_submodule(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.add_submodule_with_output(
+                repo.add_submodule_with_output_and_policy(
                     &url,
                     &path,
                     branch.as_deref(),
                     name.as_deref(),
                     force,
                     &approved_sources,
+                    remote_url_policy,
                 )
             })
         },
@@ -550,6 +563,7 @@ pub(super) fn schedule_update_submodules(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     approved_sources: Vec<SubmoduleTrustTarget>,
+    remote_url_policy: RemoteUrlPolicy,
     auth: Option<StagedGitAuth>,
 ) {
     let command_sources = approved_sources.clone();
@@ -563,7 +577,7 @@ pub(super) fn schedule_update_submodules(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.update_submodules_with_output(&approved_sources)
+                repo.update_submodules_with_output_and_policy(&approved_sources, remote_url_policy)
             })
         },
     );
@@ -574,14 +588,18 @@ pub(super) fn schedule_check_submodule_add_trust(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    url: String,
-    path: PathBuf,
-    branch: Option<String>,
-    name: Option<String>,
-    force: bool,
+    request: CheckSubmoduleAddTrustRequest,
 ) {
+    let CheckSubmoduleAddTrustRequest {
+        url,
+        path,
+        branch,
+        name,
+        force,
+        remote_url_policy,
+    } = request;
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_add_trust(&url, &path);
+        let result = repo.check_submodule_add_trust_with_policy(&url, &path, remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
@@ -602,9 +620,10 @@ pub(super) fn schedule_check_submodule_update_trust(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    remote_url_policy: RemoteUrlPolicy,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_update_trust();
+        let result = repo.check_submodule_update_trust_with_policy(remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result }),
@@ -618,9 +637,10 @@ pub(super) fn schedule_check_submodule_load_trust(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
+    remote_url_policy: RemoteUrlPolicy,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.check_submodule_load_trust(&path);
+        let result = repo.check_submodule_load_trust_with_policy(&path, remote_url_policy);
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
@@ -639,6 +659,7 @@ pub(super) fn schedule_load_submodule(
     repo_id: RepoId,
     path: PathBuf,
     approved_sources: Vec<SubmoduleTrustTarget>,
+    remote_url_policy: RemoteUrlPolicy,
     auth: Option<StagedGitAuth>,
 ) {
     let command_path = path.clone();
@@ -654,7 +675,11 @@ pub(super) fn schedule_load_submodule(
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.load_submodule_with_output(&path, &approved_sources)
+                repo.load_submodule_with_output_and_policy(
+                    &path,
+                    &approved_sources,
+                    remote_url_policy,
+                )
             })
         },
     );
@@ -1423,6 +1448,7 @@ pub(super) fn schedule_add_remote(
     repo_id: RepoId,
     name: String,
     url: String,
+    remote_url_policy: RemoteUrlPolicy,
 ) {
     let command_name = name.clone();
     let command_url = url.clone();
@@ -1435,7 +1461,7 @@ pub(super) fn schedule_add_remote(
             name: command_name,
             url: command_url,
         },
-        move |repo| repo.add_remote_with_output(&name, &url),
+        move |repo| repo.add_remote_with_output_and_policy(&name, &url, remote_url_policy),
     );
 }
 
@@ -1465,6 +1491,7 @@ pub(super) fn schedule_set_remote_url(
     name: String,
     url: String,
     kind: RemoteUrlKind,
+    remote_url_policy: RemoteUrlPolicy,
 ) {
     let command_name = name.clone();
     let command_url = url.clone();
@@ -1478,7 +1505,9 @@ pub(super) fn schedule_set_remote_url(
             url: command_url,
             kind,
         },
-        move |repo| repo.set_remote_url_with_output(&name, &url, kind),
+        move |repo| {
+            repo.set_remote_url_with_output_and_policy(&name, &url, kind, remote_url_policy)
+        },
     );
 }
 

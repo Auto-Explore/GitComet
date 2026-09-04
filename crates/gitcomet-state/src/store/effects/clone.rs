@@ -7,7 +7,7 @@ use gitcomet_core::auth::askpass::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::{bytes_to_text_preserving_utf8, git_command};
-use gitcomet_core::remote_url::validate_remote_url;
+use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
 use gitcomet_core::services::CommandOutput;
 use gitcomet_core::text_utils::redact_url_userinfo;
 use rustc_hash::FxHashMap;
@@ -238,6 +238,7 @@ pub(super) fn schedule_clone_repo(
     msg_tx: StoreWorkerSender,
     url: String,
     dest: PathBuf,
+    remote_url_policy: RemoteUrlPolicy,
     auth: Option<StagedGitAuth>,
 ) {
     let active_clone = Arc::new(ActiveCloneHandle::new());
@@ -247,7 +248,7 @@ pub(super) fn schedule_clone_repo(
     executor.spawn(move || {
         let _registration = registration;
 
-        if let Err(err) = validate_remote_url(&url) {
+        if let Err(err) = validate_remote_url_with_policy(&url, remote_url_policy) {
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
@@ -448,6 +449,8 @@ pub(super) fn schedule_abort_clone_repo(_msg_tx: StoreWorkerSender, dest: PathBu
 
 #[cfg(test)]
 mod tests {
+    use gitcomet_core::remote_url::validate_remote_url;
+
     use super::*;
     use std::process::Command;
 

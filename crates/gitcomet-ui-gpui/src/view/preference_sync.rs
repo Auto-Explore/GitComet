@@ -1,6 +1,22 @@
 use super::*;
 
 impl GitCometView {
+    pub(in crate::view) fn set_remote_url_policy(
+        &mut self,
+        next: RemoteUrlPolicy,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_url_policy == next {
+            return;
+        }
+        self.remote_url_policy = next;
+        self.store.dispatch(Msg::SetRemoteUrlPolicy(next));
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.security.remote_url_policy = next;
+        });
+        self.schedule_ui_settings_persist(cx);
+    }
+
     pub(in crate::view) fn set_remote_markdown_image_policy(
         &mut self,
         next: RemoteMarkdownImagePolicy,

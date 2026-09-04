@@ -3083,7 +3083,10 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
     );
     assert!(matches!(
         update_submodules.as_slice(),
-        [Effect::CheckSubmoduleUpdateTrust { repo_id: RepoId(1) }]
+        [Effect::CheckSubmoduleUpdateTrust {
+            repo_id: RepoId(1),
+            ..
+        }]
     ));
 
     let remove_submodule = reduce(

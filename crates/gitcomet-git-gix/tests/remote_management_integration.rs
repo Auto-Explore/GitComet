@@ -1,3 +1,4 @@
+use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{GitBackend, PullMode, RemoteUrlKind};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
@@ -283,6 +284,52 @@ fn remote_add_set_url_and_remove_round_trip() {
 
     let remotes_after_remove = opened.list_remotes().expect("list remotes after remove");
     assert!(remotes_after_remove.is_empty());
+}
+
+#[test]
+fn remote_management_honors_the_selected_protocol_policy() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    fs::create_dir_all(&repo).expect("create repo dir");
+    init_repo_with_user(&repo);
+
+    let backend = GixBackend;
+    let opened = backend.open(&repo).expect("open repository");
+    let http_url = "http://git.internal/example.git";
+    let blocked = opened
+        .add_remote_with_output_and_policy("origin", http_url, RemoteUrlPolicy::default())
+        .expect_err("HTTP must be blocked by default");
+    assert!(
+        blocked.to_string().contains("Allowed remote protocols"),
+        "unexpected policy error: {blocked}"
+    );
+
+    let http_allowed = RemoteUrlPolicy::default().with_allowed(RemoteProtocol::Http, true);
+    opened
+        .add_remote_with_output_and_policy("origin", http_url, http_allowed)
+        .expect("explicitly allowed HTTP remote");
+
+    let ftp_url = "ftp://git.internal/example.git";
+    assert!(
+        opened
+            .set_remote_url_with_output_and_policy(
+                "origin",
+                ftp_url,
+                RemoteUrlKind::Fetch,
+                RemoteUrlPolicy::default(),
+            )
+            .is_err(),
+        "FTP must be blocked by default"
+    );
+    let ftp_allowed = RemoteUrlPolicy::default().with_allowed(RemoteProtocol::Ftp, true);
+    opened
+        .set_remote_url_with_output_and_policy("origin", ftp_url, RemoteUrlKind::Fetch, ftp_allowed)
+        .expect("explicitly allowed FTP remote");
+    assert_eq!(
+        run_git_capture(&repo, &["config", "--get", "remote.origin.url"]).trim(),
+        ftp_url
+    );
 }
 
 #[test]

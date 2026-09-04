@@ -215,6 +215,12 @@ impl GitCometView {
                             remote_markdown_image_policy: Some(
                                 this.remote_markdown_image_policy.key().to_string(),
                             ),
+                            allowed_remote_protocols: Some(
+                                this.remote_url_policy
+                                    .allowed_protocols()
+                                    .map(|protocol| protocol.key().to_string())
+                                    .collect(),
+                            ),
                             check_for_updates_on_startup: Some(
                                 this.check_for_updates_on_startup,
                             ),

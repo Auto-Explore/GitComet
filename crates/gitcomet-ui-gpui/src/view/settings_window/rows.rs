@@ -1147,6 +1147,31 @@ impl SettingsWindowView {
             .collect()
     }
 
+    pub(super) fn render_remote_protocol_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| REMOTE_PROTOCOL_OPTIONS.get(ix).copied())
+            .map(|(id, protocol, label, detail)| {
+                this.option_row(
+                    id,
+                    label,
+                    Some(detail.into()),
+                    this.remote_url_policy.allows(protocol),
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.toggle_remote_protocol(protocol, cx);
+                }))
+                .into_any_element()
+            })
+            .collect()
+    }
+
     pub(super) fn card(
         &self,
         id: &'static str,
