@@ -62,7 +62,7 @@ edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
-rust-version = "1.98.0"
+rust-version = "1.98.1"
 
 [workspace.dependencies]
 # Internal crates
@@ -88,8 +88,8 @@ dekobon-tree-sitter-groovy = "0.3.0"
 fontdb = "0.24.0"
 futures = "0.3.34"
 gix = { version = "0.87.1", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced" }
-gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "acdf7b5bb786a53346f1c19a4cd2cdd3cf10bced", features = ["font-kit"] }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "e1ed786d11dec168479330bc3a7a15b5cbb22bac" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "e1ed786d11dec168479330bc3a7a15b5cbb22bac", features = ["font-kit"] }
 image = "0.25.10"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
@@ -241,7 +241,7 @@ tree-sitter-powershell = { path = "vendor/tree-sitter-powershell" }
 # Pascal and Protobuf ship no highlights query; GitComet authors both.
 tree-sitter-pascal = "0.10.2"
 tree-sitter-properties = "0.3.0"
-tree-sitter-proto = "0.5.0"
+tree-sitter-proto = "0.6.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-r = "1.3.0"
 tree-sitter-regex = "0.25.0"
