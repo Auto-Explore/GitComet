@@ -7,6 +7,9 @@ use std::hash::{Hash, Hasher};
 pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64 {
     let mut hasher = FxHasher::default();
     hash_popover_kind(popover, &mut hasher);
+    if matches!(popover, PopoverKind::CommitMenu { .. }) {
+        state.git_log_settings.show_history_tags.hash(&mut hasher);
+    }
 
     match popover {
         PopoverKind::CloneRepo => match &state.clone {
@@ -1184,6 +1187,31 @@ mod tests {
 
         state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
         assert_ne!(after_head_branch, notify_fingerprint(&state, &popover));
+    }
+
+    #[test]
+    fn commit_menu_fingerprint_changes_when_history_tag_visibility_changes() {
+        let repo_id = RepoId(9);
+        let repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_commit_menu_fingerprint"),
+            },
+        );
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+        state.repos.push(repo);
+
+        let popover = PopoverKind::CommitMenu {
+            repo_id,
+            commit_id: CommitId("deadbeef".into()),
+        };
+        let before = notify_fingerprint(&state, &popover);
+        state.git_log_settings.show_history_tags = !state.git_log_settings.show_history_tags;
+
+        assert_ne!(before, notify_fingerprint(&state, &popover));
     }
 
     #[test]
