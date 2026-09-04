@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub(crate) const DEFAULT_DARK_THEME_KEY: &str = "gitcomet_dark";
 pub(crate) const DEFAULT_LIGHT_THEME_KEY: &str = "gitcomet_light";
+pub(crate) const AMBER_DARK_THEME_KEY: &str = "amber_dark";
 pub(crate) const GRAPH_LANE_PALETTE_SIZE: usize = 64;
 pub(crate) const THEME_SCHEMA_VERSION: u32 = 2;
 
@@ -1297,7 +1298,25 @@ fn merged_theme_options(runtime_dir: Option<&Path>) -> Vec<ThemeOption> {
         options.insert(spec.option.key.clone(), spec.option.clone());
     }
 
-    options.into_values().collect()
+    let mut options = options.into_values().collect::<Vec<_>>();
+    options.sort_by(|left, right| {
+        theme_option_rank(left.key.as_str())
+            .cmp(&theme_option_rank(right.key.as_str()))
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    options
+}
+
+/// Keep GitComet's two defaults together at the top of the picker, followed by
+/// the alternate house palette. Every other bundled or user theme retains the
+/// existing deterministic key order after those three.
+fn theme_option_rank(key: &str) -> u8 {
+    match key {
+        DEFAULT_DARK_THEME_KEY => 0,
+        DEFAULT_LIGHT_THEME_KEY => 1,
+        AMBER_DARK_THEME_KEY => 2,
+        _ => 3,
+    }
 }
 
 fn runtime_themes() -> Arc<FxHashMap<String, RuntimeThemeSpec>> {
@@ -1870,13 +1889,13 @@ pub(crate) fn test_theme_json_with_syntax(base_key: &str, syntax_json: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, EMBEDDED_THEME_FILES,
-        GRAPH_LANE_PALETTE_SIZE, GraphLanePalette, HexColor, Hsla, Rgba, THEME_SCHEMA_VERSION,
-        ThemeColor, UNFILLED_COLOR_TOKENS, available_themes, content_header_bg,
-        derived_syntax_color, fill_missing_color_tokens, has_theme_key, hsla_from_hue_fraction,
-        load_theme_specs_from_json, merged_theme_options, resolved_runtime_themes_dir,
-        runtime_themes_with_dir, test_theme_bundle_value, test_theme_json_with_syntax, theme_label,
-        with_alpha,
+        AMBER_DARK_THEME_KEY, AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY,
+        EMBEDDED_THEME_FILES, GRAPH_LANE_PALETTE_SIZE, GraphLanePalette, HexColor, Hsla, Rgba,
+        THEME_SCHEMA_VERSION, ThemeColor, UNFILLED_COLOR_TOKENS, available_themes, composite_over,
+        content_header_bg, derived_syntax_color, fill_missing_color_tokens, has_theme_key,
+        hsla_from_hue_fraction, load_theme_specs_from_json, merged_theme_options,
+        resolved_runtime_themes_dir, runtime_themes_with_dir, test_theme_bundle_value,
+        test_theme_json_with_syntax, theme_label, with_alpha,
     };
     use palette::IntoColor;
     use std::{fs, path::PathBuf};
@@ -2674,9 +2693,12 @@ mod tests {
             light.colors.scrollbar.thumb_hover,
             with_alpha(gpui::rgba(0x465166ff), 0.52)
         );
-        assert_eq!(dark.colors.diff.added.background, gpui::rgba(0x102a1cff));
+        assert_eq!(
+            dark.colors.diff.added.background,
+            with_alpha(gpui::rgba(0x76d39cff), 0.15)
+        );
         assert_eq!(light.colors.diff.removed.foreground, gpui::rgba(0xa52a35ff));
-        assert_eq!(dark.colors.foreground.placeholder, gpui::rgba(0x6f7683ff));
+        assert_eq!(dark.colors.foreground.placeholder, gpui::rgba(0x767c8bff));
         assert_eq!(light.colors.accent.on_solid, gpui::rgba(0xffffffff));
         assert_eq!(dark.colors.foreground.emphasis, gpui::rgba(0xffffffff));
         assert_eq!(light.colors.foreground.emphasis, gpui::rgba(0x000000ff));
@@ -2744,15 +2766,15 @@ mod tests {
     }
 
     #[test]
-    fn dark_semantic_tokens_preserve_established_resolved_colors() {
+    fn gitcomet_dark_uses_the_tuned_neutral_and_diff_palette() {
         let theme = AppTheme::gitcomet_dark();
         let colors = theme.colors;
 
-        assert_eq!(colors.surface.canvas, gpui::rgba(0x17191eff));
-        assert_eq!(colors.surface.chrome, gpui::rgba(0x21242cff));
-        assert_eq!(colors.surface.panel, gpui::rgba(0x1d2026ff));
-        assert_eq!(colors.surface.raised, gpui::rgba(0x242831ff));
-        assert_eq!(colors.interaction.hover_background, gpui::rgba(0x232733ff));
+        assert_eq!(colors.surface.canvas, gpui::rgba(0x0d0f13ff));
+        assert_eq!(colors.surface.chrome, gpui::rgba(0x1f232bff));
+        assert_eq!(colors.surface.panel, gpui::rgba(0x1b1e25ff));
+        assert_eq!(colors.surface.raised, gpui::rgba(0x232731ff));
+        assert_eq!(colors.interaction.hover_background, gpui::rgba(0x222632ff));
         assert_eq!(
             colors.interaction.pressed_background,
             with_alpha(gpui::rgba(0x2c3242ff), 0.80)
@@ -2765,9 +2787,16 @@ mod tests {
         assert_eq!(colors.status.danger.foreground, gpui::rgba(0xf0625dff));
         assert_eq!(colors.status.warning.foreground, gpui::rgba(0xf2a53aff));
         assert_eq!(colors.status.success.foreground, gpui::rgba(0x33c06bff));
-        assert_eq!(colors.diff.added.background, gpui::rgba(0x102a1cff));
-        assert_eq!(colors.diff.removed.background, gpui::rgba(0x33141aff));
-        assert_eq!(colors.tooltip.background, gpui::rgba(0x242831ff));
+        assert_eq!(colors.diff.added.foreground, gpui::rgba(0x76d39cff));
+        assert_eq!(
+            colors.diff.added.background,
+            with_alpha(gpui::rgba(0x76d39cff), 0.15)
+        );
+        assert_eq!(
+            colors.diff.removed.background,
+            with_alpha(gpui::rgba(0xe78782ff), 0.15)
+        );
+        assert_eq!(colors.tooltip.background, gpui::rgba(0x232731ff));
     }
 
     #[test]
@@ -2775,13 +2804,45 @@ mod tests {
         let theme = AppTheme::from_key("tokyo_night").expect("Tokyo Night theme should load");
 
         assert!(theme.is_dark);
-        assert_eq!(theme.colors.surface.canvas, gpui::rgba(0x1a1b26ff));
+        assert_eq!(theme.colors.surface.canvas, gpui::rgba(0x0d0f13ff));
         assert_eq!(theme.colors.foreground.emphasis, gpui::rgba(0xffffffff));
         assert_eq!(theme.syntax.keyword, gpui::rgba(0xbb9af7ff));
         assert_eq!(theme.syntax.string, gpui::rgba(0x9ece6aff));
         assert_eq!(theme.syntax.string_regex, gpui::rgba(0xff9e64ff));
         assert_eq!(theme.syntax.diff_minus, gpui::rgba(0xf7768eff));
         assert_eq!(theme.syntax.variable, Some(gpui::rgba(0xc0caf5ff)));
+    }
+
+    #[test]
+    fn built_in_amber_dark_theme_loads_from_embedded_json() {
+        let theme = AppTheme::from_key(AMBER_DARK_THEME_KEY).expect("Amber Dark theme should load");
+
+        assert!(theme.is_dark);
+        assert_eq!(theme.colors.surface.canvas, gpui::rgba(0x0d0f13ff));
+        assert_eq!(theme.colors.surface.panel, gpui::rgba(0x161922ff));
+        assert_eq!(
+            theme.colors.interaction.hover_background,
+            gpui::rgba(0x1e2230ff)
+        );
+        assert_eq!(theme.colors.foreground.primary, gpui::rgba(0xe7e8ecff));
+        assert_eq!(theme.colors.accent.foreground, gpui::rgba(0xe3a64bff));
+        assert_eq!(
+            theme.colors.interaction.selected_background,
+            with_alpha(gpui::rgba(0xe3a64bff), 0.32)
+        );
+        assert_eq!(
+            theme.colors.interaction.selected_indicator,
+            theme.colors.accent.solid
+        );
+        assert_eq!(theme.colors.diff.added.foreground, gpui::rgba(0x5fa779ff));
+        assert_eq!(theme.syntax.keyword, gpui::rgba(0xe3a64bff));
+        assert_eq!(theme.syntax.function, gpui::rgba(0x6cb8e8ff));
+        assert_eq!(theme.radii.panel, 8.0);
+        assert_eq!(theme.radii.row, 4.0);
+        assert_eq!(
+            theme_label(AMBER_DARK_THEME_KEY),
+            Some("Amber Dark".to_string())
+        );
     }
 
     #[test]
@@ -2838,12 +2899,90 @@ mod tests {
             );
         }
 
-        for key in ["gitcomet_dark", "tokyo_night"] {
+        for key in [AMBER_DARK_THEME_KEY, "gitcomet_dark", "tokyo_night"] {
             let theme = AppTheme::from_key(key).expect("dark theme should load");
             assert!(
                 relative_luminance(theme.colors.surface.canvas)
                     < relative_luminance(theme.colors.surface.chrome),
                 "{key}: surrounding chrome should remain lighter than the dark canvas"
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_dark_themes_share_the_darker_canvas_and_compact_radii() {
+        for key in [AMBER_DARK_THEME_KEY, "gitcomet_dark", "tokyo_night"] {
+            let theme = AppTheme::from_key(key).expect("dark theme should load");
+
+            assert_eq!(theme.colors.surface.canvas, gpui::rgba(0x0d0f13ff), "{key}");
+            assert_eq!(
+                theme.colors.editor.background,
+                gpui::rgba(0x0d0f13ff),
+                "{key}"
+            );
+            assert_eq!(
+                theme.colors.editor.gutter_background,
+                gpui::rgba(0x0d0f13ff),
+                "{key}"
+            );
+            assert_eq!(theme.radii.panel, 8.0, "{key}");
+            assert_eq!(theme.radii.row, 4.0, "{key}");
+            assert_eq!(theme.radii.control, 4.0, "{key}");
+            assert_eq!(theme.radii.popover, 8.0, "{key}");
+            assert_eq!(theme.radii.window, 8.0, "{key}");
+        }
+    }
+
+    #[test]
+    fn amber_dark_semantic_foregrounds_have_strong_canvas_contrast() {
+        let theme = AppTheme::from_key(AMBER_DARK_THEME_KEY).expect("Amber Dark theme should load");
+        let colors = theme.colors;
+        let canvas = colors.surface.canvas;
+
+        for (token, color, minimum) in [
+            ("primary", colors.foreground.primary, 7.0),
+            ("secondary", colors.foreground.secondary, 4.5),
+            ("accent", colors.accent.foreground, 4.5),
+            ("info", colors.status.info.foreground, 4.5),
+            ("danger", colors.status.danger.foreground, 4.5),
+            ("warning", colors.status.warning.foreground, 4.5),
+            ("success", colors.status.success.foreground, 4.5),
+            ("diff.added", colors.diff.added.foreground, 4.5),
+            ("diff.removed", colors.diff.removed.foreground, 4.5),
+        ] {
+            assert_min_contrast(AMBER_DARK_THEME_KEY, token, color, canvas, minimum);
+        }
+
+        assert_min_contrast(
+            AMBER_DARK_THEME_KEY,
+            "accent.on_solid",
+            colors.accent.on_solid,
+            colors.accent.solid,
+            4.5,
+        );
+
+        assert_min_contrast(
+            AMBER_DARK_THEME_KEY,
+            "status.danger on surface.raised",
+            colors.status.danger.foreground,
+            colors.surface.raised,
+            4.5,
+        );
+
+        for (token, background) in [
+            ("diff.removed", colors.diff.removed.background),
+            (
+                "diff.removed.focused",
+                colors.diff.removed.focused_background,
+            ),
+            ("diff.removed.word", colors.diff.removed.word_background),
+        ] {
+            assert_min_contrast(
+                AMBER_DARK_THEME_KEY,
+                token,
+                colors.diff.removed.foreground,
+                composite_over(colors.editor.background, background),
+                4.5,
             );
         }
     }
@@ -3011,7 +3150,7 @@ mod tests {
 
     #[test]
     fn content_header_bg_matches_the_canvas_on_dark_and_is_distinct_on_light() {
-        for key in ["gitcomet_dark", "tokyo_night"] {
+        for key in [AMBER_DARK_THEME_KEY, "gitcomet_dark", "tokyo_night"] {
             let theme = AppTheme::from_key(key).expect("dark theme should load");
             assert_eq!(
                 content_header_bg(theme),
@@ -3167,6 +3306,7 @@ mod tests {
         assert!(!themes.is_empty());
         assert!(has_theme_key(DEFAULT_DARK_THEME_KEY));
         assert!(has_theme_key(DEFAULT_LIGHT_THEME_KEY));
+        assert!(has_theme_key(AMBER_DARK_THEME_KEY));
         assert_eq!(
             theme_label(DEFAULT_DARK_THEME_KEY),
             Some("GitComet Dark".to_string())
@@ -3174,6 +3314,25 @@ mod tests {
         assert_eq!(
             theme_label(DEFAULT_LIGHT_THEME_KEY),
             Some("GitComet Light".to_string())
+        );
+        assert_eq!(
+            theme_label(AMBER_DARK_THEME_KEY),
+            Some("Amber Dark".to_string())
+        );
+        let ordered_keys = themes
+            .iter()
+            .map(|theme| theme.key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordered_keys.get(..3),
+            Some(
+                [
+                    DEFAULT_DARK_THEME_KEY,
+                    DEFAULT_LIGHT_THEME_KEY,
+                    AMBER_DARK_THEME_KEY,
+                ]
+                .as_slice()
+            )
         );
     }
 
