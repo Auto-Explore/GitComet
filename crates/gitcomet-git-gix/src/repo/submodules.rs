@@ -1910,6 +1910,13 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
+    use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
+    use gitcomet_core::services::CancellationToken;
+    use std::cell::Cell;
+    use std::ffi::OsStr;
+    use std::path::Path;
+    use std::process::Command;
 
     #[test]
     fn configured_submodule_urls_survive_validation() {
@@ -1934,19 +1941,6 @@ mod tests {
             );
         }
     }
-    use super::{
-        GixRepo, allow_file_submodule_transport, is_git_config_contention_error,
-        push_submodule_add_args, remove_submodule_git_dir, resolve_submodule_logical_name,
-        retry_git_config_contention, submodule_file_transport_consent_key,
-        validate_submodule_git_dir_name,
-    };
-    use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
-    use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-    use gitcomet_core::services::CancellationToken;
-    use std::cell::Cell;
-    use std::ffi::OsStr;
-    use std::path::Path;
-    use std::process::Command;
 
     fn run_git(workdir: &Path, args: &[&str]) {
         let output = Command::new("git")
