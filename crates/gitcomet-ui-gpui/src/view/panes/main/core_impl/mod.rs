@@ -1282,6 +1282,47 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_remote_markdown_image_policy(
+        &mut self,
+        next: RemoteMarkdownImagePolicy,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_markdown_image_policy == next {
+            return;
+        }
+        self.remote_markdown_image_policy = next;
+        self.approved_remote_markdown_image_urls = Arc::default();
+        self.remote_markdown_image_approval_revision =
+            self.remote_markdown_image_approval_revision.wrapping_add(1);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn markdown_remote_image_access(
+        &self,
+        approval_view: Option<Entity<MainPaneView>>,
+    ) -> rows::MarkdownRemoteImageAccess {
+        rows::MarkdownRemoteImageAccess {
+            policy: self.remote_markdown_image_policy,
+            approved_urls: Arc::clone(&self.approved_remote_markdown_image_urls),
+            approval_view,
+        }
+    }
+
+    pub(in crate::view) fn approve_remote_markdown_image(
+        &mut self,
+        url: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_markdown_image_policy != RemoteMarkdownImagePolicy::AskBeforeLoading {
+            return;
+        }
+        if Arc::make_mut(&mut self.approved_remote_markdown_image_urls).insert(url) {
+            self.remote_markdown_image_approval_revision =
+                self.remote_markdown_image_approval_revision.wrapping_add(1);
+            cx.notify();
+        }
+    }
+
     pub(in crate::view) fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
     }
@@ -2082,6 +2123,11 @@ impl MainPaneView {
         let next_repo_id = next.active_repo;
         let next_diff_target = Self::rendered_diff_target_for_state(next.as_ref());
 
+        if prev_active_repo_id != next_repo_id || prev_diff_target != next_diff_target {
+            self.approved_remote_markdown_image_urls = Arc::default();
+            self.remote_markdown_image_approval_revision =
+                self.remote_markdown_image_approval_revision.wrapping_add(1);
+        }
         if prev_diff_target != next_diff_target {
             self.clear_diff_selection_state();
             self.diff_autoscroll_pending = next_diff_target.is_some();

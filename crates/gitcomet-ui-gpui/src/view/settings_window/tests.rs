@@ -1578,6 +1578,10 @@ fn settings_window_containers_fill_available_width_when_content_wraps(
     for (category, card_selector) in [
         (SettingsCategory::General, "settings_window_general"),
         (
+            SettingsCategory::SecurityPrivacy,
+            "settings_window_security_privacy_card",
+        ),
+        (
             SettingsCategory::ChangeTracking,
             "settings_window_change_tracking_card",
         ),

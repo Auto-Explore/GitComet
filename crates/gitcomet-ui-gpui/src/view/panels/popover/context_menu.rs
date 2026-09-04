@@ -450,7 +450,16 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { name }),
             } => Some(remote::model(self, *repo_id, name)),
-            PopoverKind::WebLinkMenu { url } => Some(web_link::model(url)),
+            PopoverKind::WebLinkMenu {
+                url,
+                load_remote_image_url,
+            } => {
+                let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
+                    self.main_pane.read(cx).remote_markdown_image_policy
+                        == RemoteMarkdownImagePolicy::AskBeforeLoading
+                });
+                Some(web_link::model(url, load_remote_image_url))
+            }
             PopoverKind::CommitShaLinkMenu {
                 repo_id,
                 commit_id,
@@ -1483,6 +1492,11 @@ impl PopoverHost {
                     "Link copied to clipboard".to_string(),
                     cx,
                 );
+            }
+            ContextMenuAction::LoadRemoteMarkdownImage { url } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.approve_remote_markdown_image(url, cx);
+                });
             }
             ContextMenuAction::OpenWebUrl { url } => {
                 crate::view::platform_open::spawn_launch(

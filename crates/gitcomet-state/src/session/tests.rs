@@ -2356,6 +2356,27 @@ fn persist_ui_settings_round_trips_auto_save_file_edits() {
 }
 
 #[test]
+fn persist_ui_settings_round_trips_security_preferences() {
+    let dir = unique_session_test_dir("security-preferences");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            remote_markdown_image_policy: Some("ask".to_string()),
+            check_for_updates_on_startup: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist security preferences");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.remote_markdown_image_policy.as_deref(), Some("ask"));
+    assert_eq!(loaded.check_for_updates_on_startup, Some(false));
+}
+
+#[test]
 fn persist_ui_settings_round_trips_change_tracking_heights() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-ui-settings-test-{}-{}",

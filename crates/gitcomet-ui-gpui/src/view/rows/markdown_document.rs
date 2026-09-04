@@ -39,6 +39,7 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) editor_font_family: SharedString,
     /// Directory relative image sources resolve against.
     pub(in crate::view) image_base_dir: Option<Arc<std::path::Path>>,
+    pub(in crate::view) remote_image_access: crate::view::rows::MarkdownRemoteImageAccess,
     /// Sizes read from picture headers, so a picture that has not decoded yet
     /// still holds the box it is going to fill.
     pub(in crate::view) picture_sizes: crate::view::rows::MarkdownPreviewPictureSizes,
@@ -539,12 +540,20 @@ fn render_inline_image(
             context.ui_scale_percent,
             context.image_base_dir.as_deref(),
             &context.picture_sizes,
+            &context.remote_image_access,
         ));
 
     // A picture wrapped in a link opens the same menu its text would.
     let (Some(view), Some(url)) = (context.view.clone(), inline.link_url.clone()) else {
         return image.into_any_element();
     };
+    let load_remote_image_url =
+        if context.remote_image_access.policy == RemoteMarkdownImagePolicy::AskBeforeLoading {
+            crate::view::rows::markdown_preview_remote_image_url(inline.image.source.as_ref())
+                .filter(|image_url| !context.remote_image_access.permits(image_url))
+        } else {
+            None
+        };
     // The menu hangs off the picture's box, which only paint knows. Prepaint of
     // this frame runs before it can dispatch a click, so the handler always
     // reads a box from the frame it fired on.
@@ -566,10 +575,18 @@ fn render_inline_image(
                     // click on its text and arm a drag-selection behind the menu.
                     cx.stop_propagation();
                     let url = url.clone();
+                    let load_remote_image_url = load_remote_image_url.clone();
                     let bounds = painted_bounds.get();
                     let position = event.position;
                     view.update(cx, |this, cx| {
-                        this.open_markdown_preview_link_menu(url, bounds, position, window, cx);
+                        this.open_markdown_preview_link_menu(
+                            url,
+                            load_remote_image_url,
+                            bounds,
+                            position,
+                            window,
+                            cx,
+                        );
                         cx.notify();
                     });
                 }),
@@ -1005,6 +1022,7 @@ fn render_image(
         context.ui_scale_percent,
         context.image_base_dir.as_deref(),
         &context.picture_sizes,
+        &context.remote_image_access,
     )
 }
 
