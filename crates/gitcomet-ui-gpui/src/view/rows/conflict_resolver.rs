@@ -353,6 +353,7 @@ fn render_conflict_markdown_preview_rows(
             text_region: DiffTextRegion::Inline,
             wrap_plan: None,
             image_base_dir: None,
+            remote_image_access: this.markdown_remote_image_access(Some(cx.entity())),
             query: this.markdown_preview_search_query(),
         },
     )

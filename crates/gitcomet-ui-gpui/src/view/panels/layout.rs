@@ -1831,7 +1831,7 @@ impl DetailsPaneView {
             .h_full()
             .min_h(ui_scale.px(90.0))
             .border_t_1()
-            .border_color(theme.colors.stroke.subtle)
+            .border_color(theme.colors.stroke.default)
             .pt_2()
             .on_children_prepainted(move |children_bounds, window, _app| {
                 let next_bounds = children_bounds.first().copied();
@@ -2001,7 +2001,6 @@ impl DetailsPaneView {
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap_2()
                                 .flex_1()
                                 .h_full()
                                 .min_h(px(0.0))
@@ -2012,10 +2011,28 @@ impl DetailsPaneView {
                                         .gap_2()
                                         .w_full()
                                         .min_w(px(0.0))
-                                        .child(message)
-                                        .children(commit_details_author_row(
-                                            theme, ui_scale, details,
-                                        ))
+                                        .pb_2()
+                                        .child(message),
+                                )
+                                .children(commit_details_author_row(theme, ui_scale, details).map(
+                                    |row| {
+                                        row.border_t_1()
+                                            .border_color(theme.colors.stroke.default)
+                                            .pt_2()
+                                            .pb_2()
+                                    },
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .w_full()
+                                        .min_w(px(0.0))
+                                        .border_t_1()
+                                        .border_color(theme.colors.stroke.default)
+                                        .pt_2()
+                                        .pb_2()
                                         .child(commit_details_selectable_row(
                                             theme,
                                             "Commit SHA",
@@ -2089,7 +2106,6 @@ impl DetailsPaneView {
                         div()
                             .flex()
                             .flex_col()
-                            .gap_2()
                             .flex_1()
                             .h_full()
                             .min_h(px(0.0))
@@ -2100,8 +2116,28 @@ impl DetailsPaneView {
                                     .gap_2()
                                     .w_full()
                                     .min_w(px(0.0))
-                                    .child(message)
-                                    .children(commit_details_author_row(theme, ui_scale, details))
+                                    .pb_2()
+                                    .child(message),
+                            )
+                            .children(commit_details_author_row(theme, ui_scale, details).map(
+                                |row| {
+                                    row.border_t_1()
+                                        .border_color(theme.colors.stroke.default)
+                                        .pt_2()
+                                        .pb_2()
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .border_t_1()
+                                    .border_color(theme.colors.stroke.default)
+                                    .pt_2()
+                                    .pb_2()
                                     .child(commit_details_selectable_row(
                                         theme,
                                         "Commit SHA",

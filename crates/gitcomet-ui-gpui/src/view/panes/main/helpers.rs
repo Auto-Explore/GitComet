@@ -5,6 +5,7 @@ use crate::kit::{HighlightProvider, HighlightProviderResult};
 use crate::view::conflict_resolver::ConflictSegment;
 use palette::IntoColor;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use std::cell::RefCell;
 use std::collections::HashSet;
 
 const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
@@ -3016,6 +3017,40 @@ impl DiffHorizontalScrollState {
     }
 }
 
+#[derive(Clone, Default)]
+pub(super) enum RemoteMarkdownImageDocumentSet {
+    #[default]
+    None,
+    Worktree(Arc<crate::view::markdown_preview::MarkdownPreviewDocument>),
+    Diff(Arc<crate::view::markdown_preview::MarkdownPreviewDiff>),
+    Conflict([Option<Arc<crate::view::markdown_preview::MarkdownPreviewDocument>>; 3]),
+}
+
+impl RemoteMarkdownImageDocumentSet {
+    pub(super) fn has_same_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::None, Self::None) => true,
+            (Self::Worktree(left), Self::Worktree(right)) => Arc::ptr_eq(left, right),
+            (Self::Diff(left), Self::Diff(right)) => Arc::ptr_eq(left, right),
+            (Self::Conflict(left), Self::Conflict(right)) => {
+                left.iter().zip(right).all(|(left, right)| {
+                    matches!((left, right), (None, None))
+                        || matches!((left, right), (Some(left), Some(right)) if Arc::ptr_eq(left, right))
+                })
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct RemoteMarkdownImageSummaryCache {
+    pub(super) documents: RemoteMarkdownImageDocumentSet,
+    pub(super) approval_revision: u64,
+    pub(super) urls: Arc<FxHashSet<SharedString>>,
+    pub(super) has_blocked: bool,
+}
+
 pub(crate) struct MainPaneView {
     pub(in crate::view) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -3079,6 +3114,10 @@ pub(crate) struct MainPaneView {
     /// stale range.
     pub(in crate::view) blame_time_range_cache: BlameTimeRangeCache,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
+    pub(in crate::view) remote_markdown_image_policy: RemoteMarkdownImagePolicy,
+    pub(in crate::view) approved_remote_markdown_image_urls: Arc<FxHashSet<SharedString>>,
+    pub(super) remote_markdown_image_approval_revision: u64,
+    pub(super) remote_markdown_image_summary_cache: RefCell<RemoteMarkdownImageSummaryCache>,
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_show_line_numbers: bool,
     pub(in crate::view) diff_scroll_sync: DiffScrollSync,

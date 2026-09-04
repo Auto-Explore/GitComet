@@ -1,7 +1,7 @@
 use super::{
     DiffSearchMatchEmphasis, MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewImageSource,
     MarkdownPreviewPictureSizes, MarkdownPreviewRow, MarkdownPreviewRowKind,
-    build_cached_diff_styled_text, history_message_text_left_px,
+    MarkdownRemoteImageAccess, build_cached_diff_styled_text, history_message_text_left_px,
     history_scope_shows_graph_color_marker, history_worktree_node_color_ix,
     markdown_preview_alert_title_label, markdown_preview_expanded_slice_range,
     markdown_preview_image_source, markdown_preview_inline_highlight,
@@ -727,6 +727,32 @@ fn image_paths_resolve_only_inside_the_documents_own_directory() {
     let _ = std::fs::remove_file(&outside);
 }
 
+#[test]
+fn markdown_remote_image_access_requires_exact_url_approval_in_ask_mode() {
+    let approved = [SharedString::from("https://example.com/image.png")]
+        .into_iter()
+        .collect();
+    let access = MarkdownRemoteImageAccess {
+        policy: crate::view::RemoteMarkdownImagePolicy::AskBeforeLoading,
+        approved_urls: Arc::new(approved),
+        approval_view: None,
+    };
+
+    assert!(access.permits(&SharedString::from("https://example.com/image.png")));
+    assert!(!access.permits(&SharedString::from("https://example.com/other.png")));
+
+    let url = SharedString::from("https://example.com/other.png");
+    assert!(MarkdownRemoteImageAccess::default().permits(&url));
+    assert!(
+        !MarkdownRemoteImageAccess {
+            policy: crate::view::RemoteMarkdownImagePolicy::NeverLoad,
+            approved_urls: access.approved_urls.clone(),
+            approval_view: None,
+        }
+        .permits(&url)
+    );
+}
+
 /// A picture row carrying `source`, and whatever size the document declared.
 fn picture_row(source: &str, width_px: Option<u32>, height_px: Option<u32>) -> MarkdownPreviewRow {
     let mut row = markdown_row(MarkdownPreviewRowKind::Image {
@@ -784,6 +810,23 @@ fn a_skeleton_holds_the_box_the_picture_will_fill() {
     assert_eq!(
         skeleton.reserved_height,
         markdown_preview_row_height(100) * 8.0
+    );
+}
+
+#[test]
+fn a_height_only_skeleton_scales_the_measured_width_with_the_picture() {
+    let skeleton = markdown_preview_picture_skeleton(
+        &picture_row("wide.gif", None, Some(60)),
+        100,
+        &measured("wide.gif", 1280, 720),
+    );
+
+    let expected_ratio = 1280.0 / 720.0;
+    let expected_width = px(60.0 * expected_ratio);
+    assert_eq!(skeleton.aspect_ratio, Some(expected_ratio));
+    assert!(
+        (skeleton.width.expect("measured width") - expected_width).abs() <= px(0.01),
+        "the placeholder must reserve the same scaled width as the height-only decoded image"
     );
 }
 

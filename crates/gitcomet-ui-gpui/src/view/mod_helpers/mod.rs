@@ -25,14 +25,11 @@ pub(in crate::view) struct SelectedBranch {
 }
 
 pub(in crate::view) fn selected_branch_label_color(theme: AppTheme) -> gpui::Rgba {
-    theme.colors.foreground.emphasis
+    theme.colors.interaction.selected_foreground
 }
 
 pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(
-        theme.colors.foreground.primary,
-        if theme.is_dark { 0.16 } else { 0.10 },
-    )
+    theme.colors.interaction.selected_background
 }
 
 /// Which ref a history row should mark as the one the sidebar selected.
@@ -838,6 +835,10 @@ pub struct GitCometView {
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,
     pub(super) auto_save_file_edits: bool,
+    pub(super) remote_markdown_image_policy: RemoteMarkdownImagePolicy,
+    pub(super) check_for_updates_on_startup: bool,
+    pub(super) update_check_in_flight: bool,
+    pub(super) update_check_manual_feedback_requested: bool,
     pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,

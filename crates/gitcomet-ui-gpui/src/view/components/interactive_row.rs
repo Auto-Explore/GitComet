@@ -62,6 +62,13 @@ impl InteractiveRowStyle {
         }
     }
 
+    /// Continuous list/tree surface: no rounded corners so adjacent rows read
+    /// as one plane instead of a stack of pills.
+    pub fn flat(mut self) -> Self {
+        self.radius = 0.0;
+        self
+    }
+
     fn resting_fill(self, state: InteractiveRowState) -> Option<Rgba> {
         match state {
             InteractiveRowState::Idle => None,
@@ -205,6 +212,14 @@ mod tests {
         assert_eq!(style.resting_fill(state), Some(selected));
         assert_eq!(style.hover_fill(state), selected);
         assert_eq!(style.active_fill(state), selected);
+    }
+
+    #[test]
+    fn flat_rows_have_square_interaction_fills() {
+        let theme = dark_theme();
+        let style = InteractiveRowStyle::new(theme, theme.colors.surface.chrome).flat();
+
+        assert_eq!(style.radius, 0.0);
     }
 
     #[test]

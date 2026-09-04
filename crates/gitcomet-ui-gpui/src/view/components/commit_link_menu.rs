@@ -103,7 +103,10 @@ impl CommitLinkMenu {
                 commit_id: commit_id.clone(),
                 allow_navigate: *allow_navigate,
             },
-            LinkTarget::Url(url) => PopoverKind::WebLinkMenu { url: url.clone() },
+            LinkTarget::Url(url) => PopoverKind::WebLinkMenu {
+                url: url.clone(),
+                load_remote_image_url: None,
+            },
         }
     }
 

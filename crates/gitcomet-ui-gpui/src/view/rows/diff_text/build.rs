@@ -1504,29 +1504,35 @@ pub(in super::super) fn diff_line_colors(
     kind: gitcomet_core::domain::DiffLineKind,
 ) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba) {
     use gitcomet_core::domain::DiffLineKind::*;
+    // Canvas-backed inline rows reuse this value for their element fill, their
+    // paint pass, and the stage-action mask. Flatten theme overlays once here
+    // so those consumers all receive the same opaque color instead of stacking
+    // the alpha in inline mode or letting text bleed through the action mask.
+    let row_background =
+        |background| crate::theme::composite_over(theme.colors.editor.background, background);
 
-    match (theme.is_dark, kind) {
-        (_, Header) => (
+    match kind {
+        Header => (
             theme.colors.editor.background,
             theme.colors.editor.line_number,
             theme.colors.editor.line_number,
         ),
-        (_, Hunk) => (
+        Hunk => (
             theme.colors.editor.background,
             theme.colors.accent.foreground,
             theme.colors.editor.line_number,
         ),
-        (_, Add) => (
-            theme.colors.diff.added.background,
+        Add => (
+            row_background(theme.colors.diff.added.background),
             theme.colors.diff.added.foreground,
             theme.colors.diff.added.foreground,
         ),
-        (_, Remove) => (
-            theme.colors.diff.removed.background,
+        Remove => (
+            row_background(theme.colors.diff.removed.background),
             theme.colors.diff.removed.foreground,
             theme.colors.diff.removed.foreground,
         ),
-        (_, Context) => (
+        Context => (
             theme.colors.editor.background,
             theme.colors.editor.foreground,
             theme.colors.editor.line_number,

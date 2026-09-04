@@ -507,9 +507,13 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::CommitFileSortMenu => 104u8.hash(hasher),
         PopoverKind::UiScalePicker => 68u8.hash(hasher),
-        PopoverKind::WebLinkMenu { url } => {
+        PopoverKind::WebLinkMenu {
+            url,
+            load_remote_image_url,
+        } => {
             96u8.hash(hasher);
             url.hash(hasher);
+            load_remote_image_url.hash(hasher);
         }
         PopoverKind::CommitShaLinkMenu {
             repo_id,

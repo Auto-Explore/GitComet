@@ -162,3 +162,37 @@ fn app_menu_offers_the_reflog_panel(cx: &mut gpui::TestAppContext) {
         "Reflog should sit above Apply patch"
     );
 }
+
+#[gpui::test]
+fn app_menu_places_update_check_immediately_after_apply_patch(cx: &mut gpui::TestAppContext) {
+    let (_view, cx) = open_app_menu(cx);
+    let apply_patch = cx
+        .debug_bounds("app_menu_apply_patch")
+        .expect("app menu should offer Apply patch");
+    let update_check = cx
+        .debug_bounds("app_menu_check_for_updates")
+        .expect("app menu should offer Check for updates");
+
+    assert!(
+        update_check.top() >= apply_patch.bottom(),
+        "Check for updates should immediately follow Apply patch"
+    );
+}
+
+#[gpui::test]
+fn app_menu_disables_update_check_when_environment_override_is_present(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx) = open_app_menu(cx);
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.read(app);
+        let model = super::super::app_menu::model_with_update_checks_disabled(host, true);
+        let disabled = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label, disabled, ..
+            } if label.as_ref() == crate::menu_labels::CHECK_FOR_UPDATES => Some(*disabled),
+            _ => None,
+        });
+        assert_eq!(disabled, Some(true));
+    });
+}

@@ -39,6 +39,7 @@ impl MainPaneView {
         let diff_reveal_whitespace_chars = preferences.diff.reveal_whitespace_chars;
         let diff_word_wrap = preferences.diff.word_wrap;
         let diff_show_line_numbers = preferences.diff.show_line_numbers;
+        let remote_markdown_image_policy = preferences.security.remote_markdown_images;
         let auto_save_file_edits = preferences.file_editing.auto_save;
         let history_show_graph = preferences.history.show_graph;
         let history_show_author = preferences.history.show_author;
@@ -317,6 +318,10 @@ impl MainPaneView {
             diff_stage_gutter_cells: FxHashMap::default(),
             blame_time_range_cache: None,
             rendered_preview_modes: RenderedPreviewModes::default(),
+            remote_markdown_image_policy,
+            approved_remote_markdown_image_urls: Arc::default(),
+            remote_markdown_image_approval_revision: 0,
+            remote_markdown_image_summary_cache: std::cell::RefCell::default(),
             diff_word_wrap,
             diff_show_line_numbers,
             diff_scroll_sync,
