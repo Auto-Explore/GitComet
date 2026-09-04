@@ -283,6 +283,27 @@ fn remote_name_is_config_key_safe(remote: &str) -> bool {
     !remote.is_empty() && !remote.contains(['=', '\n', '\r'])
 }
 
+/// Read a boolean directly from the matching `[remote "..."]` sections. This
+/// avoids interpolating the remote name into a dotted config key, where names
+/// containing `=` can be parsed as part of the value instead.
+fn remote_config_boolean(
+    config: &gix::config::Snapshot<'_>,
+    remote_name: &str,
+    value_name: &str,
+) -> Option<bool> {
+    let remote_name = remote_name.as_bytes().as_bstr();
+    let value = config
+        .sections_by_name("remote")?
+        .filter(|section| section.header().subsection_name() == Some(remote_name))
+        .filter_map(|section| section.value_implicit(value_name))
+        .last()?;
+    match value {
+        // A key without `=` is Git's implicit true spelling.
+        None => Some(true),
+        Some(value) => gix::config::Boolean::try_from(value).ok().map(Into::into),
+    }
+}
+
 /// The `branch.<name>.remote`/`merge` pair a local branch reference configures.
 /// `tracking_ref` is populated only when the remote's positive and negative
 /// fetch refspecs map this upstream locally.
@@ -450,10 +471,9 @@ impl GixRepo {
         let mut names = Vec::new();
         for name in repo.remote_names() {
             let name = name.to_str_lossy().into_owned();
-            let skipped = remote_name_is_config_key_safe(&name)
-                && config
-                    .boolean(format!("remote.{name}.skipFetchAll").as_str())
-                    .unwrap_or(false);
+            let skipped = ["skipFetchAll", "skipDefaultUpdate"]
+                .into_iter()
+                .any(|key| remote_config_boolean(&config, &name, key).unwrap_or(false));
             if !skipped {
                 names.push(name);
             }
@@ -1042,6 +1062,26 @@ impl GixRepo {
             }
         }
 
+        let tracked_before_pull = match prune_in_pull {
+            Some(remote) => {
+                let configured =
+                    self.configured_remote_upstreams(UpstreamCleanupScope::Remote(remote))?;
+                self.configured_upstreams_with_tracking_presence(configured, true)?
+            }
+            None => Vec::new(),
+        };
+        let current_tracking_ref_before_pull = match (branch, upstream) {
+            (Some(branch), Some(upstream)) => tracked_before_pull
+                .iter()
+                .find(|tracked| {
+                    tracked.local_branch == branch
+                        && tracked.remote == upstream.remote
+                        && tracked.remote_branch == upstream.branch
+                })
+                .and_then(|tracked| tracked.tracking_ref.clone()),
+            _ => None,
+        };
+
         let mut cmd = self.pull_cmd(remote, mode);
         let label = if prune_in_pull.is_some() {
             cmd.arg("--prune");
@@ -1058,15 +1098,18 @@ impl GixRepo {
             Ok(output) => output,
             Err(error) => {
                 // `git pull --prune` deletes the tracking ref before it reports
-                // that it has nothing to merge. Finish the cleanup it started
-                // and name the cause.
-                if let (Some(branch), Some(upstream)) = (branch, upstream)
-                    && prune_in_pull.is_some()
-                    && matches!(self.branch_upstream(branch), Ok(None))
+                // that it has nothing to merge. Only refs observed before this
+                // pull can be attributed to that failed fetch phase; a missing
+                // pre-state may instead accompany an auth or transport error.
+                let current_upstream_disappeared = current_tracking_ref_before_pull
+                    .as_deref()
+                    .is_some_and(|tracking_ref| {
+                        matches!(self.reference_exists(tracking_ref), Ok(false))
+                    });
+                self.best_effort_unlink_upstreams_pruned_during_failed_fetch(tracked_before_pull);
+                if let Some(upstream) = upstream
+                    && current_upstream_disappeared
                 {
-                    self.unlink_missing_remote_upstreams(UpstreamCleanupScope::Remote(
-                        &upstream.remote,
-                    ));
                     return Err(remote_branch_gone_after_fetch_error(
                         &upstream.remote,
                         &upstream.branch,
@@ -1362,7 +1405,8 @@ impl GixRepo {
         let remote_ref = format!("refs/heads/{branch}");
         let label = format!("git fetch --no-prune --refmap= {remote} {remote_ref}");
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("fetch")
+        cmd.env("LC_ALL", "C")
+            .arg("fetch")
             .arg("--no-prune")
             .arg("--no-prune-tags")
             .arg("--no-tags")

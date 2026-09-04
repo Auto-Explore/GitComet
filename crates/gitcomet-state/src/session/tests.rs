@@ -2670,6 +2670,53 @@ fn persist_ui_settings_round_trips_fetch_prune_deleted_remote_branches() {
 }
 
 #[test]
+fn v3_repo_prune_preferences_migrate_to_a_conservative_global_preference() {
+    let dir = unique_session_test_dir("legacy-repo-fetch-prune-migration");
+    let path = dir.join("session.json");
+    let legacy_session = serde_json::json!({
+        "version": SESSION_FILE_VERSION_V3,
+        "open_repos": [],
+        "active_repo": null,
+        "repo_fetch_prune_deleted_remote_tracking_branches": {
+            "/repos/pruning-enabled": true,
+            "/repos/pruning-disabled": false
+        }
+    });
+    fs::write(
+        &path,
+        serde_json::to_vec(&legacy_session).expect("serialize legacy session"),
+    )
+    .expect("write legacy session");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(
+        loaded.fetch_prune_deleted_remote_branches,
+        Some(false),
+        "one saved opt-out must keep pruning disabled after the setting becomes global"
+    );
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            sidebar_collapsed: Some(true),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist an unrelated UI setting");
+
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read migrated session"))
+            .expect("parse migrated session");
+    assert_eq!(
+        persisted
+            .get("fetch_prune_deleted_remote_branches")
+            .and_then(serde_json::Value::as_bool),
+        Some(false),
+        "the migrated global choice must survive the next session save"
+    );
+}
+
+#[test]
 fn persist_repo_history_scope_round_trips() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-repo-history-scope-test-{}-{}",

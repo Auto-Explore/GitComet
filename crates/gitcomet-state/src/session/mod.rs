@@ -157,6 +157,8 @@ struct UiSessionFile {
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
+    #[serde(skip_serializing)]
+    repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     survey_prompt: Option<SurveyPromptSession>,
 }
 
@@ -348,9 +350,13 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
         }
         SESSION_FILE_VERSION_V2 => {
             let file = serde_json::from_value::<UiSessionFile>(value).ok()?;
-            Some(migrate_v2_file(file))
+            Some(migrate_legacy_repo_fetch_prune_setting(migrate_v2_file(
+                file,
+            )))
         }
-        SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value).ok(),
+        SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value)
+            .ok()
+            .map(migrate_legacy_repo_fetch_prune_setting),
         _ => None,
     }
 }

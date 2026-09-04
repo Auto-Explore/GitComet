@@ -1,3 +1,8 @@
+#[cfg(unix)]
+use gitcomet_core::process::{
+    GitExecutablePreference, current_git_executable_preference, install_git_executable_path,
+    install_git_executable_preference,
+};
 use gitcomet_core::services::{GitBackend, PullMode, RemoteUrlKind};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
@@ -66,6 +71,32 @@ fn remote_management_test_lock() -> MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(unix)]
+struct GitExecutablePreferenceGuard {
+    original: GitExecutablePreference,
+}
+
+#[cfg(unix)]
+impl GitExecutablePreferenceGuard {
+    fn install(path: &Path) -> Self {
+        let original = current_git_executable_preference();
+        let runtime = install_git_executable_path(Some(path.to_path_buf()));
+        assert!(
+            runtime.is_available(),
+            "localized Git test wrapper must be executable: {:?}",
+            runtime.availability
+        );
+        Self { original }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for GitExecutablePreferenceGuard {
+    fn drop(&mut self) {
+        let _ = install_git_executable_preference(self.original.clone());
+    }
 }
 
 #[cfg(windows)]
@@ -1346,6 +1377,58 @@ fn failed_pruning_pull_unlinks_an_upstream_removed_by_its_fetch_phase() {
 }
 
 #[test]
+fn failed_pruning_pull_preserves_an_upstream_whose_tracking_ref_was_already_missing() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let (remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
+
+    assert!(
+        ref_exists(&remote_repo, "refs/heads/main"),
+        "the upstream branch must still exist at the real remote endpoint"
+    );
+    run_git(
+        &work_repo,
+        &["update-ref", "-d", "refs/remotes/origin/main"],
+    );
+    let unavailable_url = git_remote_url(&dir.path().join("unavailable.git"));
+    run_git(
+        &work_repo,
+        &["remote", "set-url", "origin", unavailable_url.as_str()],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    let error = opened
+        .pull_with_output_prune(PullMode::Default, true)
+        .expect_err("an unavailable remote must fail the pull");
+
+    assert!(
+        !error.to_string().contains("no longer exists"),
+        "the original transport failure must not be reclassified as a deletion: {error}"
+    );
+    assert_eq!(
+        run_git_capture(&work_repo, &["config", "--get", "branch.main.remote"]).trim(),
+        "origin",
+        "a failed fetch cannot prove that an already-untracked upstream was deleted"
+    );
+    assert_eq!(
+        run_git_capture(&work_repo, &["config", "--get", "branch.main.merge"]).trim(),
+        "refs/heads/main"
+    );
+    assert!(
+        ref_exists(&work_repo, "refs/heads/main"),
+        "the local branch must survive the network failure"
+    );
+    assert!(
+        ref_exists(&remote_repo, "refs/heads/main"),
+        "the live remote branch must be untouched"
+    );
+}
+
+#[test]
 fn push_without_origin_uses_first_remote_name_for_upstream() {
     let _guard = remote_management_test_lock();
     if !require_git_local_push_for_remote_management_tests() {
@@ -1702,6 +1785,114 @@ fn pruning_pull_branch_fetches_a_requested_branch_excluded_by_remote_refspecs() 
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn pruning_pull_branch_recognizes_a_localized_missing_remote_ref() {
+    const CHILD_ENV: &str = "GITCOMET_LOCALIZED_MISSING_REF_TEST_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let status = Command::new(std::env::current_exe().expect("current test executable"))
+            .arg("--exact")
+            .arg("pruning_pull_branch_recognizes_a_localized_missing_remote_ref")
+            .arg("--nocapture")
+            .env(CHILD_ENV, "1")
+            // The wrapper below emits a localized diagnostic unless the caller
+            // explicitly pins the stable C locale. Running in a child keeps
+            // this process-wide setting isolated from concurrent tests.
+            .env("LC_ALL", "POSIX")
+            .status()
+            .expect("run localized child test");
+        assert!(status.success(), "localized child test failed");
+        return;
+    }
+
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+    let (remote_repo, work_repo) = init_work_repo_with_remote(root, "origin");
+
+    run_git(&work_repo, &["checkout", "-b", "feature"]);
+    fs::write(work_repo.join("feature.txt"), "feature\n").expect("write feature file");
+    run_git(&work_repo, &["add", "feature.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+    run_git(&work_repo, &["push", "-u", "origin", "feature"]);
+    run_git(&work_repo, &["checkout", "main"]);
+    run_git(
+        &work_repo,
+        &["config", "--unset-all", "remote.origin.fetch"],
+    );
+    run_git(
+        &work_repo,
+        &[
+            "config",
+            "--add",
+            "remote.origin.fetch",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ],
+    );
+    run_git(&remote_repo, &["update-ref", "-d", "refs/heads/feature"]);
+    assert!(
+        ref_exists(&work_repo, "refs/remotes/origin/feature"),
+        "the narrow refspec must leave a stale tracking ref for the explicit probe"
+    );
+
+    let wrapper = root.join("localized-git");
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+saw_fetch=false
+saw_feature=false
+for argument in "$@"; do
+    if [ "$argument" = "fetch" ]; then
+        saw_fetch=true
+    fi
+    if [ "$argument" = "refs/heads/feature" ]; then
+        saw_feature=true
+    fi
+done
+if [ "$saw_fetch" = true ] && [ "$saw_feature" = true ] && [ "${LC_ALL-}" != C ]; then
+    printf '%s\n' 'ödesdigert: kunde inte hitta fjärr-referensen refs/heads/feature' >&2
+    exit 128
+fi
+exec git "$@"
+"#,
+    )
+    .expect("write localized Git wrapper");
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut permissions = fs::metadata(&wrapper)
+        .expect("localized Git wrapper metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&wrapper, permissions).expect("make localized Git wrapper executable");
+    let _git_executable = GitExecutablePreferenceGuard::install(&wrapper);
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    let error = opened
+        .pull_branch_with_output_prune("origin", "feature", true)
+        .expect_err("the deleted remote branch must not be merged");
+
+    assert!(
+        error
+            .to_string()
+            .contains("origin/feature no longer exists"),
+        "localized missing-ref output must be classified as a deletion: {error}"
+    );
+    assert!(
+        !ref_exists(&work_repo, "refs/remotes/origin/feature"),
+        "the confirmed-deleted tracking ref must be removed"
+    );
+    assert!(
+        !run_git_status(&work_repo, &["config", "--get", "branch.feature.remote"]).success(),
+        "the confirmed-deleted upstream must be unlinked"
+    );
+}
+
 #[test]
 fn pruning_pull_branch_merges_the_fetched_oid_when_a_short_ref_is_ambiguous() {
     let _guard = remote_management_test_lock();
@@ -1970,6 +2161,46 @@ fn ref_exists(repo: &Path, ref_name: &str) -> bool {
     run_git_status(repo, &["show-ref", "--verify", "--quiet", ref_name]).success()
 }
 
+fn assert_fetch_all_preserves_upstream_for_skipped_remote(
+    root: &Path,
+    remote_name: &str,
+    skip_key: &str,
+) {
+    let (_remote_repo, work_repo) = init_work_repo_with_remote(root, "origin");
+    let unavailable_url = git_remote_url(&root.join("unavailable.git"));
+    run_git(
+        &work_repo,
+        &["remote", "add", remote_name, unavailable_url.as_str()],
+    );
+    let skip_config = format!("remote.{remote_name}.{skip_key}");
+    run_git(&work_repo, &["config", skip_config.as_str(), "true"]);
+    run_git(&work_repo, &["branch", "offline", "main"]);
+    run_git(
+        &work_repo,
+        &["config", "branch.offline.remote", remote_name],
+    );
+    run_git(
+        &work_repo,
+        &["config", "branch.offline.merge", "refs/heads/offline"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    opened
+        .fetch_all_with_output_prune(true)
+        .expect("fetch --all must skip the unavailable remote");
+
+    assert_eq!(
+        run_git_capture(&work_repo, &["config", "--get", "branch.offline.remote"]).trim(),
+        remote_name,
+        "a fetch that skips {remote_name:?} via {skip_key} cannot prove its upstream was deleted"
+    );
+    assert_eq!(
+        run_git_capture(&work_repo, &["config", "--get", "branch.offline.merge"]).trim(),
+        "refs/heads/offline"
+    );
+}
+
 #[test]
 fn pruning_fetch_all_preserves_tags_from_explicit_fetch_refspecs() {
     let _guard = remote_management_test_lock();
@@ -2053,6 +2284,30 @@ fn pruning_fetch_all_keeps_upstreams_of_remotes_it_does_not_fetch() {
         "skipped",
         "a fetch that skips a remote must not unlink upstreams pointing at it"
     );
+}
+
+#[test]
+fn pruning_fetch_all_keeps_upstreams_skipped_by_skip_default_update() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    assert_fetch_all_preserves_upstream_for_skipped_remote(
+        dir.path(),
+        "skip-default",
+        "skipDefaultUpdate",
+    );
+}
+
+#[test]
+fn pruning_fetch_all_keeps_upstreams_of_unsafe_remote_names_skipped_by_fetch_all() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    assert_fetch_all_preserves_upstream_for_skipped_remote(dir.path(), "a=b", "skipFetchAll");
 }
 
 #[test]
