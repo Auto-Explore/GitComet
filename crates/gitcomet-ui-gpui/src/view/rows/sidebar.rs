@@ -63,6 +63,7 @@ pub(in crate::view) struct WorktreeBadgePalette {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct WorktreeBadgeColors {
+    bg: gpui::Rgba,
     border: gpui::Rgba,
     hover_border: gpui::Rgba,
     icon: gpui::Rgba,
@@ -117,6 +118,11 @@ fn worktree_badge_colors(
     menu_active: bool,
 ) -> WorktreeBadgeColors {
     WorktreeBadgeColors {
+        bg: if is_open {
+            palette.active_bg
+        } else {
+            palette.bg
+        },
         border: if menu_active {
             palette.active_border
         } else if is_open {
@@ -144,6 +150,12 @@ fn worktree_badge_colors(
             palette.text
         },
     }
+}
+
+/// A configured upstream is the active remote relationship, so its status chip
+/// uses the same colors as a worktree badge whose workspace is open.
+fn upstream_badge_colors(palette: WorktreeBadgePalette) -> WorktreeBadgeColors {
+    worktree_badge_colors(palette, true, false)
 }
 
 pub(super) fn worktree_branch_badge_label(
@@ -1063,11 +1075,7 @@ impl SidebarPaneView {
                                             .rounded(px(theme.radii.control))
                                             .border_1()
                                             .border_color(branch_badge_colors.border)
-                                            .bg(if worktree_tab_open {
-                                                worktree_badge_palette.active_bg
-                                            } else {
-                                                worktree_badge_palette.bg
-                                            })
+                                            .bg(branch_badge_colors.bg)
                                             .text_size(scaled_px(11.0))
                                             .text_color(branch_badge_colors.text)
                                             .id(("worktree_branch_badge", ix))
@@ -1727,7 +1735,7 @@ impl SidebarPaneView {
                         // uses the same compact control-shaped chip as the
                         // worktree badge so the sidebar's status badges read as
                         // one family.
-                        let colors = worktree_badge_colors(worktree_badge_palette, true, false);
+                        let colors = upstream_badge_colors(worktree_badge_palette);
                         let mut badge = div()
                             .flex()
                             .items_center()
@@ -1736,7 +1744,7 @@ impl SidebarPaneView {
                             .rounded(px(theme.radii.control))
                             .text_size(scaled_px(11.0))
                             .text_color(colors.text)
-                            .bg(worktree_badge_palette.bg)
+                            .bg(colors.bg)
                             .border_1()
                             .border_color(colors.border)
                             .child(svg_icon("icons/cloud.svg", colors.icon, 9.0))
@@ -1872,11 +1880,7 @@ impl SidebarPaneView {
                             .rounded(px(theme.radii.control))
                             .border_1()
                             .border_color(badge_colors.border)
-                            .bg(if has_active_workspace {
-                                worktree_badge_palette.active_bg
-                            } else {
-                                worktree_badge_palette.bg
-                            })
+                            .bg(badge_colors.bg)
                             .text_size(scaled_px(11.0))
                             .text_color(badge_colors.text)
                             .cursor(CursorStyle::PointingHand)
@@ -2667,14 +2671,18 @@ mod tests {
             assert_eq!(palette.text, theme.colors.foreground.emphasis);
 
             let closed = worktree_badge_colors(palette, false, false);
+            assert_eq!(closed.bg, palette.bg);
             assert_eq!(closed.border, palette.border);
             assert_eq!(closed.icon, palette.icon);
             assert_eq!(closed.text, palette.text);
 
             let open = worktree_badge_colors(palette, true, false);
+            assert_eq!(open.bg, palette.active_bg);
             assert_eq!(open.border, palette.open_border);
             assert_eq!(open.icon, palette.open_icon);
             assert_eq!(open.text, palette.open_text);
+
+            assert_eq!(upstream_badge_colors(palette), open);
 
             let menu_active = worktree_badge_colors(palette, true, true);
             assert_eq!(menu_active.border, palette.active_border);

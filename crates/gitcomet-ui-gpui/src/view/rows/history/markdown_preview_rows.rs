@@ -2197,13 +2197,7 @@ pub(in crate::view) fn markdown_preview_inline_highlight(
             ..gpui::HighlightStyle::default()
         },
         MarkdownInlineStyle::Code => gpui::HighlightStyle {
-            background_color: Some(
-                with_alpha(
-                    theme.colors.interaction.selected_background,
-                    if theme.is_dark { 0.75 } else { 0.55 },
-                )
-                .into_color(),
-            ),
+            background_color: Some(markdown_preview_code_background(theme).into_color()),
             ..gpui::HighlightStyle::default()
         },
         MarkdownInlineStyle::Strikethrough => gpui::HighlightStyle {
