@@ -38,6 +38,7 @@ pub(in super::super) struct DetailsPaneView {
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
+    main_pane: WeakEntity<MainPaneView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
@@ -48,6 +49,8 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) status_sections_bounds_ref:
         std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
     pub(in super::super) change_tracking_stack_bounds_ref:
+        std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
+    pub(in super::super) commit_files_section_bounds_ref:
         std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
     pub(in super::super) status_section_resize: Option<StatusSectionResizeState>,
 
@@ -87,6 +90,16 @@ pub(in super::super) struct DetailsPaneView {
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     commit_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
+    commit_file_projection: std::cell::RefCell<
+        crate::view::rows::CommitFileProjectionCache<(
+            RepoId,
+            u64,
+            crate::view::rows::CommitFileSort,
+            crate::view::rows::CommitFileFilter,
+        )>,
+    >,
+    pub(in super::super) commit_file_sort: crate::view::rows::CommitFileSort,
+    pub(in super::super) commit_file_filter: crate::view::rows::CommitFileFilter,
     range_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
     /// Keyed by the worktree as well as the scan revision: `rows_for` returns
@@ -112,15 +125,8 @@ pub(in super::super) struct DetailsPaneView {
 
 pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) theme: AppTheme,
-    pub(in super::super) change_tracking_view: ChangeTrackingView,
-    pub(in super::super) change_tracking_height: Option<u32>,
-    pub(in super::super) untracked_height: Option<u32>,
-    pub(in super::super) ui_scale_percent: u32,
-    pub(in super::super) commit_push_after_enabled: bool,
-    pub(in super::super) date_time_format: crate::view::date_time::DateTimeFormat,
-    pub(in super::super) timezone: crate::view::date_time::Timezone,
-    pub(in super::super) show_timezone: bool,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
+    pub(in super::super) main_pane: WeakEntity<MainPaneView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
 }
 
@@ -231,6 +237,7 @@ impl DetailsPaneView {
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
             repo.history_state.worktree_selection_rev.hash(&mut hasher);
+            repo.history_state.range_files_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.recent_commit_messages_rev.hash(&mut hasher);
@@ -251,17 +258,19 @@ impl DetailsPaneView {
     ) -> Self {
         let DetailsPaneInit {
             theme,
-            change_tracking_view,
-            change_tracking_height,
-            untracked_height,
-            ui_scale_percent,
-            commit_push_after_enabled,
-            date_time_format,
-            timezone,
-            show_timezone,
             root_view,
+            main_pane,
             tooltip_host,
         } = init;
+        let preferences = ui_model.read(cx).preferences.clone();
+        let change_tracking_view = preferences.change_tracking.view;
+        let change_tracking_height = preferences.change_tracking.height;
+        let untracked_height = preferences.change_tracking.untracked_height;
+        let ui_scale_percent = preferences.appearance.ui_scale_percent;
+        let commit_push_after_enabled = preferences.repository.commit_push_after_enabled;
+        let date_time_format = preferences.appearance.date_time_format;
+        let timezone = preferences.appearance.timezone;
+        let show_timezone = preferences.appearance.show_timezone;
         let state = Arc::clone(&ui_model.read(cx).state);
         let initial_fingerprint = Self::notify_fingerprint(&state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
@@ -400,6 +409,7 @@ impl DetailsPaneView {
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
             root_view,
+            main_pane,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
@@ -414,6 +424,7 @@ impl DetailsPaneView {
             untracked_height: None,
             status_sections_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             change_tracking_stack_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            commit_files_section_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             status_section_resize: None,
             untracked_scroll: UniformListScrollHandle::default(),
             unstaged_scroll: UniformListScrollHandle::default(),
@@ -448,6 +459,11 @@ impl DetailsPaneView {
             commit_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
+            commit_file_projection: std::cell::RefCell::new(
+                crate::view::rows::CommitFileProjectionCache::default(),
+            ),
+            commit_file_sort: crate::view::rows::CommitFileSort::default(),
+            commit_file_filter: crate::view::rows::CommitFileFilter::default(),
             range_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
@@ -759,7 +775,8 @@ impl DetailsPaneView {
             .iter()
             .find(|repo| repo.id == repo_id)
             .is_some_and(|repo| {
-                repo.pending_commit_retry
+                repo.pending
+                    .commit_retry
                     .as_ref()
                     .is_some_and(|pending| pending.amend)
             });
@@ -782,7 +799,7 @@ impl DetailsPaneView {
             .repos
             .iter()
             .find(|repo| repo.id == repo_id)
-            .and_then(|repo| repo.command_log.last().cloned());
+            .and_then(|repo| repo.feedback.command_log.last().cloned());
         self.pending_commit_amend = Some(PendingCommitAmend {
             repo_id,
             last_command_log_entry,
@@ -797,13 +814,14 @@ impl DetailsPaneView {
             .last_command_log_entry
             .as_ref()
             .and_then(|last_seen| {
-                repo.command_log
+                repo.feedback
+                    .command_log
                     .iter()
                     .rposition(|entry| entry == last_seen)
                     .map(|index| index + 1)
             })
             .unwrap_or(0);
-        repo.command_log[start..]
+        repo.feedback.command_log[start..]
             .iter()
             .rfind(|entry| entry.command == "Amend")
     }
@@ -882,6 +900,81 @@ impl DetailsPaneView {
     ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
         let mut cache = self.commit_file_rows.borrow_mut();
         cache.rows_for(&(repo_id, commit_details_rev), files)
+    }
+
+    pub(in super::super) fn cached_commit_file_projection(
+        &self,
+        repo_id: RepoId,
+        commit_details_rev: u64,
+        files: &[gitcomet_core::domain::CommitFileChange],
+    ) -> Arc<crate::view::rows::CommitFileProjection> {
+        let sort = self.commit_file_sort;
+        let filter = self.commit_file_filter;
+        let mut cache = self.commit_file_projection.borrow_mut();
+        cache.projection_for(
+            &(repo_id, commit_details_rev, sort, filter),
+            files,
+            sort,
+            filter,
+        )
+    }
+
+    pub(in super::super) fn active_commit_file_source_indices(
+        &self,
+        repo_id: RepoId,
+    ) -> Option<Arc<[usize]>> {
+        let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
+        let Loadable::Ready(details) = &repo.history_state.commit_details else {
+            return None;
+        };
+        Some(
+            self.cached_commit_file_projection(
+                repo_id,
+                repo.history_state.commit_details_rev,
+                &details.files,
+            )
+            .source_indices
+            .clone(),
+        )
+    }
+
+    pub(in super::super) fn set_commit_file_sort(
+        &mut self,
+        sort: crate::view::rows::CommitFileSort,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_file_sort == sort {
+            return;
+        }
+        self.commit_file_sort = sort;
+        self.commit_files_scroll
+            .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        self.notify_commit_file_projection_dependents(cx);
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_commit_file_filter(
+        &mut self,
+        filter: crate::view::rows::CommitFileFilter,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_file_filter == filter {
+            return;
+        }
+        self.commit_file_filter = filter;
+        self.commit_files_scroll
+            .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        self.notify_commit_file_projection_dependents(cx);
+        cx.notify();
+    }
+
+    /// The cached main pane reads this projection to render commit-diff file
+    /// navigation, so local sort/filter changes must invalidate it explicitly.
+    fn notify_commit_file_projection_dependents(&self, cx: &mut gpui::Context<Self>) {
+        let main_pane = self.main_pane.clone();
+        cx.defer(move |cx| {
+            let _ = main_pane.update(cx, |_pane, cx| cx.notify());
+        });
     }
 
     pub(in super::super) fn cached_range_file_rows(
@@ -1050,6 +1143,8 @@ impl DetailsPaneView {
         path_alignment_visible_signature(&(
             repo_id,
             commit_details_rev,
+            self.commit_file_sort,
+            self.commit_file_filter,
             total_rows,
             range.start,
             range.end,
@@ -1148,6 +1243,10 @@ impl DetailsPaneView {
         });
 
         let switched_repo = prev_active_repo_id != next_repo_id;
+        let switched_commit = prev_selected_commit != next_selected_commit;
+        if switched_repo || switched_commit {
+            self.commit_file_filter = crate::view::rows::CommitFileFilter::All;
+        }
         let mut restored_commit_message: Option<SharedString> = None;
         if switched_repo {
             let was_amend_enabled = self.commit_amend_enabled;
@@ -1213,7 +1312,7 @@ impl DetailsPaneView {
             self.commit_message_input
                 .update(cx, |input, cx| input.set_text(restore.to_string(), cx));
             self.commit_message_last_text = restore;
-        } else if prev_selected_commit != next_selected_commit {
+        } else if switched_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -1385,6 +1484,24 @@ impl DetailsPaneView {
         });
     }
 
+    pub(in super::super) fn open_popover_for_bounds(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root_view = self.root_view.clone();
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = root_view.update(cx, |root, cx| {
+                    root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
+                });
+            });
+        });
+    }
+
     pub(in super::super) fn activate_context_menu_invoker(
         &mut self,
         invoker: SharedString,
@@ -1447,6 +1564,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             announce_success: true,
+            hook_operation_id: None,
         }
     }
 
@@ -1459,7 +1577,7 @@ mod tests {
             last_command_log_entry: Some(old_entry.clone()),
         };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.command_log.push(old_entry);
+        repo.feedback.command_log.push(old_entry);
 
         assert!(DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo).is_none());
     }
@@ -1474,8 +1592,8 @@ mod tests {
             last_command_log_entry: Some(old_entry.clone()),
         };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.command_log.push(old_entry);
-        repo.command_log.push(new_entry);
+        repo.feedback.command_log.push(old_entry);
+        repo.feedback.command_log.push(new_entry);
 
         assert_eq!(
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
@@ -1495,9 +1613,9 @@ mod tests {
             last_command_log_entry: Some(old_entry.clone()),
         };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.command_log.push(old_entry);
-        repo.command_log.push(new_entry);
-        repo.command_log.push(push_entry);
+        repo.feedback.command_log.push(old_entry);
+        repo.feedback.command_log.push(new_entry);
+        repo.feedback.command_log.push(push_entry);
 
         assert_eq!(
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
@@ -1517,9 +1635,9 @@ mod tests {
             last_command_log_entry: Some(marker_entry.clone()),
         };
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.command_log.push(marker_entry);
-        repo.command_log.push(failed_amend);
-        repo.command_log.push(successful_retry);
+        repo.feedback.command_log.push(marker_entry);
+        repo.feedback.command_log.push(failed_amend);
+        repo.feedback.command_log.push(successful_retry);
 
         let completed_entry =
             DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo);
@@ -1565,7 +1683,7 @@ mod tests {
     fn pending_amend_marker_survives_in_flight_auth_retry() {
         let repo_id = RepoId(1);
         let mut repo = repo_state(repo_id, "/tmp/repo");
-        repo.pending_commit_retry = Some(PendingCommitRetry {
+        repo.pending.commit_retry = Some(PendingCommitRetry {
             message: "message".into(),
             amend: true,
             push_after_commit: false,
@@ -1662,8 +1780,15 @@ mod tests {
         let after_details = DetailsPaneView::notify_fingerprint(&state);
         assert_ne!(after_details, after_selected);
 
+        state.repos[0].history_state.range_files_rev = 1;
+        let after_range_files = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_range_files, after_details);
+
         state.repos[0].merge_message_rev = 1;
-        assert_ne!(DetailsPaneView::notify_fingerprint(&state), after_details);
+        assert_ne!(
+            DetailsPaneView::notify_fingerprint(&state),
+            after_range_files
+        );
     }
 
     #[test]

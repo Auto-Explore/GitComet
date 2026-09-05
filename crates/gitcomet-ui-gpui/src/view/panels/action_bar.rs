@@ -98,8 +98,8 @@ impl ActionBarView {
             repo.file_browser.file_browser_rev.hash(&mut hasher);
             repo.loads_in_flight.any_in_flight().hash(&mut hasher);
             // Global back/forward buttons enable/disable with nav stack position.
-            repo.nav_history.cursor.hash(&mut hasher);
-            repo.nav_history.entries.len().hash(&mut hasher);
+            repo.navigation.main_history.cursor.hash(&mut hasher);
+            repo.navigation.main_history.entries.len().hash(&mut hasher);
         }
 
         hasher.finish()
@@ -383,7 +383,12 @@ impl Render for ActionBarView {
         // Alt+Left / Alt+Right (Option on macOS). Sits at the very start of the action bar.
         let (nav_can_back, nav_can_forward) = self
             .active_repo()
-            .map(|repo| (repo.nav_history.can_back(), repo.nav_history.can_forward()))
+            .map(|repo| {
+                (
+                    repo.navigation.main_history.can_back(),
+                    repo.navigation.main_history.can_forward(),
+                )
+            })
             .unwrap_or((false, false));
         let nav_back = components::Button::new("global_nav_back", "")
             .start_slot(icon(
@@ -538,6 +543,9 @@ impl Render for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == pull_picker_invoker.as_ref());
         let pull_tracking_branch_name = tracking_branch_name.clone();
+        let pull_request_ready = self
+            .active_repo()
+            .is_some_and(|repo| !matches!(pull_request(repo), PullRequest::NotReady));
         let pull_menu_icon_color = if pull_picker_active {
             theme.colors.accent.foreground
         } else {
@@ -554,14 +562,28 @@ impl Render for ActionBarView {
             .id("pull")
             .child(
                 components::SplitButton::new(
-                    pull_main.on_click(theme, cx, |this, _e, _w, _cx| {
-                        if let Some(repo_id) = this.active_repo_id() {
-                            this.store.dispatch(Msg::Pull {
-                                repo_id,
-                                mode: PullMode::Default,
-                            });
-                        }
-                    }),
+                    pull_main.disabled(!pull_request_ready).on_click(
+                        theme,
+                        cx,
+                        |this, _e, _w, cx| {
+                            let Some(repo) = this.active_repo() else {
+                                return;
+                            };
+                            let repo_id = repo.id;
+                            match pull_request(repo) {
+                                PullRequest::Pull => this.store.dispatch(Msg::Pull {
+                                    repo_id,
+                                    mode: PullMode::Default,
+                                }),
+                                PullRequest::NoRemotes => this.push_toast(
+                                    components::ToastKind::Error,
+                                    "Cannot pull: no remotes configured".to_string(),
+                                    cx,
+                                ),
+                                PullRequest::NotReady => {}
+                            }
+                        },
+                    ),
                     pull_menu.on_click_with_bounds(
                         theme,
                         cx,
@@ -631,6 +653,9 @@ impl Render for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == push_picker_invoker.as_ref());
         let push_tracking_branch_name = tracking_branch_name.clone();
+        let push_request_ready = self
+            .active_repo()
+            .is_some_and(|repo| !matches!(push_request(repo), PushRequest::NotReady));
         let push_menu_icon_color = if push_picker_active {
             theme.colors.accent.foreground
         } else {
@@ -647,61 +672,33 @@ impl Render for ActionBarView {
             .id("push")
             .child(
                 components::SplitButton::new(
-                    push_main.on_click(theme, cx, |this, e, window, cx| {
-                        let Some(repo) = this.active_repo() else {
-                            return;
-                        };
-                        let repo_id = repo.id;
-                        let head = match &repo.head_branch {
-                            Loadable::Ready(head) => head.clone(),
-                            _ => {
-                                this.store.dispatch(Msg::Push { repo_id });
+                    push_main.disabled(!push_request_ready).on_click(
+                        theme,
+                        cx,
+                        |this, e, window, cx| {
+                            let Some(repo) = this.active_repo() else {
                                 return;
-                            }
-                        };
-
-                        let upstream_missing = match &repo.branches {
-                            Loadable::Ready(branches) => branches
-                                .iter()
-                                .find(|b| b.name == head)
-                                .is_some_and(|b| b.upstream.is_none()),
-                            _ => false,
-                        };
-
-                        if upstream_missing {
-                            let remote = match &repo.remotes {
-                                Loadable::Ready(remotes) => {
-                                    if remotes.is_empty() {
-                                        None
-                                    } else if remotes.iter().any(|r| r.name == "origin") {
-                                        Some("origin".to_string())
-                                    } else {
-                                        Some(remotes[0].name.clone())
-                                    }
-                                }
-                                _ => Some("origin".to_string()),
                             };
-
-                            if let Some(remote) = remote {
-                                this.open_popover_at(
+                            let repo_id = repo.id;
+                            match push_request(repo) {
+                                PushRequest::Push => this.store.dispatch(Msg::Push { repo_id }),
+                                PushRequest::SetUpstream { remote } => this.open_popover_at(
                                     PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
                                     e.position(),
                                     window,
                                     cx,
-                                );
-                                return;
+                                ),
+                                PushRequest::NoRemotes => {
+                                    this.push_toast(
+                                        components::ToastKind::Error,
+                                        "Cannot push: no remotes configured".to_string(),
+                                        cx,
+                                    );
+                                }
+                                PushRequest::NotReady => {}
                             }
-
-                            this.push_toast(
-                                components::ToastKind::Error,
-                                "Cannot push: no remotes configured".to_string(),
-                                cx,
-                            );
-                            return;
-                        }
-
-                        this.store.dispatch(Msg::Push { repo_id });
-                    }),
+                        },
+                    ),
                     push_menu.on_click_with_bounds(
                         theme,
                         cx,

@@ -6,7 +6,6 @@ use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::{env, fs, io};
@@ -48,6 +47,9 @@ pub struct UiSession {
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
+    pub remote_markdown_image_policy: Option<String>,
+    pub allowed_remote_protocols: Option<BTreeSet<String>>,
+    pub check_for_updates_on_startup: Option<bool>,
     pub auto_save_file_edits: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
@@ -71,6 +73,7 @@ pub struct UiSession {
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
+    pub fetch_prune_deleted_remote_branches: Option<bool>,
     pub git_executable_path: Option<PathBuf>,
     pub external_code_editor: Option<ExternalCodeEditorSetting>,
 }
@@ -127,6 +130,9 @@ struct UiSessionFile {
     diff_reveal_whitespace_chars: Option<bool>,
     diff_word_wrap: Option<bool>,
     diff_show_line_numbers: Option<bool>,
+    remote_markdown_image_policy: Option<String>,
+    allowed_remote_protocols: Option<BTreeSet<String>>,
+    check_for_updates_on_startup: Option<bool>,
     auto_save_file_edits: Option<bool>,
     mergetool_auto_advance: Option<bool>,
     mergetool_collapse_unchanged: Option<bool>,
@@ -150,11 +156,13 @@ struct UiSessionFile {
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
     default_tag_type: Option<DefaultTagType>,
+    fetch_prune_deleted_remote_branches: Option<bool>,
     git_executable_path: Option<String>,
     external_code_editor: Option<ExternalCodeEditorSettingFile>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
+    #[serde(skip_serializing)]
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     survey_prompt: Option<SurveyPromptSession>,
 }
@@ -240,6 +248,9 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_reveal_whitespace_chars: file.diff_reveal_whitespace_chars,
         diff_word_wrap: file.diff_word_wrap,
         diff_show_line_numbers: file.diff_show_line_numbers,
+        remote_markdown_image_policy: file.remote_markdown_image_policy,
+        allowed_remote_protocols: file.allowed_remote_protocols,
+        check_for_updates_on_startup: file.check_for_updates_on_startup,
         auto_save_file_edits: file.auto_save_file_edits,
         mergetool_auto_advance: file.mergetool_auto_advance,
         mergetool_collapse_unchanged: file.mergetool_collapse_unchanged,
@@ -263,6 +274,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
         default_tag_type: file.default_tag_type,
+        fetch_prune_deleted_remote_branches: file.fetch_prune_deleted_remote_branches,
         git_executable_path: file
             .git_executable_path
             .as_deref()
@@ -277,7 +289,6 @@ pub(crate) struct RepoSessionPreferences {
     pub(crate) repo_history_modes: BTreeMap<String, HistoryMode>,
     pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
     pub(crate) repo_history_author_filters: BTreeMap<String, Option<String>>,
-    pub(crate) repo_fetch_prune_deleted_remote_tracking_branches: BTreeMap<String, bool>,
 }
 
 #[cfg(test)]
@@ -347,24 +358,21 @@ fn load_file(path: &Path) -> Option<UiSessionFile> {
         }
         SESSION_FILE_VERSION_V2 => {
             let file = serde_json::from_value::<UiSessionFile>(value).ok()?;
-            Some(migrate_v2_file(file))
+            Some(migrate_legacy_repo_fetch_prune_setting(migrate_v2_file(
+                file,
+            )))
         }
-        SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value).ok(),
+        SESSION_FILE_VERSION_V3 => serde_json::from_value::<UiSessionFile>(value)
+            .ok()
+            .map(migrate_legacy_repo_fetch_prune_setting),
         _ => None,
     }
 }
 
 fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-
     let contents = serde_json::to_vec(session).expect("serializing session file should succeed");
-
-    let mut tmp_file = tempfile::NamedTempFile::new_in(parent)?;
-    tmp_file.write_all(&contents)?;
-    tmp_file.flush()?;
-
-    tmp_file.persist(path).map(|_| ()).map_err(|err| err.error)
+    // Records every open repository path; keep it owner-only.
+    gitcomet_core::fs_utils::write_private_file(path, &contents)
 }
 
 fn default_session_file_path() -> Option<PathBuf> {

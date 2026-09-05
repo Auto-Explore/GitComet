@@ -366,7 +366,8 @@ impl MarkdownBlock {
 /// Group a document's rows into the blocks the flowing preview renders.
 ///
 /// Spacer rows are dropped: they exist to open a gap in a fixed row grid, and
-/// the flowing layout expresses the same gap as a margin.
+/// the flowing layout expresses the same separation as one interactive gap
+/// element between blocks.
 pub(crate) fn markdown_document_blocks(document: &MarkdownPreviewDocument) -> Vec<MarkdownBlock> {
     let mut blocks: Vec<MarkdownBlock> = Vec::new();
     let mut ix = 0usize;

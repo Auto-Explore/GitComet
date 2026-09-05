@@ -1,24 +1,25 @@
 use super::super::conflict_resolver;
 use super::canvas::keyed_canvas;
+use super::canvas_text;
+use super::canvas_text::{
+    HighlightSpans, LineMetrics, center_text_y, compute_runs, diff_text_style, empty_highlights,
+    line_metrics, paint_gutter_divider, sticky_gutter_bounds, text_clip_bounds_behind_gutter,
+};
 use super::diff_text::{whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text};
 use super::*;
 use gpui::{
-    App, Bounds, ContentMask, DispatchPhase, HighlightStyle, Pixels, Styled, TextRun, TextStyle,
-    Window, fill, point, px, size,
+    App, Bounds, ContentMask, DispatchPhase, Pixels, Styled, TextStyle, Window, fill, point, px,
+    size,
 };
 use palette::IntoColor;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
-use std::ops::Range;
 use std::sync::Arc;
-use std::sync::OnceLock;
 
-const DIFF_FONT_SCALE: f32 = 0.80;
 const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 const CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 32_768;
 
-type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 thread_local! {
     static GUTTER_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
         RefCell::new(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
@@ -671,75 +672,7 @@ fn hash_text(text: &str) -> u64 {
 }
 
 #[cfg(test)]
-fn whitespace_visible_text(text: &str) -> SharedString {
-    whitespace_visible_text_and_highlights(text, &[]).0
-}
-
-#[cfg(test)]
-fn whitespace_visible_text_and_highlights(
-    text: &str,
-    highlights: &[(Range<usize>, HighlightStyle)],
-) -> (SharedString, Vec<(Range<usize>, HighlightStyle)>) {
-    let mut out = String::with_capacity(text.len());
-    let mut byte_map = vec![0usize; text.len() + 1];
-
-    for (start, ch) in text.char_indices() {
-        byte_map[start] = out.len();
-        match ch {
-            ' ' => out.push('\u{00B7}'),
-            '\t' => out.push('\u{2192}'),
-            '\r' => out.push('\u{240D}'),
-            '\n' => out.push('\u{21B5}'),
-            _ if ch.is_whitespace() => out.push('\u{2420}'),
-            _ => out.push(ch),
-        }
-        let end = start + ch.len_utf8();
-        let mapped_end = out.len();
-        for mapped in byte_map.iter_mut().take(end + 1).skip(start + 1) {
-            *mapped = mapped_end;
-        }
-    }
-
-    let mut remapped = Vec::with_capacity(highlights.len());
-    for (range, style) in highlights {
-        let start = *byte_map.get(range.start).unwrap_or(&out.len());
-        let end = *byte_map.get(range.end).unwrap_or(&out.len());
-        if start < end {
-            remapped.push((start..end, *style));
-        }
-    }
-
-    (out.into(), remapped)
-}
-
-#[derive(Clone, Copy, Debug)]
-struct LineMetrics {
-    font_size: Pixels,
-    line_height: Pixels,
-}
-
-fn diff_text_style(window: &Window) -> TextStyle {
-    let mut style = window.text_style();
-    style.font_weight = FontWeight::NORMAL;
-    style
-}
-
-fn line_metrics(window: &Window) -> LineMetrics {
-    let style = diff_text_style(window);
-    let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE;
-    let line_height = style
-        .line_height
-        .to_pixels(font_size.into(), window.rem_size());
-    LineMetrics {
-        font_size,
-        line_height,
-    }
-}
-
-fn center_text_y(bounds: Bounds<Pixels>, line_height: Pixels) -> Pixels {
-    let extra = (bounds.size.height - line_height).max(px(0.0));
-    bounds.top() + extra * 0.5
-}
+use super::diff_text::whitespace_visible_text;
 
 fn px_2(window: &Window) -> Pixels {
     window.rem_size() * 0.5
@@ -863,62 +796,6 @@ fn split_column_text_bounds(
     Bounds::new(point(left, col.top()), size(width, col.size.height))
 }
 
-/// Paint the vertical divider between the line-number gutter and the code,
-/// matching the div path's `conflict_diff_line_number_cell` right border. Sits
-/// at the right edge of the number cell (before the gap), so it stays pinned
-/// with the sticky gutter as the column scrolls horizontally.
-fn paint_gutter_divider(
-    gutter_bounds: Bounds<Pixels>,
-    pad: Pixels,
-    line_no_width: Pixels,
-    color: gpui::Rgba,
-    window: &mut Window,
-) {
-    let x = gutter_bounds.left() + pad + line_no_width;
-    window.paint_quad(fill(
-        Bounds::new(
-            point(x, gutter_bounds.top()),
-            size(px(1.0), gutter_bounds.size.height),
-        ),
-        color,
-    ));
-}
-
-/// Keep the line-number gutter at the visible edge of a horizontally scrolled
-/// column. The row itself still moves so its measured width and scrollbar range
-/// remain unchanged.
-fn sticky_gutter_bounds(
-    column_bounds: Bounds<Pixels>,
-    clip_bounds: Bounds<Pixels>,
-    pad: Pixels,
-    gap: Pixels,
-    line_no_width: Pixels,
-) -> Bounds<Pixels> {
-    let visible_column = column_bounds.intersect(&clip_bounds);
-    let width = (pad + line_no_width + gap).min(visible_column.size.width);
-    Bounds::new(
-        point(visible_column.left(), column_bounds.top()),
-        size(width.max(px(0.0)), column_bounds.size.height),
-    )
-}
-
-/// Clip the moving source text at the pinned gutter without changing the
-/// text's paint origin. This makes content pass behind the gutter instead of
-/// shifting as the horizontal offset changes.
-fn text_clip_bounds_behind_gutter(
-    text_bounds: Bounds<Pixels>,
-    gutter_bounds: Bounds<Pixels>,
-) -> Bounds<Pixels> {
-    let left = text_bounds.left().max(gutter_bounds.right());
-    Bounds::new(
-        point(left, text_bounds.top()),
-        size(
-            (text_bounds.right() - left).max(px(0.0)),
-            text_bounds.size.height,
-        ),
-    )
-}
-
 fn paint_gutter_text(
     text: &SharedString,
     x: Pixels,
@@ -931,42 +808,17 @@ fn paint_gutter_text(
     if text.is_empty() {
         return;
     }
-    let mut style = diff_text_style(window);
-    style.color = color.into_color();
-    let key = {
-        let mut hasher = FxHasher::default();
-        text.as_ref().hash(&mut hasher);
-        metrics.font_size.hash(&mut hasher);
-        style.font_family.hash(&mut hasher);
-        style.font_weight.hash(&mut hasher);
-        color.red.to_bits().hash(&mut hasher);
-        color.green.to_bits().hash(&mut hasher);
-        color.blue.to_bits().hash(&mut hasher);
-        color.alpha.to_bits().hash(&mut hasher);
-        hasher.finish()
-    };
-
-    let shaped = GUTTER_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned());
-    let shaped = shaped.unwrap_or_else(|| {
-        let run = style.to_run(text.len());
-        let shaped = window
-            .text_system()
-            .shape_line(text.clone(), metrics.font_size, &[run], None);
-
-        GUTTER_TEXT_LAYOUT_CACHE.with(|cache| {
-            cache.borrow_mut().put(key, shaped.clone());
-        });
-
-        shaped
+    GUTTER_TEXT_LAYOUT_CACHE.with(|cache| {
+        let shaped = canvas_text::shaped_gutter_line(text, color, metrics, cache, window);
+        let _ = shaped.paint(
+            point(x, y),
+            metrics.line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
     });
-    let _ = shaped.paint(
-        point(x, y),
-        metrics.line_height,
-        gpui::TextAlign::Left,
-        None,
-        window,
-        cx,
-    );
 }
 
 /// Paints one conflict row's text and hands back the line it shaped.
@@ -1079,19 +931,6 @@ fn conflict_layout_key(
     fg.blue.to_bits().hash(&mut hasher);
     fg.alpha.to_bits().hash(&mut hasher);
     hasher.finish()
-}
-
-fn compute_runs(
-    text: &str,
-    default_style: &TextStyle,
-    highlights: &[(Range<usize>, HighlightStyle)],
-) -> Vec<TextRun> {
-    crate::text_runs::text_runs_for_highlights(text, default_style, highlights)
-}
-
-fn empty_highlights() -> HighlightSpans {
-    static EMPTY: OnceLock<HighlightSpans> = OnceLock::new();
-    Arc::clone(EMPTY.get_or_init(|| Arc::from(Vec::new())))
 }
 
 #[cfg(test)]

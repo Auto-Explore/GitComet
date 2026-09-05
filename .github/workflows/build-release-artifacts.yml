@@ -66,7 +66,6 @@ env:
   WIXTOOLSET_VERSION: 3.14.1.20250415
   CARGO_WIX_VERSION: 0.3.9
   APPIMAGETOOL_VERSION: 1.9.1
-  DUMP_SYMS_VERSION: 2.3.9
 
 jobs:
   prepare:
@@ -150,11 +149,11 @@ jobs:
           - target_platform: x86_64-windows
             artifact_arch: x86_64
             runs_on: windows-latest
-            dump_syms_sha256: bdf48486220708808a3e00aec78856ee1cce096189d47a1e2cb1c635f93bacc7
+            dump_syms_triple: x86_64-pc-windows-msvc
           - target_platform: aarch64-windows
             artifact_arch: arm64
             runs_on: windows-11-arm
-            dump_syms_sha256: bdf48486220708808a3e00aec78856ee1cce096189d47a1e2cb1c635f93bacc7
+            dump_syms_triple: x86_64-pc-windows-msvc
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -164,18 +163,33 @@ jobs:
       WINDOWS_SIGNING_ACCOUNT_NAME: ${{ vars.WINDOWS_SIGNING_ACCOUNT_NAME }}
       WINDOWS_SIGNING_PROFILE_NAME: ${{ needs.prepare.outputs.release_id != '' && 'gitcomet-windows-release' || 'gitcomet-windows-test' }}
       WINDOWS_SIGNING_TIMESTAMP_RFC3161: http://timestamp.acs.microsoft.com/
-      DUMP_SYMS_SHA256: ${{ matrix.dump_syms_sha256 }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Validate Windows signing configuration
         shell: pwsh
@@ -203,7 +217,7 @@ jobs:
           Write-Host "Using Windows signing profile: $env:WINDOWS_SIGNING_PROFILE_NAME"
 
       - name: Log into Azure for Windows signing
-        uses: azure/login@v3
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           creds: ${{ env.AZURE_CREDENTIALS }}
 
@@ -236,34 +250,9 @@ jobs:
       # the x64 binary under emulation. dump_syms parses the .pdb as a file
       # format, so the host architecture does not have to match the target.
       - name: Install dump_syms
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $asset = "dump_syms-x86_64-pc-windows-msvc.zip"
-          $expected = "${env:DUMP_SYMS_SHA256}"
-          $archive = Join-Path $env:RUNNER_TEMP $asset
-          $binDir = Join-Path $env:RUNNER_TEMP "dump-syms-bin"
-
-          $url = "https://github.com/mozilla/dump_syms/releases/download/v${env:DUMP_SYMS_VERSION}/$asset"
-          Write-Host "Downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile $archive
-
-          $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLower()
-          if ($actual -ne $expected) {
-            throw "SHA-256 mismatch for $asset`n  expected: $expected`n  actual:   $actual"
-          }
-
-          New-Item -ItemType Directory -Path $binDir -Force | Out-Null
-          Expand-Archive -Path $archive -DestinationPath $binDir -Force
-          $exe = Get-ChildItem -Path $binDir -Recurse -Filter dump_syms.exe |
-            Select-Object -First 1 -ExpandProperty FullName
-          if ([string]::IsNullOrWhiteSpace($exe)) {
-            throw "Extracted archive did not contain dump_syms.exe."
-          }
-
-          & $exe --version
-          Split-Path $exe -Parent >> $env:GITHUB_PATH
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
+        with:
+          triple: ${{ matrix.dump_syms_triple }}
 
       - name: Build release binary
         shell: pwsh
@@ -291,7 +280,7 @@ jobs:
       # exercises the pipeline.
       - name: Upload Windows Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: symbols-${{ matrix.target_platform }}
           path: dist/symbols
@@ -302,7 +291,7 @@ jobs:
       # symbols for the binary that was built.
       - name: Upload Windows debug symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # Deliberately not named `windows-release-artifacts-*`:
           # `publish_release_assets` globs that prefix into the published
@@ -315,7 +304,7 @@ jobs:
           retention-days: 90
 
       - name: Sign Windows release binary
-        uses: Azure/artifact-signing-action@v2
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
           signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
@@ -393,7 +382,7 @@ jobs:
           cargo wix --package gitcomet --profile release --nocapture --no-build --bin-path "$wixBin" --output "dist\$msiName"
 
       - name: Sign Windows MSI installer
-        uses: Azure/artifact-signing-action@v2
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
           signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
@@ -417,7 +406,7 @@ jobs:
             -SignToolPath $env:SIGNTOOL_PATH
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-release-artifacts-${{ matrix.target_platform }}
           path: |
@@ -445,8 +434,7 @@ jobs:
             appimagetool_asset: appimagetool-x86_64.AppImage
             appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
             appimage_arch: x86_64
-            dump_syms_asset: dump_syms-x86_64-unknown-linux-gnu.tar.xz
-            dump_syms_sha256: 0fc852a86b00337407d9d423cc388a24c3b489ccaaedcf92623cad57af5ca8ad
+            dump_syms_triple: x86_64-unknown-linux-gnu
           - target_platform: aarch64-linux
             artifact_arch: arm64
             deb_arch: arm64
@@ -455,8 +443,7 @@ jobs:
             appimagetool_asset: appimagetool-aarch64.AppImage
             appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
             appimage_arch: aarch64
-            dump_syms_asset: dump_syms-aarch64-unknown-linux-gnu.tar.xz
-            dump_syms_sha256: 1b8d6ab436fbfeb9820d4a21413cc77c50c6a4221cff25a830f5d53ba0aaa732
+            dump_syms_triple: aarch64-unknown-linux-gnu
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -466,13 +453,25 @@ jobs:
       APPIMAGETOOL_ASSET: ${{ matrix.appimagetool_asset }}
       APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
       APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
-      DUMP_SYMS_ASSET: ${{ matrix.dump_syms_asset }}
-      DUMP_SYMS_SHA256: ${{ matrix.dump_syms_sha256 }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
+
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
 
       - name: Install Linux UI native dependencies
         run: |
@@ -486,19 +485,17 @@ jobs:
             libxkbcommon-x11-dev
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install dump_syms
-        run: |
-          set -euo pipefail
-          bin_dir="$(scripts/install-dump-syms.sh \
-            --version "${DUMP_SYMS_VERSION}" \
-            --asset "${DUMP_SYMS_ASSET}" \
-            --sha256 "${DUMP_SYMS_SHA256}")"
-          echo "$bin_dir" >> "$GITHUB_PATH"
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
+        with:
+          triple: ${{ matrix.dump_syms_triple }}
 
       - name: Build release binary
         env:
@@ -519,7 +516,7 @@ jobs:
       # Release-only; see the Breakpad symbol upload above.
       - name: Upload Linux Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: symbols-${{ matrix.target_platform }}
           path: dist/symbols
@@ -659,7 +656,7 @@ jobs:
             "${appdir}" "dist/gitcomet-v${VERSION}-linux-${ARTIFACT_ARCH}.AppImage"
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux-release-artifacts-${{ matrix.target_platform }}
           path: |
@@ -681,19 +678,15 @@ jobs:
           - target_platform: aarch64-darwin
             arch: arm64
             runs_on: macos-latest
-            dump_syms_asset: dump_syms-aarch64-apple-darwin.tar.xz
-            dump_syms_sha256: 4945b7e5de0d7ad403822635f0fb912b69990fc412741ff2b7b512e168c40a32
+            dump_syms_triple: aarch64-apple-darwin
           - target_platform: x86_64-darwin
             arch: x86_64
             runs_on: macos-15-intel
-            dump_syms_asset: dump_syms-x86_64-apple-darwin.tar.xz
-            dump_syms_sha256: e255caf99e403b31613c756babcead8463f6e600c1a9e1e5531fbe27a7e29cf2
+            dump_syms_triple: x86_64-apple-darwin
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
       ARCH: ${{ matrix.arch }}
-      DUMP_SYMS_ASSET: ${{ matrix.dump_syms_asset }}
-      DUMP_SYMS_SHA256: ${{ matrix.dump_syms_sha256 }}
       MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
       MACOS_SIGNING_CERT_BASE64: ${{ secrets.MACOS_SIGNING_CERT_BASE64 }}
       MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
@@ -701,27 +694,39 @@ jobs:
       MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
       MACOS_NOTARY_API_KEY_P8: ${{ secrets.MACOS_NOTARY_API_KEY_P8 }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
+      - name: Check out release tooling from workflow revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/actions/setup-dump-syms
+            scripts/dump-syms-pins.sh
+            scripts/install-dump-syms.sh
+            scripts/lib/cli.sh
+          sparse-checkout-cone-mode: false
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
 
       - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-targets: false
 
       - name: Install dump_syms
-        run: |
-          set -euo pipefail
-          bin_dir="$(scripts/install-dump-syms.sh \
-            --version "${DUMP_SYMS_VERSION}" \
-            --asset "${DUMP_SYMS_ASSET}" \
-            --sha256 "${DUMP_SYMS_SHA256}")"
-          echo "$bin_dir" >> "$GITHUB_PATH"
+        uses: ./.release-tooling/.github/actions/setup-dump-syms
+        with:
+          triple: ${{ matrix.dump_syms_triple }}
 
       - name: Determine macOS signing mode
         id: macos_signing_mode
@@ -844,7 +849,7 @@ jobs:
       # Release-only; see the Breakpad symbol upload above.
       - name: Upload macOS Breakpad symbols
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: symbols-${{ matrix.target_platform }}
           path: dist/symbols
@@ -884,7 +889,7 @@ jobs:
 
       - name: Upload macOS dSYM
         if: ${{ needs.prepare.outputs.release_id != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-dsym-${{ matrix.target_platform }}
           path: ${{ runner.temp }}/gitcomet-dsym/gitcomet-${{ matrix.arch }}.dSYM.tar.gz
@@ -922,7 +927,7 @@ jobs:
           fi
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-release-artifacts-${{ matrix.target_platform }}
           path: dist/*.dmg
@@ -980,7 +985,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: symbols-*
           path: dist/symbols
@@ -1030,24 +1035,24 @@ jobs:
       RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
       ENABLE_KEYLESS_SIGNING: ${{ vars.ENABLE_KEYLESS_SIGNING }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: windows-release-artifacts-*
           path: dist/windows
           merge-multiple: true
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: linux-release-artifacts-*
           path: dist/linux
           merge-multiple: true
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: macos-release-artifacts-*
           path: dist/macos
@@ -1111,7 +1116,7 @@ jobs:
 
       - name: Install cosign
         if: ${{ env.ENABLE_KEYLESS_SIGNING == 'true' }}
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
       - name: Sign SHA256 checksums with keyless signing
         if: ${{ env.ENABLE_KEYLESS_SIGNING == 'true' }}
@@ -1126,7 +1131,7 @@ jobs:
             "$sha_file"
 
       - name: Upload payload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-payload
           path: dist/release/*

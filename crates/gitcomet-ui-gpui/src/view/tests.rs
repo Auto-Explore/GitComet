@@ -1,10 +1,12 @@
 use super::*;
+use crate::view::test_support::TestBackend;
 use chrome::{cursor_style_for_resize_edge, resize_edge};
 use gitcomet_core::domain::{
     Branch, CommitId, FileEntry, FileEntryKind, Remote, RemoteBranch, RepoSpec, StashEntry,
     Submodule, SubmoduleStatus, Upstream, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use gitcomet_state::model::{AppState, AuthPromptState, AuthRetryOperation, RepoId, RepoState};
@@ -14,18 +16,35 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-struct TestBackend;
-
-impl GitBackend for TestBackend {
-    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "Test backend does not open repositories",
-        )))
-    }
-}
-
 struct RecordingFailingBackend {
     opened: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+#[test]
+fn selected_sidebar_branch_colors_come_from_theme_interaction_tokens() {
+    let mut theme = AppTheme::gitcomet_dark();
+    let selected_background = gpui::rgba(0x12345678);
+    let selected_foreground = gpui::rgba(0xabcdefee);
+    theme.colors.interaction.selected_background = selected_background;
+    theme.colors.interaction.selected_foreground = selected_foreground;
+
+    assert_eq!(selected_branch_row_bg(theme), selected_background);
+    assert_eq!(selected_branch_label_color(theme), selected_foreground);
+}
+
+#[test]
+fn recent_repository_shortcut_is_not_a_diff_select_all_candidate() {
+    let recent = gpui::Keystroke::parse("secondary-shift-a").expect("valid shortcut");
+    let select_all = gpui::Keystroke::parse("secondary-a").expect("valid shortcut");
+
+    assert!(
+        !is_diff_shortcut_candidate(&recent),
+        "the app-level recent-repositories chord must not reach diff text selection"
+    );
+    assert!(
+        is_diff_shortcut_candidate(&select_all),
+        "unshifted Ctrl/Cmd+A must still reach diff text selection"
+    );
 }
 
 impl GitBackend for RecordingFailingBackend {
@@ -48,6 +67,30 @@ fn pump_for(cx: &mut gpui::VisualTestContext, duration: Duration) {
         });
         cx.run_until_parked();
         std::thread::sleep(Duration::from_millis(16));
+    }
+}
+
+/// Like [`wait_until`], but keeps drawing and draining the test executor while
+/// it waits.
+///
+/// Required whenever the awaited work is a GPUI task — a `cx.spawn(..).detach()`
+/// — rather than something the store's own worker thread advances: those tasks
+/// only run when the test driver pumps them, so a sleeping wait would spin out
+/// its whole deadline without ever letting the task complete.
+fn pump_until(cx: &mut gpui::VisualTestContext, description: &str, ready: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if ready() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {description}");
+        }
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -209,6 +252,180 @@ fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
     }
 }
 
+fn repo_with_push_state(
+    upstream: Option<Upstream>,
+    remotes: Loadable<Arc<Vec<Remote>>>,
+) -> RepoState {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/push-request"),
+        },
+    );
+    repo.head_branch = Loadable::Ready("feature".to_string());
+    repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: "feature".to_string(),
+        target: CommitId("deadbeef".into()),
+        upstream,
+        divergence: None,
+    }]));
+    repo.remotes = remotes;
+    repo
+}
+
+#[test]
+fn push_request_uses_live_upstream_without_waiting_for_remote_list() {
+    let repo = repo_with_push_state(
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        }),
+        Loadable::Loading,
+    );
+
+    assert_eq!(push_request(&repo), PushRequest::Push);
+    assert!(head_branch_has_live_upstream(&repo));
+}
+
+#[test]
+fn push_request_offers_standard_remote_for_untracked_branch() {
+    let repo = repo_with_push_state(
+        None,
+        Loadable::Ready(Arc::new(vec![
+            Remote {
+                name: "backup".to_string(),
+                url: None,
+            },
+            Remote {
+                name: "origin".to_string(),
+                url: None,
+            },
+        ])),
+    );
+
+    assert_eq!(
+        push_request(&repo),
+        PushRequest::SetUpstream {
+            remote: "origin".to_string()
+        }
+    );
+    assert!(!head_branch_has_live_upstream(&repo));
+}
+
+#[test]
+fn push_request_uses_first_remote_when_origin_is_absent() {
+    let repo = repo_with_push_state(
+        None,
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "upstream".to_string(),
+            url: None,
+        }])),
+    );
+
+    assert_eq!(
+        push_request(&repo),
+        PushRequest::SetUpstream {
+            remote: "upstream".to_string()
+        }
+    );
+}
+
+#[test]
+fn push_request_distinguishes_no_remotes_from_loading_data() {
+    let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
+    let loading = repo_with_push_state(None, Loadable::Loading);
+
+    assert_eq!(push_request(&no_remotes), PushRequest::NoRemotes);
+    assert_eq!(push_request(&loading), PushRequest::NotReady);
+}
+
+#[test]
+fn a_selected_remote_branch_is_invalidated_only_after_a_ready_refresh_omits_it() {
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/selected-remote-branch"),
+        },
+    );
+    let selected = SelectedBranch {
+        repo_id,
+        section: BranchSection::Remote,
+        name: "origin/deleted".to_string(),
+    };
+    let mut state = AppState {
+        repos: vec![repo.clone()],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    };
+
+    assert!(
+        !selected_remote_branch_is_missing(&state, Some(&selected)),
+        "loading data is not proof that the selection disappeared"
+    );
+
+    repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+    state.repos[0] = repo;
+    assert!(selected_remote_branch_is_missing(&state, Some(&selected)));
+}
+
+#[test]
+fn pull_request_offers_a_pull_for_a_branch_that_was_never_pushed() {
+    let repo = repo_with_push_state(
+        None,
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: None,
+        }])),
+    );
+
+    assert!(!head_branch_has_live_upstream(&repo));
+    assert_eq!(
+        pull_request(&repo),
+        PullRequest::Pull,
+        "the backend pulls from the preferred remote and sets the upstream"
+    );
+}
+
+#[test]
+fn pull_request_allows_a_detached_head_and_reports_a_repo_without_remotes() {
+    let mut detached = repo_with_push_state(None, Loadable::Loading);
+    detached.head_branch = Loadable::Ready("HEAD".to_string());
+    assert!(head_is_detached(&detached));
+    assert_eq!(pull_request(&detached), PullRequest::Pull);
+
+    let no_remotes = repo_with_push_state(None, Loadable::Ready(Arc::new(Vec::new())));
+    assert_eq!(pull_request(&no_remotes), PullRequest::NoRemotes);
+}
+
+#[test]
+fn a_selected_remote_branch_survives_a_remote_name_containing_a_slash() {
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/nested-remote"),
+        },
+    );
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "forks/alice".to_string(),
+        name: "main".to_string(),
+        target: CommitId("deadbeef".into()),
+    }]));
+    let state = AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    };
+    let selected = SelectedBranch {
+        repo_id,
+        section: BranchSection::Remote,
+        name: "forks/alice/main".to_string(),
+    };
+
+    assert!(!selected_remote_branch_is_missing(&state, Some(&selected)));
+}
+
 #[gpui::test]
 fn folder_drag_marks_repository_bar_available_and_tracks_hover_emphasis(
     cx: &mut gpui::TestAppContext,
@@ -359,18 +576,22 @@ fn dropping_one_folder_on_repository_bar_dispatches_external_repo_open(
     });
     cx.run_until_parked();
 
-    wait_until("folder drop to dispatch a repository open", || {
+    // The store canonicalizes every workdir it opens, so compare against the
+    // resolved path: on macOS the temp dir arrives as `/var/...` and comes back
+    // as `/private/var/...`.
+    let dropped = canonicalize_or_original(folder.path().to_path_buf());
+    pump_until(cx, "folder drop to dispatch a repository open", || {
         store_for_state
             .snapshot()
             .repos
             .iter()
-            .any(|repo| repo.spec.workdir == folder.path())
+            .any(|repo| repo.spec.workdir == dropped)
             || !opened.lock().expect("recording backend lock").is_empty()
     });
     let opened = opened.lock().expect("recording backend lock");
     assert!(
-        opened.is_empty() || opened.as_slice() == [folder.path().to_path_buf()],
-        "the repository-load effect must receive the dropped folder"
+        opened.is_empty() || opened.as_slice() == [dropped.clone()],
+        "the repository-load effect must receive the dropped folder, got {opened:?}"
     );
     cx.update(|_window, app| {
         assert!(!test_support::repo_external_folder_drag_active(
@@ -1440,7 +1661,7 @@ fn branch_sidebar_sorts_unsorted_remote_branches() {
 }
 
 #[test]
-fn remote_section_includes_tracked_upstream_without_remote_tracking_ref() {
+fn remote_section_excludes_upstream_without_remote_tracking_ref() {
     let mut repo = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1465,20 +1686,18 @@ fn remote_section_includes_tracked_upstream_without_remote_tracking_ref() {
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
 
     let rows = GitCometView::branch_sidebar_rows(&repo);
-    let tracked_row = rows.iter().find(|r| {
-        matches!(
-            r,
-            BranchSidebarRow::Branch {
-                section: BranchSection::Remote,
-                name,
-                is_upstream: true,
-                ..
-            } if name.as_ref() == "origin/feature"
-        )
-    });
     assert!(
-        tracked_row.is_some(),
-        "expected tracked upstream branch to be listed under Remote section"
+        rows.iter().all(|row| {
+            !matches!(
+                row,
+                BranchSidebarRow::Branch {
+                    section: BranchSection::Remote,
+                    name,
+                    ..
+                } if name.as_ref() == "origin/feature"
+            )
+        }),
+        "a configured upstream must not synthesize a missing remote branch"
     );
 }
 
@@ -3014,8 +3233,14 @@ fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
     });
 }
 
+/// The full-chrome layout keeps every large pane behind a `stable_cached_*`
+/// boundary so a frame requested by one view (a spinner tick in the title bar,
+/// a store update in the main pane) does not re-render the others. The bottom
+/// status bar and the overlay hosts stay uncached: their paint ranges are
+/// recorded after a focused TextInput registers its platform input handler,
+/// and replaying them during a Wayland text-input redraw has panicked before.
 #[test]
-fn full_chrome_layout_only_caches_always_mounted_subviews() {
+fn full_chrome_layout_caches_the_pane_subviews() {
     let splash_source = include_str!("splash.rs");
     let normalized: String = splash_source
         .chars()
@@ -3052,26 +3277,46 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
         "expected both full-chrome main pane mount sites to stay cached"
     );
     assert!(
-        normalized.contains("d.child(self.sidebar_pane.clone())"),
-        "expected the collapsible sidebar pane to mount directly"
+        normalized.contains("d.child(stable_cached_fill_view(self.sidebar_pane.clone()"),
+        "expected the expanded sidebar pane to mount behind the stable cache boundary"
     );
     assert!(
-        normalized.contains(".child(self.details_pane.clone())"),
-        "expected the collapsible details pane to mount directly"
-    );
-    assert!(
-        !normalized.contains("stable_cached_fill_view(self.sidebar_pane.clone())"),
-        "sidebar pane must stay outside the stable cache boundary"
-    );
-    assert!(
-        !normalized.contains("stable_cached_fill_view(self.details_pane.clone())"),
-        "details pane must stay outside the stable cache boundary"
+        normalized.contains(".child(stable_cached_fill_view(self.details_pane.clone()"),
+        "expected the expanded details pane to mount behind the stable cache boundary"
     );
     assert!(
         !normalized.contains(
             "stable_cached_fixed_height_view(self.bottom_status_bar.clone(),components::Tab::container_height("
         ),
         "bottom status bar must stay outside the stable cache boundary"
+    );
+}
+
+#[gpui::test]
+fn cached_sidebar_rerenders_when_the_mode_changes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let _cache_guard = enable_stable_cached_views_for_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Branches;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    sync_view_snapshot(cx, &view);
+    let renders_before =
+        cx.update(|_window, app| view.read(app).sidebar_pane.read(app).render_count);
+
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    let renders_after =
+        cx.update(|_window, app| view.read(app).sidebar_pane.read(app).render_count);
+
+    assert!(
+        renders_after > renders_before,
+        "the cached sidebar must be dirtied by a Branches/Files mode change"
     );
 }
 
@@ -4229,8 +4474,9 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
             workdir: PathBuf::from("repo"),
         },
     );
-    repo.last_error = Some(error.clone());
-    repo.command_log
+    repo.feedback.last_error = Some(error.clone());
+    repo.feedback
+        .command_log
         .push(gitcomet_state::model::CommandLogEntry {
             time: std::time::SystemTime::now(),
             ok: false,
@@ -4239,6 +4485,7 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
             stdout: String::new(),
             stderr: "fatal: test".to_string(),
             announce_success: true,
+            hook_operation_id: None,
         });
     next.active_repo = Some(repo_id);
     next.repos.push(repo);
@@ -4555,10 +4802,9 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
-fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestAppContext) {
-    // It used to be gated on a file being open as well, so the strip's contents
-    // changed as files were opened and closed — and it was simply absent for
-    // anyone who had not opened one yet.
+fn each_sidebar_tab_keeps_its_own_locate_button_present(cx: &mut gpui::TestAppContext) {
+    // The trailing action stays put as its data becomes available; switching
+    // tabs swaps it for the action belonging to that tree.
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -4571,7 +4817,11 @@ fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestApp
     sync_view_snapshot(cx, &view);
     assert!(
         cx.debug_bounds("sidebar_locate_open_file").is_none(),
-        "the Branches tab has no tree to locate anything in"
+        "the file-locate action belongs only to Files"
+    );
+    assert!(
+        cx.debug_bounds("sidebar_locate_active_branch").is_some(),
+        "Branches keeps its disabled locate action before HEAD is available"
     );
 
     // Files, still with no file open: present, and disabled rather than absent.
@@ -4582,6 +4832,10 @@ fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestApp
         cx.debug_bounds("sidebar_locate_open_file").is_some(),
         "the locate button belongs to the Files tab, open file or not"
     );
+    assert!(
+        cx.debug_bounds("sidebar_locate_active_branch").is_none(),
+        "the branch-locate action belongs only to Branches"
+    );
 
     state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
         path: PathBuf::from("src/main.rs"),
@@ -4591,6 +4845,139 @@ fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestApp
     store.replace_snapshot_for_test(Arc::new(state));
     sync_view_snapshot(cx, &view);
     assert!(cx.debug_bounds("sidebar_locate_open_file").is_some());
+}
+
+#[gpui::test]
+fn active_branch_locate_button_expands_scrolls_and_selects_like_its_row(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let active_name = "zzzz/deep/topic";
+    let active_tip = CommitId("active-branch-tip".into());
+    let branch = |name: String, target: CommitId| Branch {
+        name,
+        target,
+        upstream: None,
+        divergence: None,
+    };
+    let mut branches = (0..80)
+        .map(|ix| {
+            branch(
+                format!("group-{ix:03}/topic"),
+                CommitId(format!("tip-{ix:03}").into()),
+            )
+        })
+        .collect::<Vec<_>>();
+    branches.push(branch(active_name.to_string(), active_tip));
+    branches.push(branch(
+        "zzzz/deep/other".to_string(),
+        CommitId("other-tip".into()),
+    ));
+
+    let mut state = view_state_with_active_ready_repo(repo_id);
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Branches;
+    state.repos[0].head_branch = Loadable::Ready(active_name.to_string());
+    state.repos[0].branches = Loadable::Ready(Arc::new(branches));
+    state.repos[0].branches_rev = 1;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    let sidebar_pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_window, app| {
+        sidebar_pane.update(app, |pane, _cx| {
+            pane.set_branch_filter_query_for_test("does-not-match-head");
+            pane.set_collapsed_keys_for_test(&[
+                branch_sidebar::local_section_storage_key(),
+                "group:local:zzzz",
+                "group:local:zzzz/deep",
+                "group:local:release",
+            ]);
+        });
+    });
+    test_support::redraw(cx);
+
+    let button_center = cx
+        .debug_bounds("sidebar_locate_active_branch")
+        .expect("expected the Branches locate action")
+        .center();
+    cx.simulate_mouse_move(button_center, None, gpui::Modifiers::default());
+    test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some(format!(
+            "Show and select the active local branch: {active_name}"
+        ))
+    );
+
+    click_debug_selector(cx, "sidebar_locate_active_branch");
+
+    let target_ix = cx.update(|_window, app| {
+        sidebar_pane.update(app, |pane, _cx| {
+            assert!(pane.branch_filter_query.is_empty());
+            assert_eq!(
+                pane.selected_branch(),
+                Some(&SelectedBranch {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: active_name.to_string(),
+                })
+            );
+
+            let collapsed = pane.collapsed_items_for_test();
+            for expanded in [
+                branch_sidebar::local_section_storage_key(),
+                "group:local:zzzz",
+                "group:local:zzzz/deep",
+            ] {
+                assert!(!collapsed.contains(expanded), "{expanded} stayed collapsed");
+            }
+            assert!(
+                collapsed.contains("group:local:release"),
+                "unrelated groups should retain their state"
+            );
+
+            let presentation = pane
+                .branch_sidebar_presentation_cached()
+                .expect("expected the expanded branch presentation");
+            presentation
+                .rows
+                .iter()
+                .rposition(|row| {
+                    matches!(
+                        row,
+                        BranchSidebarRow::Branch {
+                            name,
+                            section: BranchSection::Local,
+                            ..
+                        } if name.as_ref() == active_name
+                    )
+                })
+                .expect("expected the active branch row after expansion")
+        })
+    });
+    test_support::redraw(cx);
+    let target_selector: &'static str =
+        Box::leak(format!("branch_row_{}_{}", repo_id.0, target_ix).into_boxed_str());
+    assert!(
+        cx.debug_bounds(target_selector).is_some(),
+        "the locate action should scroll the distant active branch row into the rendered viewport"
+    );
+
+    // Drawing the programmatic scroll starts the branch scrollbar's auto-hide
+    // task. Remove that scrollbar from the element tree so its state drops and
+    // cancels the task on this test's thread, before another GPUI test installs
+    // a different test scheduler.
+    let mut teardown_state = store.snapshot().as_ref().clone();
+    teardown_state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    store.replace_snapshot_for_test(Arc::new(teardown_state));
+    sync_view_snapshot(cx, &view);
+    cx.run_until_parked();
 }
 
 #[gpui::test]
@@ -4961,6 +5348,11 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         .or_else(|| cx.debug_bounds("branch_group_1"))
         .or_else(|| cx.debug_bounds("branch_group_2"))
         .expect("the feat/ group renders a row");
+    assert_eq!(
+        group_row.size.height,
+        px(24.0),
+        "branch hierarchy rows must remain 24 px tall"
+    );
     let center = group_row.center();
     cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
     cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());

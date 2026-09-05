@@ -10,9 +10,9 @@ use std::time::{Duration, Instant, SystemTime};
 /// The linked-worktree rows live in this table, so the two revs behind them
 /// have to move the fingerprint. Without them a finished scan -- or a row
 /// being selected -- changed nothing the pane hashed, and the rows sat stale
-/// until some unrelated rev happened to move. Not reachable from a
-/// `#[gpui::test]`: `stable_cached_view` returns the uncached view under
-/// `cfg!(test)`, so the missed repaint is invisible there.
+/// until some unrelated rev happened to move. Most visual tests use uncached
+/// mounts because GPUI does not replay debug bounds during cache reuse; focused
+/// invalidation tests can opt into the production cache path.
 #[test]
 fn the_history_fingerprint_tracks_the_worktree_revs() {
     let mut state = AppState::default();

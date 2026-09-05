@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::rows::LruTouchQueue;
 
 impl TreesitterCachedDocument {
     pub(crate) fn from_chunked_line_tokens(
@@ -179,7 +180,7 @@ pub(crate) fn chunk_count_for_line_count(line_count: usize) -> usize {
 pub(crate) struct TreesitterDocumentCache {
     pub(crate) by_cache_key: FxHashMap<PreparedSyntaxCacheKey, TreesitterCachedDocument>,
     pub(crate) by_source_identity: FxHashMap<PreparedSyntaxSourceIdentity, PreparedSyntaxCacheKey>,
-    pub(crate) lru_order: VecDeque<PreparedSyntaxCacheKey>,
+    pub(crate) lru_order: LruTouchQueue<PreparedSyntaxCacheKey>,
     pub(crate) pending_chunk_requests: FxHashSet<PreparedSyntaxChunkKey>,
     pub(crate) pending_chunk_request_counts: FxHashMap<PreparedSyntaxCacheKey, usize>,
     pub(crate) metrics: PreparedSyntaxCacheMetrics,
@@ -197,7 +198,7 @@ impl TreesitterDocumentCache {
         Self {
             by_cache_key: FxHashMap::default(),
             by_source_identity: FxHashMap::default(),
-            lru_order: VecDeque::new(),
+            lru_order: LruTouchQueue::default(),
             pending_chunk_requests: FxHashSet::default(),
             pending_chunk_request_counts: FxHashMap::default(),
             metrics: PreparedSyntaxCacheMetrics::default(),
@@ -205,17 +206,7 @@ impl TreesitterDocumentCache {
     }
 
     pub(crate) fn touch_key(&mut self, cache_key: PreparedSyntaxCacheKey) {
-        if self.lru_order.back() == Some(&cache_key) {
-            return;
-        }
-        if let Some(pos) = self
-            .lru_order
-            .iter()
-            .position(|candidate| *candidate == cache_key)
-        {
-            self.lru_order.remove(pos);
-        }
-        self.lru_order.push_back(cache_key);
+        self.lru_order.touch(cache_key);
     }
 
     pub(crate) fn record_hit(&mut self, cache_key: PreparedSyntaxCacheKey) {
@@ -278,7 +269,7 @@ impl TreesitterDocumentCache {
 
     pub(crate) fn evict_if_needed(&mut self, drop_mode: SyntaxCacheDropMode) {
         while self.by_cache_key.len() >= TS_DOCUMENT_CACHE_MAX_ENTRIES {
-            let Some(evict_key) = self.lru_order.pop_front() else {
+            let Some(evict_key) = self.lru_order.pop_oldest() else {
                 break;
             };
             if let Some(evicted) = self.by_cache_key.remove(&evict_key) {
@@ -1019,12 +1010,8 @@ impl TreesitterDocumentCache {
     ) {
         if !self.by_cache_key.contains_key(&cache_key) {
             self.evict_if_needed(drop_mode);
-        } else if let Some(pos) = self
-            .lru_order
-            .iter()
-            .position(|candidate| *candidate == cache_key)
-        {
-            self.lru_order.remove(pos);
+        } else {
+            self.lru_order.remove(&cache_key);
         }
 
         self.index_source_identity(cache_key, &document);

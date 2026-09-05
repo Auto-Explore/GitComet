@@ -6,10 +6,7 @@ use gitcomet_core::process::{
 };
 use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
 use gitcomet_state::session::ExternalCodeEditorSetting;
-use gpui::{
-    Stateful, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
-    WindowOptions,
-};
+use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -168,6 +165,94 @@ const DIFF_VIEW_MODE_OPTIONS: &[(&str, DiffViewMode, &str)] = &[
     ),
 ];
 
+const REMOTE_MARKDOWN_IMAGE_OPTIONS: &[(&str, RemoteMarkdownImagePolicy, &str)] = &[
+    (
+        "settings_window_remote_markdown_images_always",
+        RemoteMarkdownImagePolicy::AlwaysLoad,
+        "Load HTTP and HTTPS images automatically.",
+    ),
+    (
+        "settings_window_remote_markdown_images_ask",
+        RemoteMarkdownImagePolicy::AskBeforeLoading,
+        "Prompt before loading; approve one image or all images in the current preview.",
+    ),
+    (
+        "settings_window_remote_markdown_images_never",
+        RemoteMarkdownImagePolicy::NeverLoad,
+        "Never request or display HTTP and HTTPS images.",
+    ),
+];
+
+const REMOTE_PROTOCOL_OPTIONS: &[(&str, RemoteProtocol, &str, &str)] = &[
+    (
+        "settings_window_remote_protocol_https",
+        RemoteProtocol::Https,
+        "HTTPS",
+        "Encrypted HTTP transport (allowed by default).",
+    ),
+    (
+        "settings_window_remote_protocol_ssh",
+        RemoteProtocol::Ssh,
+        "SSH",
+        "Secure Shell transport (allowed by default).",
+    ),
+    (
+        "settings_window_remote_protocol_git",
+        RemoteProtocol::Git,
+        "Git",
+        "Native Git transport (allowed by default).",
+    ),
+    (
+        "settings_window_remote_protocol_file",
+        RemoteProtocol::File,
+        "File",
+        "Local file URL transport (allowed by default).",
+    ),
+    (
+        "settings_window_remote_protocol_http",
+        RemoteProtocol::Http,
+        "HTTP",
+        "Unencrypted HTTP transport.",
+    ),
+    (
+        "settings_window_remote_protocol_ftp",
+        RemoteProtocol::Ftp,
+        "FTP",
+        "Unencrypted FTP transport.",
+    ),
+    (
+        "settings_window_remote_protocol_ftps",
+        RemoteProtocol::Ftps,
+        "FTPS",
+        "FTP transport protected with TLS.",
+    ),
+    (
+        "settings_window_remote_protocol_git_ssh",
+        RemoteProtocol::GitSsh,
+        "git+ssh",
+        "Deprecated alias for SSH transport.",
+    ),
+    (
+        "settings_window_remote_protocol_ssh_git",
+        RemoteProtocol::SshGit,
+        "ssh+git",
+        "Deprecated alias for SSH transport.",
+    ),
+];
+
+fn remote_url_policy_settings_label(policy: RemoteUrlPolicy) -> String {
+    let labels = REMOTE_PROTOCOL_OPTIONS
+        .iter()
+        .filter(|(_, protocol, _, _)| policy.allows(*protocol))
+        .map(|(_, _, label, _)| *label)
+        .collect::<Vec<_>>();
+    if labels.is_empty() {
+        "No URL protocols".to_string()
+    } else {
+        labels.join(", ")
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
     Theme,
@@ -186,6 +271,8 @@ enum SettingsSection {
     GitLogDefaultMode,
     GitLogColumns,
     GitLogTagFetch,
+    AllowedRemoteProtocols,
+    RemoteMarkdownImages,
 }
 
 impl SettingsSection {
@@ -207,6 +294,9 @@ impl SettingsSection {
             Self::GitLogDefaultMode | Self::GitLogColumns | Self::GitLogTagFetch => {
                 SettingsCategory::GitLog
             }
+            Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
+                SettingsCategory::SecurityPrivacy
+            }
         }
     }
 }
@@ -216,11 +306,13 @@ impl SettingsSection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsCategory {
     General,
+    SecurityPrivacy,
     Terminal,
     ChangeTracking,
     Diff,
     FileEditing,
     GitLog,
+    Remotes,
     Tags,
     GitExecutable,
     Environment,
@@ -230,11 +322,13 @@ enum SettingsCategory {
 impl SettingsCategory {
     const ALL: &'static [SettingsCategory] = &[
         SettingsCategory::General,
+        SettingsCategory::SecurityPrivacy,
         SettingsCategory::Terminal,
         SettingsCategory::ChangeTracking,
         SettingsCategory::Diff,
         SettingsCategory::FileEditing,
         SettingsCategory::GitLog,
+        SettingsCategory::Remotes,
         SettingsCategory::Tags,
         SettingsCategory::GitExecutable,
         SettingsCategory::Environment,
@@ -244,11 +338,13 @@ impl SettingsCategory {
     fn label(self) -> &'static str {
         match self {
             Self::General => "General",
+            Self::SecurityPrivacy => "Security / Privacy",
             Self::Terminal => "Terminal",
             Self::ChangeTracking => "Change tracking",
             Self::Diff => "Diff",
             Self::FileEditing => "File editing",
             Self::GitLog => "Git log",
+            Self::Remotes => "Remotes",
             Self::Tags => "Tags",
             Self::GitExecutable => "Git executable",
             Self::Environment => "Environment",
@@ -259,11 +355,13 @@ impl SettingsCategory {
     fn icon(self) -> &'static str {
         match self {
             Self::General => "icons/cog.svg",
+            Self::SecurityPrivacy => "icons/file_icons/lock.svg",
             Self::Terminal => "icons/terminal.svg",
             Self::ChangeTracking => "icons/file.svg",
             Self::Diff => "icons/swap.svg",
             Self::FileEditing => "icons/pencil.svg",
             Self::GitLog => "icons/history.svg",
+            Self::Remotes => "icons/cloud.svg",
             Self::Tags => "icons/tag.svg",
             Self::GitExecutable => "icons/git_branch.svg",
             Self::Environment => "icons/computer.svg",
@@ -274,11 +372,13 @@ impl SettingsCategory {
     fn nav_id(self) -> &'static str {
         match self {
             Self::General => "settings_window_nav_general",
+            Self::SecurityPrivacy => "settings_window_nav_security_privacy",
             Self::Terminal => "settings_window_nav_terminal",
             Self::ChangeTracking => "settings_window_nav_change_tracking",
             Self::Diff => "settings_window_nav_diff",
             Self::FileEditing => "settings_window_nav_file_editing",
             Self::GitLog => "settings_window_nav_git_log",
+            Self::Remotes => "settings_window_nav_remotes",
             Self::Tags => "settings_window_nav_tags",
             Self::GitExecutable => "settings_window_nav_git_executable",
             Self::Environment => "settings_window_nav_environment",
@@ -294,6 +394,11 @@ impl SettingsCategory {
                 "general theme date format ui scale ui font editor font ligatures \
                  external code editor date timezone appearance"
             }
+            Self::SecurityPrivacy => {
+                "security privacy allowed remote protocols https http ssh git file ftp ftps \
+                 git+ssh ssh+git remote markdown images load image tracking pixels updates \
+                 automatically check updates startup"
+            }
             Self::Terminal => "terminal external terminal action bar terminal button opens",
             Self::ChangeTracking => "change tracking untracked files",
             Self::Diff => {
@@ -307,6 +412,7 @@ impl SettingsCategory {
                 "git log default history mode history columns relative dates show tags graph \
                  author sha"
             }
+            Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
             Self::Tags => "tags automatically fetch tags",
             Self::GitExecutable => "git executable custom path system path version",
             Self::Environment => "environment build operating system app version",
@@ -347,6 +453,24 @@ impl GitExecutableMode {
     }
 }
 
+/// Where the External code editor dropdown's option list stands.
+///
+/// Detecting installed editors probes every PATH directory and walks IDE
+/// install roots (on Windows `Program Files\JetBrains`), which measured 2.6 s
+/// on the main thread when it ran in the constructor. The summary row only
+/// needs the saved setting, so the scan is deferred until the row is expanded
+/// and runs on a background thread; the dropdown shows a spinner until then.
+enum ExternalEditorOptionsState {
+    NotLoaded,
+    /// Keeps the result-delivery future alive while this view exists. The
+    /// blocking detector itself may finish after the view is dropped because
+    /// `smol::unblock` jobs are not cancellable once running.
+    Loading {
+        _task: gpui::Task<()>,
+    },
+    Loaded,
+}
+
 pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
@@ -357,6 +481,7 @@ pub(crate) struct SettingsWindowView {
     ui_font_options: Arc<[String]>,
     editor_font_options: Arc<[String]>,
     external_editor_options: Arc<[crate::external_editor::ExternalEditorOption]>,
+    external_editor_options_state: ExternalEditorOptionsState,
     settings_window_scroll: ScrollHandle,
     theme_scroll: UniformListScrollHandle,
     ui_font_scroll: UniformListScrollHandle,
@@ -368,6 +493,8 @@ pub(crate) struct SettingsWindowView {
     diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
     diff_view_mode_scroll: UniformListScrollHandle,
+    remote_protocols_scroll: UniformListScrollHandle,
+    remote_markdown_images_scroll: UniformListScrollHandle,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
@@ -383,6 +510,9 @@ pub(crate) struct SettingsWindowView {
     diff_word_wrap: bool,
     diff_show_line_numbers: bool,
     auto_save_file_edits: bool,
+    remote_url_policy: RemoteUrlPolicy,
+    remote_markdown_image_policy: RemoteMarkdownImagePolicy,
+    check_for_updates_on_startup: bool,
     diff_scroll_sync: DiffScrollSync,
     history_show_graph: bool,
     history_show_author: bool,
@@ -394,6 +524,7 @@ pub(crate) struct SettingsWindowView {
     history_tag_fetch_mode: GitLogTagFetchMode,
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
+    prune_deleted_remote_branches_on_fetch: bool,
     current_view: SettingsView,
     selected_category: SettingsCategory,
     search_query: String,
@@ -500,13 +631,7 @@ fn settings_window_options_for_scale(
         titlebar: Some(settings_window_titlebar_options_for_scale(ui_scale_percent)),
         app_id: Some("gitcomet-settings".into()),
         window_decorations: Some(WindowDecorations::Client),
-        // Match the main window: the area outside the rounded client frame
-        // must be see-through.
-        window_background: if cfg!(target_os = "macos") {
-            WindowBackgroundAppearance::Opaque
-        } else {
-            WindowBackgroundAppearance::Transparent
-        },
+        window_background: crate::app::main_window_background_appearance(),
         is_movable: true,
         is_resizable: true,
         ..Default::default()
@@ -753,70 +878,50 @@ impl SettingsWindowView {
         window.set_window_title(SETTINGS_WINDOW_TITLE);
 
         let ui_session = session::load();
+        let ui_preferences = UiPreferences::from_session(&ui_session);
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
-        let theme_mode = ui_session
-            .theme_mode
-            .as_deref()
-            .and_then(ThemeMode::from_key)
-            .unwrap_or_default();
-        let date_time_format = ui_session
-            .date_time_format
-            .as_deref()
-            .and_then(DateTimeFormat::from_key)
-            .unwrap_or(DateTimeFormat::YmdHm);
-        let timezone = ui_session
-            .timezone
-            .as_deref()
-            .and_then(Timezone::from_key)
-            .unwrap_or_default();
-        let show_timezone = ui_session.show_timezone.unwrap_or(true);
-        let change_tracking_view = ui_session
-            .change_tracking_view
-            .as_deref()
-            .and_then(ChangeTrackingView::from_key)
-            .unwrap_or_default();
-        let terminal_preferences = TerminalPreferences::from_ui_session(&ui_session);
-        let diff_scroll_sync = ui_session
-            .diff_scroll_sync
-            .as_deref()
-            .and_then(DiffScrollSync::from_key)
-            .unwrap_or_default();
-        let diff_content_mode = ui_session
-            .diff_content_mode
-            .as_deref()
-            .and_then(DiffContentMode::from_key)
-            .unwrap_or_default();
-        let diff_whitespace_mode = ui_session
-            .diff_whitespace_mode
-            .as_deref()
-            .and_then(DiffWhitespaceMode::from_key)
-            .unwrap_or_default();
-        let diff_view_mode = ui_session
-            .diff_view_mode
-            .as_deref()
-            .and_then(DiffViewMode::from_key)
-            .unwrap_or(DiffViewMode::Split);
-        let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
-        let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
-        let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
-        let auto_save_file_edits = ui_session.auto_save_file_edits.unwrap_or(false);
-        let history_show_graph = ui_session.history_show_graph.unwrap_or(true);
-        let history_show_author = ui_session.history_show_author.unwrap_or(true);
-        let history_show_date = ui_session.history_show_date.unwrap_or(true);
-        let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
-        let history_relative_dates = ui_session.history_relative_dates.unwrap_or(true);
-        let history_highlight_commit_chain =
-            ui_session.history_highlight_commit_chain.unwrap_or(true);
-        let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
-        let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
-        let default_history_mode = ui_session.default_history_mode.unwrap_or_default();
-        let default_tag_type = ui_session.default_tag_type.unwrap_or_default();
+        let theme_mode = ui_preferences.appearance.theme_mode.clone();
+        let date_time_format = ui_preferences.appearance.date_time_format;
+        let timezone = ui_preferences.appearance.timezone;
+        let show_timezone = ui_preferences.appearance.show_timezone;
+        let change_tracking_view = ui_preferences.change_tracking.view;
+        let terminal_preferences = ui_preferences.terminal.clone();
+        let diff_scroll_sync = ui_preferences.diff.scroll_sync;
+        let diff_content_mode = ui_preferences.diff.content_mode;
+        let diff_whitespace_mode = ui_preferences.diff.whitespace_mode;
+        let diff_view_mode = ui_preferences.diff.view_mode;
+        let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
+        let diff_word_wrap = ui_preferences.diff.word_wrap;
+        let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
+        let auto_save_file_edits = ui_preferences.file_editing.auto_save;
+        let remote_url_policy = ui_preferences.security.remote_url_policy;
+        let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
+        let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
+        let history_show_graph = ui_preferences.history.show_graph;
+        let history_show_author = ui_preferences.history.show_author;
+        let history_show_date = ui_preferences.history.show_date;
+        let history_show_sha = ui_preferences.history.show_sha;
+        let history_relative_dates = ui_preferences.history.relative_dates;
+        let history_highlight_commit_chain = ui_preferences.history.highlight_commit_chain;
+        let history_show_tags = ui_preferences.history.show_tags;
+        let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
+        let default_history_mode = ui_preferences.history.default_mode;
+        let default_tag_type = ui_preferences.repository.default_tag_type;
+        let prune_deleted_remote_branches_on_fetch = ui_preferences
+            .remotes
+            .prune_deleted_remote_branches_on_fetch;
         let external_editor_setting = initial_external_editor_setting(&ui_session);
+        // Only the saved editor's entry is needed to render the summary row;
+        // installed editors are detected once the row is expanded, see
+        // `ensure_external_editor_options_loaded`.
         let external_editor_options: Arc<[crate::external_editor::ExternalEditorOption]> =
-            crate::external_editor::external_editor_options(external_editor_setting.as_ref())
-                .into();
+            crate::external_editor::external_editor_options_from_detected(
+                external_editor_setting.as_ref(),
+                Vec::new(),
+            )
+            .into();
         let (external_editor_custom_path_draft, external_editor_custom_arguments_draft) =
             match &external_editor_setting {
                 Some(ExternalCodeEditorSetting::Custom {
@@ -1010,6 +1115,7 @@ impl SettingsWindowView {
             ui_font_options: crate::font_preferences::ui_font_options(window),
             editor_font_options: crate::font_preferences::editor_font_options(window),
             external_editor_options,
+            external_editor_options_state: ExternalEditorOptionsState::NotLoaded,
             settings_window_scroll: ScrollHandle::default(),
             theme_scroll: UniformListScrollHandle::default(),
             ui_font_scroll: UniformListScrollHandle::default(),
@@ -1021,6 +1127,8 @@ impl SettingsWindowView {
             diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
             diff_view_mode_scroll: UniformListScrollHandle::default(),
+            remote_protocols_scroll: UniformListScrollHandle::default(),
+            remote_markdown_images_scroll: UniformListScrollHandle::default(),
             date_time_format,
             timezone,
             show_timezone,
@@ -1036,6 +1144,9 @@ impl SettingsWindowView {
             diff_word_wrap,
             diff_show_line_numbers,
             auto_save_file_edits,
+            remote_url_policy,
+            remote_markdown_image_policy,
+            check_for_updates_on_startup,
             diff_scroll_sync,
             history_show_graph,
             history_show_author,
@@ -1047,6 +1158,7 @@ impl SettingsWindowView {
             history_tag_fetch_mode,
             default_history_mode,
             default_tag_type,
+            prune_deleted_remote_branches_on_fetch,
             current_view: SettingsView::Root,
             selected_category: SettingsCategory::General,
             search_query: String::new(),
@@ -1086,18 +1198,83 @@ impl SettingsWindowView {
         self.selected_category = category;
         // Collapse any expanded row so the new page starts clean, and scroll
         // the content pane back to the top.
-        self.expanded_section = None;
+        self.set_expanded_section(None, cx);
         self.settings_window_scroll
             .set_offset(gpui::point(px(0.0), px(0.0)));
         cx.notify();
     }
 
     fn toggle_section(&mut self, section: SettingsSection, cx: &mut gpui::Context<Self>) {
-        self.expanded_section = if self.expanded_section == Some(section) {
+        let next = if self.expanded_section == Some(section) {
             None
         } else {
             Some(section)
         };
+        self.set_expanded_section(next, cx);
+    }
+
+    fn set_expanded_section(
+        &mut self,
+        section: Option<SettingsSection>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.expanded_section == section {
+            return;
+        }
+        self.expanded_section = section;
+        if section == Some(SettingsSection::ExternalCodeEditor) {
+            self.ensure_external_editor_options_loaded(cx);
+        }
+        cx.notify();
+    }
+
+    /// Whether the External code editor dropdown is still waiting for the
+    /// installed-editor scan; it shows a static placeholder meanwhile.
+    pub(super) fn external_editor_options_loading(&self) -> bool {
+        !matches!(
+            self.external_editor_options_state,
+            ExternalEditorOptionsState::Loaded
+        )
+    }
+
+    /// Start the installed-editor scan the first time the dropdown needs it.
+    /// The scan runs on a background thread, and the option list is rebuilt
+    /// against the setting current at completion, so a change made in the
+    /// meantime is not clobbered.
+    fn ensure_external_editor_options_loaded(&mut self, cx: &mut gpui::Context<Self>) {
+        if !matches!(
+            self.external_editor_options_state,
+            ExternalEditorOptionsState::NotLoaded
+        ) {
+            return;
+        }
+        // The deterministic runtime (tests) has no background thread to wait
+        // for, so the list is complete by the time the expanded row draws.
+        if !crate::ui_runtime::current().uses_background_compute() {
+            let detected = crate::external_editor::detect_external_editors();
+            self.apply_detected_external_editors(detected, cx);
+            return;
+        }
+        let task = crate::ui_runtime::run_background_compute(
+            cx,
+            crate::external_editor::detect_external_editors,
+            |this, cx, detected| this.apply_detected_external_editors(detected, cx),
+        );
+        self.external_editor_options_state = ExternalEditorOptionsState::Loading { _task: task };
+    }
+
+    fn apply_detected_external_editors(
+        &mut self,
+        detected: Vec<crate::external_editor::DetectedExternalEditor>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.external_editor_options =
+            crate::external_editor::external_editor_options_from_detected(
+                self.external_editor_setting.as_ref(),
+                detected,
+            )
+            .into();
+        self.external_editor_options_state = ExternalEditorOptionsState::Loaded;
         cx.notify();
     }
 }

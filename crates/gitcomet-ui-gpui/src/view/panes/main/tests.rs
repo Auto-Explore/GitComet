@@ -234,13 +234,19 @@ fn identical_current_and_projection_remain_interactive_without_stage_payloads() 
 #[test]
 fn focused_mergetool_output_writes_exact_binary_bytes_and_creates_parent() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let output = dir.path().join("nested/result.bin");
     let bytes = b"\0ours\xffresult";
 
-    apply_focused_mergetool_output(&output, FocusedMergetoolOutput::Write(bytes))
-        .expect("write focused mergetool output");
+    apply_focused_mergetool_output(
+        dir.path(),
+        Path::new("nested/result.bin"),
+        FocusedMergetoolOutput::Write(bytes),
+    )
+    .expect("write focused mergetool output");
 
-    assert_eq!(std::fs::read(output).expect("read output"), bytes);
+    assert_eq!(
+        std::fs::read(dir.path().join("nested/result.bin")).expect("read output"),
+        bytes
+    );
 }
 
 #[test]
@@ -249,20 +255,61 @@ fn focused_mergetool_delete_accepts_existing_and_missing_outputs() {
     let output = dir.path().join("result.txt");
     std::fs::write(&output, "merged").expect("seed output");
 
-    apply_focused_mergetool_output(&output, FocusedMergetoolOutput::Delete)
-        .expect("delete focused mergetool output");
+    apply_focused_mergetool_output(
+        dir.path(),
+        Path::new("result.txt"),
+        FocusedMergetoolOutput::Delete,
+    )
+    .expect("delete focused mergetool output");
     assert!(!output.exists());
 
-    apply_focused_mergetool_output(&output, FocusedMergetoolOutput::Delete)
-        .expect("missing output is already deleted");
+    apply_focused_mergetool_output(
+        dir.path(),
+        Path::new("result.txt"),
+        FocusedMergetoolOutput::Delete,
+    )
+    .expect("missing output is already deleted");
+}
+
+#[cfg(unix)]
+#[test]
+fn focused_mergetool_output_refuses_to_leave_the_worktree() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let outside = tempfile::tempdir().expect("outside dir");
+    let victim = outside.path().join("victim");
+    std::fs::write(&victim, "original").expect("seed victim");
+    std::os::unix::fs::symlink(&victim, dir.path().join("conflict.txt")).expect("symlink");
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("docs")).expect("dir symlink");
+    std::fs::write(outside.path().join("note.txt"), "keep").expect("seed note");
+
+    apply_focused_mergetool_output(
+        dir.path(),
+        Path::new("conflict.txt"),
+        FocusedMergetoolOutput::Write(b"merged"),
+    )
+    .expect_err("a symlinked conflict path must be refused");
+    assert_eq!(
+        std::fs::read_to_string(&victim).expect("victim"),
+        "original"
+    );
+
+    apply_focused_mergetool_output(
+        dir.path(),
+        Path::new("docs/note.txt"),
+        FocusedMergetoolOutput::Delete,
+    )
+    .expect_err("a symlinked parent must be refused");
+    assert!(outside.path().join("note.txt").exists());
 }
 
 #[test]
 fn focused_mergetool_output_reports_filesystem_failures() {
     let dir = tempfile::tempdir().expect("temp dir");
 
+    std::fs::create_dir(dir.path().join("result")).expect("directory target");
     let err = apply_focused_mergetool_output(
         dir.path(),
+        Path::new("result"),
         FocusedMergetoolOutput::Write(b"cannot replace a directory"),
     )
     .expect_err("directory target must fail");

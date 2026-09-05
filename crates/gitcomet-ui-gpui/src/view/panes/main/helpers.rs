@@ -5,6 +5,7 @@ use crate::kit::{HighlightProvider, HighlightProviderResult};
 use crate::view::conflict_resolver::ConflictSegment;
 use palette::IntoColor;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use std::cell::RefCell;
 use std::collections::HashSet;
 
 const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
@@ -2714,21 +2715,26 @@ pub(super) enum FocusedMergetoolOutput<'a> {
     Delete,
 }
 
+/// Apply a focused-mergetool result to the repository-relative `path`. Resolved
+/// here, not at the call sites, so none of them can write through a symlink.
 pub(super) fn apply_focused_mergetool_output(
+    workdir: &std::path::Path,
     path: &std::path::Path,
     output: FocusedMergetoolOutput<'_>,
 ) -> std::io::Result<()> {
+    let relative = gitcomet_core::path_utils::validated_repo_relative_path(path)?;
+    let target = gitcomet_core::path_utils::symlink_free_write_target(workdir, &relative)?;
     match output {
         FocusedMergetoolOutput::Write(bytes) => {
-            if let Some(parent) = path
+            if let Some(parent) = target
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
             {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(path, bytes)
+            std::fs::write(&target, bytes)
         }
-        FocusedMergetoolOutput::Delete => match std::fs::remove_file(path) {
+        FocusedMergetoolOutput::Delete => match std::fs::remove_file(&target) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(err) => Err(err),
@@ -2970,6 +2976,21 @@ pub(in crate::view) type BlameTimeRangeCache = Option<(
     Option<(i64, i64)>,
 )>;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(in crate::view) struct FileImagePreviewAnimationSide {
+    pub(in crate::view) image_id: Option<gpui::ImageId>,
+    pub(in crate::view) frame_index: usize,
+    pub(in crate::view) frame_started_at: Option<std::time::Instant>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(in crate::view) struct FileImagePreviewAnimation {
+    pub(in crate::view) old: FileImagePreviewAnimationSide,
+    pub(in crate::view) new: FileImagePreviewAnimationSide,
+    pub(in crate::view) scheduled_deadline: Option<std::time::Instant>,
+    pub(in crate::view) generation: u64,
+}
+
 impl DiffHorizontalScrollState {
     pub(in crate::view) fn new() -> Self {
         Self {
@@ -2994,6 +3015,40 @@ impl DiffHorizontalScrollState {
             false
         }
     }
+}
+
+#[derive(Clone, Default)]
+pub(super) enum RemoteMarkdownImageDocumentSet {
+    #[default]
+    None,
+    Worktree(Arc<crate::view::markdown_preview::MarkdownPreviewDocument>),
+    Diff(Arc<crate::view::markdown_preview::MarkdownPreviewDiff>),
+    Conflict([Option<Arc<crate::view::markdown_preview::MarkdownPreviewDocument>>; 3]),
+}
+
+impl RemoteMarkdownImageDocumentSet {
+    pub(super) fn has_same_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::None, Self::None) => true,
+            (Self::Worktree(left), Self::Worktree(right)) => Arc::ptr_eq(left, right),
+            (Self::Diff(left), Self::Diff(right)) => Arc::ptr_eq(left, right),
+            (Self::Conflict(left), Self::Conflict(right)) => {
+                left.iter().zip(right).all(|(left, right)| {
+                    matches!((left, right), (None, None))
+                        || matches!((left, right), (Some(left), Some(right)) if Arc::ptr_eq(left, right))
+                })
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct RemoteMarkdownImageSummaryCache {
+    pub(super) documents: RemoteMarkdownImageDocumentSet,
+    pub(super) approval_revision: u64,
+    pub(super) urls: Arc<FxHashSet<SharedString>>,
+    pub(super) has_blocked: bool,
 }
 
 pub(crate) struct MainPaneView {
@@ -3059,6 +3114,10 @@ pub(crate) struct MainPaneView {
     /// stale range.
     pub(in crate::view) blame_time_range_cache: BlameTimeRangeCache,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
+    pub(in crate::view) remote_markdown_image_policy: RemoteMarkdownImagePolicy,
+    pub(in crate::view) approved_remote_markdown_image_urls: Arc<FxHashSet<SharedString>>,
+    pub(super) remote_markdown_image_approval_revision: u64,
+    pub(super) remote_markdown_image_summary_cache: RefCell<RemoteMarkdownImageSummaryCache>,
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_show_line_numbers: bool,
     pub(in crate::view) diff_scroll_sync: DiffScrollSync,
@@ -3149,6 +3208,9 @@ pub(crate) struct MainPaneView {
     /// replay stale coordinates.
     pub(in crate::view) diff_text_pending_syntax_click: Option<(DiffTextPos, DiffTextRegion)>,
     pub(in crate::view) diff_text_hitboxes: FxHashMap<(usize, DiffTextRegion), DiffTextHitbox>,
+    /// Non-text Markdown blocks that still carry logical copy text. Rebuilt
+    /// every frame alongside `diff_text_hitboxes`.
+    pub(in crate::view) diff_text_motion_targets: Vec<DiffTextMotionTarget>,
     /// A search match whose row still has to be brought into view sideways, and
     /// how many more frames to keep trying for.
     ///
@@ -3278,11 +3340,20 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_image_diff_cache_target: Option<DiffTarget>,
     pub(in crate::view) file_image_diff_cache_seq: u64,
     pub(in crate::view) file_image_diff_cache_inflight: Option<u64>,
+    pub(in crate::view) file_image_diff_cache_complete: bool,
+    pub(in crate::view) file_image_diff_cache_failed: bool,
     pub(in crate::view) file_image_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_image_diff_cache_old: Option<Arc<gpui::RenderImage>>,
     pub(in crate::view) file_image_diff_cache_new: Option<Arc<gpui::RenderImage>>,
     pub(in crate::view) file_image_diff_cache_old_svg_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_image_diff_cache_new_svg_path: Option<std::path::PathBuf>,
+    pub(in crate::view) file_image_preview_animation: FileImagePreviewAnimation,
+    pub(in crate::view) file_image_preview_animation_task: Option<gpui::Task<()>>,
+
+    pub(in crate::view) conflict_image_preview_seq: u64,
+    pub(in crate::view) conflict_image_preview_inflight: Option<u64>,
+    pub(in crate::view) conflict_image_preview_task: Option<gpui::Task<()>>,
+    pub(in crate::view) conflict_image_preview_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 
     pub(in crate::view) worktree_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_source_path: Option<std::path::PathBuf>,

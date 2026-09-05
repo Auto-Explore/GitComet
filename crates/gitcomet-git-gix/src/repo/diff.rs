@@ -6,7 +6,6 @@ use super::{
 };
 use crate::util::{
     git_command_failed_error, run_git_parsed_stdout, run_git_parsed_stdout_cancellable,
-    run_git_raw_output,
 };
 use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictResolverStrategy, ConflictSession, canonicalize_stage_parts,
@@ -66,6 +65,8 @@ impl GixRepo {
             DiffTarget::Commit { commit_id, path } => {
                 cmd.arg("show")
                     .arg("--no-ext-diff")
+                    .arg("-m")
+                    .arg("--first-parent")
                     .arg("--pretty=format:")
                     .arg(commit_id.as_ref());
                 if let Some(path) = path {
@@ -94,20 +95,20 @@ impl GixRepo {
     }
 
     pub(super) fn diff_unified_impl(&self, target: &DiffTarget) -> Result<String> {
-        let label = "git diff";
-        let output = run_git_raw_output(self.build_unified_diff_command(target), label)?;
-
-        // git diff exits 1 when there are differences — that is not a failure.
-        let ok_exit = output.status.success() || output.status.code() == Some(1);
-        if !ok_exit {
-            return Err(git_command_failed_error(label, output));
-        }
-
-        String::from_utf8(output.stdout).map_err(|_| {
-            Error::new(ErrorKind::Backend(
-                "git diff produced non-UTF-8 output".to_string(),
-            ))
-        })
+        run_git_parsed_stdout(
+            self.build_unified_diff_command(target),
+            "git diff",
+            true,
+            |stdout| {
+                Diff::read_unified_text(stdout)
+                    .map(|(text, _notice)| text)
+                    .map_err(|err| {
+                        Error::new(ErrorKind::Backend(format!(
+                            "failed to read unified git diff output: {err}"
+                        )))
+                    })
+            },
+        )
     }
 
     pub(super) fn diff_parsed_impl(&self, target: &DiffTarget) -> Result<Diff> {
@@ -121,9 +122,9 @@ impl GixRepo {
             "git diff",
             true,
             move |stdout| {
-                Diff::from_unified_reader(target, BufReader::new(stdout)).map_err(|err| {
+                Diff::from_unified_reader(target, stdout).map_err(|err| {
                     Error::new(ErrorKind::Backend(format!(
-                        "git diff produced non-UTF-8 output: {err}"
+                        "failed to parse unified git diff output: {err}"
                     )))
                 })
             },
@@ -148,9 +149,9 @@ impl GixRepo {
             true,
             cancellation,
             move |stdout| {
-                Diff::from_unified_reader(target, BufReader::new(stdout)).map_err(|err| {
+                Diff::from_unified_reader(target, stdout).map_err(|err| {
                     Error::new(ErrorKind::Backend(format!(
-                        "git diff produced non-UTF-8 output: {err}"
+                        "failed to parse unified git diff output: {err}"
                     )))
                 })
             },
@@ -480,7 +481,7 @@ impl GixRepo {
         }
 
         let cache_path = preview_blob_cache_path(&self.spec.workdir, logical_path, &blob_id);
-        if std::fs::metadata(&cache_path).is_ok_and(|m| m.is_file()) {
+        if cached_preview_blob_matches(&repo, &cache_path, blob_id) {
             return Ok(Some(cache_path));
         }
 
@@ -507,16 +508,8 @@ impl GixRepo {
         }
         tmp_file.flush().map_err(io_err_to_error)?;
 
-        if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent).map_err(io_err_to_error)?;
-        }
-        match tmp_file.persist(&cache_path) {
-            Ok(_) => Ok(Some(cache_path)),
-            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
-                Ok(Some(cache_path))
-            }
-            Err(err) => Err(io_err_to_error(err.error)),
-        }
+        persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        Ok(Some(cache_path))
     }
 
     pub(super) fn diff_file_image_impl(
@@ -739,39 +732,47 @@ impl GixRepo {
         };
         let new = gix_revision_path_blob_entry_optional(&repo, &new_revision, &path)?;
 
-        let (prefix, body_text, blob) = match (old, new) {
-            (None, Some(new)) => {
-                let new_text = decode_utf8_bytes(new.bytes)?;
-                (
-                    UnifiedBlobPrefix::Add,
-                    new_text,
-                    UnifiedBlobDiff {
-                        mode: new.mode,
-                        short_id: new.short_id,
-                    },
-                )
-            }
-            (Some(old), None) => {
-                let old_text = decode_utf8_bytes(old.bytes)?;
-                (
-                    UnifiedBlobPrefix::Remove,
-                    old_text,
-                    UnifiedBlobDiff {
-                        mode: old.mode,
-                        short_id: old.short_id,
-                    },
-                )
-            }
+        let (prefix, blob) = match (old, new) {
+            (None, Some(new)) => (
+                UnifiedBlobPrefix::Add,
+                UnifiedBlobDiff {
+                    object_id: new.object_id,
+                    size: new.size,
+                    mode: new.mode,
+                    short_id: new.short_id,
+                },
+            ),
+            (Some(old), None) => (
+                UnifiedBlobPrefix::Remove,
+                UnifiedBlobDiff {
+                    object_id: old.object_id,
+                    size: old.size,
+                    mode: old.mode,
+                    short_id: old.short_id,
+                },
+            ),
             _ => return Ok(None),
         };
+        // Check the cheap header before asking gix to inflate the blob.
+        if !Diff::fits_unified_limits(blob.size, 0) {
+            return Ok(None);
+        }
+        let Some(body_bytes) = gix_blob_bytes_from_object_id_optional(&repo, blob.object_id)?
+        else {
+            return Ok(None);
+        };
+        // Binary blob: `git diff` answers with "Binary files ... differ".
+        let Ok(body_text) = String::from_utf8(body_bytes) else {
+            return Ok(None);
+        };
 
-        Ok(Some(build_simple_commit_path_diff(
+        Ok(build_simple_commit_path_diff(
             target.clone(),
             &path,
             body_text.as_str(),
             prefix,
             &blob,
-        )))
+        ))
     }
 }
 
@@ -924,12 +925,15 @@ enum IndexUnconflictedBlobId {
 }
 
 struct RevisionPathBlobEntry {
-    bytes: Vec<u8>,
+    object_id: gix::ObjectId,
+    size: u64,
     mode: gix::objs::tree::EntryMode,
     short_id: String,
 }
 
 struct UnifiedBlobDiff {
+    object_id: gix::ObjectId,
+    size: u64,
     mode: gix::objs::tree::EntryMode,
     short_id: String,
 }
@@ -938,11 +942,6 @@ struct UnifiedBlobDiff {
 enum UnifiedBlobPrefix {
     Add,
     Remove,
-}
-
-fn decode_utf8_bytes(bytes: Vec<u8>) -> Result<String> {
-    String::from_utf8(bytes)
-        .map_err(|_| Error::new(ErrorKind::Unsupported("file is not valid UTF-8")))
 }
 
 fn gix_blob_bytes_from_object_id_optional(
@@ -1086,12 +1085,20 @@ fn gix_revision_path_blob_entry_optional(
         return Ok(None);
     };
 
-    let Some(bytes) = gix_blob_bytes_from_object_id_optional(repo, entry.object_id())? else {
+    let object_id = entry.object_id();
+    let Some(header) = repo
+        .try_find_header(object_id)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_header: {e}"))))?
+    else {
         return Ok(None);
     };
+    if header.kind() != gix::objs::Kind::Blob {
+        return Ok(None);
+    }
 
     Ok(Some(RevisionPathBlobEntry {
-        bytes,
+        object_id,
+        size: header.size(),
         mode: entry.mode(),
         short_id: entry.id().shorten_or_id().to_string(),
     }))
@@ -1188,6 +1195,35 @@ fn copy_and_hash(
     }
 }
 
+/// Whether `cache_path` is a regular file whose bytes hash to `blob_id` as a
+/// git blob.
+///
+/// The cache lives in the shared temp directory under a name anyone can
+/// compute, so a pre-existing file only proves that *something* wrote it.
+/// Hashing is the check git itself would apply and needs no subprocess. A
+/// symlink is never trusted: the bytes it reaches are not ours to vouch for
+/// and can change after this check.
+fn cached_preview_blob_matches(
+    repo: &gix::Repository,
+    cache_path: &Path,
+    blob_id: gix::ObjectId,
+) -> bool {
+    let Ok(metadata) = std::fs::symlink_metadata(cache_path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    let Ok(bytes) = std::fs::read(cache_path) else {
+        return false;
+    };
+    gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, &bytes)
+        .is_ok_and(|id| id == blob_id)
+}
+
+/// Move `tmp_file` to the content-addressed `cache_path`, keeping an existing
+/// regular file only when its bytes are identical. Shared by the worktree and
+/// preview caches, both of which live in the shared temp directory.
 fn persist_worktree_git_cache_file(
     tmp_file: tempfile::NamedTempFile,
     cache_path: &Path,
@@ -1199,7 +1235,11 @@ fn persist_worktree_git_cache_file(
         Ok(_) => Ok(()),
         Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
             let tmp_file = err.file;
-            if worktree_git_cache_files_match(&tmp_file, cache_path)? {
+            // A symlink is replaced even when the bytes it reaches match: its
+            // target is outside our control and can change after the compare.
+            let existing_is_symlink = std::fs::symlink_metadata(cache_path)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink());
+            if !existing_is_symlink && worktree_git_cache_files_match(&tmp_file, cache_path)? {
                 // The path is content-addressed. Keeping an identical winner is
                 // both cheaper and semantically important: replacing it changes
                 // filesystem metadata that open diff rows use as a freshness
@@ -1326,21 +1366,14 @@ fn build_simple_commit_path_diff(
     body_text: &str,
     prefix: UnifiedBlobPrefix,
     blob: &UnifiedBlobDiff,
-) -> Diff {
+) -> Option<Diff> {
     let path_text = path.to_string_lossy();
     let line_count = unified_body_line_count(body_text);
     let mut mode_buf = [0u8; 6];
     let mode_text =
         std::str::from_utf8(blob.mode.as_bytes(&mut mode_buf).as_ref()).unwrap_or("100644");
     let header_capacity = path_text.len().saturating_mul(4).saturating_add(96);
-    let body_capacity = body_text.len().saturating_add(line_count);
-    let missing_newline_marker = usize::from(!body_text.is_empty() && !body_text.ends_with('\n'))
-        .saturating_mul("\\ No newline at end of file\n".len());
-    let mut text = String::with_capacity(
-        header_capacity
-            .saturating_add(body_capacity)
-            .saturating_add(missing_newline_marker),
-    );
+    let mut text = String::with_capacity(header_capacity);
 
     text.push_str("diff --git a/");
     text.push_str(path_text.as_ref());
@@ -1381,8 +1414,30 @@ fn build_simple_commit_path_diff(
         }
     }
 
+    let missing_newline = !body_text.is_empty() && !body_text.ends_with('\n');
+    let body_byte_count = (body_text.len() as u64)
+        .saturating_add(line_count as u64)
+        .saturating_add(if missing_newline {
+            1 + "\\ No newline at end of file\n".len() as u64
+        } else {
+            0
+        });
+    let unified_byte_count = (text.len() as u64).saturating_add(body_byte_count);
+    let unified_line_count = text
+        .as_bytes()
+        .iter()
+        .filter(|&&byte| byte == b'\n')
+        .count()
+        .saturating_add(line_count)
+        .saturating_add(usize::from(missing_newline));
+    // Too large to build here; `git diff` renders it truncated instead.
+    if !Diff::fits_unified_limits(unified_byte_count, unified_line_count) {
+        return None;
+    }
+    text.reserve(body_byte_count as usize);
+
     append_prefixed_unified_body(&mut text, prefix, body_text);
-    Diff::from_unified_owned(target, text)
+    Some(Diff::from_unified_owned(target, text))
 }
 
 fn append_prefixed_unified_body(target: &mut String, prefix: UnifiedBlobPrefix, text: &str) {
@@ -1512,6 +1567,136 @@ mod tests {
         let second = worktree_source_identity(workdir, path, 0x22);
 
         assert_ne!(first, second);
+    }
+
+    fn stage_blob(workdir: &Path, relative: &str, content: &[u8]) -> gix::ObjectId {
+        std::fs::write(workdir.join(relative), content).expect("write file");
+        run_git(workdir, &["add", relative]);
+        gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::objs::Kind::Blob, content)
+            .expect("blob id")
+    }
+
+    #[test]
+    fn preview_blob_cache_ignores_pre_planted_file_with_other_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let logical_path = Path::new("image.bin");
+        let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+
+        // The name is a function of (workdir, path, blob id) that anyone on the
+        // host can compute, so a file there is not evidence of who wrote it.
+        let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id);
+        std::fs::write(&cache_path, b"planted by someone else").expect("plant cache file");
+
+        let served = repo
+            .cached_preview_blob_file_path(blob_id, logical_path)
+            .expect("materialize blob")
+            .expect("blob exists");
+
+        assert_eq!(served, cache_path);
+        assert_eq!(
+            std::fs::read(&served).expect("read served file"),
+            b"real blob bytes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_blob_cache_replaces_symlink_at_cache_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let logical_path = Path::new("image.bin");
+        let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+
+        let elsewhere = tempfile::tempdir().expect("symlink target dir");
+        let target = elsewhere.path().join("target");
+        std::fs::write(&target, b"real blob bytes").expect("write symlink target");
+        let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id);
+        let _ = std::fs::remove_file(&cache_path);
+        std::os::unix::fs::symlink(&target, &cache_path).expect("plant symlink");
+
+        let served = repo
+            .cached_preview_blob_file_path(blob_id, logical_path)
+            .expect("materialize blob")
+            .expect("blob exists");
+
+        let metadata = std::fs::symlink_metadata(&served).expect("served metadata");
+        assert!(
+            metadata.file_type().is_file(),
+            "a symlink at the cache path must be replaced by a regular file, even when its target matches"
+        );
+        assert_eq!(
+            std::fs::read(&served).expect("read served file"),
+            b"real blob bytes"
+        );
+    }
+
+    #[test]
+    fn preview_blob_cache_keeps_verified_existing_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let logical_path = Path::new("image.bin");
+        let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+
+        let first = repo
+            .cached_preview_blob_file_path(blob_id, logical_path)
+            .expect("materialize blob")
+            .expect("blob exists");
+        let mut permissions = std::fs::metadata(&first)
+            .expect("first cache metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&first, permissions).expect("make cache read-only");
+
+        let second = repo
+            .cached_preview_blob_file_path(blob_id, logical_path)
+            .expect("reuse cached blob")
+            .expect("blob exists");
+
+        assert_eq!(first, second);
+        let metadata = std::fs::metadata(&second).expect("second cache metadata");
+        assert!(
+            metadata.permissions().readonly(),
+            "a verified cache file must be reused, not rewritten"
+        );
+
+        #[cfg(windows)]
+        {
+            let mut permissions = metadata.permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&second, permissions)
+                .expect("restore writable cache for cleanup");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persist_worktree_git_cache_file_replaces_symlink_even_with_identical_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cache_path = tmp.path().join("gitcomet-diff-worktree-symlink.txt");
+        let target = tmp.path().join("target.txt");
+        let content = b"identical normalized content";
+        std::fs::write(&target, content).expect("write symlink target");
+        std::os::unix::fs::symlink(&target, &cache_path).expect("plant symlink");
+
+        let mut duplicate = tempfile::NamedTempFile::new_in(tmp.path()).expect("temp file");
+        duplicate.write_all(content).expect("write cache candidate");
+        duplicate.flush().expect("flush cache candidate");
+
+        persist_worktree_git_cache_file(duplicate, &cache_path)
+            .expect("replace symlinked cache file");
+
+        let metadata = std::fs::symlink_metadata(&cache_path).expect("cache metadata");
+        assert!(metadata.file_type().is_file());
+        assert_eq!(std::fs::read(&cache_path).expect("read cache"), content);
+        assert_eq!(
+            std::fs::read(&target).expect("read former target"),
+            content,
+            "the symlink target must be left alone"
+        );
     }
 
     #[test]

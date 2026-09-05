@@ -780,7 +780,7 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -837,6 +837,57 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
         redraw(cx);
     };
 
+    // The first chip represents both `main` and `origin/main`. A direct
+    // right-click must disambiguate those exact refs rather than silently
+    // choosing whichever one happened to be inserted first.
+    let combined_chip_point = refs_column_point(cx, 0);
+    cx.simulate_mouse_move(combined_chip_point, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        combined_chip_point,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        combined_chip_point,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    redraw(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app)
+                .active_context_menu_invoker
+                .as_ref()
+                .map(|invoker| invoker.as_ref()),
+            Some("history_branch_chip_menu_1_tip_main"),
+            "a chip menu must pin the chip instead of the whole commit row"
+        );
+        assert_eq!(
+            crate::view::test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::BranchRefsMenu {
+                repo_id,
+                display_name: "main".to_string(),
+                targets: vec![
+                    BranchMenuTarget {
+                        section: BranchSection::Local,
+                        name: "main".to_string(),
+                    },
+                    BranchMenuTarget {
+                        section: BranchSection::Remote,
+                        name: "origin/main".to_string(),
+                    },
+                ],
+            })
+        );
+    });
+    cx.update(|_window, app| {
+        let popover_host = view.read(app).popover_host.clone();
+        popover_host.update(app, |host, cx| host.close_popover(cx));
+    });
+    cx.run_until_parked();
+    redraw(cx);
+
     move_to_refs_column(cx);
     assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
     cx.update(|_window, app| {
@@ -891,6 +942,12 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
             None
         );
     });
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("feature".into()),
+        "hover-menu rows should expose their complete ref name"
+    );
 
     let click_hover_item =
         |cx: &mut gpui::VisualTestContext, selector: &'static str, button: gpui::MouseButton| {
@@ -1294,7 +1351,7 @@ fn history_row_selection_follows_the_press_not_the_release(cx: &mut gpui::TestAp
     // view renders; the reducer thread mutates exactly this state.
     store_for_assert.replace_snapshot_for_test(Arc::clone(&state));
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1403,7 +1460,7 @@ fn history_rows_ignore_clicks_that_landed_on_the_collapsed_sidebar_popover(
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1518,7 +1575,7 @@ fn history_refs_hover_closes_when_history_scrolls_without_mouse_move(
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1618,7 +1675,7 @@ fn history_refs_hover_does_not_open_while_overlay_is_open(cx: &mut gpui::TestApp
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1721,7 +1778,7 @@ fn history_refs_hover_closes_when_click_selects_another_commit_without_mouse_mov
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1834,7 +1891,7 @@ fn history_refs_hover_item_click_keeps_existing_history_selection(cx: &mut gpui:
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });
@@ -1989,7 +2046,7 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
 
     let apply_state = |cx: &mut gpui::VisualTestContext, state: Arc<AppState>| {
         cx.update(|window, app| {
-            let ui_model = view.read(app)._ui_model.clone();
+            let ui_model = view.read(app).ui_model.clone();
             ui_model.update(app, |model, cx| {
                 model.set_state(Arc::clone(&state), cx);
             });
@@ -2151,7 +2208,7 @@ fn history_refs_hover_closes_when_history_scrolls_programmatically(cx: &mut gpui
     });
 
     cx.update(|_window, app| {
-        let ui_model = view.read(app)._ui_model.clone();
+        let ui_model = view.read(app).ui_model.clone();
         ui_model.update(app, |model, cx| {
             model.set_state(Arc::clone(&state), cx);
         });

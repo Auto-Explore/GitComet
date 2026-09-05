@@ -1,8 +1,8 @@
 use super::GixRepo;
 use super::history::gix_head_id_or_none;
 use crate::util::{
-    bytes_to_text_preserving_utf8, git_workdir_cmd_for, path_buf_from_git_bytes,
-    run_git_raw_output, run_git_simple, run_git_with_output,
+    bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
+    run_git_raw_output, run_git_simple, run_git_with_output, stable_path_bytes,
 };
 use gitcomet_core::domain::{
     CommitFileChange, CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
@@ -11,13 +11,15 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::remote_url::{RemoteUrlPolicy, validate_remote_url_with_policy};
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
+use gitcomet_core::text_utils::redact_url_userinfo;
 use gix::bstr::ByteSlice as _;
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -38,6 +40,22 @@ fn allow_file_submodule_transport(cmd: &mut Command) {
 }
 
 impl GixRepo {
+    pub(super) fn head_path_is_gitlink_impl(&self, path: &Path) -> Result<bool> {
+        let path = if path.is_absolute() {
+            path.strip_prefix(&self.spec.workdir).map_err(|_| {
+                Error::new(ErrorKind::Backend(format!(
+                    "submodule path '{}' is outside repository '{}'",
+                    path.display(),
+                    self.spec.workdir.display()
+                )))
+            })?
+        } else {
+            path
+        };
+        let repo = self.reopen_repo()?;
+        Ok(head_gitlink_commit_id(&repo, path)?.is_some())
+    }
+
     pub(super) fn list_submodules_impl(&self) -> Result<Vec<Submodule>> {
         self.list_submodules_cancellable_impl(&CancellationToken::new())
     }
@@ -78,7 +96,9 @@ impl GixRepo {
         &self,
         url: &str,
         path: &Path,
+        remote_url_policy: RemoteUrlPolicy,
     ) -> Result<SubmoduleTrustDecision> {
+        validate_remote_url_with_policy(url, remote_url_policy)?;
         let repo = self.reopen_repo()?;
         let Some(target) =
             trust_target_from_raw_source(repo_workdir_for_submodule_trust(&repo), path, url)?
@@ -95,11 +115,20 @@ impl GixRepo {
         }
     }
 
-    pub(super) fn check_submodule_update_trust_impl(&self) -> Result<SubmoduleTrustDecision> {
+    pub(super) fn check_submodule_update_trust_impl(
+        &self,
+        remote_url_policy: RemoteUrlPolicy,
+    ) -> Result<SubmoduleTrustDecision> {
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo);
         let mut sources = BTreeMap::new();
-        collect_repo_untrusted_submodule_sources(&repo, trust_root, Path::new(""), &mut sources)?;
+        collect_repo_untrusted_submodule_sources(
+            &repo,
+            trust_root,
+            Path::new(""),
+            &mut sources,
+            remote_url_policy,
+        )?;
         if sources.is_empty() {
             Ok(SubmoduleTrustDecision::Proceed)
         } else {
@@ -112,6 +141,7 @@ impl GixRepo {
     pub(super) fn check_submodule_load_trust_impl(
         &self,
         path: &Path,
+        remote_url_policy: RemoteUrlPolicy,
     ) -> Result<SubmoduleTrustDecision> {
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo);
@@ -122,6 +152,7 @@ impl GixRepo {
             Path::new(""),
             path,
             &mut sources,
+            remote_url_policy,
         )?;
         if !found {
             return Err(Error::new(ErrorKind::Backend(format!(
@@ -146,7 +177,9 @@ impl GixRepo {
         name: Option<&str>,
         force: bool,
         approved_sources: &[SubmoduleTrustTarget],
+        remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
+        validate_remote_url_with_policy(url, remote_url_policy)?;
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo);
         let git_dir = repo.git_dir().to_path_buf();
@@ -162,23 +195,9 @@ impl GixRepo {
         let logical_name = name
             .map(PathBuf::from)
             .unwrap_or_else(|| path.to_path_buf());
+        validate_submodule_git_dir_name(&logical_name)?;
 
-        cmd.arg("submodule").arg("add");
-        let mut command = "git submodule add".to_string();
-        if let Some(branch) = branch {
-            cmd.arg("--branch").arg(branch);
-            command.push_str(&format!(" --branch {branch}"));
-        }
-        if force {
-            cmd.arg("--force");
-            command.push_str(" --force");
-        }
-        if let Some(name) = name {
-            cmd.arg("--name").arg(name);
-            command.push_str(&format!(" --name {name}"));
-        }
-        cmd.arg(url).arg(path);
-        command.push_str(&format!(" {url} {}", path.display()));
+        let command = push_submodule_add_args(&mut cmd, url, path, branch, name, force);
         match run_git_with_output(cmd, &command) {
             Ok(output) => Ok(output),
             Err(err) => Err(cleanup_failed_submodule_add_error(
@@ -194,13 +213,20 @@ impl GixRepo {
     pub(super) fn update_submodules_with_output_impl(
         &self,
         approved_sources: &[SubmoduleTrustTarget],
+        remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo).to_path_buf();
         persist_submodule_trust_approvals(&trust_root, approved_sources)?;
 
         let mut outputs = Vec::new();
-        update_repo_submodules_recursive(&repo, &trust_root, Path::new(""), &mut outputs)?;
+        update_repo_submodules_recursive(
+            &repo,
+            &trust_root,
+            Path::new(""),
+            &mut outputs,
+            remote_url_policy,
+        )?;
 
         if outputs.is_empty() {
             Ok(CommandOutput::empty_success(
@@ -215,14 +241,21 @@ impl GixRepo {
         &self,
         path: &Path,
         approved_sources: &[SubmoduleTrustTarget],
+        remote_url_policy: RemoteUrlPolicy,
     ) -> Result<CommandOutput> {
         let repo = self.reopen_repo()?;
         let trust_root = repo_workdir_for_submodule_trust(&repo).to_path_buf();
         persist_submodule_trust_approvals(&trust_root, approved_sources)?;
 
         let mut outputs = Vec::new();
-        let found =
-            load_target_submodule_recursive(&repo, &trust_root, Path::new(""), path, &mut outputs)?;
+        let found = load_target_submodule_recursive(
+            &repo,
+            &trust_root,
+            Path::new(""),
+            path,
+            &mut outputs,
+            remote_url_policy,
+        )?;
         if !found {
             return Err(Error::new(ErrorKind::Backend(format!(
                 "submodule '{}' is not configured in this repository",
@@ -410,11 +443,45 @@ fn collect_repo_submodules(
     Ok(())
 }
 
+/// Append the `git submodule add` arguments and return the display label.
+///
+/// `--` keeps a user-typed URL or path that starts with `-` out of the option
+/// parser (`--reference=<path>` would borrow objects from an arbitrary repo).
+fn push_submodule_add_args(
+    cmd: &mut Command,
+    url: &str,
+    path: &Path,
+    branch: Option<&str>,
+    name: Option<&str>,
+    force: bool,
+) -> String {
+    cmd.arg("submodule").arg("add");
+    let mut command = "git submodule add".to_string();
+    if let Some(branch) = branch {
+        cmd.arg("--branch").arg(branch);
+        command.push_str(&format!(" --branch {branch}"));
+    }
+    if force {
+        cmd.arg("--force");
+        command.push_str(" --force");
+    }
+    if let Some(name) = name {
+        cmd.arg("--name").arg(name);
+        command.push_str(&format!(" --name {name}"));
+    }
+    // The label stays a human-readable summary; `--` is an argv concern only,
+    // and credentials in the URL are masked because the label is displayed.
+    cmd.arg("--").arg(url).arg(path);
+    command.push_str(&format!(" {} {}", redact_url_userinfo(url), path.display()));
+    command
+}
+
 fn collect_repo_untrusted_submodule_sources(
     repo: &gix::Repository,
     trust_root: &Path,
     prefix: &Path,
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
+    remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
     let Some(submodules) = repo
         .submodules()
@@ -431,14 +498,21 @@ fn collect_repo_untrusted_submodule_sources(
             .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
         let full_path = prefix.join(&relative_path);
 
-        if let Some(target) = trust_target_from_submodule(current_workdir, &full_path, &submodule)?
+        if let Some(target) =
+            trust_target_from_submodule(current_workdir, &full_path, &submodule, remote_url_policy)?
             && !submodule_source_trusted(trust_root, &target)?
         {
             out.insert(full_path.clone(), target);
         }
 
         if let Some(nested_repo) = open_configured_submodule_repo(&submodule)? {
-            collect_repo_untrusted_submodule_sources(&nested_repo, trust_root, &full_path, out)?;
+            collect_repo_untrusted_submodule_sources(
+                &nested_repo,
+                trust_root,
+                &full_path,
+                out,
+                remote_url_policy,
+            )?;
         }
     }
 
@@ -450,6 +524,7 @@ fn update_repo_submodules_recursive(
     trust_root: &Path,
     prefix: &Path,
     outputs: &mut Vec<CommandOutput>,
+    remote_url_policy: RemoteUrlPolicy,
 ) -> Result<()> {
     let Some(submodules) = repo
         .submodules()
@@ -466,7 +541,12 @@ fn update_repo_submodules_recursive(
             .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
         let full_path = prefix.join(&relative_path);
 
-        let local_target = trust_target_from_submodule(current_workdir, &full_path, &submodule)?;
+        let local_target = trust_target_from_submodule(
+            current_workdir,
+            &full_path,
+            &submodule,
+            remote_url_policy,
+        )?;
 
         let mut cmd = git_workdir_cmd_for(current_workdir);
         if let Some(target) = local_target.as_ref() {
@@ -487,7 +567,13 @@ fn update_repo_submodules_recursive(
         )?);
 
         if let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)? {
-            update_repo_submodules_recursive(&nested_repo, trust_root, &full_path, outputs)?;
+            update_repo_submodules_recursive(
+                &nested_repo,
+                trust_root,
+                &full_path,
+                outputs,
+                remote_url_policy,
+            )?;
         }
     }
 
@@ -500,6 +586,7 @@ fn collect_target_submodule_untrusted_sources(
     prefix: &Path,
     target_path: &Path,
     out: &mut BTreeMap<PathBuf, SubmoduleTrustTarget>,
+    remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
     let Some(submodules) = repo
         .submodules()
@@ -517,9 +604,12 @@ fn collect_target_submodule_untrusted_sources(
         let full_path = prefix.join(&relative_path);
 
         if full_path == target_path {
-            if let Some(target) =
-                trust_target_from_submodule(current_workdir, &full_path, &submodule)?
-                && !submodule_source_trusted(trust_root, &target)?
+            if let Some(target) = trust_target_from_submodule(
+                current_workdir,
+                &full_path,
+                &submodule,
+                remote_url_policy,
+            )? && !submodule_source_trusted(trust_root, &target)?
             {
                 out.insert(full_path.clone(), target);
             }
@@ -529,6 +619,7 @@ fn collect_target_submodule_untrusted_sources(
                     trust_root,
                     &full_path,
                     out,
+                    remote_url_policy,
                 )?;
             }
             return Ok(true);
@@ -542,6 +633,7 @@ fn collect_target_submodule_untrusted_sources(
                 &full_path,
                 target_path,
                 out,
+                remote_url_policy,
             )?
         {
             return Ok(true);
@@ -557,6 +649,7 @@ fn load_target_submodule_recursive(
     prefix: &Path,
     target_path: &Path,
     outputs: &mut Vec<CommandOutput>,
+    remote_url_policy: RemoteUrlPolicy,
 ) -> Result<bool> {
     let Some(submodules) = repo
         .submodules()
@@ -574,8 +667,12 @@ fn load_target_submodule_recursive(
         let full_path = prefix.join(&relative_path);
 
         if full_path == target_path {
-            let local_target =
-                trust_target_from_submodule(current_workdir, &full_path, &submodule)?;
+            let local_target = trust_target_from_submodule(
+                current_workdir,
+                &full_path,
+                &submodule,
+                remote_url_policy,
+            )?;
             let mut cmd = git_workdir_cmd_for(current_workdir);
             if let Some(target) = local_target.as_ref() {
                 if !submodule_source_trusted(trust_root, target)? {
@@ -595,7 +692,13 @@ fn load_target_submodule_recursive(
             )?);
 
             if let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)? {
-                update_repo_submodules_recursive(&nested_repo, trust_root, &full_path, outputs)?;
+                update_repo_submodules_recursive(
+                    &nested_repo,
+                    trust_root,
+                    &full_path,
+                    outputs,
+                    remote_url_policy,
+                )?;
             }
             return Ok(true);
         }
@@ -608,6 +711,7 @@ fn load_target_submodule_recursive(
                 &full_path,
                 target_path,
                 outputs,
+                remote_url_policy,
             )?
         {
             return Ok(true);
@@ -1235,7 +1339,16 @@ fn resolve_submodule_logical_name(repo: &gix::Repository, path: &Path) -> Result
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
             .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
         if relative_path == path {
-            return pathbuf_from_gix_path(submodule.name()).map(Some);
+            let name = submodule.validated_name().map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "submodule '{}' has an unsafe name {:?}: {e}",
+                    path.display(),
+                    submodule.name()
+                )))
+            })?;
+            let logical_name = pathbuf_from_gix_path(name)?;
+            validate_submodule_git_dir_name(&logical_name)?;
+            return Ok(Some(logical_name));
         }
     }
 
@@ -1458,9 +1571,45 @@ fn remove_local_submodule_config_section_if_present(
     ))))
 }
 
+/// Refuse a submodule name that could leave `.git/modules/` once joined onto
+/// it.
+///
+/// Names come from `.gitmodules` (`[submodule "<name>"]`, tracked content that
+/// whoever published the repository controls) or from the user's own `--name`.
+/// Git only forbids `..` components, so an absolute name passes its checks —
+/// and `Path::join` adopts an absolute right-hand side wholesale, which would
+/// aim the metadata removal below at an arbitrary directory.
+fn validate_submodule_git_dir_name(logical_name: &Path) -> Result<()> {
+    let mut has_normal_component = false;
+    for component in logical_name.components() {
+        match component {
+            Component::Normal(_) => has_normal_component = true,
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(unsafe_submodule_name_error(logical_name));
+            }
+        }
+    }
+    if !has_normal_component {
+        return Err(unsafe_submodule_name_error(logical_name));
+    }
+    Ok(())
+}
+
+fn unsafe_submodule_name_error(logical_name: &Path) -> Error {
+    Error::new(ErrorKind::Backend(format!(
+        "refusing to use submodule name '{}': it must be a relative path without '..' components so it stays inside .git/modules",
+        logical_name.display()
+    )))
+}
+
 fn remove_submodule_git_dir(git_dir: &Path, logical_name: &Path) -> Result<()> {
+    validate_submodule_git_dir_name(logical_name)?;
     let modules_root = git_dir.join("modules");
     let module_dir = modules_root.join(logical_name);
+    if !module_dir.starts_with(&modules_root) {
+        return Err(unsafe_submodule_name_error(logical_name));
+    }
     if !module_dir.exists() {
         return Ok(());
     }
@@ -1582,10 +1731,17 @@ fn trust_target_from_submodule(
     current_repo_workdir: &Path,
     full_submodule_path: &Path,
     submodule: &gix::Submodule<'_>,
+    remote_url_policy: RemoteUrlPolicy,
 ) -> Result<Option<SubmoduleTrustTarget>> {
     let url = submodule
         .url()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule url: {e}"))))?;
+    // .gitmodules ships with the repository, so hold its URL to the same
+    // allowlist as the Add dialog rather than to Git's protocol policy alone.
+    validate_remote_url_with_policy(
+        &bytes_to_text_preserving_utf8(url.to_bstring().as_ref()),
+        remote_url_policy,
+    )?;
     trust_target_from_url(current_repo_workdir, full_submodule_path, &url)
 }
 
@@ -1806,42 +1962,6 @@ fn git_config_get_bool_global(trust_root: &Path, key: &str) -> Result<Option<boo
     ))))
 }
 
-fn stable_path_bytes(path: &Path) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt as _;
-
-        path.as_os_str().as_bytes().to_vec()
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt as _;
-
-        let mut bytes = Vec::new();
-        for unit in path.as_os_str().encode_wide() {
-            bytes.extend_from_slice(&unit.to_le_bytes());
-        }
-        bytes
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        path.to_str()
-            .map(|text| text.as_bytes().to_vec())
-            .unwrap_or_else(|| format!("{path:?}").into_bytes())
-    }
-}
-
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
 fn pathbuf_from_gix_path(path: &gix::bstr::BStr) -> Result<PathBuf> {
     gix::path::try_from_bstr(path)
         .map(|path| path.into_owned())
@@ -1858,10 +1978,11 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        GixRepo, allow_file_submodule_transport, is_git_config_contention_error,
-        retry_git_config_contention, submodule_file_transport_consent_key,
+    use gitcomet_core::remote_url::{
+        RemoteProtocol, RemoteUrlPolicy, validate_remote_url_with_policy,
     };
+
+    use super::*;
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
     use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
     use gitcomet_core::services::CancellationToken;
@@ -1869,6 +1990,31 @@ mod tests {
     use std::ffi::OsStr;
     use std::path::Path;
     use std::process::Command;
+
+    #[test]
+    fn configured_submodule_urls_survive_validation() {
+        // The URL is validated after gix re-serializes it, so every shape a
+        // real .gitmodules carries has to come back through unchanged enough.
+        let policy = RemoteUrlPolicy::default().with_allowed(RemoteProtocol::Http, true);
+        for source in [
+            "../sibling.git",
+            "./nested.git",
+            "sub/other.git",
+            "/srv/git/repo.git",
+            "https://example.com/org/repo.git",
+            "http://git.internal/org/repo.git",
+            "ssh://git@example.com/org/repo.git",
+            "git@example.com:org/repo.git",
+            "file:///srv/git/repo.git",
+        ] {
+            let url = gix::url::parse(source.as_bytes().as_bstr()).expect(source);
+            let rendered = bytes_to_text_preserving_utf8(url.to_bstring().as_ref());
+            assert!(
+                validate_remote_url_with_policy(&rendered, policy).is_ok(),
+                "{source} rendered as {rendered}"
+            );
+        }
+    }
 
     fn run_git(workdir: &Path, args: &[&str]) {
         let output = Command::new("git")
@@ -1896,6 +2042,159 @@ mod tests {
     fn open_repo(workdir: &Path) -> GixRepo {
         let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
         GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
+
+    #[test]
+    fn submodule_add_args_separate_positionals_from_options() {
+        let mut cmd = Command::new("git");
+        let label = push_submodule_add_args(
+            &mut cmd,
+            "--reference=/tmp/evil",
+            Path::new("sub"),
+            Some("main"),
+            Some("lib/sub"),
+            true,
+        );
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                OsStr::new("submodule"),
+                OsStr::new("add"),
+                OsStr::new("--branch"),
+                OsStr::new("main"),
+                OsStr::new("--force"),
+                OsStr::new("--name"),
+                OsStr::new("lib/sub"),
+                OsStr::new("--"),
+                OsStr::new("--reference=/tmp/evil"),
+                OsStr::new("sub"),
+            ]
+        );
+        assert_eq!(
+            label,
+            "git submodule add --branch main --force --name lib/sub --reference=/tmp/evil sub"
+        );
+    }
+
+    #[test]
+    fn submodule_add_label_masks_credentials_but_argv_keeps_the_url() {
+        let mut cmd = Command::new("git");
+        let url = "https://user:s3cret@example.com/lib.git";
+        let label = push_submodule_add_args(&mut cmd, url, Path::new("lib"), None, None, false);
+        assert_eq!(
+            label,
+            "git submodule add https://user:***@example.com/lib.git lib"
+        );
+        assert!(cmd.get_args().any(|arg| arg == OsStr::new(url)));
+    }
+
+    #[test]
+    fn submodule_git_dir_name_validation_accepts_nested_relative_names() {
+        for name in ["sub", "group/sub", "./sub", "a.b/c-d"] {
+            validate_submodule_git_dir_name(Path::new(name))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+    }
+
+    #[test]
+    fn submodule_git_dir_name_validation_rejects_names_that_escape_modules_dir() {
+        for name in ["", ".", "..", "../victim", "sub/../../victim", "sub/.."] {
+            let err = validate_submodule_git_dir_name(Path::new(name))
+                .expect_err(&format!("{name:?} must be rejected"));
+            assert!(
+                matches!(err.kind(), ErrorKind::Backend(_)),
+                "{name:?}: {err}"
+            );
+        }
+        let absolute = std::env::temp_dir().join("gitcomet-victim");
+        validate_submodule_git_dir_name(&absolute).expect_err("absolute names must be rejected");
+    }
+
+    #[test]
+    fn remove_submodule_git_dir_refuses_parent_dir_names() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let git_dir = tmp.path().join(".git");
+        let victim = tmp.path().join("victim");
+        std::fs::create_dir_all(git_dir.join("modules")).expect("modules dir");
+        std::fs::create_dir_all(&victim).expect("victim dir");
+        std::fs::write(victim.join("keep"), b"keep").expect("victim file");
+
+        let err = remove_submodule_git_dir(&git_dir, Path::new("../../victim"))
+            .expect_err("a name with '..' must not be joined onto .git/modules");
+        assert!(err.to_string().contains("../../victim"), "{err}");
+        assert!(victim.join("keep").exists(), "victim directory was deleted");
+    }
+
+    #[test]
+    fn remove_submodule_git_dir_refuses_absolute_names() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(git_dir.join("modules")).expect("modules dir");
+        let victim = tempfile::tempdir().expect("victim tempdir");
+        std::fs::write(victim.path().join("keep"), b"keep").expect("victim file");
+
+        let err = remove_submodule_git_dir(&git_dir, victim.path())
+            .expect_err("an absolute name must not replace the .git/modules root");
+        assert!(matches!(err.kind(), ErrorKind::Backend(_)), "{err}");
+        assert!(
+            victim.path().join("keep").exists(),
+            "victim directory was deleted"
+        );
+    }
+
+    #[test]
+    fn remove_submodule_git_dir_removes_nested_module_and_prunes_empty_parents() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let git_dir = tmp.path().join(".git");
+        let modules = git_dir.join("modules");
+        let module_dir = modules.join("group").join("sub");
+        std::fs::create_dir_all(&module_dir).expect("module dir");
+        std::fs::write(module_dir.join("HEAD"), b"ref: refs/heads/main\n").expect("module file");
+
+        remove_submodule_git_dir(&git_dir, Path::new("group/sub")).expect("remove module dir");
+
+        assert!(!module_dir.exists());
+        assert!(
+            !modules.join("group").exists(),
+            "empty parent should be pruned"
+        );
+        assert!(modules.exists(), "modules root must survive");
+    }
+
+    #[test]
+    fn resolve_submodule_logical_name_rejects_names_that_escape_modules_dir() {
+        for name in ["../../escape", "/tmp/gitcomet-victim"] {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            init_test_repo(tmp.path());
+            std::fs::write(
+                tmp.path().join(".gitmodules"),
+                format!(
+                    "[submodule \"{name}\"]\n\tpath = sub\n\turl = https://example.invalid/sub.git\n"
+                ),
+            )
+            .expect("write .gitmodules");
+
+            let repo = gix::open(tmp.path()).expect("open repo");
+            let err = resolve_submodule_logical_name(&repo, Path::new("sub"))
+                .expect_err(&format!("name {name:?} must be rejected"));
+            assert!(err.to_string().contains(name), "{name:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn resolve_submodule_logical_name_returns_safe_names() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        std::fs::write(
+            tmp.path().join(".gitmodules"),
+            "[submodule \"group/sub\"]\n\tpath = sub\n\turl = https://example.invalid/sub.git\n",
+        )
+        .expect("write .gitmodules");
+
+        let repo = gix::open(tmp.path()).expect("open repo");
+        let name = resolve_submodule_logical_name(&repo, Path::new("sub")).expect("resolve name");
+        assert_eq!(name.as_deref(), Some(Path::new("group/sub")));
     }
 
     #[test]

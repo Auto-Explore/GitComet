@@ -1,10 +1,11 @@
 use std::backtrace::Backtrace;
 use std::fmt::Write as _;
-use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use gitcomet_core::fs_utils::{open_private_append, write_private_file};
 
 static WRITING_CRASH_LOG: AtomicBool = AtomicBool::new(false);
 static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -228,10 +229,6 @@ fn write_runtime_error_log(record: &log::Record<'_>) {
     let Some(dir) = crash_dir() else {
         return;
     };
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-
     let location = record
         .file()
         .map(|file| match record.line() {
@@ -256,12 +253,9 @@ fn write_runtime_error_log_in_dir(
     info: &str,
     backtrace: &str,
 ) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
     let path = runtime_error_path(dir);
-    let has_existing_log = std::fs::metadata(&path)
-        .map(|metadata| metadata.len() > 0)
-        .unwrap_or(false);
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = open_private_append(&path)?;
+    let has_existing_log = file.metadata()?.len() > 0;
     if has_existing_log {
         writeln!(file)?;
     }
@@ -306,38 +300,36 @@ pub fn begin_session() -> std::io::Result<()> {
 }
 
 fn begin_session_in_dir(dir: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
     remove_file_if_exists(&last_operation_path(dir))?;
     remove_file_if_exists(&runtime_error_path(dir))?;
 
-    let mut file = File::create(session_marker_path(dir))?;
-    writeln!(file, "=== GitComet abnormal exit candidate ===")?;
-    writeln!(file, "failure_kind=abnormal-exit")?;
-    writeln!(file, "failure_context=")?;
-    writeln!(file, "copy_source=")?;
-    writeln!(file, "timestamp_unix_ms={}", unix_time_ms())?;
+    let mut contents = Vec::new();
+    writeln!(contents, "=== GitComet abnormal exit candidate ===")?;
+    writeln!(contents, "failure_kind=abnormal-exit")?;
+    writeln!(contents, "failure_context=")?;
+    writeln!(contents, "copy_source=")?;
+    writeln!(contents, "timestamp_unix_ms={}", unix_time_ms())?;
     writeln!(
-        file,
+        contents,
         "crate={} version={}",
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION")
     )?;
     writeln!(
-        file,
+        contents,
         "thread={}",
         std::thread::current().name().unwrap_or("<unnamed>")
     )?;
-    writeln!(file, "message=GitComet did not exit cleanly")?;
+    writeln!(contents, "message=GitComet did not exit cleanly")?;
     writeln!(
-        file,
+        contents,
         "info=The previous UI process ended before it completed its shutdown sequence."
     )?;
-    writeln!(file, "os={}", std::env::consts::OS)?;
-    writeln!(file, "arch={}", std::env::consts::ARCH)?;
-    writeln!(file, "display={}", env_value("DISPLAY"))?;
-    writeln!(file, "wayland_display={}", env_value("WAYLAND_DISPLAY"))?;
-    file.flush()?;
-    file.sync_data()
+    writeln!(contents, "os={}", std::env::consts::OS)?;
+    writeln!(contents, "arch={}", std::env::consts::ARCH)?;
+    writeln!(contents, "display={}", env_value("DISPLAY"))?;
+    writeln!(contents, "wayland_display={}", env_value("WAYLAND_DISPLAY"))?;
+    write_private_file(&session_marker_path(dir), &contents)
 }
 
 /// Clears the current session marker after the UI event loop returns normally.
@@ -387,11 +379,7 @@ fn record_session_failure_in_dir_with_diagnostics(
     location: Option<&str>,
     backtrace: Option<&str>,
 ) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(session_marker_path(dir))?;
+    let mut file = open_private_append(&session_marker_path(dir))?;
     writeln!(file, "failure_kind=returned-error")?;
     writeln!(file, "failure_context={}", single_line_text(context))?;
     writeln!(file, "timestamp_unix_ms={}", unix_time_ms())?;
@@ -638,23 +626,8 @@ fn append_report_log(destination: &mut String, report_log: &str) {
 }
 
 fn write_startup_report_snapshot(dir: &Path, report_log: &str) -> std::io::Result<PathBuf> {
-    std::fs::create_dir_all(dir)?;
     let report_path = startup_report_path(dir);
-    let temporary_path = dir.join(format!(
-        ".{STARTUP_REPORT_FILE}-{}-{}.tmp",
-        std::process::id(),
-        unix_time_ms()
-    ));
-    let result = (|| -> std::io::Result<()> {
-        let mut file = File::create(&temporary_path)?;
-        file.write_all(report_log.as_bytes())?;
-        file.sync_all()?;
-        std::fs::rename(&temporary_path, &report_path)
-    })();
-    if let Err(err) = result {
-        let _ = std::fs::remove_file(&temporary_path);
-        return Err(err);
-    }
+    write_private_file(&report_path, report_log.as_bytes())?;
     Ok(report_path)
 }
 
@@ -671,13 +644,11 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
     let Some(dir) = crash_dir() else {
         return;
     };
-    let _ = std::fs::create_dir_all(&dir);
-
     let Some(path) = crash_log_path(&dir) else {
         return;
     };
 
-    let mut file = match open_append(&path) {
+    let mut file = match open_private_append(&path) {
         Ok(f) => f,
         Err(_) => return,
     };
@@ -798,10 +769,6 @@ fn crash_log_path(dir: &Path) -> Option<PathBuf> {
     Some(dir.join(format!("panic-{pid}-{}.log", unix_time_ms())))
 }
 
-fn open_append(path: &Path) -> std::io::Result<File> {
-    OpenOptions::new().create(true).append(true).open(path)
-}
-
 fn pending_report_path(dir: &Path) -> PathBuf {
     dir.join(PENDING_REPORT_FILE)
 }
@@ -859,7 +826,7 @@ fn write_pending_report_path(marker: &Path, crash_log_path: &Path) -> std::io::R
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
-        std::fs::write(marker, crash_log_path.as_os_str().as_bytes())
+        write_private_file(marker, crash_log_path.as_os_str().as_bytes())
     }
 
     #[cfg(windows)]
@@ -873,7 +840,7 @@ fn write_pending_report_path(marker: &Path, crash_log_path: &Path) -> std::io::R
         let mut out = String::with_capacity(PENDING_REPORT_PATH_WIDE_PREFIX.len() + raw.len() * 2);
         out.push_str(PENDING_REPORT_PATH_WIDE_PREFIX);
         out.push_str(&hex_encode(&raw));
-        std::fs::write(marker, out)
+        write_private_file(marker, out.as_bytes())
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -884,7 +851,7 @@ fn write_pending_report_path(marker: &Path, crash_log_path: &Path) -> std::io::R
                 "crash log path is not valid Unicode on this platform",
             ));
         };
-        std::fs::write(marker, path_text)
+        write_private_file(marker, path_text.as_bytes())
     }
 }
 
@@ -921,7 +888,7 @@ fn read_pending_report_path(marker: &Path) -> std::io::Result<Option<PathBuf>> {
             && bytes.len() % 2 == 0
         {
             let mut wide = Vec::with_capacity(bytes.len() / 2);
-            for chunk in bytes.chunks_exact(2) {
+            for chunk in bytes.as_chunks::<2>().0 {
                 wide.push(u16::from_le_bytes([chunk[0], chunk[1]]));
             }
             return Ok(Some(PathBuf::from(OsString::from_wide(&wide))));
@@ -951,31 +918,8 @@ fn read_pending_report_path(marker: &Path) -> std::io::Result<Option<PathBuf>> {
 
 #[cfg(windows)]
 use crate::hex_encode;
-
 #[cfg(windows)]
-fn hex_decode(hex: &str) -> Option<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(hex.len() / 2);
-    let bytes = hex.as_bytes();
-    for pair in bytes.chunks_exact(2) {
-        let high = hex_value(pair[0])?;
-        let low = hex_value(pair[1])?;
-        out.push((high << 4) | low);
-    }
-    Some(out)
-}
-
-#[cfg(windows)]
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
+use gitcomet_core::hex::decode as hex_decode;
 
 fn unix_time_ms() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1755,6 +1699,45 @@ new frame
         assert!(
             startup_report_path(dir.path()).exists(),
             "a report is retired only when the user handles the notification"
+        );
+    }
+
+    #[test]
+    fn begin_session_creates_a_missing_crash_dir() {
+        let root = tempdir().expect("temp dir");
+        let dir = root.path().join("state/gitcomet/crashes");
+
+        begin_session_in_dir(&dir).expect("begin session below a missing dir");
+
+        assert!(session_marker_path(&dir).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diagnostics_still_land_in_a_symlinked_crash_dir() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // A state dir relocated with a symlink is supported; losing logs is not.
+        let root = tempdir().expect("temp dir");
+        let real = root.path().join("real-state");
+        std::fs::create_dir(&real).expect("create state dir");
+        let mode = std::fs::metadata(&real)
+            .expect("state dir")
+            .permissions()
+            .mode();
+        let dir = root.path().join("crashes");
+        std::os::unix::fs::symlink(&real, &dir).expect("symlink");
+
+        begin_session_in_dir(&dir).expect("begin session in a symlinked dir");
+        write_runtime_error_log_in_dir(&dir, "target", "boom", "", "")
+            .expect("runtime error log in a symlinked dir");
+
+        assert!(session_marker_path(&real).exists());
+        assert!(runtime_error_path(&real).exists());
+        assert_eq!(
+            std::fs::metadata(&real).unwrap().permissions().mode(),
+            mode,
+            "a directory the user pointed us at keeps its own permissions"
         );
     }
 

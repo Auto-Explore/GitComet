@@ -1,3 +1,4 @@
+use gitcomet_core::text_utils::panic_payload_to_string;
 use std::any::Any;
 use std::fmt;
 
@@ -20,7 +21,7 @@ impl UiLaunchError {
     pub(crate) fn from_panic(context: &'static str, payload: Box<dyn Any + Send>) -> Self {
         Self {
             context,
-            message: panic_payload_to_string(payload.as_ref()),
+            message: panic_payload_to_string(payload.as_ref(), "<non-string panic payload>"),
             is_panic: true,
         }
     }
@@ -53,16 +54,6 @@ where
 {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(launch))
         .map_err(|payload| UiLaunchError::from_panic(context, payload))
-}
-
-fn panic_payload_to_string(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "<non-string panic payload>".to_string()
-    }
 }
 
 #[cfg(test)]

@@ -24,15 +24,140 @@ pub(in crate::view) struct SelectedBranch {
     pub(in crate::view) name: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum PushRequest {
+    Push,
+    SetUpstream { remote: String },
+    NoRemotes,
+    NotReady,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum PullRequest {
+    Pull,
+    NoRemotes,
+    NotReady,
+}
+
+pub(in crate::view) fn head_is_detached(repo: &RepoState) -> bool {
+    matches!(&repo.head_branch, Loadable::Ready(head) if head.is_empty() || head == "HEAD")
+}
+
+/// Whether the checked-out branch has a live remote-tracking upstream. A
+/// detached HEAD carries no branch to hold one, so this is false there and
+/// callers that can still act on a detached HEAD must check for it themselves.
+pub(in crate::view) fn head_branch_has_live_upstream(repo: &RepoState) -> bool {
+    let (Loadable::Ready(head), Loadable::Ready(branches)) = (&repo.head_branch, &repo.branches)
+    else {
+        return false;
+    };
+    branches
+        .iter()
+        .find(|branch| branch.name == *head)
+        .is_some_and(|branch| branch.upstream.is_some())
+}
+
+/// Decide whether Pull can run. It mirrors the backend, which pulls from the
+/// preferred remote and sets the upstream when a branch has none, and falls
+/// back to Git's own diagnostics on a detached HEAD. The only hard blocker is a
+/// repository with no remotes at all.
+pub(in crate::view) fn pull_request(repo: &RepoState) -> PullRequest {
+    let Loadable::Ready(head) = &repo.head_branch else {
+        return PullRequest::NotReady;
+    };
+    if head.is_empty() || head == "HEAD" {
+        return PullRequest::Pull;
+    }
+    let Loadable::Ready(branches) = &repo.branches else {
+        return PullRequest::NotReady;
+    };
+    if branches
+        .iter()
+        .find(|branch| branch.name == *head)
+        .is_some_and(|branch| branch.upstream.is_some())
+    {
+        return PullRequest::Pull;
+    }
+
+    let Loadable::Ready(remotes) = &repo.remotes else {
+        return PullRequest::NotReady;
+    };
+    if remotes.is_empty() {
+        return PullRequest::NoRemotes;
+    }
+    PullRequest::Pull
+}
+
+/// Decide whether an interactive Push can run immediately or first needs the
+/// existing set-upstream prompt. `Branch::upstream` contains only live tracking
+/// refs, so a pruned `[gone]` upstream follows the same path as a new branch.
+pub(in crate::view) fn push_request(repo: &RepoState) -> PushRequest {
+    let Loadable::Ready(head) = &repo.head_branch else {
+        return PushRequest::NotReady;
+    };
+    // Preserve Git's own detached-HEAD diagnostics; there is no local branch
+    // for which GitComet could offer to set an upstream.
+    if head.is_empty() || head == "HEAD" {
+        return PushRequest::Push;
+    }
+    let Loadable::Ready(branches) = &repo.branches else {
+        return PushRequest::NotReady;
+    };
+    let Some(branch) = branches.iter().find(|branch| branch.name == *head) else {
+        return PushRequest::NotReady;
+    };
+    if branch.upstream.is_some() {
+        return PushRequest::Push;
+    }
+
+    let Loadable::Ready(remotes) = &repo.remotes else {
+        return PushRequest::NotReady;
+    };
+    if remotes.is_empty() {
+        return PushRequest::NoRemotes;
+    }
+    let remote = remotes
+        .iter()
+        .find(|remote| remote.name == "origin")
+        .unwrap_or(&remotes[0])
+        .name
+        .clone();
+    PushRequest::SetUpstream { remote }
+}
+
+pub(in crate::view) fn selected_remote_branch_is_missing(
+    state: &AppState,
+    selected_branch: Option<&SelectedBranch>,
+) -> bool {
+    let Some(selected) = selected_branch else {
+        return false;
+    };
+    if selected.section != BranchSection::Remote {
+        return false;
+    }
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == selected.repo_id) else {
+        return true;
+    };
+    let Loadable::Ready(branches) = &repo.remote_branches else {
+        return false;
+    };
+    // A remote name can itself contain '/', so the selected row cannot be split
+    // into (remote, branch); match it against each remote branch's own label.
+    !branches.iter().any(|branch| {
+        selected
+            .name
+            .strip_prefix(branch.remote.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+            .is_some_and(|name| name == branch.name)
+    })
+}
+
 pub(in crate::view) fn selected_branch_label_color(theme: AppTheme) -> gpui::Rgba {
-    theme.colors.foreground.emphasis
+    theme.colors.interaction.selected_foreground
 }
 
 pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(
-        theme.colors.foreground.primary,
-        if theme.is_dark { 0.16 } else { 0.10 },
-    )
+    theme.colors.interaction.selected_background
 }
 
 /// Which ref a history row should mark as the one the sidebar selected.
@@ -129,10 +254,6 @@ pub(super) fn is_svg_path(path: &std::path::Path) -> bool {
 
 pub(super) fn should_bypass_text_file_preview_for_path(path: &std::path::Path) -> bool {
     image_format_for_path(path).is_some()
-        || path
-            .extension()
-            .and_then(|s| s.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -683,6 +804,20 @@ pub(super) struct DiffTextHitbox {
     pub(super) wrapped: Option<DiffTextWrappedHit>,
 }
 
+/// A selectable document range painted by something other than text.
+///
+/// Flowing Markdown pictures and thematic breaks intentionally have no
+/// [`DiffTextHitbox`]: their accessible copy text is not a run of glyphs that
+/// can be mapped to an x coordinate. They still need a geometric target while
+/// a drag crosses them, so this records the logical boundaries of the block
+/// without making its invisible text directly clickable.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DiffTextMotionTarget {
+    pub(super) bounds: Bounds<Pixels>,
+    pub(super) start: DiffTextPos,
+    pub(super) end: DiffTextPos,
+}
+
 /// Where one merge-tool column row painted its text, and the line it shaped.
 ///
 /// The conflict columns are their own canvases and register nothing in
@@ -755,7 +890,7 @@ pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
     pub(super) window_handle: gpui::AnyWindowHandle,
-    pub(super) _ui_model: Entity<AppUiModel>,
+    pub(super) ui_model: Entity<AppUiModel>,
     pub(super) _poller: Poller,
     pub(super) _ui_model_subscription: gpui::Subscription,
     pub(super) _activation_subscription: gpui::Subscription,
@@ -828,6 +963,11 @@ pub struct GitCometView {
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,
     pub(super) auto_save_file_edits: bool,
+    pub(super) remote_markdown_image_policy: RemoteMarkdownImagePolicy,
+    pub(super) remote_url_policy: RemoteUrlPolicy,
+    pub(super) check_for_updates_on_startup: bool,
+    pub(super) update_check_in_flight: bool,
+    pub(super) update_check_manual_feedback_requested: bool,
     pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,
@@ -871,6 +1011,7 @@ pub struct GitCometView {
     pub(super) pending_unsaved_file_edits_flush: Option<gpui::Task<()>>,
     pub(super) pending_quit_other_views: Vec<gpui::WeakEntity<GitCometView>>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
+    pub(super) pending_branch_exists_prompt: Option<BranchExistsPromptState>,
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
     pub(super) pending_force_delete_branch_centered: bool,
     pub(super) pending_force_remove_worktree_prompt:
@@ -879,6 +1020,18 @@ pub struct GitCometView {
         Option<gitcomet_state::model::SubmoduleTrustPromptState>,
     pub(super) pending_submodule_trust_check:
         Option<gitcomet_state::model::SubmoduleTrustCheckState>,
+    /// Hook chains queued to open once render has a `Window`. A chain is
+    /// identified by the outer Git operation, so pre- and post-hooks from one
+    /// command share the same presentation lifecycle.
+    pub(super) pending_hook_activity_open: Option<(RepoId, GitOperationId)>,
+    /// Active chains the user minimized, or that began behind another overlay.
+    /// They stay represented by the compact progress toast and must not
+    /// auto-open again when another hook in the same Git command starts.
+    pub(super) minimized_hook_activity_chains: FxHashSet<(RepoId, GitOperationId)>,
+    /// Repositories explicitly minimized by the user. Unlike the per-chain
+    /// suppression above, this remains set across operations until Activity is
+    /// opened again and closed with its X button.
+    pub(super) minimized_hook_activity_repos: FxHashSet<RepoId>,
     pub(super) pending_worktree_branch_removals: FxHashMap<(RepoId, std::path::PathBuf), String>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]

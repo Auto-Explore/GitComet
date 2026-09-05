@@ -2,12 +2,12 @@
 Fira Code	6.2-103-ge50b177	SIL OFL-1.1
 IBM Plex Sans	3.005	SIL OFL-1.1
 Lilex	2.621	SIL OFL-1.1
-accesskit	0.24.1	MIT OR Apache-2.0
-accesskit_atspi_common	0.19.1	MIT OR Apache-2.0
-accesskit_consumer	0.38.0	MIT OR Apache-2.0
-accesskit_macos	0.26.3	MIT OR Apache-2.0
-accesskit_unix	0.22.1	MIT OR Apache-2.0
-accesskit_windows	0.34.0	MIT OR Apache-2.0
+accesskit	0.25.0	MIT OR Apache-2.0
+accesskit_atspi_common	0.20.0	MIT OR Apache-2.0
+accesskit_consumer	0.39.0	MIT OR Apache-2.0
+accesskit_macos	0.27.0	MIT OR Apache-2.0
+accesskit_unix	0.23.0	MIT OR Apache-2.0
+accesskit_windows	0.35.0	MIT OR Apache-2.0
 addr2line	0.25.1	Apache-2.0 OR MIT
 adler2	2.0.1	0BSD OR MIT OR Apache-2.0
 aes	0.8.4	MIT OR Apache-2.0
@@ -27,7 +27,6 @@ anstyle-query	1.1.5	MIT OR Apache-2.0
 anstyle-wincon	3.0.11	MIT OR Apache-2.0
 anyhow	1.0.104	MIT OR Apache-2.0
 approx	0.5.1	Apache-2.0
-ar_archive_writer	0.5.3	Apache-2.0 WITH LLVM-exception
 arbitrary	1.4.2	MIT OR Apache-2.0
 arc-swap	1.9.2	MIT OR Apache-2.0
 arg_enum_proc_macro	0.3.4	MIT
@@ -76,7 +75,7 @@ block-padding	0.3.3	MIT OR Apache-2.0
 block2	0.5.1	MIT
 block2	0.6.2	MIT
 blocking	1.7.0	Apache-2.0 OR MIT
-borsh	1.8.0	MIT OR Apache-2.0
+borsh	1.8.1	MIT OR Apache-2.0
 bstr	1.13.1	MIT OR Apache-2.0
 built	0.8.1	MIT
 bumpalo	3.20.3	MIT OR Apache-2.0
@@ -92,11 +91,11 @@ calloop-wayland-source	0.4.1	MIT
 cast	0.3.0	MIT OR Apache-2.0
 cbc	0.1.2	MIT OR Apache-2.0
 cbindgen	0.29.4	MPL-2.0
-cc	1.4.4	MIT OR Apache-2.0
+cc	1.4.5	MIT OR Apache-2.0
 cexpr	0.6.0	Apache-2.0/MIT
 cfg-if	1.0.4	MIT OR Apache-2.0
 cfg_aliases	0.2.2	MIT
-chacha20	0.10.1	MIT OR Apache-2.0
+chacha20	0.10.2	MIT OR Apache-2.0
 chrono	0.4.45	MIT OR Apache-2.0
 ciborium	0.2.2	Apache-2.0
 ciborium-io	0.2.2	Apache-2.0
@@ -108,8 +107,6 @@ clap_builder	4.6.6	MIT OR Apache-2.0
 clap_derive	4.6.4	MIT OR Apache-2.0
 clap_lex	1.1.0	MIT OR Apache-2.0
 clru	0.6.3	MIT
-cocoa	0.26.1	MIT OR Apache-2.0
-cocoa-foundation	0.2.1	MIT OR Apache-2.0
 codespan-reporting	0.13.1	Apache-2.0
 color_quant	1.1.0	MIT
 colorchoice	1.0.5	MIT OR Apache-2.0
@@ -121,7 +118,6 @@ convert_case	0.10.0	MIT
 convert_case	0.11.0	MIT
 core-foundation	0.10.1	MIT OR Apache-2.0
 core-foundation-sys	0.8.7	MIT OR Apache-2.0
-core-graphics	0.24.0	MIT OR Apache-2.0
 core-graphics	0.25.0	MIT OR Apache-2.0
 core-graphics-types	0.2.0	MIT OR Apache-2.0
 core-graphics2	0.6.1	MIT OR Apache-2.0
@@ -130,7 +126,7 @@ core-video	0.6.1	MIT OR Apache-2.0
 core_maths	0.1.1	MIT
 cosmic-text	0.19.0	MIT OR Apache-2.0
 cpufeatures	0.2.17	MIT OR Apache-2.0
-cpufeatures	0.3.0	MIT OR Apache-2.0
+cpufeatures	0.3.1	MIT OR Apache-2.0
 crc32fast	1.5.1	MIT OR Apache-2.0
 criterion	0.8.2	Apache-2.0 OR MIT
 criterion-plot	0.8.2	Apache-2.0 OR MIT
@@ -149,7 +145,7 @@ data-url	0.3.2	MIT OR Apache-2.0
 defmt	1.1.1	MIT OR Apache-2.0
 defmt-macros	1.1.1	MIT OR Apache-2.0
 defmt-parser	1.0.0	MIT OR Apache-2.0
-dekobon-tree-sitter-groovy	0.2.2	Apache-2.0 OR MIT
+dekobon-tree-sitter-groovy	0.3.0	Apache-2.0 OR MIT
 deranged	0.5.8	MIT OR Apache-2.0
 derive_more	2.1.1	MIT
 derive_more-impl	2.1.1	MIT
@@ -187,9 +183,9 @@ fax	0.2.7	MIT
 fdeflate	0.3.7	MIT OR Apache-2.0
 filedescriptor	0.8.3	MIT
 filetime	0.2.29	MIT/Apache-2.0
-find-msvc-tools	0.1.11	MIT OR Apache-2.0
+find-msvc-tools	0.1.12	MIT OR Apache-2.0
 fixedbitset	0.5.7	MIT OR Apache-2.0
-flate2	1.1.9	MIT OR Apache-2.0
+flate2	1.1.10	MIT OR Apache-2.0
 float-cmp	0.9.0	MIT
 float-ord	0.3.2	MIT / Apache-2.0
 float_next_after	1.0.0	MIT
@@ -232,7 +228,7 @@ gix-attributes	0.35.0	MIT OR Apache-2.0
 gix-bitmap	0.4.0	MIT OR Apache-2.0
 gix-blame	0.17.1	MIT OR Apache-2.0
 gix-chunk	0.8.0	MIT OR Apache-2.0
-gix-command	0.10.0	MIT OR Apache-2.0
+gix-command	0.10.1	MIT OR Apache-2.0
 gix-commitgraph	0.39.0	MIT OR Apache-2.0
 gix-config	0.60.0	MIT OR Apache-2.0
 gix-config-value	0.19.1	MIT OR Apache-2.0
@@ -240,7 +236,7 @@ gix-date	0.16.0	MIT OR Apache-2.0
 gix-diff	0.67.1	MIT OR Apache-2.0
 gix-dir	0.29.1	MIT OR Apache-2.0
 gix-discover	0.55.0	MIT OR Apache-2.0
-gix-error	0.3.1	MIT OR Apache-2.0
+gix-error	0.3.2	MIT OR Apache-2.0
 gix-features	0.49.1	MIT OR Apache-2.0
 gix-filter	0.34.0	MIT OR Apache-2.0
 gix-fs	0.22.1	MIT OR Apache-2.0
@@ -257,7 +253,7 @@ gix-object	0.64.1	MIT OR Apache-2.0
 gix-odb	0.84.0	MIT OR Apache-2.0
 gix-pack	0.74.2	MIT OR Apache-2.0
 gix-packetline	0.22.2	MIT OR Apache-2.0
-gix-path	0.12.5	MIT OR Apache-2.0
+gix-path	0.12.6	MIT OR Apache-2.0
 gix-pathspec	0.20.0	MIT OR Apache-2.0
 gix-protocol	0.65.1	MIT OR Apache-2.0
 gix-quote	0.8.0	MIT OR Apache-2.0
@@ -271,7 +267,7 @@ gix-status	0.34.1	MIT OR Apache-2.0
 gix-submodule	0.34.0	MIT OR Apache-2.0
 gix-tempfile	24.0.0	MIT OR Apache-2.0
 gix-trace	0.1.21	MIT OR Apache-2.0
-gix-transport	0.59.1	MIT OR Apache-2.0
+gix-transport	0.59.2	MIT OR Apache-2.0
 gix-traverse	0.61.0	MIT OR Apache-2.0
 gix-url	0.38.0	MIT OR Apache-2.0
 gix-utils	0.3.6	MIT OR Apache-2.0
@@ -286,24 +282,24 @@ glutin_wgl_sys	0.6.1	Apache-2.0
 gpu-allocator	0.28.0	MIT OR Apache-2.0
 gpu-descriptor	0.3.2	MIT OR Apache-2.0
 gpu-descriptor-types	0.2.0	MIT OR Apache-2.0
-gpui	0.2.2	Apache-2.0
-gpui_ce_util	0.2.2	Apache-2.0
-gpui_collections	0.2.2	Apache-2.0
-gpui_derive_refineable	0.2.2	Apache-2.0
-gpui_linux	0.1.0	Apache-2.0
-gpui_macos	0.1.0	Apache-2.0
-gpui_macros	0.1.0	Apache-2.0
-gpui_media	0.2.2	Apache-2.0
-gpui_platform	0.1.0	Apache-2.0
-gpui_refineable	0.2.2	Apache-2.0
-gpui_scheduler	0.2.2	Apache-2.0
-gpui_shared_string	0.1.0	Apache-2.0
-gpui_sum_tree	0.2.2	Apache-2.0
-gpui_web	0.1.0	Apache-2.0
-gpui_wgpu	0.1.0	Apache-2.0
-gpui_windows	0.1.0	Apache-2.0
+gpui-ce	0.2.2	Apache-2.0
+gpui_ce_apple	0.1.0	Apache-2.0
+gpui_ce_collections	0.2.2	Apache-2.0
+gpui_ce_derive_refineable	0.2.2	Apache-2.0
+gpui_ce_linux	0.1.0	Apache-2.0
+gpui_ce_macos	0.1.0	Apache-2.0
+gpui_ce_macros	0.1.0	Apache-2.0
+gpui_ce_media	0.2.2	Apache-2.0
+gpui_ce_platform	0.1.0	Apache-2.0
+gpui_ce_refineable	0.2.2	Apache-2.0
+gpui_ce_scheduler	0.2.2	Apache-2.0
+gpui_ce_shared_string	0.1.0	Apache-2.0
+gpui_ce_sum_tree	0.2.2	Apache-2.0
+gpui_ce_util	0.2.6	Apache-2.0
+gpui_ce_web	0.1.0	Apache-2.0
+gpui_ce_wgpu	0.1.0	Apache-2.0
+gpui_ce_windows	0.1.0	Apache-2.0
 gpui_xim	0.4.0-gpui	MIT
-grid	1.0.1	MIT
 half	2.7.1	MIT OR Apache-2.0
 harfrust	0.12.0	MIT
 harfrust	0.5.2	MIT
@@ -312,10 +308,11 @@ hashbrown	0.14.5	MIT OR Apache-2.0
 hashbrown	0.15.5	MIT OR Apache-2.0
 hashbrown	0.16.1	MIT OR Apache-2.0
 hashbrown	0.17.1	MIT OR Apache-2.0
+hdrhistogram	7.6.0	MIT/Apache-2.0
 heapless	0.8.0	MIT OR Apache-2.0
 heapless	0.9.3	MIT OR Apache-2.0
 heck	0.5.0	MIT OR Apache-2.0
-hermit-abi	0.5.2	MIT OR Apache-2.0
+hermit-abi	0.5.3	MIT OR Apache-2.0
 hex	0.4.3	MIT OR Apache-2.0
 hexf-parse	0.2.1	CC0-1.0
 hkdf	0.12.4	MIT OR Apache-2.0
@@ -338,8 +335,8 @@ idna_adapter	1.2.2	Apache-2.0 OR MIT
 image	0.25.10	MIT OR Apache-2.0
 image-webp	0.2.4	MIT OR Apache-2.0
 imagesize	0.15.0	MIT
-imgref	1.12.2	CC0-1.0 OR Apache-2.0
-indexmap	2.14.0	Apache-2.0 OR MIT
+imgref	1.12.3	CC0-1.0 OR Apache-2.0
+indexmap	2.14.1	Apache-2.0 OR MIT
 inotify	0.11.5	ISC
 inotify-sys	0.1.8	ISC
 inout	0.1.4	MIT OR Apache-2.0
@@ -374,7 +371,7 @@ libfuzzer-sys	0.4.13	(MIT OR Apache-2.0) AND NCSA
 libloading	0.8.9	ISC
 libm	0.2.16	MIT
 libmimalloc-sys	0.1.49	MIT
-libredox	0.1.20	MIT
+libredox	0.1.23	MIT
 libz-sys	1.1.29	MIT OR Apache-2.0
 linebender_resource_handle	0.1.1	Apache-2.0 OR MIT
 link-section	0.19.3	Apache-2.0 OR MIT
@@ -385,25 +382,27 @@ litrs	1.0.0	MIT OR Apache-2.0
 lock_api	0.4.14	MIT OR Apache-2.0
 log	0.4.34	MIT OR Apache-2.0
 loop9	0.1.5	MIT
-lru	0.18.2	MIT
+lru	0.18.4	MIT
 lyon	1.0.19	MIT OR Apache-2.0
-lyon_algorithms	1.0.20	MIT OR Apache-2.0
+lyon_algorithms	1.0.21	MIT OR Apache-2.0
 lyon_geom	1.0.19	MIT OR Apache-2.0
 lyon_path	1.0.19	MIT OR Apache-2.0
-lyon_tessellation	1.0.20	MIT OR Apache-2.0
+lyon_tessellation	1.0.21	MIT OR Apache-2.0
 mac-notification-sys	0.6.15	MIT/Apache-2.0
-mach2	0.6.0	BSD-2-Clause OR MIT OR Apache-2.0
+mach2	0.7.0	BSD-2-Clause OR MIT OR Apache-2.0
 malloc_buf	0.0.6	MIT
 maybe-rayon	0.1.1	MIT
 md-5	0.10.6	MIT OR Apache-2.0
 memchr	2.8.3	Unlicense OR MIT
+memfd	0.6.6	MIT OR Apache-2.0
 memmap2	0.9.11	MIT OR Apache-2.0
 memoffset	0.9.1	MIT
 metal	0.33.0	MIT OR Apache-2.0
 mimalloc	0.1.52	MIT
 minimal-lexical	0.2.1	MIT/Apache-2.0
 miniz_oxide	0.8.9	MIT OR Zlib OR Apache-2.0
-mio	1.2.2	MIT
+miniz_oxide	0.9.1	MIT OR Zlib OR Apache-2.0
+mio	1.2.3	MIT
 miow	0.6.1	MIT OR Apache-2.0
 moxcms	0.8.1	BSD-3-Clause OR Apache-2.0
 naga	29.0.4	MIT OR Apache-2.0
@@ -414,7 +413,7 @@ nom	7.1.3	MIT
 nom	8.0.0	MIT
 nonempty	0.12.0	MIT
 noop_proc_macro	0.3.0	MIT
-notify	9.0.0-rc.4	CC0-1.0
+notify	9.0.0-rc.5	CC0-1.0
 notify-rust	4.18.0	MIT OR Apache-2.0
 notify-types	2.1.0	MIT OR Apache-2.0
 ntapi	0.4.3	Apache-2.0 OR MIT
@@ -451,12 +450,11 @@ objc2-quartz-core	0.2.2	MIT
 objc2-quartz-core	0.3.2	Zlib OR Apache-2.0 OR MIT
 objc2-user-notifications	0.3.2	Zlib OR Apache-2.0 OR MIT
 object	0.37.3	Apache-2.0 OR MIT
-object	0.39.1	Apache-2.0 OR MIT
 once_cell	1.21.4	MIT OR Apache-2.0
 once_cell_polyfill	1.70.2	MIT OR Apache-2.0
 oo7	0.6.0	MIT
 oorandom	11.1.5	MIT
-open	5.4.2	MIT
+open	5.4.3	MIT
 option-ext	0.2.0	MPL-2.0
 ordered-float	5.5.0	MIT
 ordered-stream	0.2.0	MIT OR Apache-2.0
@@ -474,9 +472,11 @@ pathfinder_simd	0.5.6	MIT OR Apache-2.0
 pbkdf2	0.12.2	MIT OR Apache-2.0
 percent-encoding	2.3.2	MIT OR Apache-2.0
 phf	0.13.1	MIT
-phf_generator	0.13.1	MIT
-phf_macros	0.13.1	MIT
+phf	0.14.0	MIT
+phf_generator	0.14.0	MIT
+phf_macros	0.14.0	MIT
 phf_shared	0.13.1	MIT
+phf_shared	0.14.0	MIT
 pico-args	0.5.0	MIT
 pin-project	1.1.13	Apache-2.0 OR MIT
 pin-project-internal	1.1.13	Apache-2.0 OR MIT
@@ -492,7 +492,7 @@ pollster	0.2.5	Apache-2.0/MIT
 pollster	1.0.1	Apache-2.0/MIT
 polycool	0.4.0	MIT OR Apache-2.0
 portable-atomic	1.15.0	Apache-2.0 OR MIT
-portable-atomic-util	0.2.7	Apache-2.0 OR MIT
+portable-atomic-util	0.2.8	Apache-2.0 OR MIT
 postage	0.5.0	MIT
 potential_utf	0.1.6	Unicode-3.0
 powerfmt	0.2.0	MIT OR Apache-2.0
@@ -506,7 +506,6 @@ profiling	1.0.18	MIT OR Apache-2.0
 profiling-procmacros	1.0.18	MIT OR Apache-2.0
 proptest	1.11.0	MIT OR Apache-2.0
 proptest-macro	0.5.0	MIT OR Apache-2.0
-psm	0.1.32	MIT OR Apache-2.0
 pulldown-cmark	0.13.4	MIT
 pulldown-cmark-escape	0.11.0	MIT
 pulp	0.22.3	MIT
@@ -536,6 +535,7 @@ rayon	1.12.0	MIT OR Apache-2.0
 rayon-core	1.13.0	MIT OR Apache-2.0
 read-fonts	0.37.0	MIT OR Apache-2.0
 read-fonts	0.41.0	MIT OR Apache-2.0
+read-fonts	0.43.3	MIT OR Apache-2.0
 reborrow	0.5.5	MIT
 redox_syscall	0.5.18	MIT
 redox_users	0.5.2	MIT
@@ -583,7 +583,6 @@ sha1	0.10.7	MIT OR Apache-2.0
 sha1-checked	0.10.0	MIT OR Apache-2.0
 sha1_smol	1.0.1	BSD-3-Clause
 sha2	0.10.9	MIT OR Apache-2.0
-shell-words	1.1.1	MIT/Apache-2.0
 shlex	1.3.0	MIT OR Apache-2.0
 shlex	2.0.1	MIT OR Apache-2.0
 signal-hook	0.4.4	MIT OR Apache-2.0
@@ -594,18 +593,16 @@ simplecss	0.2.2	Apache-2.0 OR MIT
 siphasher	1.0.3	MIT/Apache-2.0
 skrifa	0.40.0	MIT OR Apache-2.0
 skrifa	0.44.0	MIT OR Apache-2.0
+skrifa	0.46.2	MIT OR Apache-2.0
 slab	0.4.12	MIT
 slotmap	1.1.1	Zlib
-smallvec	1.15.2	MIT OR Apache-2.0
+smallvec	1.16.0	MIT OR Apache-2.0
 smol	2.0.2	Apache-2.0 OR MIT
 smol_str	0.3.6	MIT OR Apache-2.0
 spin	0.12.3	MIT
 spin	0.9.9	MIT
 spirv	0.4.0+sdk-1.4.341.0	Apache-2.0
 stable_deref_trait	1.2.1	MIT OR Apache-2.0
-stacker	0.1.25	MIT OR Apache-2.0
-stacksafe	1.0.3	Apache-2.0
-stacksafe-macro	1.0.3	Apache-2.0
 static_assertions	1.1.0	MIT OR Apache-2.0
 stats_alloc	0.1.10	MIT
 streaming-iterator	0.1.9	MIT OR Apache-2.0
@@ -614,14 +611,14 @@ strsim	0.11.1	MIT
 strum	0.28.0	MIT
 strum_macros	0.28.0	MIT
 subtle	2.6.1	BSD-3-Clause
-sval	2.21.1	Apache-2.0 OR MIT
-sval_buffer	2.21.1	Apache-2.0 OR MIT
-sval_dynamic	2.21.1	Apache-2.0 OR MIT
-sval_fmt	2.21.1	Apache-2.0 OR MIT
-sval_json	2.21.1	Apache-2.0 OR MIT
-sval_nested	2.21.1	Apache-2.0 OR MIT
-sval_ref	2.21.1	Apache-2.0 OR MIT
-sval_serde	2.21.1	Apache-2.0 OR MIT
+sval	2.22.0	Apache-2.0 OR MIT
+sval_buffer	2.22.0	Apache-2.0 OR MIT
+sval_dynamic	2.22.0	Apache-2.0 OR MIT
+sval_fmt	2.22.0	Apache-2.0 OR MIT
+sval_json	2.22.0	Apache-2.0 OR MIT
+sval_nested	2.22.0	Apache-2.0 OR MIT
+sval_ref	2.22.0	Apache-2.0 OR MIT
+sval_serde	2.22.0	Apache-2.0 OR MIT
 svgtypes	0.16.1	Apache-2.0 OR MIT
 swash	0.2.10	Apache-2.0 OR MIT
 syn	2.0.119	MIT OR Apache-2.0
@@ -629,7 +626,7 @@ syn	3.0.4	MIT OR Apache-2.0
 synstructure	0.13.2	MIT
 sys-locale	0.3.2	MIT OR Apache-2.0
 sysinfo	0.39.6	MIT
-taffy	0.12.2	MIT
+taffy	0.14.0	MIT
 tauri-winrt-notification	0.7.3	MIT OR Apache-2.0
 tempfile	3.27.0	MIT OR Apache-2.0
 termcolor	1.4.1	Unlicense OR MIT
@@ -645,10 +642,10 @@ tiny-skia	0.12.0	BSD-3-Clause
 tiny-skia-path	0.12.0	BSD-3-Clause
 tinystr	0.8.4	Unicode-3.0
 tinytemplate	1.2.1	Apache-2.0 OR MIT
-tinyvec	1.12.0	Zlib OR Apache-2.0 OR MIT
+tinyvec	1.13.2	Zlib OR Apache-2.0 OR MIT
 tinyvec_macros	0.1.1	MIT OR Apache-2.0 OR Zlib
 toml	0.9.12+spec-1.1.0	MIT OR Apache-2.0
-toml	1.1.4+spec-1.1.0	MIT OR Apache-2.0
+toml	1.1.5+spec-1.1.0	MIT OR Apache-2.0
 toml_datetime	0.7.5+spec-1.1.0	MIT OR Apache-2.0
 toml_datetime	1.1.1+spec-1.1.0	MIT OR Apache-2.0
 toml_edit	0.25.13+spec-1.1.0	MIT OR Apache-2.0
@@ -657,7 +654,7 @@ toml_writer	1.1.2+spec-1.1.0	MIT OR Apache-2.0
 tracing	0.1.44	MIT
 tracing-attributes	0.1.31	MIT
 tracing-core	0.1.36	MIT
-tree-sitter	0.26.13	MIT
+tree-sitter	0.27.0	MIT
 tree-sitter-asm	0.24.0	MIT
 tree-sitter-bash	0.25.1	MIT
 tree-sitter-bicep	1.1.0	MIT
@@ -702,7 +699,7 @@ tree-sitter-julia	0.23.1	MIT
 tree-sitter-just	0.1.0	Apache-2.0
 tree-sitter-kdl	1.1.0	MIT
 tree-sitter-kotlin-sg	0.4.1	MIT
-tree-sitter-language	0.1.7	MIT
+tree-sitter-language	0.1.8	MIT
 tree-sitter-llvm	1.1.0	MIT
 tree-sitter-lua	0.5.0	MIT
 tree-sitter-make	1.1.1	MIT
@@ -715,7 +712,7 @@ tree-sitter-perl	1.1.2	MIT
 tree-sitter-php	0.24.2	MIT
 tree-sitter-powershell	0.26.4	MIT
 tree-sitter-properties	0.3.0	MIT
-tree-sitter-proto	0.5.0	MIT
+tree-sitter-proto	0.6.0	MIT
 tree-sitter-python	0.25.0	MIT
 tree-sitter-r	1.3.0	MIT
 tree-sitter-regex	0.25.0	MIT
@@ -761,11 +758,11 @@ usvg	0.48.1	Apache-2.0 OR MIT
 utf8-zero	0.8.1	MIT OR Apache-2.0
 utf8_iter	1.0.4	Apache-2.0 OR MIT
 utf8parse	0.2.2	Apache-2.0 OR MIT
-uuid	1.25.0	Apache-2.0 OR MIT
+uuid	1.26.0	Apache-2.0 OR MIT
 v_frame	0.3.9	BSD-2-Clause
-value-bag	1.13.2	Apache-2.0 OR MIT
-value-bag-serde1	1.13.2	Apache-2.0 OR MIT
-value-bag-sval2	1.13.2	Apache-2.0 OR MIT
+value-bag	1.14.1	Apache-2.0 OR MIT
+value-bag-serde1	1.14.1	Apache-2.0 OR MIT
+value-bag-sval2	1.14.1	Apache-2.0 OR MIT
 vcpkg	0.2.15	MIT/Apache-2.0
 version_check	0.9.5	MIT/Apache-2.0
 vswhom	0.1.0	MIT
@@ -781,6 +778,7 @@ wasm-bindgen-futures	0.4.77	MIT OR Apache-2.0
 wasm-bindgen-macro	0.2.127	MIT OR Apache-2.0
 wasm-bindgen-macro-support	0.2.127	MIT OR Apache-2.0
 wasm-bindgen-shared	0.2.127	MIT OR Apache-2.0
+wasm_thread	0.3.3	Apache-2.0 OR MIT
 wayland-backend	0.3.17	MIT
 wayland-client	0.31.15	MIT
 wayland-cursor	0.31.14	MIT
@@ -797,11 +795,12 @@ wgpu	29.0.4	MIT OR Apache-2.0
 wgpu-core	29.0.4	MIT OR Apache-2.0
 wgpu-core-deps-apple	29.0.4	MIT OR Apache-2.0
 wgpu-core-deps-emscripten	29.0.4	MIT OR Apache-2.0
+wgpu-core-deps-wasm	29.0.4	MIT OR Apache-2.0
 wgpu-core-deps-windows-linux-android	29.0.4	MIT OR Apache-2.0
 wgpu-hal	29.0.4	MIT OR Apache-2.0
 wgpu-naga-bridge	29.0.4	MIT OR Apache-2.0
 wgpu-types	29.0.4	MIT OR Apache-2.0
-which	8.0.5	MIT
+which	8.0.6	MIT
 winapi	0.3.9	MIT/Apache-2.0
 winapi-i686-pc-windows-gnu	0.4.0	MIT/Apache-2.0
 winapi-util	0.1.11	Unlicense OR MIT

@@ -1,5 +1,37 @@
 use super::*;
 
+/// Why an open checkout prompt can no longer be satisfied.
+enum StaleCheckoutPrompt {
+    /// The repository the prompt belongs to is gone from state, e.g. its tab
+    /// was closed while the prompt was open.
+    RepoClosed,
+    BranchGone(String),
+}
+
+fn stale_checkout_remote_branch_prompt(
+    state: &AppState,
+    popover: Option<&PopoverKind>,
+) -> Option<StaleCheckoutPrompt> {
+    let Some(PopoverKind::CheckoutRemoteBranchPrompt {
+        repo_id,
+        remote,
+        branch,
+    }) = popover
+    else {
+        return None;
+    };
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == *repo_id) else {
+        return Some(StaleCheckoutPrompt::RepoClosed);
+    };
+    let Loadable::Ready(branches) = &repo.remote_branches else {
+        return None;
+    };
+    (!branches
+        .iter()
+        .any(|candidate| candidate.remote == *remote && candidate.name == *branch))
+    .then(|| StaleCheckoutPrompt::BranchGone(format!("{remote}/{branch}")))
+}
+
 impl PopoverHost {
     #[cfg(test)]
     pub(in crate::view) fn create_branch_input_focus_handle_for_test(
@@ -92,45 +124,93 @@ impl PopoverHost {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::view) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        theme: AppTheme,
-        theme_mode: ThemeMode,
-        date_time_format: DateTimeFormat,
-        timezone: Timezone,
-        show_timezone: bool,
-        change_tracking_view: ChangeTrackingView,
-        commit_push_after_enabled: bool,
-        diff_content_mode: DiffContentMode,
-        diff_whitespace_mode: DiffWhitespaceMode,
-        diff_reveal_whitespace_chars: bool,
-        diff_word_wrap: bool,
-        diff_show_line_numbers: bool,
-        root_view: WeakEntity<GitCometView>,
-        root_view_mode: GitCometViewMode,
-        tooltip_host: WeakEntity<TooltipHost>,
-        main_pane: Entity<MainPaneView>,
-        details_pane: Entity<DetailsPaneView>,
-        reflog_pane: Entity<ReflogPaneView>,
-        sidebar_pane: Entity<SidebarPaneView>,
-        pinned_branches_by_repo: std::collections::BTreeMap<
-            std::path::PathBuf,
-            std::collections::BTreeSet<String>,
-        >,
-        collapsed_items_by_repo: std::collections::BTreeMap<
-            std::path::PathBuf,
-            std::collections::BTreeSet<String>,
-        >,
+        init: PopoverHostInit,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
+        let PopoverHostInit {
+            theme,
+            root_view,
+            root_view_mode,
+            tooltip_host,
+            main_pane,
+            details_pane,
+            reflog_pane,
+            sidebar_pane,
+            pinned_branches_by_repo,
+            collapsed_items_by_repo,
+        } = init;
+        let preferences = ui_model.read(cx).preferences.clone();
+        let theme_mode = preferences.appearance.theme_mode;
+        let date_time_format = preferences.appearance.date_time_format;
+        let timezone = preferences.appearance.timezone;
+        let show_timezone = preferences.appearance.show_timezone;
+        let change_tracking_view = preferences.change_tracking.view;
+        let commit_push_after_enabled = preferences.repository.commit_push_after_enabled;
+        let diff_content_mode = preferences.diff.content_mode;
+        let diff_whitespace_mode = preferences.diff.whitespace_mode;
+        let diff_reveal_whitespace_chars = preferences.diff.reveal_whitespace_chars;
+        let diff_word_wrap = preferences.diff.word_wrap;
+        let diff_show_line_numbers = preferences.diff.show_line_numbers;
         let state = Arc::clone(&ui_model.read(cx).state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
-            this.state = Arc::clone(&model.read(cx).state);
+            let hook_activity_repo_id = match this.popover.as_ref() {
+                Some(PopoverKind::HookActivity { repo_id, .. }) => Some(*repo_id),
+                _ => None,
+            };
+            let previous_hook_activity_rev = hook_activity_repo_id.and_then(|repo_id| {
+                this.state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .map(|repo| repo.feedback.hook_activity_rev)
+            });
+            let follow_hook_output = hook_activity_repo_id.is_some()
+                && scroll_is_near_bottom(&this.hook_activity_output_scroll, px(24.0));
+            let follow_hook_list = hook_activity_repo_id.is_some()
+                && scroll_is_near_bottom(&this.hook_activity_hooks_scroll, px(24.0));
+
+            let next_state = Arc::clone(&model.read(cx).state);
+            let next_hook_activity_rev = hook_activity_repo_id.and_then(|repo_id| {
+                next_state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .map(|repo| repo.feedback.hook_activity_rev)
+            });
+            this.state = next_state;
+            if follow_hook_output
+                && previous_hook_activity_rev.is_some()
+                && next_hook_activity_rev != previous_hook_activity_rev
+            {
+                this.hook_activity_output_scroll.scroll_to_bottom();
+            }
+            if follow_hook_list
+                && previous_hook_activity_rev.is_some()
+                && next_hook_activity_rev != previous_hook_activity_rev
+            {
+                this.hook_activity_hooks_scroll.scroll_to_bottom();
+            }
             this.commit_prompt_message_drafts
                 .retain(|repo_id, _| this.state.repos.iter().any(|repo| repo.id == *repo_id));
+
+            // Closing clears `this.popover`, so the per-event work below still
+            // runs and simply finds no popover to fingerprint.
+            match stale_checkout_remote_branch_prompt(&this.state, this.popover.as_ref()) {
+                Some(StaleCheckoutPrompt::BranchGone(branch)) => {
+                    this.close_popover(cx);
+                    this.push_toast(
+                        components::ToastKind::Warning,
+                        format!("Remote branch {branch} no longer exists."),
+                        cx,
+                    );
+                }
+                Some(StaleCheckoutPrompt::RepoClosed) => this.close_popover(cx),
+                None => {}
+            }
 
             // Prefill the squash prompt from the message preview when it lands,
             // rather than in the render path, so the generated message never
@@ -692,6 +772,10 @@ impl PopoverHost {
             branch_filter_query: String::new(),
             popover: None,
             popover_anchor: None,
+            hook_activity_selected: None,
+            hook_activity_history_scroll: ScrollHandle::new(),
+            hook_activity_hooks_scroll: ScrollHandle::new(),
+            hook_activity_output_scroll: ScrollHandle::new(),
             cherry_pick_mainline: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
@@ -861,6 +945,102 @@ impl PopoverHost {
         self.popover.as_ref() == Some(kind)
     }
 
+    pub(in crate::view) fn hook_activity_workflow_repo_id(&self) -> Option<RepoId> {
+        match self.popover.as_ref() {
+            Some(PopoverKind::HookActivity { repo_id, .. }) => Some(*repo_id),
+            _ => None,
+        }
+    }
+
+    pub(in crate::view) fn is_hook_activity_workflow_open(&self) -> bool {
+        self.hook_activity_workflow_repo_id().is_some()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn hook_activity_output_is_near_bottom_for_test(&self) -> bool {
+        scroll_is_near_bottom(&self.hook_activity_output_scroll, px(24.0))
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn hook_activity_hooks_are_near_bottom_for_test(&self) -> bool {
+        scroll_is_near_bottom(&self.hook_activity_hooks_scroll, px(24.0))
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn scroll_hook_activity_hooks_to_top_for_test(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.hook_activity_hooks_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn scroll_hook_activity_output_to_top_for_test(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.hook_activity_output_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn scroll_hook_activity_output_to_bottom_for_test(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.hook_activity_output_scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    pub(super) fn minimize_hook_activity(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::HookActivity { repo_id, .. }) = self.popover.as_ref() else {
+            return;
+        };
+        let repo_id = *repo_id;
+        let active_chains = self
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .into_iter()
+            .flat_map(|repo| repo.feedback.hook_activity.iter())
+            .filter(|operation| operation.has_hooks() && operation.status.is_active())
+            .map(|operation| (repo_id, operation.id))
+            .collect::<Vec<_>>();
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.minimize_hook_activity_repo(repo_id, active_chains, cx);
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn close_hook_activity(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::HookActivity { repo_id, .. }) = self.popover.as_ref() else {
+            return;
+        };
+        let repo_id = *repo_id;
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.resume_hook_activity_auto_open(repo_id, cx);
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn dismiss_hook_activity_workflow(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        match self.popover.clone() {
+            Some(PopoverKind::HookActivity { .. }) => {
+                self.minimize_hook_activity(cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
     #[cfg(test)]
     pub(in crate::view) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
         self.popover.clone()
@@ -901,6 +1081,7 @@ impl PopoverHost {
 
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         let dismissing_unsaved_prompt = self.showing_unsaved_file_edits_prompt();
+        let dismissing_hook_activity = self.is_hook_activity_workflow_open();
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
@@ -917,6 +1098,9 @@ impl PopoverHost {
             let _ = root_view.update(cx, |root, cx| {
                 if dismissing_unsaved_prompt {
                     root.clear_pending_unsaved_file_edits_prompt(cx);
+                }
+                if dismissing_hook_activity {
+                    root.set_hook_activity_dialog_repo(None, cx);
                 }
                 root.set_history_refs_hover_item_menu_open(false, cx);
             });
@@ -1153,11 +1337,38 @@ impl PopoverHost {
         cx.stop_propagation();
     }
 
+    pub(super) fn resolve_open_branch_exists_prompt(&self, choice: BranchExistsChoice) -> bool {
+        let Some(PopoverKind::BranchExistsPrompt {
+            repo_id,
+            name,
+            target,
+            operation,
+        }) = self.popover.as_ref()
+        else {
+            return false;
+        };
+
+        self.store.dispatch(Msg::ResolveBranchExistsPrompt {
+            prompt: BranchExistsPromptState {
+                repo_id: *repo_id,
+                name: name.clone(),
+                target: target.clone(),
+                operation: operation.clone(),
+            },
+            choice,
+        });
+        true
+    }
+
     pub(in crate::view) fn dismiss_prompt_popover(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel) {
+            self.close_popover(cx);
+            return;
+        }
         if self.popover.as_ref().is_some_and(popover_is_confirm_dialog) {
             self.close_popover(cx);
             return;
@@ -1203,6 +1414,10 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.dismiss_hook_activity_workflow(window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if !self.prompt_tab_navigation_enabled() {
             return;
         }
@@ -1563,6 +1778,7 @@ impl PopoverHost {
                 repo_id,
                 name,
                 target,
+                force: false,
             });
         } else {
             self.store.dispatch(Msg::CreateBranch {
@@ -1580,7 +1796,7 @@ impl PopoverHost {
         };
         self.create_branch_input.read_with(cx, |input, _| {
             let new_name = input.text().trim();
-            !new_name.is_empty() && new_name != name
+            is_submittable_branch_name(new_name) && new_name != name
         })
     }
 
@@ -1596,13 +1812,14 @@ impl PopoverHost {
         let new_name = self
             .create_branch_input
             .read_with(cx, |input, _| input.text().trim().to_string());
-        if new_name.is_empty() || new_name == name {
+        if !is_submittable_branch_name(&new_name) || new_name == name {
             return;
         }
         self.store.dispatch(Msg::RenameBranch {
             repo_id,
             old_name: name,
             new_name,
+            force: false,
         });
         self.dismiss_inline_popover(window, cx);
     }
@@ -1805,19 +2022,42 @@ impl PopoverHost {
             })
             .unwrap_or(false);
         if local_branch_exists {
-            self.push_toast(
-                components::ToastKind::Error,
-                format!("Branch already exists: {local_branch}"),
-                cx,
-            );
+            self.store.dispatch(Msg::ShowBranchExistsPrompt {
+                prompt: BranchExistsPromptState {
+                    repo_id,
+                    name: local_branch,
+                    target: format!("{remote}/{branch}"),
+                    operation: BranchExistsPromptOperation::CheckoutRemoteBranch { remote, branch },
+                },
+            });
             return;
         }
 
+        self.dispatch_checkout_remote_branch(
+            repo_id,
+            remote,
+            branch,
+            local_branch,
+            CheckoutRemoteBranchMode::Create,
+            cx,
+        );
+    }
+
+    pub(super) fn dispatch_checkout_remote_branch(
+        &mut self,
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+        local_branch: String,
+        mode: CheckoutRemoteBranchMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
         self.store.dispatch(Msg::CheckoutRemoteBranch {
             repo_id,
             remote,
             branch,
             local_branch,
+            mode,
         });
         self.main_pane.update(cx, |pane, cx| {
             pane.rebuild_diff_cache(cx);
@@ -1988,6 +2228,12 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Branch-collision prompts are also held in shared state. Replacing one
+        // without resolving it leaves that state occupied, so the same
+        // collision cannot emit a fresh prompt later.
+        if self.popover.as_ref() != Some(&kind) {
+            self.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
+        }
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         // The anchor stays hovered behind the opened surface; keep its
@@ -2072,6 +2318,37 @@ impl PopoverHost {
             window.focus(&self.context_menu_focus_handle, cx);
         } else {
             match &kind {
+                PopoverKind::HookActivity {
+                    repo_id,
+                    operation_id,
+                } => {
+                    let operations = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == *repo_id)
+                        .map(|repo| repo.feedback.hook_activity.as_slice())
+                        .unwrap_or_default();
+                    let selected = operation_id
+                        .filter(|requested| {
+                            operations.iter().any(|operation| {
+                                operation.id == *requested && operation.has_hooks()
+                            })
+                        })
+                        .or_else(|| {
+                            operations
+                                .iter()
+                                .rev()
+                                .find(|operation| operation.has_hooks())
+                                .map(|operation| operation.id)
+                        });
+                    self.hook_activity_selected = selected;
+                    self.hook_activity_history_scroll = ScrollHandle::new();
+                    self.hook_activity_hooks_scroll = ScrollHandle::new();
+                    self.hook_activity_hooks_scroll.scroll_to_bottom();
+                    self.hook_activity_output_scroll = ScrollHandle::new();
+                    self.hook_activity_output_scroll.scroll_to_bottom();
+                }
                 PopoverKind::RepoPicker => {
                     let ui_session = session::load();
                     self.repo_picker_sort = repo_picker::sort_from_session(&ui_session);

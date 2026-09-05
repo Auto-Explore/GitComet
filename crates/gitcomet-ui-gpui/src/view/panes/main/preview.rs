@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::markdown_preview::{
-    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewVisualRow,
+    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownPreviewVisualRow,
 };
 #[cfg(test)]
 use std::borrow::Cow;
@@ -18,6 +18,27 @@ pub(in crate::view) const FILE_EDITOR_MAX_TEXT_BYTES: usize = 32 * 1024 * 1024;
 
 const WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES: usize = 64 * 1024;
 const WORKTREE_PREVIEW_INDEX_LINE_CAPACITY_MAX: usize = 64 * 1024;
+
+#[cfg(test)]
+thread_local! {
+    static REMOTE_MARKDOWN_IMAGE_ROW_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn record_remote_markdown_image_row_visit() {
+    #[cfg(test)]
+    REMOTE_MARKDOWN_IMAGE_ROW_VISITS.with(|visits| visits.set(visits.get().saturating_add(1)));
+}
+
+#[cfg(test)]
+pub(in crate::view) fn reset_remote_markdown_image_row_visits_for_tests() {
+    REMOTE_MARKDOWN_IMAGE_ROW_VISITS.with(|visits| visits.set(0));
+}
+
+#[cfg(test)]
+pub(in crate::view) fn remote_markdown_image_row_visits_for_tests() -> usize {
+    REMOTE_MARKDOWN_IMAGE_ROW_VISITS.with(std::cell::Cell::get)
+}
 
 struct IndexedWorktreePreview {
     source_len: usize,
@@ -252,12 +273,14 @@ fn conflict_preview_side_bytes(
     (!fallback_text.is_empty()).then(|| fallback_text.as_ref().as_bytes().to_vec())
 }
 
-fn ready_conflict_preview_image_from_bytes(
+fn ready_conflict_preview_encoded_image_from_bytes(
     format: gpui::ImageFormat,
     bytes: Option<Vec<u8>>,
 ) -> LoadableImagePreview {
     match bytes {
-        Some(bytes) => Loadable::Ready(Some(Arc::new(gpui::Image::from_bytes(format, bytes)))),
+        Some(bytes) => Loadable::Ready(Some(ConflictPreviewImage::Encoded(Arc::new(
+            gpui::Image::from_bytes(format, bytes),
+        )))),
         None => Loadable::Ready(None),
     }
 }
@@ -286,14 +309,236 @@ fn loadable_conflict_preview_svg_image(
 ) -> LoadableImagePreview {
     match payload {
         Some((format, bytes)) => {
-            Loadable::Ready(Some(Arc::new(gpui::Image::from_bytes(format, bytes))))
+            ready_conflict_preview_encoded_image_from_bytes(format, Some(bytes))
         }
         None if had_source => Loadable::Error("Preview unavailable.".into()),
         None => Loadable::Ready(None),
     }
 }
 
+fn loadable_conflict_preview_render_image(
+    image: Option<Arc<gpui::RenderImage>>,
+    had_source: bool,
+) -> LoadableImagePreview {
+    match image {
+        Some(image) => Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))),
+        None if had_source => Loadable::Error("Preview unavailable.".into()),
+        None => Loadable::Ready(None),
+    }
+}
+
+fn map_deduplicated_conflict_preview_sides<T: Clone>(
+    sides: [Option<Vec<u8>>; 3],
+    cancel: &std::sync::atomic::AtomicBool,
+    mut map: impl FnMut(&[u8]) -> Option<T>,
+) -> [Option<T>; 3] {
+    let mut output: [Option<T>; 3] = std::array::from_fn(|_| None);
+    let mut unique = Vec::<(Vec<u8>, Option<T>)>::new();
+
+    for (index, bytes) in sides.into_iter().enumerate() {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
+        let Some(bytes) = bytes else {
+            continue;
+        };
+        if let Some((_, mapped)) = unique
+            .iter()
+            .find(|(source, _)| source.as_slice() == bytes.as_slice())
+        {
+            output[index] = mapped.clone();
+            continue;
+        }
+
+        let mapped = map(&bytes);
+        output[index] = mapped.clone();
+        unique.push((bytes, mapped));
+    }
+
+    output
+}
+
+pub(in crate::view) fn release_conflict_preview_render_images<T>(
+    preview: &ConflictResolverImagePreviewState,
+    cx: &mut gpui::Context<T>,
+) {
+    let mut images = Vec::new();
+    for side in ThreeWayColumn::ALL {
+        if let Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) = preview.image(side)
+            && images
+                .iter()
+                .all(|known: &Arc<gpui::RenderImage>| known.id != image.id)
+        {
+            images.push(Arc::clone(image));
+        }
+    }
+    if !images.is_empty() {
+        cx.defer(move |cx| {
+            for image in images {
+                cx.drop_image(image, None);
+            }
+        });
+    }
+}
+
 impl MainPaneView {
+    fn current_remote_markdown_image_documents(&self) -> RemoteMarkdownImageDocumentSet {
+        if self.is_conflict_rendered_markdown_preview_active() {
+            let documents = &self.conflict_resolver.markdown_preview.documents;
+            return RemoteMarkdownImageDocumentSet::Conflict([
+                match &documents.base {
+                    Loadable::Ready(document) => Some(Arc::clone(document)),
+                    _ => None,
+                },
+                match &documents.ours {
+                    Loadable::Ready(document) => Some(Arc::clone(document)),
+                    _ => None,
+                },
+                match &documents.theirs {
+                    Loadable::Ready(document) => Some(Arc::clone(document)),
+                    _ => None,
+                },
+            ]);
+        } else if self.is_markdown_preview_active() && self.is_file_preview_active() {
+            if let Loadable::Ready(document) = &self.worktree_markdown_preview {
+                return RemoteMarkdownImageDocumentSet::Worktree(Arc::clone(document));
+            }
+        } else if self.is_markdown_preview_active()
+            && let Loadable::Ready(preview) = &self.file_markdown_preview
+        {
+            return RemoteMarkdownImageDocumentSet::Diff(Arc::clone(preview));
+        }
+        RemoteMarkdownImageDocumentSet::None
+    }
+
+    fn collect_remote_markdown_image_urls(
+        documents: &RemoteMarkdownImageDocumentSet,
+    ) -> FxHashSet<SharedString> {
+        fn collect(
+            document: &crate::view::markdown_preview::MarkdownPreviewDocument,
+            urls: &mut FxHashSet<SharedString>,
+        ) {
+            let mut add = |source: &str| {
+                if let Some(url) = crate::view::rows::markdown_preview_remote_image_url(source) {
+                    urls.insert(url);
+                }
+            };
+            for row in &document.rows {
+                record_remote_markdown_image_row_visit();
+                if let Some(image) = &row.image {
+                    add(image.source.as_ref());
+                }
+                for inline in row.inline_images.iter() {
+                    add(inline.image.source.as_ref());
+                }
+            }
+        }
+
+        let mut urls = FxHashSet::default();
+        match documents {
+            RemoteMarkdownImageDocumentSet::None => {}
+            RemoteMarkdownImageDocumentSet::Worktree(document) => collect(document, &mut urls),
+            RemoteMarkdownImageDocumentSet::Diff(preview) => {
+                collect(&preview.old, &mut urls);
+                collect(&preview.new, &mut urls);
+                collect(&preview.inline, &mut urls);
+            }
+            RemoteMarkdownImageDocumentSet::Conflict(documents) => {
+                for document in documents.iter().flatten() {
+                    collect(document, &mut urls);
+                }
+            }
+        }
+        urls
+    }
+
+    fn remote_markdown_image_summary(&self) -> (Arc<FxHashSet<SharedString>>, bool) {
+        let documents = self.current_remote_markdown_image_documents();
+        let mut cache = self.remote_markdown_image_summary_cache.borrow_mut();
+        let documents_changed = !cache.documents.has_same_identity(&documents);
+        if documents_changed {
+            cache.urls = Arc::new(Self::collect_remote_markdown_image_urls(&documents));
+            cache.documents = documents;
+        }
+
+        if documents_changed
+            || cache.approval_revision != self.remote_markdown_image_approval_revision
+        {
+            cache.has_blocked = cache
+                .urls
+                .iter()
+                .any(|url| !self.approved_remote_markdown_image_urls.contains(url));
+            cache.approval_revision = self.remote_markdown_image_approval_revision;
+        }
+
+        (Arc::clone(&cache.urls), cache.has_blocked)
+    }
+
+    fn current_remote_markdown_image_urls(&self) -> Arc<FxHashSet<SharedString>> {
+        self.remote_markdown_image_summary().0
+    }
+
+    pub(in crate::view) fn has_blocked_remote_markdown_images(&self) -> bool {
+        self.remote_markdown_image_policy == RemoteMarkdownImagePolicy::AskBeforeLoading
+            && self.remote_markdown_image_summary().1
+    }
+
+    pub(in crate::view) fn approve_all_remote_markdown_images(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_markdown_image_policy != RemoteMarkdownImagePolicy::AskBeforeLoading {
+            return;
+        }
+        let urls = self.current_remote_markdown_image_urls();
+        let previous_len = self.approved_remote_markdown_image_urls.len();
+        Arc::make_mut(&mut self.approved_remote_markdown_image_urls).extend(urls.iter().cloned());
+        if self.approved_remote_markdown_image_urls.len() != previous_len {
+            self.remote_markdown_image_approval_revision =
+                self.remote_markdown_image_approval_revision.wrapping_add(1);
+            cx.notify();
+        }
+    }
+
+    fn cancel_conflict_image_preview_task(&mut self) {
+        if let Some(cancel) = self.conflict_image_preview_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.conflict_image_preview_inflight = None;
+
+        // Keep a running task owned so the next preview can await it before
+        // starting another blocking decode. Dropping the outer GPUI task does
+        // not stop a smol::unblock job that is already running.
+        if self
+            .conflict_image_preview_task
+            .as_ref()
+            .is_some_and(gpui::Task::is_ready)
+        {
+            self.conflict_image_preview_task = None;
+        }
+    }
+
+    fn supersede_conflict_image_preview_task(&mut self) -> Option<gpui::Task<()>> {
+        if let Some(cancel) = self.conflict_image_preview_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.conflict_image_preview_inflight = None;
+        self.conflict_image_preview_task.take()
+    }
+
+    fn release_conflict_render_images(&mut self, cx: &mut gpui::Context<Self>) {
+        release_conflict_preview_render_images(&self.conflict_resolver.image_preview, cx);
+    }
+
+    pub(in crate::view) fn reset_conflict_image_preview_cache(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.cancel_conflict_image_preview_task();
+        self.release_conflict_render_images(cx);
+        self.conflict_resolver.image_preview = ConflictResolverImagePreviewState::default();
+    }
+
     /// Clears worktree preview source text, line starts, and the segments
     /// cache. Use this when the preview content is invalidated but the caller
     /// still needs to set identity fields (path, loadable state, syntax
@@ -512,24 +757,36 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let Some(source_hash) = self.conflict_resolver.source_hash else {
-            self.conflict_resolver.image_preview = ConflictResolverImagePreviewState::default();
+            self.reset_conflict_image_preview_cache(cx);
             return;
         };
         let Some(path) = self.conflict_resolver.path.clone() else {
-            self.conflict_resolver.image_preview = ConflictResolverImagePreviewState::default();
+            self.reset_conflict_image_preview_cache(cx);
             return;
         };
         let Some(format) = crate::view::diff_utils::image_format_for_path(&path) else {
-            self.conflict_resolver.image_preview = ConflictResolverImagePreviewState::default();
+            self.reset_conflict_image_preview_cache(cx);
             return;
         };
+        let conflict_rev = self.conflict_resolver.conflict_rev;
 
         let previews = &self.conflict_resolver.image_preview;
+        let terminal = [
+            &previews.images.base,
+            &previews.images.ours,
+            &previews.images.theirs,
+        ]
+        .into_iter()
+        .all(|image| !matches!(image, Loadable::NotLoaded | Loadable::Loading));
+        let current_worker = self.conflict_image_preview_inflight.is_some()
+            && self
+                .conflict_image_preview_task
+                .as_ref()
+                .is_some_and(|task| !task.is_ready());
         let cache_ready = previews.source_hash == Some(source_hash)
             && previews.path.as_ref() == Some(&path)
-            && !matches!(previews.images.base, Loadable::NotLoaded)
-            && !matches!(previews.images.ours, Loadable::NotLoaded)
-            && !matches!(previews.images.theirs, Loadable::NotLoaded);
+            && previews.conflict_rev == conflict_rev
+            && (terminal || current_worker);
         if cache_ready {
             return;
         }
@@ -551,25 +808,18 @@ impl MainPaneView {
             &self.conflict_resolver.three_way_text.theirs,
         );
 
-        if format != gpui::ImageFormat::Svg {
-            self.conflict_resolver.image_preview = ConflictResolverImagePreviewState {
-                source_hash: Some(source_hash),
-                path: Some(path),
-                images: ThreeWaySides {
-                    base: ready_conflict_preview_image_from_bytes(format, base_bytes),
-                    ours: ready_conflict_preview_image_from_bytes(format, ours_bytes),
-                    theirs: ready_conflict_preview_image_from_bytes(format, theirs_bytes),
-                },
-            };
-            return;
-        }
-
         let base_has_source = base_bytes.is_some();
         let ours_has_source = ours_bytes.is_some();
         let theirs_has_source = theirs_bytes.is_some();
+        let previous_task = self.supersede_conflict_image_preview_task();
+        self.release_conflict_render_images(cx);
+        self.conflict_image_preview_seq = self.conflict_image_preview_seq.wrapping_add(1);
+        let seq = self.conflict_image_preview_seq;
+        self.conflict_image_preview_inflight = Some(seq);
         self.conflict_resolver.image_preview = ConflictResolverImagePreviewState {
             source_hash: Some(source_hash),
             path: Some(path.clone()),
+            conflict_rev,
             images: ThreeWaySides {
                 base: loading_conflict_preview_image(base_has_source),
                 ours: loading_conflict_preview_image(ours_has_source),
@@ -577,16 +827,70 @@ impl MainPaneView {
             },
         };
 
-        cx.spawn(
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.conflict_image_preview_cancel = Some(Arc::clone(&cancel));
+
+        if format != gpui::ImageFormat::Svg {
+            let task = cx.spawn(
+                async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                    if let Some(previous_task) = previous_task {
+                        previous_task.await;
+                    }
+                    let decode_payloads = move || {
+                        map_deduplicated_conflict_preview_sides(
+                            [base_bytes, ours_bytes, theirs_bytes],
+                            &cancel,
+                            |bytes| {
+                                super::diff_cache::render_raster_conflict_preview(format, bytes)
+                            },
+                        )
+                    };
+                    let [base_image, ours_image, theirs_image] =
+                        if crate::ui_runtime::current().uses_background_compute() {
+                            smol::unblock(decode_payloads).await
+                        } else {
+                            decode_payloads()
+                        };
+
+                    let _ = view.update(cx, |this, cx| {
+                        if this.conflict_image_preview_inflight != Some(seq)
+                            || this.conflict_resolver.conflict_rev != conflict_rev
+                            || this.conflict_resolver.image_preview.conflict_rev != conflict_rev
+                            || this.conflict_resolver.image_preview.source_hash != Some(source_hash)
+                            || this.conflict_resolver.image_preview.path.as_ref() != Some(&path)
+                        {
+                            return;
+                        }
+
+                        this.conflict_image_preview_inflight = None;
+                        this.conflict_image_preview_cancel = None;
+                        this.conflict_resolver.image_preview.images.base =
+                            loadable_conflict_preview_render_image(base_image, base_has_source);
+                        this.conflict_resolver.image_preview.images.ours =
+                            loadable_conflict_preview_render_image(ours_image, ours_has_source);
+                        this.conflict_resolver.image_preview.images.theirs =
+                            loadable_conflict_preview_render_image(theirs_image, theirs_has_source);
+                        cx.notify();
+                    });
+                },
+            );
+            self.conflict_image_preview_task = Some(task);
+            return;
+        }
+
+        let task = cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                if let Some(previous_task) = previous_task {
+                    previous_task.await;
+                }
                 let rasterize_payloads = move || {
-                    (
-                        rasterize_conflict_preview_svg_payload(base_bytes),
-                        rasterize_conflict_preview_svg_payload(ours_bytes),
-                        rasterize_conflict_preview_svg_payload(theirs_bytes),
+                    map_deduplicated_conflict_preview_sides(
+                        [base_bytes, ours_bytes, theirs_bytes],
+                        &cancel,
+                        |bytes| rasterize_conflict_preview_svg_payload(Some(bytes.to_vec())),
                     )
                 };
-                let (base_payload, ours_payload, theirs_payload) =
+                let [base_payload, ours_payload, theirs_payload] =
                     if crate::ui_runtime::current().uses_background_compute() {
                         smol::unblock(rasterize_payloads).await
                     } else {
@@ -594,12 +898,17 @@ impl MainPaneView {
                     };
 
                 let _ = view.update(cx, |this, cx| {
-                    if this.conflict_resolver.image_preview.source_hash != Some(source_hash)
+                    if this.conflict_image_preview_inflight != Some(seq)
+                        || this.conflict_resolver.conflict_rev != conflict_rev
+                        || this.conflict_resolver.image_preview.conflict_rev != conflict_rev
+                        || this.conflict_resolver.image_preview.source_hash != Some(source_hash)
                         || this.conflict_resolver.image_preview.path.as_ref() != Some(&path)
                     {
                         return;
                     }
 
+                    this.conflict_image_preview_inflight = None;
+                    this.conflict_image_preview_cancel = None;
                     this.conflict_resolver.image_preview.images.base =
                         loadable_conflict_preview_svg_image(base_payload, base_has_source);
                     this.conflict_resolver.image_preview.images.ours =
@@ -609,8 +918,8 @@ impl MainPaneView {
                     cx.notify();
                 });
             },
-        )
-        .detach();
+        );
+        self.conflict_image_preview_task = Some(task);
     }
 
     pub(in crate::view) fn is_worktree_target_directory(&self) -> bool {
@@ -774,6 +1083,50 @@ impl MainPaneView {
         None
     }
 
+    /// Logical EOF of one Markdown region as `(visual row, byte offset)`.
+    ///
+    /// Split preview documents are padded with `Spacer` rows to align additions
+    /// and deletions. Their wrap plans can add more empty continuations when
+    /// the opposite column wraps farther. Neither kind of padding is part of
+    /// this side's document, so EOF stays on the last non-spacer source row and
+    /// its last content-bearing visual slice. A genuinely empty final row still
+    /// owns its first visual slice.
+    pub(in crate::view) fn markdown_preview_region_eof(
+        &self,
+        region: DiffTextRegion,
+    ) -> Option<(usize, usize)> {
+        let (list, document) = self.markdown_preview_list_for_region(region)?;
+        let source_row_ix = document
+            .rows
+            .iter()
+            .rposition(|row| !matches!(row.kind, MarkdownPreviewRowKind::Spacer))?;
+        let row = document.rows.get(source_row_ix)?;
+
+        let Some(plan) = self.markdown_preview_wrap_plan(list) else {
+            return Some((source_row_ix, row.text.len()));
+        };
+
+        let first_visual_ix = plan.visual_ix_for_row(source_row_ix);
+        let after_visual_ix = plan
+            .visual_ix_for_row(source_row_ix.saturating_add(1))
+            .min(plan.len());
+        if first_visual_ix >= after_visual_ix {
+            return None;
+        }
+
+        let last_content_visual_ix = (first_visual_ix..after_visual_ix)
+            .rev()
+            .find(|&visual_ix| {
+                plan.get(visual_ix)
+                    .is_some_and(|visual| !visual.byte_range.is_empty())
+            })
+            .unwrap_or(first_visual_ix);
+        Some((
+            last_content_visual_ix,
+            self.markdown_preview_row_text_len(last_content_visual_ix, region),
+        ))
+    }
+
     /// Returns the text painted by the markdown preview row at `visible_ix`
     /// for the given `region`. For file preview (added/deleted/untracked) only
     /// `DiffTextRegion::Inline` is meaningful.
@@ -840,12 +1193,18 @@ impl MainPaneView {
         }
         let document = Arc::clone(document);
         let base_dir = self.markdown_preview_image_base_dir();
+        let remote_image_access = self.markdown_remote_image_access(None);
 
         let mut resources = Vec::new();
         let mut push = |source: &str| {
             if let Some(resolved) =
                 crate::view::rows::markdown_preview_image_source(base_dir.as_deref(), source)
             {
+                if let crate::view::rows::MarkdownPreviewImageSource::Remote(url) = &resolved
+                    && !remote_image_access.permits(url)
+                {
+                    return;
+                }
                 resources.push(resolved.to_resource());
             }
         };
@@ -1473,6 +1832,23 @@ mod tests {
     use crate::perf_alloc::measure_allocations;
 
     use super::*;
+
+    #[test]
+    fn conflict_preview_mapping_decodes_identical_payloads_once() {
+        let decodes = std::cell::Cell::new(0_usize);
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let images = map_deduplicated_conflict_preview_sides(
+            [Some(vec![1, 2, 3]), Some(vec![4, 5]), Some(vec![1, 2, 3])],
+            &cancel,
+            |bytes| {
+                decodes.set(decodes.get() + 1);
+                Some(bytes.len())
+            },
+        );
+
+        assert_eq!(images, [Some(3), Some(2), Some(3)]);
+        assert_eq!(decodes.get(), 2);
+    }
 
     #[test]
     fn build_conflict_markdown_preview_documents_parses_each_side() {

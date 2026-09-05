@@ -18,6 +18,7 @@ pub(in crate::view) enum AppMenuAction {
     ApplyPatch {
         repo_id: Option<RepoId>,
     },
+    CheckForUpdates,
     /// Show the reflog panel for the active repository, in the bottom panel.
     ShowReflog {
         repo_id: Option<RepoId>,
@@ -233,6 +234,9 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
     },
+    SetCommitFileSort {
+        sort: crate::view::rows::CommitFileSort,
+    },
     SetDiffContentMode {
         mode: DiffContentMode,
     },
@@ -414,6 +418,11 @@ pub(in crate::view) enum ContextMenuAction {
     /// way to tell the copy happened without being told.
     CopyLinkAddress {
         url: String,
+    },
+    /// Approve one repository-controlled remote image in the current Markdown
+    /// preview. The pane re-checks that Ask mode is still active when invoked.
+    LoadRemoteMarkdownImage {
+        url: SharedString,
     },
     OpenWebUrl {
         url: String,
@@ -604,7 +613,7 @@ mod repo_tabs_bar;
 
 pub(super) use action_bar::{ActionBarView, action_bar_height};
 pub(super) use bottom_status_bar::BottomStatusBarView;
-pub(super) use popover::PopoverHost;
+pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use popover::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
 /// Layout guards outside this module assert against the tab padding, so they

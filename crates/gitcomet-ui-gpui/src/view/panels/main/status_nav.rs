@@ -152,6 +152,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
     diff_target: &DiffTarget,
     change_tracking_view: ChangeTrackingView,
     direction: i8,
+    commit_file_source_indices: Option<&[usize]>,
 ) -> Option<AdjacentDiffFileTarget> {
     if direction == 0 {
         return None;
@@ -187,13 +188,26 @@ pub(super) fn adjacent_diff_file_target_for_repo(
                 return None;
             }
 
-            let current_ix = details.files.iter().position(|file| file.path == *path)?;
+            let source_indices;
+            let visible_source_indices = if let Some(indices) = commit_file_source_indices {
+                indices
+            } else {
+                source_indices = (0..details.files.len()).collect::<Vec<_>>();
+                source_indices.as_slice()
+            };
+            let current_ix = visible_source_indices.iter().position(|source_ix| {
+                details
+                    .files
+                    .get(*source_ix)
+                    .is_some_and(|file| file.path == *path)
+            })?;
             let target_ix = if direction < 0 {
                 current_ix.checked_sub(1)?
             } else {
-                (current_ix + 1 < details.files.len()).then_some(current_ix + 1)?
+                (current_ix + 1 < visible_source_indices.len()).then_some(current_ix + 1)?
             };
-            let path = details.files.get(target_ix)?.path.clone();
+            let source_ix = *visible_source_indices.get(target_ix)?;
+            let path = details.files.get(source_ix)?.path.clone();
 
             Some(AdjacentDiffFileTarget::Commit {
                 commit_id: commit_id.clone(),
@@ -236,11 +250,26 @@ impl MainPaneView {
             return true;
         }
 
+        let commit_file_source_indices = self
+            .root_view
+            .update(cx, |root, cx| {
+                root.details_pane
+                    .read(cx)
+                    .active_commit_file_source_indices(repo_id)
+            })
+            .ok()
+            .flatten();
         let change_tracking_view = self.active_change_tracking_view(cx);
         let Some(target) = (|| {
             let repo = self.active_repo()?;
             let diff_target = repo.diff_state.diff_target.as_ref()?;
-            adjacent_diff_file_target_for_repo(repo, diff_target, change_tracking_view, direction)
+            adjacent_diff_file_target_for_repo(
+                repo,
+                diff_target,
+                change_tracking_view,
+                direction,
+                commit_file_source_indices.as_deref(),
+            )
         })() else {
             return false;
         };
@@ -496,7 +525,13 @@ mod tests {
         };
 
         assert_eq!(
-            adjacent_diff_file_target_for_repo(&repo, &target, ChangeTrackingView::Combined, -1),
+            adjacent_diff_file_target_for_repo(
+                &repo,
+                &target,
+                ChangeTrackingView::Combined,
+                -1,
+                None,
+            ),
             Some(AdjacentDiffFileTarget::Commit {
                 commit_id: commit_id.clone(),
                 target_ix: 0,
@@ -504,12 +539,109 @@ mod tests {
             })
         );
         assert_eq!(
-            adjacent_diff_file_target_for_repo(&repo, &target, ChangeTrackingView::Combined, 1),
+            adjacent_diff_file_target_for_repo(
+                &repo,
+                &target,
+                ChangeTrackingView::Combined,
+                1,
+                None,
+            ),
             Some(AdjacentDiffFileTarget::Commit {
                 commit_id,
                 target_ix: 2,
                 path: file_c,
             })
+        );
+    }
+
+    #[test]
+    fn commit_details_file_navigation_uses_the_visible_sorted_projection() {
+        let commit_id = CommitId("deadbeefdeadbeef".into());
+        let file_a = pb("src/a.rs");
+        let file_b = pb("src/b.rs");
+        let file_c = pb("src/c.rs");
+
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.history_state.commit_details =
+            Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::CommitDetails {
+                id: commit_id.clone(),
+                message: "subject".into(),
+                author_name: String::new(),
+                author_email: String::new(),
+                authored_at_unix: 0,
+                committed_at: "2026-04-14 12:00:00 +0300".into(),
+                committed_at_unix: 0,
+                parent_ids: vec![],
+                files: vec![
+                    gitcomet_core::domain::CommitFileChange {
+                        path: file_a.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        is_submodule: false,
+                        additions: None,
+                        deletions: None,
+                    },
+                    gitcomet_core::domain::CommitFileChange {
+                        path: file_b.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        is_submodule: false,
+                        additions: None,
+                        deletions: None,
+                    },
+                    gitcomet_core::domain::CommitFileChange {
+                        path: file_c.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        is_submodule: false,
+                        additions: None,
+                        deletions: None,
+                    },
+                ],
+            }));
+
+        let target = DiffTarget::Commit {
+            commit_id: commit_id.clone(),
+            path: Some(file_b.clone()),
+        };
+        let visible_source_indices = [2, 1];
+
+        assert_eq!(
+            adjacent_diff_file_target_for_repo(
+                &repo,
+                &target,
+                ChangeTrackingView::Combined,
+                -1,
+                Some(&visible_source_indices),
+            ),
+            Some(AdjacentDiffFileTarget::Commit {
+                commit_id: commit_id.clone(),
+                target_ix: 0,
+                path: file_c,
+            })
+        );
+        assert_eq!(
+            adjacent_diff_file_target_for_repo(
+                &repo,
+                &target,
+                ChangeTrackingView::Combined,
+                1,
+                Some(&visible_source_indices),
+            ),
+            None,
+        );
+
+        let hidden_target = DiffTarget::Commit {
+            commit_id,
+            path: Some(file_a),
+        };
+        assert_eq!(
+            adjacent_diff_file_target_for_repo(
+                &repo,
+                &hidden_target,
+                ChangeTrackingView::Combined,
+                1,
+                Some(&visible_source_indices),
+            ),
+            None,
+            "navigation is a no-op while the open diff is hidden by the filter"
         );
     }
 }

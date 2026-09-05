@@ -5,6 +5,59 @@
 //! - Interval coalescing for overlapping ranges
 //! - Newline-aware text manipulation
 
+use std::any::Any;
+
+/// Renders a `catch_unwind` / `JoinHandle::join` payload for diagnostics,
+/// using `fallback` for payloads that are not `&str` or `String`.
+///
+/// Callers keep their own fallback wording; taking a reference means a caller
+/// holding a `Box` can pass `payload.as_ref()` without giving up ownership.
+pub fn panic_payload_to_string(payload: &(dyn Any + Send), fallback: &str) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        fallback.to_string()
+    }
+}
+
+/// Wraps text in POSIX single quotes, escaping embedded single quotes with the
+/// standard `'"'"'` idiom.
+///
+/// Used for shell command fragments such as `GIT_EDITOR` values, which git
+/// hands to `sh` on every platform.
+/// Mask credentials embedded in a URL's userinfo for display.
+///
+/// `scheme://user:secret@host/…` becomes `scheme://user:***@host/…`. For
+/// http(s), where a token is commonly the whole userinfo
+/// (`https://ghp_…@github.com`), the userinfo is masked entirely. Other
+/// schemes keep a bare username (`ssh://git@host`), and inputs without an
+/// authority — scp-like `git@host:path`, local paths — are returned as-is.
+/// Only display strings go through here; the URL git receives is untouched.
+pub fn redact_url_userinfo(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let Some(at) = rest[..authority_end].rfind('@') else {
+        return url.to_string();
+    };
+    let userinfo = &rest[..at];
+    let masked = match userinfo.split_once(':') {
+        Some((user, _)) => format!("{user}:***"),
+        None if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") => {
+            "***".to_string()
+        }
+        None => return url.to_string(),
+    };
+    format!("{scheme}://{masked}{}", &rest[at..])
+}
+
+pub fn shell_single_quote(raw: &str) -> String {
+    format!("'{}'", raw.replace('\'', "'\"'\"'"))
+}
+
 #[cfg(test)]
 use crate::file_diff::{Edit, EditKind, myers_edits};
 #[cfg(test)]
@@ -765,6 +818,39 @@ pub(crate) fn delete_last_line(text: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn redact_url_userinfo_masks_secrets_and_keeps_the_rest() {
+        use super::redact_url_userinfo;
+        assert_eq!(
+            redact_url_userinfo("https://user:s3cret@example.com/org/repo.git"),
+            "https://user:***@example.com/org/repo.git"
+        );
+        assert_eq!(
+            redact_url_userinfo("https://ghp_token@github.com/org/repo.git"),
+            "https://***@github.com/org/repo.git"
+        );
+        assert_eq!(
+            redact_url_userinfo("HTTP://user@example.com:8080/repo?x=a@b#f"),
+            "HTTP://***@example.com:8080/repo?x=a@b#f"
+        );
+        assert_eq!(
+            redact_url_userinfo("ssh://git@example.com/org/repo.git"),
+            "ssh://git@example.com/org/repo.git"
+        );
+        assert_eq!(
+            redact_url_userinfo("ssh://git:pass@example.com/org/repo.git"),
+            "ssh://git:***@example.com/org/repo.git"
+        );
+        for untouched in [
+            "git@github.com:org/repo.git",
+            "/tmp/repo.git",
+            "https://example.com/repo?token=a@b",
+            "",
+        ] {
+            assert_eq!(redact_url_userinfo(untouched), untouched);
+        }
+    }
+
     use super::{LineEndingDetectionMode, chars_to_tokens, detect_line_ending_from_texts};
 
     #[test]

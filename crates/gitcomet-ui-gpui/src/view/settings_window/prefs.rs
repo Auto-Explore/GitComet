@@ -40,6 +40,14 @@ impl SettingsWindowView {
             diff_reveal_whitespace_chars: Some(self.diff_reveal_whitespace_chars),
             diff_word_wrap: Some(self.diff_word_wrap),
             diff_show_line_numbers: Some(self.diff_show_line_numbers),
+            allowed_remote_protocols: Some(
+                self.remote_url_policy
+                    .allowed_protocols()
+                    .map(|protocol| protocol.key().to_string())
+                    .collect(),
+            ),
+            remote_markdown_image_policy: Some(self.remote_markdown_image_policy.key().to_string()),
+            check_for_updates_on_startup: Some(self.check_for_updates_on_startup),
             auto_save_file_edits: Some(self.auto_save_file_edits),
             // Merge tool settings are managed from the resolver's cog menu;
             // None never overwrites the stored values.
@@ -60,6 +68,7 @@ impl SettingsWindowView {
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
             default_history_mode: Some(self.default_history_mode),
             default_tag_type: Some(self.default_tag_type),
+            fetch_prune_deleted_remote_branches: Some(self.prune_deleted_remote_branches_on_fetch),
             commit_push_after_enabled: None,
             git_executable_path: Some(applied_git_executable_path(&self.runtime_info.git.runtime)),
             terminal_external_mode: None,
@@ -596,9 +605,7 @@ impl SettingsWindowView {
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
-            view.popover_host.update(cx, |host, cx| {
-                host.set_date_time_format(format, cx);
-            });
+            view.set_date_time_format_preference(format, cx);
         });
         cx.notify();
     }
@@ -612,9 +619,7 @@ impl SettingsWindowView {
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
-            view.popover_host.update(cx, |host, cx| {
-                host.set_timezone(timezone, cx);
-            });
+            view.set_timezone_preference(timezone, cx);
         });
         cx.notify();
     }
@@ -627,9 +632,7 @@ impl SettingsWindowView {
         self.show_timezone = enabled;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
-            view.popover_host.update(cx, |host, cx| {
-                host.set_show_timezone(enabled, cx);
-            });
+            view.set_show_timezone_preference(enabled, cx);
         });
         cx.notify();
     }
@@ -775,6 +778,56 @@ impl SettingsWindowView {
         cx.notify();
     }
 
+    pub(super) fn set_remote_markdown_image_policy(
+        &mut self,
+        next: RemoteMarkdownImagePolicy,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.remote_markdown_image_policy == next {
+            return;
+        }
+        self.remote_markdown_image_policy = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_remote_markdown_image_policy(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn toggle_remote_protocol(
+        &mut self,
+        protocol: RemoteProtocol,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let allowed = !self.remote_url_policy.allows(protocol);
+        self.remote_url_policy.set_allowed(protocol, allowed);
+        let next = self.remote_url_policy;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_remote_url_policy(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_check_for_updates_on_startup(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if crate::view::update_checks_disabled_by_environment()
+            || self.check_for_updates_on_startup == next
+        {
+            return;
+        }
+        self.check_for_updates_on_startup = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_check_for_updates_on_startup(next, cx);
+        });
+        cx.notify();
+    }
+
     pub(super) fn set_history_column_preferences(
         &mut self,
         show_graph: bool,
@@ -883,6 +936,9 @@ impl SettingsWindowView {
         self.default_history_mode = mode;
         self.expanded_section = None;
         self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_default_history_mode_preference(mode, cx);
+        });
         cx.notify();
     }
 
@@ -899,6 +955,23 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_default_tag_type_preference(tag_type, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_prune_deleted_remote_branches_on_fetch(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.prune_deleted_remote_branches_on_fetch == enabled {
+            return;
+        }
+
+        self.prune_deleted_remote_branches_on_fetch = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_remote_prune_preference(enabled, cx);
         });
         cx.notify();
     }

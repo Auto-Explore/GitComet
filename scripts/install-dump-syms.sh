@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/cli.sh"
+
 usage() {
   cat <<'EOF'
 Usage: scripts/install-dump-syms.sh --version VERSION --asset ASSET --sha256 SHA256 [--bin-dir DIR]
@@ -18,15 +21,6 @@ Options:
   --sha256    Expected SHA-256 of the asset
   --bin-dir   Destination directory (default: ${RUNNER_TEMP:-/tmp}/dump-syms-bin)
 EOF
-}
-
-# `shift 2` on a flag whose value is missing fails under `set -e`, killing the
-# script before the diagnostics below can run.
-require_value() {
-  if [[ $# -lt 2 ]]; then
-    echo "Option $1 requires a value." >&2
-    exit 2
-  fi
 }
 
 version=""

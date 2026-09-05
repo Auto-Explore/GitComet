@@ -77,6 +77,73 @@ const FILE_BROWSER_ROW_HEIGHT_PX: f32 = 22.0;
 /// moved on from never fires.
 const FILE_BROWSER_REVEAL_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// The checked-out local branch and its tip, but only once both pieces of
+/// sidebar data agree. A detached `HEAD` and a branch list that has not landed
+/// yet deliberately leave the locate action disabled.
+fn active_local_branch_target(repo: &RepoState) -> Option<(&str, &CommitId)> {
+    let Loadable::Ready(head) = &repo.head_branch else {
+        return None;
+    };
+    if head == "HEAD" {
+        return None;
+    }
+    let Loadable::Ready(branches) = &repo.branches else {
+        return None;
+    };
+    branches
+        .iter()
+        .find(|branch| branch.name.as_str() == head.as_str())
+        .map(|branch| (head.as_str(), &branch.target))
+}
+
+/// Expand the Local section and every possible slash-group on the path to a
+/// branch. Including the full branch name matters when a ref is both a leaf and
+/// a group (`feature` alongside `feature/one`); for an ordinary leaf its key is
+/// simply absent and this is a no-op.
+fn expand_local_branch_path(collapsed_items: &mut BTreeSet<String>, branch_name: &str) -> bool {
+    let mut changed = false;
+    let mut expand = |key: &str| {
+        if branch_sidebar::is_collapsed(collapsed_items, key) {
+            branch_sidebar::set_collapse_state(collapsed_items, key, false);
+            changed = true;
+        }
+    };
+
+    expand(branch_sidebar::local_section_storage_key());
+    let mut group_path = String::new();
+    for segment in branch_name.split('/') {
+        if !group_path.is_empty() {
+            group_path.push('/');
+        }
+        group_path.push_str(segment);
+        expand(&branch_sidebar::local_group_storage_key(&group_path));
+    }
+    changed
+}
+
+/// Prefer the branch's row in the Local tree over a duplicate in the Pinned
+/// section, which is emitted earlier in the presentation.
+fn local_branch_home_row_index(rows: &[BranchSidebarRow], branch_name: &str) -> Option<usize> {
+    rows.iter().rposition(|row| {
+        matches!(
+            row,
+            BranchSidebarRow::Branch {
+                name,
+                section: BranchSection::Local,
+                ..
+            } if name.as_ref() == branch_name
+        )
+    })
+}
+
+fn file_browser_row_label_color(theme: AppTheme, selected: bool) -> gpui::Rgba {
+    if selected {
+        selected_branch_label_color(theme)
+    } else {
+        theme.colors.foreground.primary
+    }
+}
+
 /// A section of the sidebar that gets its own icon in the collapsed rail and,
 /// when clicked, opens in a floating popover without expanding the sidebar.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -253,10 +320,13 @@ pub(in super::super) struct SidebarPaneView {
     /// When the request was made. Bounded so an unresolvable reveal expires
     /// instead of firing at some unrelated later moment.
     pending_file_browser_reveal_at: Option<std::time::Instant>,
+    #[cfg(test)]
+    pub(in crate::view) render_count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SidebarNotifyFingerprint {
+    sidebar_mode: SidebarMode,
     active_repo_id: Option<RepoId>,
     repo_fingerprint: Option<BranchSidebarFingerprint>,
     open_repo_workdirs_count: usize,
@@ -289,6 +359,7 @@ impl SidebarNotifyFingerprint {
             .map(|r| r.diff_state.diff_target_rev)
             .unwrap_or(0);
         Self {
+            sidebar_mode: state.sidebar_mode,
             active_repo_id,
             repo_fingerprint,
             open_repo_workdirs_count,
@@ -323,6 +394,9 @@ impl SidebarPaneView {
 
             this.notify_fingerprint = next_fingerprint;
             this.state = next;
+            if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
+                this.selected_branch = None;
+            }
             this.dispatch_sidebar_data_request_if_needed(cx);
 
             // Reflect the newly-active repo's stored search query in the input.
@@ -449,6 +523,8 @@ impl SidebarPaneView {
             collapsed_popover_section: None,
             pending_file_browser_reveal: None,
             pending_file_browser_reveal_at: None,
+            #[cfg(test)]
+            render_count: 0,
         };
         this.dispatch_sidebar_data_request_if_needed(cx);
         // Reflect any already-active repo's stored search query on first mount.
@@ -462,8 +538,9 @@ impl SidebarPaneView {
     }
 
     /// Sync the section this pane should render as collapsed-rail popover content.
-    /// No `cx.notify()`: the root re-renders (and re-embeds this pane) whenever the
-    /// value changes, so an extra notify would only cause a redundant paint.
+    /// Notifies on change: the expanded pane is mounted as a cached view, which
+    /// only re-renders when it is marked dirty, so a silent field change could
+    /// leave a stale frame on screen.
     pub(in super::super) fn set_collapsed_popover_section(
         &mut self,
         section: Option<CollapsedSidebarSection>,
@@ -474,6 +551,7 @@ impl SidebarPaneView {
         }
         self.collapsed_popover_section = section;
         self.reset_collapsed_popover_filter(cx);
+        cx.notify();
     }
 
     fn toggle_file_search_option(
@@ -532,6 +610,22 @@ impl SidebarPaneView {
             return;
         }
         self.selected_branch = next;
+        cx.notify();
+    }
+
+    /// Apply the single-click outcome shared by a rendered branch row and any
+    /// action that promises to behave like one.
+    pub(in super::super) fn select_branch_and_reveal_tip(
+        &mut self,
+        repo_id: RepoId,
+        section: BranchSection,
+        name: &str,
+        commit_id: CommitId,
+        fallback_scope: Option<LogScope>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.set_selected_branch(repo_id, section, name, cx);
+        self.reveal_branch_commit_in_history(repo_id, section, name, commit_id, fallback_scope, cx);
         cx.notify();
     }
 
@@ -933,10 +1027,13 @@ impl SidebarPaneView {
             SidebarMode::Files => self.render_file_browser_content(theme, cx),
         };
 
+        // `size_full`, not just `h_full`: mounted as a cached view this is laid
+        // out as a root against the pane's bounds, where an auto width would
+        // shrink to the content instead of stretching like a flex child does.
         div()
             .flex()
             .flex_col()
-            .h_full()
+            .size_full()
             .min_h(px(0.0))
             .child(tab_bar)
             .child(content)
@@ -1437,7 +1534,7 @@ impl SidebarPaneView {
             if theme.is_dark { 0.08 } else { 0.05 },
         );
         // Same value as `ButtonStyle::Subtle`'s hover border, so the chips match
-        // the locate button sharing their strip.
+        // the locate action sharing their strip.
         let tab_hover_border = with_alpha(
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.45 } else { 0.32 },
@@ -1555,11 +1652,15 @@ impl SidebarPaneView {
                 }),
             );
 
-        // Shown for the whole time the tree it scrolls is on screen — hiding it
-        // when nothing is open made the strip's contents flicker as files were
-        // opened and closed. It greys out instead.
-        let show_locate = mode == SidebarMode::Files;
-        let can_locate = self
+        // Each tab keeps its locate action in the same trailing slot for the
+        // whole time its tree is visible. Unavailable actions grey out instead
+        // of making the strip shift as repository data changes.
+        let active_local_branch_name = self
+            .active_repo()
+            .and_then(active_local_branch_target)
+            .map(|(name, _)| name.to_string());
+        let can_locate_active_branch = active_local_branch_name.is_some();
+        let can_locate_open_file = self
             .active_repo()
             .and_then(|repo| repo.open_file_path())
             .is_some();
@@ -1575,15 +1676,50 @@ impl SidebarPaneView {
             .bg(bg)
             .child(branches_tab)
             .child(files_tab)
-            .when(show_locate, |strip| {
+            .when(mode == SidebarMode::Branches, |strip| {
+                let tooltip = active_local_branch_name.map_or_else(
+                    || SharedString::from("No active local branch to show"),
+                    |name| {
+                        SharedString::from(format!(
+                            "Show and select the active local branch: {name}"
+                        ))
+                    },
+                );
+                strip.child(
+                    components::Button::new("sidebar_locate_active_branch", "")
+                        .borderless()
+                        .style(components::ButtonStyle::Subtle)
+                        .disabled(!can_locate_active_branch)
+                        .start_slot(crate::view::icons::svg_icon(
+                            "icons/locate.svg",
+                            if can_locate_active_branch {
+                                theme.colors.foreground.secondary
+                            } else {
+                                with_alpha(theme.colors.foreground.secondary, 0.45)
+                            },
+                            scaled_px(13.0),
+                        ))
+                        .on_click(theme, cx, |this, _e, _window, cx| {
+                            this.locate_active_local_branch(cx);
+                        })
+                        // Pushed to the far edge so it reads as an action on the
+                        // strip rather than a third tab.
+                        .ml_auto()
+                        .w(scaled_px(22.0))
+                        .h(scaled_px(22.0))
+                        .gitcomet_tooltip(theme, tooltip)
+                        .debug_selector(|| "sidebar_locate_active_branch".to_string()),
+                )
+            })
+            .when(mode == SidebarMode::Files, |strip| {
                 strip.child(
                     components::Button::new("sidebar_locate_open_file", "")
                         .borderless()
                         .style(components::ButtonStyle::Subtle)
-                        .disabled(!can_locate)
+                        .disabled(!can_locate_open_file)
                         .start_slot(crate::view::icons::svg_icon(
                             "icons/locate.svg",
-                            if can_locate {
+                            if can_locate_open_file {
                                 theme.colors.foreground.secondary
                             } else {
                                 with_alpha(theme.colors.foreground.secondary, 0.45)
@@ -1600,7 +1736,7 @@ impl SidebarPaneView {
                         .h(scaled_px(22.0))
                         .gitcomet_tooltip(
                             theme,
-                            if can_locate {
+                            if can_locate_open_file {
                                 format!(
                                     "Show the open file in the explorer ({})",
                                     crate::view::shortcut_labels::secondary_shortcut("Shift+L")
@@ -1613,6 +1749,67 @@ impl SidebarPaneView {
                         .debug_selector(|| "sidebar_locate_open_file".to_string()),
                 )
             })
+    }
+
+    /// Scroll to the checked-out local branch, opening every group that hides
+    /// it, and then select its tip exactly as a single click on its row would.
+    pub(in super::super) fn locate_active_local_branch(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some((repo_id, repo_path, branch_name, commit_id)) =
+            self.active_repo().and_then(|repo| {
+                let (branch_name, commit_id) = active_local_branch_target(repo)?;
+                Some((
+                    repo.id,
+                    repo.spec.workdir.clone(),
+                    branch_name.to_string(),
+                    commit_id.clone(),
+                ))
+            })
+        else {
+            return;
+        };
+
+        if !self.branch_filter_query.is_empty() {
+            self.clear_branch_filter(cx);
+        }
+
+        let collapse_changed = {
+            let collapsed_items = self
+                .sidebar_collapsed_items_by_repo
+                .entry(repo_path.clone())
+                .or_default();
+            expand_local_branch_path(collapsed_items, &branch_name)
+        };
+        if self
+            .sidebar_collapsed_items_by_repo
+            .get(&repo_path)
+            .is_some_and(BTreeSet::is_empty)
+        {
+            self.sidebar_collapsed_items_by_repo.remove(&repo_path);
+        }
+
+        self.sidebar_presentation_cache = SidebarPresentationCache::default();
+        if collapse_changed {
+            self.schedule_ui_settings_persist(cx);
+            self.sync_popover_collapsed_items(cx);
+            self.dispatch_sidebar_data_request_if_needed(cx);
+        }
+
+        let row_ix = self
+            .branch_sidebar_presentation_cached()
+            .and_then(|presentation| local_branch_home_row_index(&presentation.rows, &branch_name));
+        self.select_branch_and_reveal_tip(
+            repo_id,
+            BranchSection::Local,
+            &branch_name,
+            commit_id,
+            Some(LogScope::FullReachable),
+            cx,
+        );
+        if let Some(row_ix) = row_ix {
+            self.branches_scroll
+                .scroll_to_item(row_ix, gpui::ScrollStrategy::Center);
+        }
+        cx.notify();
     }
 
     /// Scroll the file explorer to the file the main pane has open, expanding
@@ -2279,7 +2476,6 @@ impl SidebarPaneView {
         // Zed renders file/folder icons in a neutral, muted tone rather than a
         // bright accent — match that so the tree reads the same way.
         let icon_color = theme.colors.foreground.secondary;
-        let text_color = theme.colors.foreground.primary;
         let row_surface = if matches!(
             this.collapsed_popover_section,
             Some(CollapsedSidebarSection::Files)
@@ -2288,7 +2484,9 @@ impl SidebarPaneView {
         } else {
             theme.colors.surface.chrome
         };
-        let row_style = components::InteractiveRowStyle::new(theme, row_surface);
+        // Match the Branches tree: both are continuous lists, and their
+        // hover/selection fills should have the same square row silhouette.
+        let row_style = components::InteractiveRowStyle::new(theme, row_surface).flat();
         let store = Arc::clone(&this.store);
         let search_matchers = this
             .active_repo()
@@ -2463,6 +2661,7 @@ impl SidebarPaneView {
                         && open_path
                             .as_ref()
                             .is_some_and(|open| open.as_path() == entry.path.as_path());
+                    let row_text_color = file_browser_row_label_color(theme, is_open_file);
                     // The pen marks the file wherever it sits in the tree, so a user
                     // who navigated to it rather than to the pinned section still
                     // sees that it is holding unsaved text.
@@ -2568,7 +2767,7 @@ impl SidebarPaneView {
                                 file_search_highlight_ranges(&search_matchers, entry.name.as_ref());
                             let mut label = components::TruncatedText::new(entry.name.to_string())
                                 .profile(components::TextTruncationProfile::End)
-                                .text_color(text_color)
+                                .text_color(row_text_color)
                                 .text_sm();
                             if !highlight_ranges.is_empty() {
                                 let style = gpui::HighlightStyle {
@@ -2687,6 +2886,10 @@ impl SidebarPaneView {
 
 impl Render for SidebarPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.render_count += 1;
+        }
         match self.collapsed_popover_section {
             Some(section) => self.render_collapsed_popover(section, window, cx),
             None => self.sidebar(cx).into_any_element(),
@@ -2994,7 +3197,7 @@ fn unsaved_file_row(
                     // Path elision keeps the file name, which is what identifies
                     // the row, and drops the folders in the middle.
                     .profile(components::TextTruncationProfile::Path)
-                    .text_color(theme.colors.foreground.primary)
+                    .text_color(file_browser_row_label_color(theme, is_open))
                     .text_sm()
                     .render(cx),
             ),
@@ -3124,6 +3327,7 @@ mod file_search_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::domain::Branch;
     use std::path::PathBuf;
 
     /// Three copies of "is the tree filtered" exist: this one, the reducer's
@@ -3139,6 +3343,75 @@ mod tests {
                 file_browser_search_is_active(query),
                 !file_search_matchers(query, options).is_empty(),
                 "predicates disagree for {query:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn active_local_branch_target_requires_matching_ready_branch_data() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.head_branch = Loadable::Ready("feature/current".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "feature/current".to_string(),
+            target: CommitId("current-tip".into()),
+            upstream: None,
+            divergence: None,
+        }]));
+
+        assert_eq!(
+            active_local_branch_target(&repo).map(|(name, tip)| (name, tip.0.as_ref())),
+            Some(("feature/current", "current-tip"))
+        );
+
+        repo.head_branch = Loadable::Ready("HEAD".to_string());
+        assert_eq!(active_local_branch_target(&repo), None);
+
+        repo.head_branch = Loadable::Ready("missing".to_string());
+        assert_eq!(active_local_branch_target(&repo), None);
+    }
+
+    #[test]
+    fn expanding_a_local_branch_path_preserves_unrelated_collapsed_groups() {
+        let local_section = branch_sidebar::local_section_storage_key().to_string();
+        let feature = branch_sidebar::local_group_storage_key("feature");
+        let feature_deep = branch_sidebar::local_group_storage_key("feature/deep");
+        let feature_deep_topic = branch_sidebar::local_group_storage_key("feature/deep/topic");
+        let unrelated = branch_sidebar::local_group_storage_key("release");
+        let mut collapsed = BTreeSet::from([
+            local_section.clone(),
+            feature.clone(),
+            feature_deep.clone(),
+            feature_deep_topic.clone(),
+            unrelated.clone(),
+        ]);
+
+        assert!(expand_local_branch_path(
+            &mut collapsed,
+            "feature/deep/topic"
+        ));
+        for expanded in [local_section, feature, feature_deep, feature_deep_topic] {
+            assert!(
+                !collapsed.contains(&expanded),
+                "{expanded} stayed collapsed"
+            );
+        }
+        assert!(collapsed.contains(&unrelated));
+        assert!(!expand_local_branch_path(
+            &mut collapsed,
+            "feature/deep/topic"
+        ));
+    }
+
+    #[test]
+    fn selected_file_rows_use_the_branch_selection_foreground() {
+        for theme in [AppTheme::gitcomet_light(), AppTheme::gitcomet_dark()] {
+            assert_eq!(
+                file_browser_row_label_color(theme, true),
+                selected_branch_label_color(theme)
+            );
+            assert_eq!(
+                file_browser_row_label_color(theme, false),
+                theme.colors.foreground.primary
             );
         }
     }
@@ -3163,6 +3436,16 @@ mod tests {
         let initial = SidebarNotifyFingerprint::from_state(&state);
 
         state.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
+
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_sidebar_mode() {
+        let mut state = AppState::default();
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.sidebar_mode = SidebarMode::Files;
 
         assert_ne!(SidebarNotifyFingerprint::from_state(&state), initial);
     }

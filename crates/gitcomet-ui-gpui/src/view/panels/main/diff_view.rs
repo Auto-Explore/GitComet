@@ -875,6 +875,7 @@ impl MainPaneView {
                 && (mods.control || mods.platform)
                 && !mods.alt
                 && !mods.function
+                && !mods.shift
                 && key == "a"
             {
                 self.select_all_diff_text();
@@ -1120,6 +1121,7 @@ impl MainPaneView {
             && (mods.control || mods.platform)
             && !mods.alt
             && !mods.function
+            && !mods.shift
             && key == "a"
         {
             self.select_all_diff_text();
@@ -2419,6 +2421,9 @@ impl MainPaneView {
         let wants_collapsed_diff =
             supports_diff_content_toggle && self.wants_collapsed_diff_view(is_file_preview);
 
+        if self.is_conflict_rendered_markdown_preview_active() {
+            self.ensure_conflict_markdown_preview_cache();
+        }
         let repo = self.active_repo();
         let conflict_target = (!inline_submodule_diff_active)
             .then_some(())
@@ -2460,7 +2465,6 @@ impl MainPaneView {
         let is_conflict_resolver = conflict_strategy.is_some();
         let is_conflict_compare = conflict_target_path.is_some() && conflict_strategy.is_none();
         let conflict_rendered_preview_active = self.is_conflict_rendered_preview_active();
-
         let rendered_preview_kind =
             super::super::diff_target_rendered_preview_kind(self.rendered_diff_target());
         let rendered_view_toggle_kind = super::super::main_diff_rendered_preview_toggle_kind(
@@ -2842,6 +2846,21 @@ impl MainPaneView {
             );
         }
 
+        if self.has_blocked_remote_markdown_images() {
+            controls = controls.child(
+                components::Button::new(
+                    "markdown_preview_load_all_remote_images",
+                    "Load all images",
+                )
+                .style(components::ButtonStyle::Outlined)
+                .on_click(theme, cx, |this, _e, window, cx| {
+                    this.approve_all_remote_markdown_images(cx);
+                    this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                })
+                .debug_selector(|| "markdown_preview_load_all_remote_images".to_string()),
+            );
+        }
+
         if let Some(repo_id) = repo_id {
             // The full text resolver gets its own settings menu under the cog
             // (section 30); everything else keeps the diff actions menu.
@@ -2966,8 +2985,12 @@ impl MainPaneView {
                                     } else {
                                         "Nothing to render."
                                     };
-                                    components::empty_state(theme, "Preview", message)
-                                        .into_any_element()
+                                    empty_diff_text_document(
+                                        cx.entity(),
+                                        DiffTextRegion::Inline,
+                                        components::empty_state(theme, "Preview", message)
+                                            .into_any_element(),
+                                    )
                                 } else {
                                     // A single document lays out as one flowing
                                     // element tree rather than a uniform row
@@ -2987,6 +3010,8 @@ impl MainPaneView {
                                             ui_scale_percent,
                                             editor_font_family: editor_font_family.clone().into(),
                                             image_base_dir,
+                                            remote_image_access: self
+                                                .markdown_remote_image_access(Some(cx.entity())),
                                             picture_sizes: std::sync::Arc::clone(
                                                 &self.worktree_markdown_preview_picture_sizes,
                                             ),
@@ -3085,7 +3110,12 @@ impl MainPaneView {
                     Loadable::Ready(line_count) => {
                         let line_count = *line_count;
                         if line_count == 0 {
-                            components::empty_state(theme, "File", "Empty file.").into_any_element()
+                            empty_diff_text_document(
+                                cx.entity(),
+                                DiffTextRegion::Inline,
+                                components::empty_state(theme, "File", "Empty file.")
+                                    .into_any_element(),
+                            )
                         } else {
                             // Word wrap turns one line into several rows, so the
                             // projection has to be built before the list is
@@ -3104,6 +3134,10 @@ impl MainPaneView {
                             .h_full()
                             .min_h(px(0.0))
                             .track_scroll(&self.worktree_preview_scroll)
+                            .with_decoration(DiffTextEmptySpaceDecoration {
+                                view: cx.entity(),
+                                region: DiffTextRegion::Inline,
+                            })
                             .with_horizontal_sizing_behavior(
                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                             );
@@ -3357,6 +3391,10 @@ impl MainPaneView {
                                                 horizontal_scrollbar_gutter
                                             })
                                             .track_scroll(&self.diff_scroll)
+                                            .with_decoration(DiffTextEmptySpaceDecoration {
+                                                view: cx.entity(),
+                                                region: DiffTextRegion::Inline,
+                                            })
                                             .when(!self.diff_word_wrap, |list| {
                                                 list.with_horizontal_sizing_behavior(
                                                     gpui::ListHorizontalSizingBehavior::Unconstrained,
@@ -3442,6 +3480,10 @@ impl MainPaneView {
                                                 horizontal_scrollbar_gutter
                                             })
                                             .track_scroll(&self.diff_scroll)
+                                            .with_decoration(DiffTextEmptySpaceDecoration {
+                                                view: cx.entity(),
+                                                region: DiffTextRegion::SplitLeft,
+                                            })
                                             .when(!self.diff_word_wrap, |list| {
                                                 list.with_horizontal_sizing_behavior(
                                                     gpui::ListHorizontalSizingBehavior::Unconstrained,
@@ -3460,6 +3502,10 @@ impl MainPaneView {
                                                 horizontal_scrollbar_gutter
                                             })
                                             .track_scroll(&self.diff_split_right_scroll)
+                                            .with_decoration(DiffTextEmptySpaceDecoration {
+                                                view: cx.entity(),
+                                                region: DiffTextRegion::SplitRight,
+                                            })
                                             .when(!self.diff_word_wrap, |list| {
                                                 list.with_horizontal_sizing_behavior(
                                                     gpui::ListHorizontalSizingBehavior::Unconstrained,
@@ -3804,6 +3850,7 @@ impl MainPaneView {
         // the position the vertical scroll put it in.
         self.apply_pending_diff_search_horizontal_reveal(window);
         self.diff_text_hitboxes.clear();
+        self.diff_text_motion_targets.clear();
         self.conflict_text_hitboxes.clear();
         // The map still holds last frame's buttons, so it is the one place that
         // knows a hovered button has stopped being painted — the row itself

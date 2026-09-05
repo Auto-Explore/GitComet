@@ -3,7 +3,6 @@ resolver = "3"
 members = [
   "crates/gitcomet",
   "crates/gitcomet-core",
-  "crates/gitcomet-git",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-tree-sitter-alloc",
@@ -52,24 +51,22 @@ exclude = [
 default-members = [
   "crates/gitcomet",
   "crates/gitcomet-core",
-  "crates/gitcomet-git",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-ui-gpui",
 ]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
-rust-version = "1.98.0"
+rust-version = "1.98.1"
 
 [workspace.dependencies]
 # Internal crates
 gitcomet-core = { path = "crates/gitcomet-core" }
-gitcomet-git = { path = "crates/gitcomet-git" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
 gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
@@ -87,12 +84,12 @@ criterion = "0.8.2"
 ctor = "1.0.13"
 # Groovy grammar: the `tree-sitter-groovy` crate name is taken by amaanq's fork,
 # which ships no highlights query. This one does.
-dekobon-tree-sitter-groovy = "0.2.2"
+dekobon-tree-sitter-groovy = "0.3.0"
 fontdb = "0.24.0"
 futures = "0.3.34"
 gix = { version = "0.87.1", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "bd33290a612c700e008753ff9ae28f735c9cfa40" }
-gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "bd33290a612c700e008753ff9ae28f735c9cfa40", features = ["font-kit"] }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "e1ed786d11dec168479330bc3a7a15b5cbb22bac" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/Havunen/gpui-ce.git", rev = "e1ed786d11dec168479330bc3a7a15b5cbb22bac", features = ["font-kit"] }
 image = "0.25.10"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
@@ -117,7 +114,7 @@ mimalloc = "0.1.52"
 # point of the exercise.
 libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
-notify = "9.0.0-rc.4"
+notify = "9.0.0-rc.5"
 palette = "0.7.7"
 raw-window-handle = "0.6"
 regex = "1.13.1"
@@ -129,14 +126,14 @@ schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 signal-hook = "0.4.4"
-smallvec = "1.15.2"
+smallvec = "1.16.0"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
-tree-sitter = "0.26.13"
+tree-sitter = "0.27.0"
 # Fifteen of the grammars below are `path = "vendor/..."` purely to shrink the
 # release binary: they are upstream's source, regenerated with a larger
 # small-state threshold. tree-sitter's generator gives a parse state either a
@@ -233,13 +230,18 @@ tree-sitter-ocaml = { path = "vendor/tree-sitter-ocaml" }
 # parse trees -- `pod.pl` renests a `scalar_variable` -- and would break the
 # representation-only guarantee the other grammars are held to. 1.19 MiB is not
 # worth an unverified change to Perl parsing.
-tree-sitter-perl = "1.1.2"
+# The crates.io 1.1.2 package has `tree-sitter = "^0.26.3"` as a regular
+# dependency, which conflicts with the workspace's 0.27 C library because
+# `tree-sitter` declares `links = "tree-sitter"`. Upstream's post-release
+# revision moves it to dev-dependencies (and changes only Cargo.toml); pin it
+# until it releases that fix.
+tree-sitter-perl = { git = "https://github.com/ganezdragon/tree-sitter-perl", rev = "5b97493ce70686e22ec8b9ea261437147e342b49" }
 tree-sitter-php = { path = "vendor/tree-sitter-php" }
 tree-sitter-powershell = { path = "vendor/tree-sitter-powershell" }
 # Pascal and Protobuf ship no highlights query; GitComet authors both.
 tree-sitter-pascal = "0.10.2"
 tree-sitter-properties = "0.3.0"
-tree-sitter-proto = "0.5.0"
+tree-sitter-proto = "0.6.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-r = "1.3.0"
 tree-sitter-regex = "0.25.0"

@@ -18,6 +18,7 @@ pub(in crate::view) use self::file_diff::{
     PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild_with_patch,
 };
 use self::file_diff::{file_diff_source_identity, file_diff_text_signature, line_starts_describe};
+pub(in crate::view) use self::image_cache::render_raster_conflict_preview;
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 
@@ -67,24 +68,8 @@ fn diff_syntax_edit_from_text_change(old: &str, new: &str) -> Option<rows::DiffS
         return None;
     }
 
-    let old_bytes = old.as_bytes();
-    let new_bytes = new.as_bytes();
-
-    let mut prefix = 0usize;
-    let max_prefix = old_bytes.len().min(new_bytes.len());
-    while prefix < max_prefix && old_bytes[prefix] == new_bytes[prefix] {
-        prefix += 1;
-    }
-
-    let mut old_suffix_start = old_bytes.len();
-    let mut new_suffix_start = new_bytes.len();
-    while old_suffix_start > prefix
-        && new_suffix_start > prefix
-        && old_bytes[old_suffix_start - 1] == new_bytes[new_suffix_start - 1]
-    {
-        old_suffix_start -= 1;
-        new_suffix_start -= 1;
-    }
+    let (prefix, old_suffix_start, new_suffix_start) =
+        rows::shared_byte_affix_bounds(old.as_bytes(), new.as_bytes());
 
     Some(rows::DiffSyntaxEdit {
         old_range: prefix..old_suffix_start,

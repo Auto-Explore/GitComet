@@ -4,6 +4,23 @@ use super::*;
 /// pane collapse toggles, the zoom control and the branding strip on one shared
 /// centerline, so every saved pixel goes to the content area.
 const BOTTOM_STATUS_BAR_HEIGHT_PX: f32 = 26.0;
+const PANE_TOGGLE_ICON_SIZE_PX: f32 = 16.0;
+
+fn sidebar_toggle_icon_path(collapsed: bool) -> &'static str {
+    if collapsed {
+        "icons/side_panel_left_expand.svg"
+    } else {
+        "icons/side_panel_left.svg"
+    }
+}
+
+fn details_toggle_icon_path(collapsed: bool) -> &'static str {
+    if collapsed {
+        "icons/side_panel_right_expand.svg"
+    } else {
+        "icons/side_panel_right.svg"
+    }
+}
 
 /// Shared shape for the branding links on the bar's trailing end. No plate and
 /// no outline — beside the wordmark and the version number these read as links,
@@ -33,17 +50,61 @@ fn status_bar_chip(
 
 pub(in super::super) struct BottomStatusBarView {
     theme: AppTheme,
+    state: Arc<AppState>,
+    _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     active_context_menu_invoker: Option<SharedString>,
 }
 
 impl BottomStatusBarView {
-    pub(in super::super) fn new(theme: AppTheme, root_view: WeakEntity<GitCometView>) -> Self {
+    pub(in super::super) fn new(
+        theme: AppTheme,
+        ui_model: Entity<AppUiModel>,
+        root_view: WeakEntity<GitCometView>,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        let state = Arc::clone(&ui_model.read(cx).state);
+        let subscription = cx.observe(&ui_model, |this, model, cx| {
+            let previous_summary = Self::hook_activity_summary(&this.state);
+            let next = Arc::clone(&model.read(cx).state);
+            let next_summary = Self::hook_activity_summary(&next);
+            this.state = next;
+            if next_summary != previous_summary {
+                cx.notify();
+            }
+        });
         Self {
             theme,
+            state,
+            _ui_model_subscription: subscription,
             root_view,
             active_context_menu_invoker: None,
         }
+    }
+
+    fn hook_activity_summary(state: &AppState) -> (Option<RepoId>, usize, bool) {
+        let repo_id = state.active_repo;
+        let (active, warning) = repo_id
+            .and_then(|repo_id| state.repos.iter().find(|repo| repo.id == repo_id))
+            .map(|repo| {
+                (
+                    repo.feedback
+                        .hook_activity
+                        .iter()
+                        .filter(|operation| operation.has_hooks() && operation.status.is_active())
+                        .count(),
+                    repo.feedback.hook_activity.iter().rev().any(|operation| {
+                        matches!(
+                            operation.status,
+                            GitHookOperationStatus::SucceededWithHookFailure
+                                | GitHookOperationStatus::Failed
+                                | GitHookOperationStatus::TimedOut
+                        )
+                    }),
+                )
+            })
+            .unwrap_or((0, false));
+        (repo_id, active, warning)
     }
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -73,6 +134,17 @@ impl BottomStatusBarView {
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
+        });
+    }
+
+    fn open_popover_centered(
+        &mut self,
+        kind: PopoverKind,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.open_popover_centered(kind, window, cx);
         });
     }
 
@@ -151,13 +223,9 @@ impl Render for BottomStatusBarView {
 
         let sidebar_toggle = components::Button::new("sidebar_toggle", "")
             .start_slot(svg_icon(
-                if sidebar_collapsed {
-                    "icons/arrow_right.svg"
-                } else {
-                    "icons/arrow_left.svg"
-                },
+                sidebar_toggle_icon_path(sidebar_collapsed),
                 theme.colors.foreground.secondary,
-                scaled_px(12.0),
+                scaled_px(PANE_TOGGLE_ICON_SIZE_PX),
             ))
             .style(components::ButtonStyle::Transparent)
             .on_click(theme, cx, |this, _e, _w, cx| {
@@ -176,13 +244,9 @@ impl Render for BottomStatusBarView {
 
         let details_toggle = components::Button::new("details_toggle", "")
             .start_slot(svg_icon(
-                if details_collapsed {
-                    "icons/arrow_left.svg"
-                } else {
-                    "icons/arrow_right.svg"
-                },
+                details_toggle_icon_path(details_collapsed),
                 theme.colors.foreground.secondary,
-                scaled_px(12.0),
+                scaled_px(PANE_TOGGLE_ICON_SIZE_PX),
             ))
             .style(components::ButtonStyle::Transparent)
             .on_click(theme, cx, |this, _e, _w, cx| {
@@ -198,6 +262,73 @@ impl Render for BottomStatusBarView {
                     "Hide details panel".into()
                 },
             );
+
+        let (active_repo_id, active_hook_count, has_hook_warning) =
+            Self::hook_activity_summary(&self.state);
+        let activity_icon_color = if active_hook_count > 0 {
+            theme.colors.accent.foreground
+        } else if has_hook_warning {
+            theme.colors.status.warning.foreground
+        } else {
+            theme.colors.foreground.secondary
+        };
+        let activity_icon = div()
+            .flex()
+            .items_center()
+            .gap(scaled_px(3.0))
+            .child(
+                div()
+                    .debug_selector(|| "bottom_hook_activity_lightning".to_string())
+                    .child(svg_icon(
+                        "icons/lightning.svg",
+                        activity_icon_color,
+                        scaled_px(13.0),
+                    )),
+            )
+            .when(active_hook_count > 0, |icon| {
+                icon.child(
+                    div()
+                        .debug_selector(|| "bottom_hook_activity_running".to_string())
+                        .min_w(scaled_px(14.0))
+                        .h(scaled_px(14.0))
+                        .px(scaled_px(3.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(scaled_px(999.0))
+                        .bg(with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.24 } else { 0.16 },
+                        ))
+                        .text_size(scaled_px(9.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.colors.accent.foreground)
+                        .child(active_hook_count.to_string()),
+                )
+            })
+            .when(has_hook_warning && active_hook_count == 0, |icon| {
+                icon.debug_selector(|| "bottom_hook_activity_warning".to_string())
+            });
+        let hook_activity_button = components::Button::new("bottom_hook_activity", "")
+            .start_slot(activity_icon)
+            .style(components::ButtonStyle::Subtle)
+            .borderless()
+            .disabled(active_repo_id.is_none())
+            .on_click(theme, cx, move |this, _e, window, cx| {
+                let Some(repo_id) = active_repo_id else {
+                    return;
+                };
+                this.open_popover_centered(
+                    PopoverKind::HookActivity {
+                        repo_id,
+                        operation_id: None,
+                    },
+                    window,
+                    cx,
+                );
+            })
+            .gitcomet_tooltip(theme, "Git hook activity".into())
+            .debug_selector(|| "bottom_hook_activity".to_string());
 
         // Branding strip: the edition badge moved down here from the title bar,
         // where it crowded the repository tabs.
@@ -307,13 +438,20 @@ impl Render for BottomStatusBarView {
                         .when(rounding.bottom_right, |d| d.rounded_br(rounding.radius))
                 },
             )
-            .child(sidebar_toggle)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(scaled_px(2.0))
+                    .child(sidebar_toggle),
+            )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(scaled_px(2.0))
                     .child(details_toggle)
+                    .child(hook_activity_button)
                     .child(zoom_button)
                     .child(
                         // Branding chips want more air between them than the
@@ -329,5 +467,27 @@ impl Render for BottomStatusBarView {
                             .child(version_link),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{details_toggle_icon_path, sidebar_toggle_icon_path};
+
+    #[test]
+    fn pane_toggle_arrows_only_appear_when_the_panel_is_collapsed() {
+        assert_eq!(sidebar_toggle_icon_path(false), "icons/side_panel_left.svg");
+        assert_eq!(
+            sidebar_toggle_icon_path(true),
+            "icons/side_panel_left_expand.svg"
+        );
+        assert_eq!(
+            details_toggle_icon_path(false),
+            "icons/side_panel_right.svg"
+        );
+        assert_eq!(
+            details_toggle_icon_path(true),
+            "icons/side_panel_right_expand.svg"
+        );
     }
 }

@@ -1673,7 +1673,7 @@ fn commit_details_message_url_click_opens_the_web_link_menu(cx: &mut gpui::TestA
     assert!(
         matches!(
             popover,
-            Some(PopoverKind::WebLinkMenu { ref url })
+            Some(PopoverKind::WebLinkMenu { ref url, .. })
                 if url.as_ref() == "https://example.com/issues/42"
         ),
         "clicking a URL should open the same menu the markdown preview shows, got {popover:?}"
@@ -1744,7 +1744,7 @@ fn commit_details_message_mailto_click_opens_the_web_link_menu(cx: &mut gpui::Te
     assert!(
         matches!(
             popover,
-            Some(PopoverKind::WebLinkMenu { ref url })
+            Some(PopoverKind::WebLinkMenu { ref url, .. })
                 if url.as_ref() == "mailto:maintainer@example.com"
         ),
         "clicking a mailto link should open the link menu, got {popover:?}"
@@ -2587,18 +2587,18 @@ fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_delete
         "gitcomet_ui_test_{}_commit_file_right_click_menu_only",
         std::process::id()
     ));
-    let files = vec![
+    let files = [
         (
             std::path::PathBuf::from("src/added.rs"),
             gitcomet_core::domain::FileStatusKind::Added,
         ),
         (
-            std::path::PathBuf::from("src/modified.rs"),
-            gitcomet_core::domain::FileStatusKind::Modified,
-        ),
-        (
             std::path::PathBuf::from("src/deleted.rs"),
             gitcomet_core::domain::FileStatusKind::Deleted,
+        ),
+        (
+            std::path::PathBuf::from("src/modified.rs"),
+            gitcomet_core::domain::FileStatusKind::Modified,
         ),
     ];
     let initial_target = gitcomet_core::domain::DiffTarget::WorkingTree {
@@ -2819,6 +2819,16 @@ fn status_file_right_click_opens_menu_without_opening_diff_or_changing_selection
             .unwrap_or_else(|| panic!("expected status row {row_selector} to be rendered"));
         let row_center = row_bounds.center();
         cx.simulate_mouse_move(row_center, None, gpui::Modifiers::default());
+        test_support::redraw(cx);
+        let action_selector = format!("status_row_action_{}_{}_{}", repo_id.0, section_label, ix);
+        let action_bounds = cx
+            .debug_bounds(Box::leak(action_selector.into_boxed_str()))
+            .expect("expected the hovered row action to be rendered");
+        assert_eq!(
+            action_bounds.right(),
+            row_bounds.right(),
+            "the per-file stage action must be flush with the row's right edge"
+        );
         cx.simulate_mouse_down(
             row_center,
             gpui::MouseButton::Right,
@@ -2979,6 +2989,260 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
     assert!(
         viewport_height >= 24.0,
         "expected commit details file list to keep at least one visible row when overflowing (viewport_height={viewport_height}, contents_height={contents_height})",
+    );
+}
+
+#[gpui::test]
+fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(611);
+    let commit_id = gitcomet_core::domain::CommitId("0123456789abcdef".into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-file-controls"));
+            repo.history_state.selected_commit = Some(commit_id.clone());
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: commit_id.clone(),
+                    message: "subject".to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
+                    committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    committed_at_unix: 0,
+                    parent_ids: vec![],
+                    files: vec![
+                        gitcomet_core::domain::CommitFileChange {
+                            path: "src/modified.rs".into(),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            is_submodule: false,
+                            additions: Some(1),
+                            deletions: Some(2),
+                        },
+                        gitcomet_core::domain::CommitFileChange {
+                            path: "src/removed.rs".into(),
+                            kind: gitcomet_core::domain::FileStatusKind::Deleted,
+                            is_submodule: false,
+                            additions: Some(0),
+                            deletions: Some(4),
+                        },
+                        gitcomet_core::domain::CommitFileChange {
+                            path: "src/added.rs".into(),
+                            kind: gitcomet_core::domain::FileStatusKind::Added,
+                            is_submodule: false,
+                            additions: Some(5),
+                            deletions: Some(0),
+                        },
+                        gitcomet_core::domain::CommitFileChange {
+                            path: "src/renamed.rs".into(),
+                            kind: gitcomet_core::domain::FileStatusKind::Renamed,
+                            is_submodule: false,
+                            additions: Some(0),
+                            deletions: Some(0),
+                        },
+                        gitcomet_core::domain::CommitFileChange {
+                            path: "src/added-small.rs".into(),
+                            kind: gitcomet_core::domain::FileStatusKind::Added,
+                            is_submodule: false,
+                            additions: Some(1),
+                            deletions: Some(0),
+                        },
+                    ],
+                },
+            ));
+            repo.history_state.commit_details_rev = 1;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    assert!(cx.debug_bounds("commit_file_sort_button").is_some());
+    assert!(cx.debug_bounds("commit_file_filter_tabs").is_some());
+    for selector in [
+        "commit_file_filter_tab_0",
+        "commit_file_filter_tab_1",
+        "commit_file_filter_tab_2",
+        "commit_file_filter_tab_3",
+        "commit_file_filter_tab_4",
+    ] {
+        assert!(
+            cx.debug_bounds(selector).is_some(),
+            "expected {selector} to be rendered"
+        );
+    }
+
+    let added = cx
+        .debug_bounds("commit_file_filter_tab_3")
+        .expect("expected Added filter tab");
+    cx.simulate_click(added.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert_eq!(
+            pane.commit_file_filter,
+            crate::view::rows::CommitFileFilter::Added
+        );
+        assert_eq!(
+            pane.active_commit_file_source_indices(repo_id)
+                .expect("expected commit-file projection")
+                .as_ref(),
+            &[4, 2]
+        );
+    });
+
+    let sort = cx
+        .debug_bounds("commit_file_sort_button")
+        .expect("expected commit file sort button");
+    cx.simulate_click(sort.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_window, app| view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()),
+        Some(PopoverKind::CommitFileSortMenu)
+    );
+
+    draw_and_drain_test_window(cx);
+    let largest = cx
+        .debug_bounds("context_menu_edit_size_largest")
+        .expect("expected Edit size: Largest menu entry");
+    cx.simulate_click(largest.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert_eq!(
+            pane.commit_file_sort,
+            crate::view::rows::CommitFileSort::EditSizeDescending
+        );
+        assert_eq!(
+            pane.commit_file_filter,
+            crate::view::rows::CommitFileFilter::Added,
+            "changing sort keeps the selected filter"
+        );
+        assert_eq!(
+            pane.active_commit_file_source_indices(repo_id)
+                .expect("expected sorted commit-file projection")
+                .as_ref(),
+            &[2, 4]
+        );
+    });
+}
+
+#[gpui::test]
+fn commit_file_filter_resets_on_commit_switch_while_sort_is_retained(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(612);
+    let make_state = |suffix: &str| {
+        let commit_id = gitcomet_core::domain::CommitId(format!("commit-{suffix}").into());
+        let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-file-state"));
+        repo.history_state.selected_commit = Some(commit_id.clone());
+        repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+            gitcomet_core::domain::CommitDetails {
+                id: commit_id,
+                message: "subject".to_string(),
+                author_name: String::new(),
+                author_email: String::new(),
+                authored_at_unix: 0,
+                committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                committed_at_unix: 0,
+                parent_ids: vec![],
+                files: vec![],
+            },
+        ));
+        app_state_with_repo(repo, repo_id)
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, make_state("a"), cx);
+            this.details_pane.update(cx, |pane, cx| {
+                pane.set_commit_file_sort(
+                    crate::view::rows::CommitFileSort::EditSizeDescending,
+                    cx,
+                );
+                pane.set_commit_file_filter(crate::view::rows::CommitFileFilter::Removed, cx);
+            });
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| push_test_state(this, make_state("b"), cx));
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert_eq!(
+            pane.commit_file_sort,
+            crate::view::rows::CommitFileSort::EditSizeDescending
+        );
+        assert_eq!(
+            pane.commit_file_filter,
+            crate::view::rows::CommitFileFilter::All
+        );
+    });
+}
+
+/// Commit-diff file navigation is rendered by the cached main pane but derives
+/// its endpoints from the details pane's active file projection. Guard that
+/// cross-entity invalidation boundary for both ways the projection can change.
+#[gpui::test]
+fn commit_file_projection_changes_notify_the_cached_main_pane(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let (details_pane, main_pane) = cx.update(|_window, app| {
+        let view = view.read(app);
+        (view.details_pane.clone(), view.main_pane.clone())
+    });
+
+    let main_notifies = Arc::new(AtomicUsize::new(0));
+    let _main_notify_subscription = cx.update(|_window, app| {
+        let main_notifies = Arc::clone(&main_notifies);
+        main_pane.update(app, |_pane, cx| {
+            cx.observe_self(move |_pane, _cx| {
+                main_notifies.fetch_add(1, Ordering::Relaxed);
+            })
+        })
+    });
+    cx.run_until_parked();
+
+    main_notifies.store(0, Ordering::Relaxed);
+    cx.update(|_window, app| {
+        details_pane.update(app, |pane, cx| {
+            pane.set_commit_file_filter(crate::view::rows::CommitFileFilter::Added, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        main_notifies.load(Ordering::Relaxed) > 0,
+        "filtering the commit file projection must invalidate the cached main pane"
+    );
+
+    main_notifies.store(0, Ordering::Relaxed);
+    cx.update(|_window, app| {
+        details_pane.update(app, |pane, cx| {
+            pane.set_commit_file_sort(crate::view::rows::CommitFileSort::EditSizeDescending, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        main_notifies.load(Ordering::Relaxed) > 0,
+        "sorting the commit file projection must invalidate the cached main pane"
     );
 }
 

@@ -353,6 +353,7 @@ fn render_conflict_markdown_preview_rows(
             text_region: DiffTextRegion::Inline,
             wrap_plan: None,
             image_base_dir: None,
+            remote_image_access: this.markdown_remote_image_access(Some(cx.entity())),
             query: this.markdown_preview_search_query(),
         },
     )
@@ -2965,46 +2966,7 @@ fn conflict_diff_text_cell(
 }
 
 #[cfg(test)]
-fn whitespace_visible_text(text: &str) -> SharedString {
-    whitespace_visible_text_and_highlights(text, &[]).0
-}
-
-#[cfg(test)]
-fn whitespace_visible_text_and_highlights(
-    text: &str,
-    highlights: &[(Range<usize>, gpui::HighlightStyle)],
-) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
-    let mut out = String::with_capacity(text.len());
-    let mut byte_map = vec![0usize; text.len() + 1];
-
-    for (start, ch) in text.char_indices() {
-        byte_map[start] = out.len();
-        match ch {
-            ' ' => out.push('\u{00B7}'),                     // middle dot
-            '\t' => out.push('\u{2192}'),                    // rightwards arrow
-            '\r' => out.push('\u{240D}'),                    // carriage return symbol
-            '\n' => out.push('\u{21B5}'),                    // carriage return arrow
-            _ if ch.is_whitespace() => out.push('\u{2420}'), // symbol for space
-            _ => out.push(ch),
-        }
-        let end = start + ch.len_utf8();
-        let mapped_end = out.len();
-        for mapped in byte_map.iter_mut().take(end + 1).skip(start + 1) {
-            *mapped = mapped_end;
-        }
-    }
-
-    let mut remapped = Vec::with_capacity(highlights.len());
-    for (range, style) in highlights {
-        let start = *byte_map.get(range.start).unwrap_or(&out.len());
-        let end = *byte_map.get(range.end).unwrap_or(&out.len());
-        if start < end {
-            remapped.push((start..end, *style));
-        }
-    }
-
-    (out.into(), remapped)
-}
+use super::diff_text::{whitespace_visible_text, whitespace_visible_text_and_highlights};
 
 fn resolved_output_source_badge_colors(
     theme: AppTheme,

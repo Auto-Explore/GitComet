@@ -6,10 +6,6 @@ use std::sync::OnceLock;
 
 const SPLASH_BACKDROP_PNG_BYTES: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/splash_backdrop.png"));
-/// Gap (on the 8px grid) around the inset content/details cards so they read as
-/// rounded surfaces floating on the shared window canvas, with the sidebar
-/// blended into that canvas.
-const CONTENT_CARD_GAP_PX: f32 = 8.0;
 /// Bottom margin the main content card leaves for the bottom bar. The collapsed
 /// section popover matches it so its top/bottom gaps read symmetric.
 const CONTENT_CARD_BOTTOM_MARGIN_PX: f32 = 2.0;
@@ -21,12 +17,10 @@ const CONTENT_CARD_BOTTOM_MARGIN_PX: f32 = 2.0;
 const COLLAPSED_POPOVER_WIDTH_PX: f32 = 340.0;
 static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
-/// Corner radius of the main content card — squarer than the shared `panel`
-/// radius the floating dialogs and splash cards keep. This surface is chrome
-/// fused to the tab strip above it and the sidebar beside it, not a card
-/// floating on the canvas, so it takes the same radius as the controls
-/// (buttons, tabs) it sits among. The corner caps derive from this, so both
-/// move together.
+/// Left corner radius of the main content card — squarer than the shared
+/// `panel` radius the floating dialogs and splash cards keep. The right edge is
+/// square because the card runs flush to the window edge. The corner caps
+/// derive from this, so both move together.
 fn main_content_card_radius(theme: AppTheme) -> f32 {
     theme.radii.control
 }
@@ -56,18 +50,16 @@ pub(in crate::view) fn load_splash_backdrop_image() -> Arc<gpui::Image> {
 }
 
 /// Children clip to rectangles, so full-bleed content inside the card can
-/// square off its rounded corners. These caps repaint the four corner
+/// square off its rounded left corners. These caps repaint the two left corner
 /// notches (the area between the content rectangle's corner and the card's
 /// inner arc) in the surrounding surface color, restoring the rounding over
 /// anything the content paints. Canvas elements take no hitboxes, so the
 /// overlay is invisible to the mouse.
-fn card_corner_caps(radius: Pixels, color: gpui::Rgba) -> AnyElement {
+fn card_left_corner_caps(radius: Pixels, color: gpui::Rgba) -> AnyElement {
     #[derive(Clone, Copy)]
     enum CapCorner {
         TopLeft,
-        TopRight,
         BottomLeft,
-        BottomRight,
     }
 
     let cap = move |corner: CapCorner| {
@@ -84,20 +76,6 @@ fn card_corner_caps(radius: Pixels, color: gpui::Rgba) -> AnyElement {
                     point(bounds.left() + r, bounds.top()),
                     point(bounds.left(), bounds.top() + r - k),
                     point(bounds.left() + r - k, bounds.top()),
-                ),
-                CapCorner::TopRight => (
-                    point(bounds.right(), bounds.top()),
-                    point(bounds.left(), bounds.top()),
-                    point(bounds.right(), bounds.top() + r),
-                    point(bounds.left() + k, bounds.top()),
-                    point(bounds.right(), bounds.top() + r - k),
-                ),
-                CapCorner::BottomRight => (
-                    point(bounds.right(), bounds.bottom()),
-                    point(bounds.right(), bounds.top()),
-                    point(bounds.left(), bounds.bottom()),
-                    point(bounds.right(), bounds.top() + k),
-                    point(bounds.left() + k, bounds.bottom()),
                 ),
                 CapCorner::BottomLeft => (
                     point(bounds.left(), bounds.bottom()),
@@ -119,9 +97,7 @@ fn card_corner_caps(radius: Pixels, color: gpui::Rgba) -> AnyElement {
         let positioned = div().absolute().size(radius);
         let positioned = match corner {
             CapCorner::TopLeft => positioned.top_0().left_0(),
-            CapCorner::TopRight => positioned.top_0().right_0(),
             CapCorner::BottomLeft => positioned.bottom_0().left_0(),
-            CapCorner::BottomRight => positioned.bottom_0().right_0(),
         };
         positioned.child(
             gpui::canvas(
@@ -138,9 +114,7 @@ fn card_corner_caps(radius: Pixels, color: gpui::Rgba) -> AnyElement {
         .left_0()
         .size_full()
         .child(cap(CapCorner::TopLeft))
-        .child(cap(CapCorner::TopRight))
         .child(cap(CapCorner::BottomLeft))
-        .child(cap(CapCorner::BottomRight))
         .into_any_element()
 }
 
@@ -1148,7 +1122,12 @@ impl GitCometView {
                                 .min_h(px(0.0))
                                 .bg(theme.colors.surface.chrome)
                                 .when(!self.sidebar_collapsed, |d| {
-                                    d.child(self.sidebar_pane.clone())
+                                    // Cached so frames driven by another view's
+                                    // `notify` (a spinner tick in the title bar,
+                                    // a diff update) reuse the sidebar's layout
+                                    // and paint. The wrapper fills this div, so
+                                    // the width animation still re-lays it out.
+                                    d.child(stable_cached_fill_view(self.sidebar_pane.clone()))
                                 })
                                 .when(self.sidebar_collapsed, |d| {
                                     d.child(self.collapsed_sidebar_rail(theme, cx))
@@ -1157,8 +1136,8 @@ impl GitCometView {
                         .child(
                             // Main + details share one card silhouette; the panes stay
                             // independently resizable inside it. The card sits flush
-                            // against the action bar and sidebar (no top/left gap); the
-                            // sidebar resize strip overlays the card's left edge below.
+                            // against the action bar, sidebar, and right window edge;
+                            // the sidebar resize strip overlays its left edge below.
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
@@ -1168,9 +1147,9 @@ impl GitCometView {
                                 // Kept minimal so the bottom bar's icons (pane
                                 // toggles + zoom) read as one row hugging the card.
                                 .mb(px(CONTENT_CARD_BOTTOM_MARGIN_PX))
-                                .mr(px(CONTENT_CARD_GAP_PX))
                                 .relative()
-                                .rounded(px(main_content_card_radius(theme)))
+                                .rounded_tl(px(main_content_card_radius(theme)))
+                                .rounded_bl(px(main_content_card_radius(theme)))
                                 .border_1()
                                 .border_color(theme.colors.stroke.default)
                                 .overflow_hidden()
@@ -1210,12 +1189,9 @@ impl GitCometView {
                                             d.border_l_1().border_color(theme.colors.stroke.subtle)
                                         })
                                         .when(!self.details_collapsed, |d| {
-                                            d.child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_h(px(0.0))
-                                                    .child(self.details_pane.clone()),
-                                            )
+                                            d.child(div().flex_1().min_h(px(0.0)).child(
+                                                stable_cached_fill_view(self.details_pane.clone()),
+                                            ))
                                         }),
                                 )
                                 .child(
@@ -1237,7 +1213,7 @@ impl GitCometView {
                                             cx,
                                         )),
                                 )
-                                .child(card_corner_caps(
+                                .child(card_left_corner_caps(
                                     px((main_content_card_radius(theme) - 1.0).max(0.0)),
                                     theme.colors.surface.chrome,
                                 )),

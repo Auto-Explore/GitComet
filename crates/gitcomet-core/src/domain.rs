@@ -1,6 +1,7 @@
 use memchr::memchr;
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
+use std::io::Read as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -813,6 +814,11 @@ pub enum DiffLineKind {
 }
 
 impl Diff {
+    pub const MAX_UNIFIED_BYTES: u64 = 64 * 1024 * 1024;
+    pub const MAX_UNIFIED_LINES: usize = 1_000_000;
+    /// Start of the row appended when a diff was cut at a display limit.
+    pub const TRUNCATION_NOTICE_PREFIX: &'static str = "... diff truncated";
+
     fn line_capacity_from_bytes(bytes: &[u8]) -> usize {
         if bytes.is_empty() {
             return 0;
@@ -889,13 +895,115 @@ impl Diff {
         Self { target, lines: out }
     }
 
-    pub fn from_unified_reader<R: std::io::BufRead>(
-        target: DiffTarget,
+    /// Read a unified diff, cutting it at the display limits rather than failing.
+    fn read_unified_text_with_limits<R: std::io::Read>(
         mut reader: R,
+        max_bytes: u64,
+        max_lines: usize,
+    ) -> std::io::Result<(String, Option<String>)> {
+        let mut bytes = Vec::new();
+        (&mut reader)
+            .take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)?;
+
+        let mut notice = None;
+        if bytes.len() as u64 > max_bytes {
+            // Drain to the end so Git exits normally rather than by SIGPIPE,
+            // whose non-zero status would outrank the diff we just read. A
+            // failure here must not cost us that diff either.
+            let _ = std::io::copy(&mut reader, &mut std::io::sink());
+            bytes.truncate(Self::line_boundary_at_or_before(&bytes, max_bytes as usize));
+            notice = Some(Self::truncation_notice(&format!("{max_bytes}-byte")));
+        }
+
+        let mut text = String::from_utf8(bytes).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unified diff is not valid UTF-8: {err}"),
+            )
+        })?;
+
+        if Self::line_capacity_from_bytes(text.as_bytes()) > max_lines {
+            text.truncate(Self::line_boundary_after_lines(text.as_bytes(), max_lines));
+            notice = Some(Self::truncation_notice(&format!("{max_lines}-line")));
+        }
+        Ok((text, notice))
+    }
+
+    fn truncation_notice(limit: &str) -> String {
+        format!(
+            "{} at the {limit} display limit",
+            Self::TRUNCATION_NOTICE_PREFIX
+        )
+    }
+
+    /// Largest cut at or before `limit` on a line boundary, else a UTF-8 one.
+    fn line_boundary_at_or_before(bytes: &[u8], limit: usize) -> usize {
+        let head = &bytes[..limit.min(bytes.len())];
+        if let Some(index) = memchr::memrchr(b'\n', head) {
+            return index + 1;
+        }
+        let mut cut = head.len();
+        while cut > 0 && bytes.get(cut).is_some_and(|byte| byte & 0xC0 == 0x80) {
+            cut -= 1;
+        }
+        cut
+    }
+
+    /// The byte just past the `count`-th line.
+    fn line_boundary_after_lines(bytes: &[u8], count: usize) -> usize {
+        let mut start = 0usize;
+        for _ in 0..count {
+            match memchr(b'\n', &bytes[start..]) {
+                Some(offset) => start += offset + 1,
+                None => return bytes.len(),
+            }
+        }
+        start
+    }
+
+    /// Whether a prospective unified diff fits the display limits.
+    pub fn fits_unified_limits(byte_count: u64, line_count: usize) -> bool {
+        byte_count <= Self::MAX_UNIFIED_BYTES && line_count <= Self::MAX_UNIFIED_LINES
+    }
+
+    pub fn read_unified_text<R: std::io::Read>(
+        reader: R,
+    ) -> std::io::Result<(String, Option<String>)> {
+        Self::read_unified_text_with_limits(
+            reader,
+            Self::MAX_UNIFIED_BYTES,
+            Self::MAX_UNIFIED_LINES,
+        )
+    }
+
+    fn from_unified_reader_with_limits<R: std::io::Read>(
+        target: DiffTarget,
+        reader: R,
+        max_bytes: u64,
+        max_lines: usize,
     ) -> std::io::Result<Self> {
-        let mut text = String::new();
-        reader.read_to_string(&mut text)?;
-        Ok(Self::from_unified_owned(target, text))
+        let (text, notice) = Self::read_unified_text_with_limits(reader, max_bytes, max_lines)?;
+        let mut diff = Self::from_unified_owned(target, text);
+        if let Some(notice) = notice {
+            diff.lines.push(DiffLine {
+                kind: DiffLineKind::Header,
+                text: SharedLineText::from(notice.as_str()),
+            });
+        }
+        Ok(diff)
+    }
+
+    pub fn from_unified_reader<R: std::io::Read>(
+        target: DiffTarget,
+        reader: R,
+    ) -> std::io::Result<Self> {
+        Self::from_unified_reader_with_limits(
+            target,
+            reader,
+            Self::MAX_UNIFIED_BYTES,
+            Self::MAX_UNIFIED_LINES,
+        )
     }
 
     pub fn from_unified(target: DiffTarget, text: &str) -> Self {
@@ -1099,6 +1207,94 @@ diff --git a/src/lib.rs b/src/lib.rs\r\n\
         assert_eq!(diff.lines.len(), 3);
         assert!(diff.lines[0].text.shares_storage_with(&diff.lines[1].text));
         assert!(diff.lines[1].text.shares_storage_with(&diff.lines[2].text));
+    }
+
+    #[test]
+    fn unified_reader_keeps_the_limit_result_when_the_drain_fails() {
+        // A killed `git diff` leaves the pipe erroring; keep what we read.
+        struct FailsWhenDrained(Cursor<&'static [u8]>);
+        impl std::io::Read for FailsWhenDrained {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                match self.0.read(buf)? {
+                    0 => Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "child went away",
+                    )),
+                    read => Ok(read),
+                }
+            }
+        }
+
+        let (text, notice) = Diff::read_unified_text_with_limits(
+            FailsWhenDrained(Cursor::new(b"aa\nbb\ncc\n")),
+            5,
+            100,
+        )
+        .expect("a failing drain must not discard the diff");
+        assert_eq!(text, "aa\n");
+        assert!(notice.expect("notice").contains("5-byte"));
+    }
+
+    #[test]
+    fn unified_reader_drains_the_whole_reader_after_truncating() {
+        // The reader is a child Git pipe. Closing it early kills Git with
+        // SIGPIPE, and the non-zero exit outranks the diff we just parsed.
+        let mut reader = Cursor::new(vec![b'x'; 100]);
+        let (text, notice) = Diff::read_unified_text_with_limits(&mut reader, 4, 100).unwrap();
+
+        assert_eq!(text.len(), 4);
+        assert!(notice.is_some());
+        assert_eq!(
+            reader.position(),
+            100,
+            "Git must reach the end of its output and exit normally"
+        );
+    }
+
+    #[test]
+    fn unified_reader_truncates_instead_of_failing() {
+        let (text, notice) =
+            Diff::read_unified_text_with_limits(Cursor::new(b"aa\nbb\ncc\n"), 100, 2).unwrap();
+        assert_eq!(text, "aa\nbb\n");
+        assert!(notice.expect("notice").contains("2-line"));
+
+        // A single line longer than the limit is cut on a UTF-8 boundary.
+        let (text, notice) =
+            Diff::read_unified_text_with_limits(Cursor::new("aaaä".as_bytes()), 4, 100).unwrap();
+        assert_eq!(text, "aaa");
+        assert!(notice.expect("notice").contains("4-byte"));
+    }
+
+    #[test]
+    fn truncated_diffs_end_with_a_notice_row() {
+        let target = DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        };
+        let diff =
+            Diff::from_unified_reader_with_limits(target, Cursor::new(b"aa\nbb\ncc\n"), 100, 2)
+                .unwrap();
+        let last = diff.lines.last().expect("notice row");
+        assert_eq!(last.kind, DiffLineKind::Header);
+        assert!(
+            last.text
+                .as_ref()
+                .starts_with(Diff::TRUNCATION_NOTICE_PREFIX),
+            "{:?}",
+            last.text.as_ref()
+        );
+        assert_eq!(diff.lines.len(), 3);
+    }
+
+    #[test]
+    fn unified_reader_leaves_diffs_within_the_limits_untouched() {
+        for (text, max_bytes, max_lines) in [("1234", 4, 1), ("a\nb\n", 4, 2)] {
+            let (read, notice) =
+                Diff::read_unified_text_with_limits(Cursor::new(text), max_bytes, max_lines)
+                    .unwrap();
+            assert_eq!(read, text);
+            assert_eq!(notice, None);
+        }
     }
 
     #[test]

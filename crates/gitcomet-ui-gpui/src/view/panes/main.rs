@@ -22,9 +22,14 @@ pub(in crate::view) use diff_search::{
 };
 // The editor's free functions are exercised directly by the panel tests; the
 // pane itself reaches them through `impl MainPaneView`.
+pub(in crate::view) use core_impl::MainPaneInit;
 #[cfg(test)]
 pub(in crate::view) use file_editor::*;
 pub(crate) use helpers::*;
+#[cfg(test)]
+pub(in crate::view) use preview::{
+    remote_markdown_image_row_visits_for_tests, reset_remote_markdown_image_row_visits_for_tests,
+};
 
 #[cfg(not(test))]
 const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;

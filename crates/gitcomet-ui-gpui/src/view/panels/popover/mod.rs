@@ -5,6 +5,7 @@ mod add_repo_menu;
 mod add_to_gitignore_prompt;
 mod app_menu;
 mod author_filter;
+mod branch_exists_prompt;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
 mod cherry_pick_commit_confirm;
@@ -21,6 +22,7 @@ mod fingerprint;
 mod force_delete_branch_confirm;
 mod force_push_confirm;
 mod force_remove_worktree_confirm;
+mod hook_activity;
 mod merge_abort_confirm;
 mod merge_commit_confirm;
 mod picker_nav;
@@ -125,6 +127,7 @@ const DIALOG_440_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(440.0);
 const DIALOG_460_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(460.0);
 const DIALOG_540_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(540.0);
 const DIALOG_640_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(640.0);
+const DIALOG_900_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(900.0);
 // Leaves enough room for “Open in code editor” and its three-key shortcut
 // badge to remain on one line on non-macOS platforms.
 const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
@@ -198,6 +201,10 @@ pub(in super::super) struct PopoverHost {
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
+    hook_activity_selected: Option<GitOperationId>,
+    hook_activity_history_scroll: ScrollHandle,
+    hook_activity_hooks_scroll: ScrollHandle,
+    hook_activity_output_scroll: ScrollHandle,
     /// Explicit 1-based mainline selected for the currently open single
     /// merge-commit cherry-pick confirmation. Reset every time that dialog
     /// opens; drafts are intentionally session-local.
@@ -357,6 +364,21 @@ pub(in super::super) struct PopoverHost {
     rebase_reword_description_scroll: ScrollHandle,
 }
 
+pub(in crate::view) struct PopoverHostInit {
+    pub(in crate::view) theme: AppTheme,
+    pub(in crate::view) root_view: WeakEntity<GitCometView>,
+    pub(in crate::view) root_view_mode: GitCometViewMode,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) main_pane: Entity<MainPaneView>,
+    pub(in crate::view) details_pane: Entity<DetailsPaneView>,
+    pub(in crate::view) reflog_pane: Entity<ReflogPaneView>,
+    pub(in crate::view) sidebar_pane: Entity<SidebarPaneView>,
+    pub(in crate::view) pinned_branches_by_repo:
+        std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
+    pub(in crate::view) collapsed_items_by_repo:
+        std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
+}
+
 /// Rows the branch badge's checkout picker would show for `query`, for the
 /// picker benchmarks. The builder is a pure function of the repository, so the
 /// benchmark measures exactly what a frame used to rebuild.
@@ -467,6 +489,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::MergetoolSettingsMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
+            | PopoverKind::CommitFileSortMenu
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
             | PopoverKind::TerminalMenu { .. }
@@ -481,6 +504,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::TagRefMenu { .. }
             | PopoverKind::StatusFileMenu { .. }
             | PopoverKind::BranchMenu { .. }
+            | PopoverKind::BranchRefsMenu { .. }
             | PopoverKind::BranchSectionMenu { .. }
             | PopoverKind::SubmoduleInnerDiffMenu { .. }
             | PopoverKind::Repo {
@@ -519,6 +543,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::RebaseOntoConfirm { .. }
             | PopoverKind::RebaseReword { .. }
+            | PopoverKind::BranchExistsPrompt { .. }
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::DeleteBranchesConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
@@ -759,6 +784,7 @@ pub(super) fn input_label(theme: AppTheme, label: &'static str) -> gpui::Div {
 fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
     match kind {
         PopoverKind::PullPicker
+        | PopoverKind::HookActivity { .. }
         | PopoverKind::PushPicker
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
@@ -803,6 +829,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
+        | PopoverKind::BranchExistsPrompt { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
@@ -816,6 +843,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::HistoryAuthorFilter { .. }
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::CommitFileSortMenu
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::UiScalePicker => Anchor::TopRight,
@@ -838,6 +866,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CloneRepo
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
+        PopoverKind::HookActivity { .. } => Some(DIALOG_900_WIDTH),
         PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),
@@ -868,6 +897,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
+        PopoverKind::BranchExistsPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
         PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
         PopoverKind::PullReconcilePrompt { .. } | PopoverKind::AddToGitignorePrompt { .. } => {
@@ -940,6 +970,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::TagRefMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::BranchMenu { .. }
+        | PopoverKind::BranchRefsMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::Repo {
@@ -970,6 +1001,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::CommitFileSortMenu
         | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryAuthorFilter { .. } => Some(HISTORY_AUTHOR_FILTER_WIDTH),
@@ -1014,14 +1046,55 @@ fn choose_popover_anchor_corner(
     }
 }
 
+/// The directory name to clone into, derived from the URL's last segment.
+///
+/// The result is joined onto the parent folder the user picked, so it must be
+/// exactly one ordinary path component: `..`, `.`, an empty segment or a drive
+/// prefix fall back to `repo` instead of resolving somewhere else.
 fn clone_repo_name_from_url(url: &str) -> String {
     let trimmed = url.trim().trim_end_matches(['/', '\\']);
     let last = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
     let name = last.strip_suffix(".git").unwrap_or(last).trim();
-    if name.is_empty() {
-        "repo".to_string()
-    } else {
-        name.to_string()
+    let mut components = std::path::Path::new(name).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => name.to_string(),
+        _ => "repo".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod clone_repo_name_tests {
+    use super::clone_repo_name_from_url;
+
+    #[test]
+    fn clone_repo_name_takes_the_last_url_segment() {
+        assert_eq!(
+            clone_repo_name_from_url("https://example.com/org/repo.git"),
+            "repo"
+        );
+        assert_eq!(
+            clone_repo_name_from_url("git@github.com:org/tools.git/"),
+            "tools"
+        );
+        assert_eq!(
+            clone_repo_name_from_url("C:\\src\\local-repo"),
+            "local-repo"
+        );
+    }
+
+    #[test]
+    fn clone_repo_name_never_resolves_outside_the_parent_folder() {
+        for url in [
+            "https://example.com/org/..",
+            "https://example.com/org/../",
+            "https://example.com/org/.",
+            "https://example.com/org/..git",
+            "",
+            "   ",
+            "/",
+        ] {
+            assert_eq!(clone_repo_name_from_url(url), "repo", "{url:?}");
+        }
     }
 }
 

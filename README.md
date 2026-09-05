@@ -1,3 +1,4 @@
+
 ## <img alt="GitComet logo" src="assets/gitcomet_logo.svg" width="26" /> GitComet
 
 [![Build Status](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml)
@@ -258,6 +259,10 @@ backtrace.
 SourceTree, GitKraken, Zed, GPUI, KDiff3, Meld, Github Desktop, Git, Gix, Rust, Smol, and many more.
 
 This project has been created with the help of AI tools, including OpenAI Codex and Claude Code.
+
+### Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Auto-Explore/gitcomet&type=Date)](https://star-history.com/#Auto-Explore/gitcomet&Date)
 
 ### License
 

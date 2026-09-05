@@ -212,6 +212,18 @@ impl GitCometView {
                             ),
                             diff_word_wrap: Some(this.diff_word_wrap),
                             diff_show_line_numbers: Some(this.diff_show_line_numbers),
+                            remote_markdown_image_policy: Some(
+                                this.remote_markdown_image_policy.key().to_string(),
+                            ),
+                            allowed_remote_protocols: Some(
+                                this.remote_url_policy
+                                    .allowed_protocols()
+                                    .map(|protocol| protocol.key().to_string())
+                                    .collect(),
+                            ),
+                            check_for_updates_on_startup: Some(
+                                this.check_for_updates_on_startup,
+                            ),
                             // Auto-save is only ever changed from the settings
                             // window; the main window mirrors it to drive the
                             // editor, so None keeps the stored value.
@@ -243,6 +255,7 @@ impl GitCometView {
                             default_history_mode: None,
                             commit_push_after_enabled: Some(this.commit_push_after_enabled),
                             default_tag_type: None,
+                            fetch_prune_deleted_remote_branches: None,
                             git_executable_path: None,
                             external_code_editor: None,
                         };

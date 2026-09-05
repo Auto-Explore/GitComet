@@ -24,6 +24,7 @@ impl PopoverHost {
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
         let is_context_menu = popover_is_context_menu(&kind);
+        let center_hook_workflow = matches!(&kind, PopoverKind::HookActivity { .. });
         let mut anchor_corner = popover_anchor_corner(&kind);
 
         let anchor_for_corner = |corner: Anchor| match &anchor_source {
@@ -49,6 +50,10 @@ impl PopoverHost {
         anchor = anchor_for_corner(anchor_corner);
 
         let panel = match kind {
+            PopoverKind::HookActivity {
+                repo_id,
+                operation_id,
+            } => hook_activity::panel(self, repo_id, operation_id, window, cx),
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
             PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
             PopoverKind::CreateBranchFromRefPrompt {
@@ -75,6 +80,12 @@ impl PopoverHost {
                 remote,
                 branch,
             } => checkout_remote_branch_prompt::panel(self, repo_id, remote, branch, cx),
+            PopoverKind::BranchExistsPrompt {
+                repo_id,
+                name,
+                target,
+                operation,
+            } => branch_exists_prompt::panel(self, repo_id, name, target, operation, cx),
             PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
             PopoverKind::CommitPrompt { repo_id } => commit_prompt::panel(self, repo_id, cx),
             PopoverKind::StashPickerPrompt { repo_id, purpose } => {
@@ -217,9 +228,16 @@ impl PopoverHost {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
             PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
-            PopoverKind::WebLinkMenu { url } => {
-                self.context_menu_view(PopoverKind::WebLinkMenu { url }, cx)
-            }
+            PopoverKind::WebLinkMenu {
+                url,
+                load_remote_image_url,
+            } => self.context_menu_view(
+                PopoverKind::WebLinkMenu {
+                    url,
+                    load_remote_image_url,
+                },
+                cx,
+            ),
             PopoverKind::CommitShaLinkMenu {
                 repo_id,
                 commit_id,
@@ -244,6 +262,9 @@ impl PopoverHost {
             PopoverKind::HistoryAuthorFilter { repo_id } => author_filter::panel(self, repo_id, cx),
             PopoverKind::DiffContentModeSettings => {
                 self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
+            }
+            PopoverKind::CommitFileSortMenu => {
+                self.context_menu_view(PopoverKind::CommitFileSortMenu, cx)
             }
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
@@ -400,6 +421,18 @@ impl PopoverHost {
                     repo_id,
                     section,
                     name,
+                },
+                cx,
+            ),
+            PopoverKind::BranchRefsMenu {
+                repo_id,
+                display_name,
+                targets,
+            } => self.context_menu_view(
+                PopoverKind::BranchRefsMenu {
+                    repo_id,
+                    display_name,
+                    targets,
                 },
                 cx,
             ),
@@ -748,7 +781,7 @@ impl PopoverHost {
             .p_1()
             .child(panel);
 
-        if prompt_tab_navigation_enabled {
+        if prompt_tab_navigation_enabled || center_hook_workflow {
             popover_container = popover_container
                 .key_context("PopoverPrompt")
                 .on_action(cx.listener(Self::dismiss_prompt))
@@ -759,24 +792,29 @@ impl PopoverHost {
         if is_centered {
             let top_offset = scaled_px(80.0);
             let scrim_close = cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                this.close_popover_and_restore_focus(window, cx);
+                this.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
+                if !this.dismiss_hook_activity_workflow(window, cx) {
+                    this.close_popover_and_restore_focus(window, cx);
+                }
             });
+            let placement = div()
+                .absolute()
+                .left_0()
+                .w_full()
+                .flex()
+                .justify_center()
+                .when(center_hook_workflow, |placement| {
+                    placement.top_0().h_full().items_center()
+                })
+                .when(!center_hook_workflow, |placement| placement.top(top_offset))
+                .child(div().child(popover_container));
             div()
                 .absolute()
                 .top_0()
                 .left_0()
                 .size_full()
                 .child(components::modal_scrim(theme).on_mouse_down(MouseButton::Left, scrim_close))
-                .child(
-                    div()
-                        .absolute()
-                        .top(top_offset)
-                        .left_0()
-                        .w_full()
-                        .flex()
-                        .justify_center()
-                        .child(div().child(popover_container)),
-                )
+                .child(placement)
                 .into_any_element()
         } else {
             anchored()

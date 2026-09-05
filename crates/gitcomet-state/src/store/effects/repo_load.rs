@@ -2332,7 +2332,7 @@ mod worktree_scan_handle_tests {
         fn open(&self, workdir: &Path) -> gitcomet_core::services::Result<Arc<dyn GitRepository>> {
             self.opens
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(Arc::new(DummyRepo::new(&workdir.to_string_lossy())))
+            Ok(Arc::new(DummyRepo::new(workdir)))
         }
     }
 

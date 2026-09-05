@@ -8,8 +8,7 @@ pub(super) use super::*;
 pub(super) use crate::test_support::{lock_clipboard_test, lock_visual_test};
 pub(super) use crate::view::panes::main::PreparedSyntaxViewMode;
 pub(super) use crate::view::show_diff_file_navigation;
-pub(super) use gitcomet_core::error::{Error, ErrorKind};
-pub(super) use gitcomet_core::services::{GitBackend, GitRepository, Result};
+pub(super) use crate::view::test_support::TestBackend;
 pub(super) use gitcomet_state::store::AppStore;
 pub(super) use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Pixels, point, px};
 pub(super) use std::path::Path;
@@ -234,16 +233,6 @@ fn conflict_resolver_strategy_maps_conflict_kinds() {
         MainPaneView::conflict_resolver_strategy(Some(K::DeletedByUs), true),
         Some(S::BinarySidePick),
     );
-}
-
-pub(super) struct TestBackend;
-
-impl GitBackend for TestBackend {
-    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "Test backend does not open repositories",
-        )))
-    }
 }
 
 pub(super) fn set_ready_worktree_preview(
@@ -1001,7 +990,7 @@ pub(super) fn push_test_state(
     cx: &mut impl gpui::AppContext,
 ) {
     this.store.replace_snapshot_for_test(Arc::clone(&state));
-    this._ui_model.update(cx, |model, cx| {
+    this.ui_model.update(cx, |model, cx| {
         model.set_state(state, cx);
     });
 }

@@ -1,3 +1,5 @@
+pub mod askpass;
+
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread::ThreadId;
@@ -13,6 +15,11 @@ pub const GITCOMET_AUTH_KIND_USERNAME_PASSWORD: &str = "username_password";
 pub const GITCOMET_AUTH_KIND_PASSPHRASE: &str = "passphrase";
 pub const GITCOMET_AUTH_KIND_PASSPHRASE_CACHED: &str = "passphrase_cached";
 pub const GITCOMET_AUTH_KIND_HOST_VERIFICATION: &str = "host_verification";
+
+/// Marker added to a failed Git command when the askpass helper observed an
+/// SSH key passphrase prompt. This lets the state layer classify SSH signing
+/// failures without depending on platform-specific `ssh-keygen` wording.
+pub const SSH_PASSPHRASE_PROMPT_MARKER: &str = "SSH key passphrase prompt:";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitAuthKind {
@@ -142,6 +149,28 @@ pub fn remember_passphrase_prompt_from_staged_git_auth(auth: &StagedGitAuth, pro
         && let Some(prompt) = prompt
     {
         remember_session_passphrase(prompt, &auth.secret);
+    }
+}
+
+/// Stages thread-owned credentials and clears them again on drop.
+///
+/// Effect executors hold this guard for the whole effect run so credentials
+/// are never left staged for another thread, whether the run succeeds, fails,
+/// or panics.
+pub struct ScopedStagedGitAuth {
+    _private: (),
+}
+
+impl ScopedStagedGitAuth {
+    pub fn stage(auth: StagedGitAuth) -> Self {
+        stage_git_auth_for_current_thread(auth);
+        Self { _private: () }
+    }
+}
+
+impl Drop for ScopedStagedGitAuth {
+    fn drop(&mut self) {
+        clear_staged_git_auth();
     }
 }
 

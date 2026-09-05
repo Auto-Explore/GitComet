@@ -144,10 +144,315 @@ pub(in crate::view) fn new_fx_lru_cache<K: std::hash::Hash + Eq, V>(
     InstrumentedLruCache::with_hasher(cap, BuildHasherDefault::default())
 }
 
+/// A VecDeque-backed recency queue for caches that keep their own entry maps
+/// and only need the touch/evict-order half of an LRU.
+#[derive(Clone, Debug)]
+pub(in crate::view) struct LruTouchQueue<K> {
+    order: std::collections::VecDeque<K>,
+}
+
+impl<K> Default for LruTouchQueue<K> {
+    fn default() -> Self {
+        Self {
+            order: std::collections::VecDeque::new(),
+        }
+    }
+}
+
+impl<K: Eq> LruTouchQueue<K> {
+    pub(in crate::view) fn touch(&mut self, key: K) {
+        if self.order.back() == Some(&key) {
+            return;
+        }
+        if let Some(pos) = self.order.iter().position(|existing| *existing == key) {
+            self.order.remove(pos);
+        }
+        self.order.push_back(key);
+    }
+
+    pub(in crate::view) fn remove(&mut self, key: &K) -> bool {
+        if let Some(pos) = self.order.iter().position(|existing| existing == key) {
+            self.order.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(in crate::view) fn back(&self) -> Option<&K> {
+        self.order.back()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) fn clear(&mut self) {
+        self.order.clear();
+    }
+
+    pub(in crate::view) fn pop_oldest(&mut self) -> Option<K> {
+        self.order.pop_front()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::view) struct CommitFileRowPresentation {
     pub(in crate::view) label: SharedString,
     pub(in crate::view) visuals: CommitFileKindVisuals,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(in crate::view) enum CommitFileSort {
+    #[default]
+    PathAscending,
+    PathDescending,
+    EditSizeAscending,
+    EditSizeDescending,
+}
+
+impl CommitFileSort {
+    pub(in crate::view) const ALL: [Self; 4] = [
+        Self::PathAscending,
+        Self::PathDescending,
+        Self::EditSizeAscending,
+        Self::EditSizeDescending,
+    ];
+
+    pub(in crate::view) const fn label(self) -> &'static str {
+        match self {
+            Self::PathAscending => "Path A–Z",
+            Self::PathDescending => "Path Z–A",
+            Self::EditSizeAscending => "Edit size: Smallest",
+            Self::EditSizeDescending => "Edit size: Largest",
+        }
+    }
+
+    pub(in crate::view) const fn control_label(self) -> &'static str {
+        match self {
+            Self::PathAscending => "Path A–Z",
+            Self::PathDescending => "Path Z–A",
+            Self::EditSizeAscending => "Edit size ↑",
+            Self::EditSizeDescending => "Edit size ↓",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(in crate::view) enum CommitFileFilter {
+    #[default]
+    All,
+    Modified,
+    Removed,
+    Added,
+    Renamed,
+}
+
+impl CommitFileFilter {
+    pub(in crate::view) const ALL: [Self; 5] = [
+        Self::All,
+        Self::Modified,
+        Self::Removed,
+        Self::Added,
+        Self::Renamed,
+    ];
+
+    pub(in crate::view) const fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Modified => "Modified",
+            Self::Removed => "Deleted",
+            Self::Added => "Added",
+            Self::Renamed => "Renamed",
+        }
+    }
+
+    pub(in crate::view) const fn icon(self) -> &'static str {
+        match self {
+            Self::All => "icons/file.svg",
+            Self::Modified => "icons/pencil.svg",
+            Self::Removed => "icons/minus.svg",
+            Self::Added => "icons/plus.svg",
+            Self::Renamed => "icons/swap.svg",
+        }
+    }
+
+    pub(in crate::view) fn tooltip(self, count: usize) -> String {
+        match self {
+            Self::All => format!("Show every file changed by this commit ({count})"),
+            Self::Modified => format!("Show files modified by this commit ({count})"),
+            Self::Removed => format!("Show files deleted by this commit ({count})"),
+            Self::Added => format!("Show files added by this commit ({count})"),
+            Self::Renamed => format!("Show files renamed by this commit ({count})"),
+        }
+    }
+
+    fn matches(self, kind: FileStatusKind) -> bool {
+        match self {
+            Self::All => true,
+            Self::Modified => {
+                matches!(kind, FileStatusKind::Modified | FileStatusKind::Conflicted)
+            }
+            Self::Removed => kind == FileStatusKind::Deleted,
+            Self::Added => matches!(kind, FileStatusKind::Added | FileStatusKind::Untracked),
+            Self::Renamed => kind == FileStatusKind::Renamed,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct CommitFileKindCounts {
+    pub(in crate::view) all: usize,
+    pub(in crate::view) modified: usize,
+    pub(in crate::view) removed: usize,
+    pub(in crate::view) added: usize,
+    pub(in crate::view) renamed: usize,
+}
+
+impl CommitFileKindCounts {
+    pub(in crate::view) const fn for_filter(self, filter: CommitFileFilter) -> usize {
+        match filter {
+            CommitFileFilter::All => self.all,
+            CommitFileFilter::Modified => self.modified,
+            CommitFileFilter::Removed => self.removed,
+            CommitFileFilter::Added => self.added,
+            CommitFileFilter::Renamed => self.renamed,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct CommitFileProjection {
+    pub(in crate::view) source_indices: Arc<[usize]>,
+    pub(in crate::view) counts: CommitFileKindCounts,
+}
+
+#[derive(Clone, Debug)]
+struct CommitFileProjectionCacheEntry<K: Eq + Clone> {
+    key: K,
+    projection: Arc<CommitFileProjection>,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::view) struct CommitFileProjectionCache<K: Eq + Clone> {
+    cached: Option<CommitFileProjectionCacheEntry<K>>,
+}
+
+impl<K: Eq + Clone> Default for CommitFileProjectionCache<K> {
+    fn default() -> Self {
+        Self { cached: None }
+    }
+}
+
+fn commit_file_edit_size(file: &gitcomet_core::domain::CommitFileChange) -> Option<u64> {
+    Some(u64::from(file.additions?) + u64::from(file.deletions?))
+}
+
+fn commit_file_path_sort_key(path: &std::path::Path) -> String {
+    super::path_display::path_display_string(path).to_lowercase()
+}
+
+fn compare_commit_file_paths(
+    left: &(usize, String),
+    right: &(usize, String),
+    files: &[gitcomet_core::domain::CommitFileChange],
+) -> std::cmp::Ordering {
+    left.1
+        .cmp(&right.1)
+        .then_with(|| {
+            files[left.0]
+                .path
+                .as_os_str()
+                .cmp(files[right.0].path.as_os_str())
+        })
+        .then_with(|| left.0.cmp(&right.0))
+}
+
+fn build_commit_file_projection(
+    files: &[gitcomet_core::domain::CommitFileChange],
+    sort: CommitFileSort,
+    filter: CommitFileFilter,
+) -> CommitFileProjection {
+    let mut counts = CommitFileKindCounts {
+        all: files.len(),
+        ..Default::default()
+    };
+    for file in files {
+        match file.kind {
+            FileStatusKind::Untracked | FileStatusKind::Added => counts.added += 1,
+            FileStatusKind::Modified | FileStatusKind::Conflicted => counts.modified += 1,
+            FileStatusKind::Deleted => counts.removed += 1,
+            FileStatusKind::Renamed => counts.renamed += 1,
+        }
+    }
+
+    let mut sortable: Vec<(usize, String)> = files
+        .iter()
+        .enumerate()
+        .filter(|(_, file)| filter.matches(file.kind))
+        .map(|(source_ix, file)| (source_ix, commit_file_path_sort_key(&file.path)))
+        .collect();
+
+    sortable.sort_by(|left, right| match sort {
+        CommitFileSort::PathAscending => compare_commit_file_paths(left, right, files),
+        CommitFileSort::PathDescending => compare_commit_file_paths(left, right, files).reverse(),
+        CommitFileSort::EditSizeAscending | CommitFileSort::EditSizeDescending => {
+            let left_size = commit_file_edit_size(&files[left.0]);
+            let right_size = commit_file_edit_size(&files[right.0]);
+            match (left_size, right_size) {
+                (Some(left_size), Some(right_size)) => {
+                    let size_order = if sort == CommitFileSort::EditSizeAscending {
+                        left_size.cmp(&right_size)
+                    } else {
+                        right_size.cmp(&left_size)
+                    };
+                    size_order.then_with(|| compare_commit_file_paths(left, right, files))
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => compare_commit_file_paths(left, right, files),
+            }
+        }
+    });
+
+    CommitFileProjection {
+        source_indices: sortable
+            .into_iter()
+            .map(|(source_ix, _)| source_ix)
+            .collect::<Vec<_>>()
+            .into(),
+        counts,
+    }
+}
+
+impl<K: Eq + Clone> CommitFileProjectionCache<K> {
+    pub(in crate::view) fn projection_for(
+        &mut self,
+        key: &K,
+        files: &[gitcomet_core::domain::CommitFileChange],
+        sort: CommitFileSort,
+        filter: CommitFileFilter,
+    ) -> Arc<CommitFileProjection> {
+        if let Some(entry) = self.cached.as_ref()
+            && entry.key == *key
+        {
+            return Arc::clone(&entry.projection);
+        }
+
+        let projection = Arc::new(build_commit_file_projection(files, sort, filter));
+        self.cached = Some(CommitFileProjectionCacheEntry {
+            key: key.clone(),
+            projection: Arc::clone(&projection),
+        });
+        projection
+    }
+
+    #[cfg(feature = "benchmarks")]
+    pub(in crate::view) fn clear(&mut self) {
+        self.cached = None;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -395,6 +700,7 @@ mod blame;
 mod canvas;
 #[cfg(test)]
 mod canvas_tests;
+mod canvas_text;
 mod conflict_canvas;
 mod conflict_resolver;
 mod diff;
@@ -418,9 +724,10 @@ pub(in crate::view) use self::diff::{BlameRenderCtx, build_row_blame_paint};
 pub(in crate::view) use self::diff_canvas::blame_gutter_row_canvas;
 pub(in crate::view) use self::history::{
     MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, MarkdownPreviewQuery,
-    MarkdownPreviewRevealRequest, markdown_preview_alert_bar_color, markdown_preview_alert_label,
-    markdown_preview_flow_image, markdown_preview_highlighted_text, markdown_preview_image_source,
-    markdown_preview_inline_image, markdown_preview_marker_label, markdown_preview_reveal_offset_y,
+    MarkdownPreviewRevealRequest, MarkdownRemoteImageAccess, markdown_preview_alert_bar_color,
+    markdown_preview_alert_label, markdown_preview_flow_image, markdown_preview_highlighted_text,
+    markdown_preview_image_source, markdown_preview_inline_image, markdown_preview_marker_label,
+    markdown_preview_remote_image_url, markdown_preview_reveal_offset_y,
     markdown_preview_row_background, markdown_preview_row_extent,
     markdown_preview_styled_row_with_query, worktree_markdown_preview_bar_color,
 };
@@ -430,7 +737,9 @@ pub(in crate::view) use self::markdown_document::{
 };
 #[cfg(test)]
 pub(in crate::view) use self::markdown_flow_text::{
-    clear_markdown_selection_paint_log_for_tests, markdown_selection_paint_log_for_tests,
+    MarkdownFlowPaintPhase, begin_markdown_flow_paint_phase_capture_for_tests,
+    clear_markdown_selection_paint_log_for_tests, markdown_flow_paint_phases_for_tests,
+    markdown_selection_paint_log_for_tests,
 };
 pub(in crate::view) use self::markdown_flow_text::{
     markdown_flow_painted_offset, markdown_flow_row_offset,
@@ -460,7 +769,8 @@ pub(in crate::view) use diff_text::{
     prepared_diff_syntax_occurrences_at_display_offset,
     prepared_diff_syntax_pair_at_display_offset, prepared_diff_syntax_reparse_seed,
     query_highlight_colors, request_syntax_highlights_for_prepared_document_byte_range,
-    resolved_output_line_text, syntax_highlights_for_line, whitespace_visible_line_text,
+    resolved_output_line_text, shared_byte_affix_bounds, syntax_highlights_for_line,
+    whitespace_visible_line_text,
 };
 #[cfg(test)]
 pub(in crate::view) use diff_text::{OCCURRENCE_MAX_TEXT_BYTES, SyntaxPairKind};
@@ -700,6 +1010,144 @@ mod tests {
             replacement[0].visuals,
             commit_file_kind_visuals(FileStatusKind::Renamed)
         );
+    }
+
+    fn commit_file(
+        path: &str,
+        kind: FileStatusKind,
+        additions: Option<u32>,
+        deletions: Option<u32>,
+    ) -> CommitFileChange {
+        CommitFileChange {
+            path: PathBuf::from(path),
+            kind,
+            is_submodule: false,
+            additions,
+            deletions,
+        }
+    }
+
+    #[test]
+    fn commit_file_projection_counts_the_whole_commit_and_filters_by_kind() {
+        let files = vec![
+            commit_file("modified.rs", FileStatusKind::Modified, Some(1), Some(2)),
+            commit_file("conflicted.rs", FileStatusKind::Conflicted, None, None),
+            commit_file("removed.rs", FileStatusKind::Deleted, Some(0), Some(3)),
+            commit_file("added.rs", FileStatusKind::Added, Some(4), Some(0)),
+            commit_file("untracked.rs", FileStatusKind::Untracked, None, None),
+            commit_file("renamed.rs", FileStatusKind::Renamed, Some(0), Some(0)),
+        ];
+
+        let projection = build_commit_file_projection(
+            &files,
+            CommitFileSort::PathAscending,
+            CommitFileFilter::Modified,
+        );
+
+        assert_eq!(projection.source_indices.as_ref(), &[1, 0]);
+        assert_eq!(
+            projection.counts,
+            CommitFileKindCounts {
+                all: 6,
+                modified: 2,
+                removed: 1,
+                added: 2,
+                renamed: 1,
+            }
+        );
+        assert_eq!(
+            CommitFileFilter::ALL.map(|filter| projection.counts.for_filter(filter)),
+            [6, 2, 1, 2, 1]
+        );
+        assert_eq!(
+            CommitFileFilter::ALL.map(CommitFileFilter::label),
+            ["All", "Modified", "Deleted", "Added", "Renamed"]
+        );
+        assert_eq!(
+            CommitFileFilter::Removed.tooltip(1),
+            "Show files deleted by this commit (1)"
+        );
+    }
+
+    #[test]
+    fn commit_file_projection_sorts_paths_case_insensitively_with_stable_ties() {
+        let files = vec![
+            commit_file("src/zeta.rs", FileStatusKind::Modified, None, None),
+            commit_file("src/Alpha.rs", FileStatusKind::Modified, None, None),
+            commit_file("src/alpha.rs", FileStatusKind::Modified, None, None),
+            commit_file("src/Alpha.rs", FileStatusKind::Modified, None, None),
+        ];
+
+        let ascending = build_commit_file_projection(
+            &files,
+            CommitFileSort::PathAscending,
+            CommitFileFilter::All,
+        );
+        let descending = build_commit_file_projection(
+            &files,
+            CommitFileSort::PathDescending,
+            CommitFileFilter::All,
+        );
+
+        assert_eq!(ascending.source_indices.as_ref(), &[1, 3, 2, 0]);
+        assert_eq!(descending.source_indices.as_ref(), &[0, 2, 3, 1]);
+    }
+
+    #[test]
+    fn commit_file_projection_sorts_edit_size_with_unknown_stats_last() {
+        let files = vec![
+            commit_file("z-large.rs", FileStatusKind::Modified, Some(7), Some(3)),
+            commit_file("b-small.rs", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file("unknown.rs", FileStatusKind::Modified, None, None),
+            commit_file("a-small.rs", FileStatusKind::Modified, Some(0), Some(2)),
+        ];
+
+        let ascending = build_commit_file_projection(
+            &files,
+            CommitFileSort::EditSizeAscending,
+            CommitFileFilter::All,
+        );
+        let descending = build_commit_file_projection(
+            &files,
+            CommitFileSort::EditSizeDescending,
+            CommitFileFilter::All,
+        );
+
+        assert_eq!(ascending.source_indices.as_ref(), &[3, 1, 0, 2]);
+        assert_eq!(descending.source_indices.as_ref(), &[0, 3, 1, 2]);
+    }
+
+    #[test]
+    fn commit_file_projection_cache_reuses_a_key_and_invalidates_on_change() {
+        let files = vec![commit_file(
+            "src/lib.rs",
+            FileStatusKind::Modified,
+            Some(1),
+            Some(2),
+        )];
+        let mut cache = CommitFileProjectionCache::<u64>::default();
+
+        let first = cache.projection_for(
+            &1,
+            &files,
+            CommitFileSort::PathAscending,
+            CommitFileFilter::All,
+        );
+        let reused = cache.projection_for(
+            &1,
+            &[],
+            CommitFileSort::PathDescending,
+            CommitFileFilter::Removed,
+        );
+        let replacement = cache.projection_for(
+            &2,
+            &files,
+            CommitFileSort::PathDescending,
+            CommitFileFilter::All,
+        );
+
+        assert!(Arc::ptr_eq(&first, &reused));
+        assert!(!Arc::ptr_eq(&first, &replacement));
     }
 
     /// A linked worktree's file list contains untracked files, which commit and

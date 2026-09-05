@@ -149,8 +149,6 @@ pub(super) enum TerminalBackendEvent {
     /// these via the event proxy and relies on us to forward them.
     PtyWrite(String),
     Title(String),
-    ClipboardStore(String),
-    ClipboardLoad,
     Wakeup,
     Bell,
     Exit,
@@ -163,8 +161,12 @@ impl From<AlacEvent> for TerminalBackendEvent {
         match event {
             AlacEvent::PtyWrite(text) => Self::PtyWrite(text),
             AlacEvent::Title(title) => Self::Title(title),
-            AlacEvent::ClipboardStore(_, data) => Self::ClipboardStore(data),
-            AlacEvent::ClipboardLoad(_, _) => Self::ClipboardLoad,
+            // OSC 52 is disabled in `terminal_config`, so the emulator never
+            // raises these. They stay explicitly inert rather than growing a
+            // handler: program output must not write to or read the system
+            // clipboard, and a clipboard read pushed into the PTY would be
+            // unbracketed keystrokes.
+            AlacEvent::ClipboardStore(..) | AlacEvent::ClipboardLoad(..) => Self::Wakeup,
             AlacEvent::Wakeup => Self::Wakeup,
             AlacEvent::Bell => Self::Bell,
             AlacEvent::Exit => Self::Exit,
@@ -1663,6 +1665,32 @@ impl gpui::InputHandler for TerminalTextInputHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Program output must never reach the system clipboard, nor pull it into
+    /// the PTY: OSC 52 stays disabled and the emulator's clipboard events map
+    /// to nothing.
+    #[test]
+    fn terminal_config_disables_osc52() {
+        let config = terminal_config(TERMINAL_SCROLLBACK_ROWS);
+        assert!(matches!(config.osc52, Osc52::Disabled));
+    }
+
+    #[test]
+    fn clipboard_events_from_the_emulator_are_inert() {
+        use alacritty_terminal::term::ClipboardType;
+
+        let store = TerminalBackendEvent::from(AlacEvent::ClipboardStore(
+            ClipboardType::Clipboard,
+            "exfiltrated".to_string(),
+        ));
+        assert!(matches!(store, TerminalBackendEvent::Wakeup));
+
+        let load = TerminalBackendEvent::from(AlacEvent::ClipboardLoad(
+            ClipboardType::Clipboard,
+            std::sync::Arc::new(|text: &str| text.to_string()),
+        ));
+        assert!(matches!(load, TerminalBackendEvent::Wakeup));
+    }
     use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
     use alacritty_terminal::term::cell::Cell as AlacCell;
     use gpui::{FontStyle, FontWeight, WhiteSpace};

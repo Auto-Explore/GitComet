@@ -11,12 +11,13 @@ use super::util::{
     start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{
-    AppState, DiagnosticKind, InteractiveRebaseSetup, Loadable, RepoLoadsInFlight, SidebarMode,
+    AppState, BranchExistsPromptState, DiagnosticKind, InteractiveRebaseSetup, Loadable,
+    RepoLoadsInFlight, SidebarMode,
 };
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
-use gitcomet_core::services::{InteractiveRebaseEntry, SequencerState};
+use gitcomet_core::services::{GitRepository, InteractiveRebaseEntry, SequencerState};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
@@ -61,11 +62,16 @@ fn reserve_initial_paginated_log_append_slack<T>(commits: &mut Vec<T>) {
     commits.reserve_exact(desired_spare - spare);
 }
 
-pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -> Vec<Effect> {
+pub(super) fn reload_repo(
+    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+) -> Vec<Effect> {
     let git_log_settings = state.git_log_settings;
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+    let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    let repo_state = &mut state.repos[repo_ix];
 
     repo_state.set_head_branch(Loadable::Loading);
     repo_state.set_detached_head_commit(None);
@@ -97,13 +103,18 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     // marked commit with it. `set_selected_commit(None)` already dissolved the
     // active comparison; the mark is the same kind of stale reference, and
     // leaving it would keep offering a "Compare with …" that can only fail.
-    repo_state.comparison_mark = None;
+    repo_state.navigation.comparison_mark = None;
     // A full reload may rewrite history (rebase/amend/branch switch underneath),
     // so back/forward snapshots can reference commits or file revisions that no
     // longer resolve. Start the navigation stacks fresh.
-    repo_state.nav_history.clear();
-    repo_state.view_history.clear();
+    repo_state.navigation.main_history.clear();
+    repo_state.navigation.view_history.clear();
 
+    // Reload deliberately retains the working-tree diff target. Rebuild the
+    // target's classification immediately, before later activation or status
+    // results can use the freshly cleared cache.
+    super::refresh_selected_head_gitlink(repos, state, repo_id);
+    let repo_state = &mut state.repos[repo_ix];
     let mut effects = refresh_full_effects(repo_state, git_log_settings);
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
     // Linked-worktree rows survive a reload, so their dirty counts have to be
@@ -140,12 +151,22 @@ fn file_browser_refresh_for_external_change(
 }
 
 pub(super) fn repo_externally_changed(
+    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     change: RepoExternalChange,
 ) -> Vec<Effect> {
     let sidebar_shows_this_files_tree =
         state.sidebar_mode == SidebarMode::Files && state.active_repo == Some(repo_id);
+    if change.git_state {
+        // Every cached entry describes the old HEAD. Keep the selected path
+        // classified because its diff is retained and reloaded below; other
+        // paths will be classified when selected.
+        if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+            repo_state.head_gitlink_paths.clear();
+        }
+        super::refresh_selected_head_gitlink(repos, state, repo_id);
+    }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -720,26 +741,35 @@ pub(super) fn log_loaded(
     effects
 }
 
-pub(super) fn repo_action_finished(
+enum RepoActionCompletion {
+    Succeeded,
+    ExpectedNoop,
+    Failed(Error),
+}
+
+fn finish_repo_action(
+    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     action: RepoActionKind,
-    result: std::result::Result<(), Error>,
+    completion: RepoActionCompletion,
 ) -> Vec<Effect> {
+    let rebuild_selected_head_gitlink = repo_action_clears_head_dependent_state(action);
     let mut clear_banner = false;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
-        match result {
-            Ok(()) => {
-                repo_state.last_error = None;
+        match completion {
+            RepoActionCompletion::Succeeded => {
+                repo_state.feedback.last_error = None;
                 if repo_action_clears_head_dependent_state(action) {
                     repo_state.clear_head_dependent_cached_state();
                 }
                 clear_banner = true;
             }
-            Err(e) => {
-                repo_state.last_error = Some(e.to_string());
+            RepoActionCompletion::ExpectedNoop => {}
+            RepoActionCompletion::Failed(e) => {
+                repo_state.feedback.last_error = Some(e.to_string());
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
             }
         }
@@ -747,13 +777,22 @@ pub(super) fn repo_action_finished(
     if clear_banner {
         clear_banner_error_for_repo(state, repo_id);
     }
+
+    // HEAD-changing actions invalidate this cache when they start. Classify the
+    // retained selection against the HEAD that actually remains before
+    // rebuilding its diff, on both success and failure: successful checkouts
+    // may retain the staged deletion, while partial failures may still move
+    // HEAD.
+    if rebuild_selected_head_gitlink {
+        super::refresh_selected_head_gitlink(repos, state, repo_id);
+    }
     let is_active = state.active_repo == Some(repo_id);
 
-    // A completed action mutated the repo, so every load issued before it is now stale. Bump the
-    // load epoch (so those stale results are dropped by the epoch gate), clear all in-flight flags,
-    // reset every `Loading` loadable back to `NotLoaded`, and cancel the orphaned worker tasks.
-    // This mirrors the invalidation repo activation performs; unlike a partial flag clear it never
-    // leaves a non-status load stranded in flight (its flag would otherwise never be cleared).
+    // A completed action either mutated the repo or observed an external mutation (the expected
+    // branch-collision case), so every load issued before it may now be stale. Bump the load epoch,
+    // clear all in-flight flags, reset every `Loading` loadable back to `NotLoaded`, and cancel the
+    // orphaned worker tasks. This also restores the head-dependent state cleared optimistically
+    // when an expected collision prevented checkout.
     let mut effects: Vec<Effect> = Vec::new();
     append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
 
@@ -810,6 +849,41 @@ pub(super) fn repo_action_finished(
     effects
 }
 
+pub(super) fn repo_action_finished(
+    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    action: RepoActionKind,
+    result: std::result::Result<(), Error>,
+) -> Vec<Effect> {
+    let completion = match result {
+        Ok(()) => RepoActionCompletion::Succeeded,
+        Err(error) => RepoActionCompletion::Failed(error),
+    };
+    finish_repo_action(repos, state, repo_id, action, completion)
+}
+
+pub(super) fn branch_already_exists(
+    repos: &FxHashMap<crate::model::RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    action: RepoActionKind,
+    prompt: BranchExistsPromptState,
+) -> Vec<Effect> {
+    if !state.repos.iter().any(|repo| repo.id == prompt.repo_id) {
+        return Vec::new();
+    }
+
+    let repo_id = prompt.repo_id;
+    state.branch_exists_prompt = Some(prompt);
+    finish_repo_action(
+        repos,
+        state,
+        repo_id,
+        action,
+        RepoActionCompletion::ExpectedNoop,
+    )
+}
+
 fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
     matches!(
         action,
@@ -819,6 +893,7 @@ fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
             | RepoActionKind::CherryPickCommit
             | RepoActionKind::RevertCommit
             | RepoActionKind::CreateBranchAndCheckout
+            | RepoActionKind::RenameBranch
     )
 }
 

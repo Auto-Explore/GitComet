@@ -15,8 +15,8 @@ use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolver
 use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
-    CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitTarget,
+    CheckoutRemoteBranchMode, CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode,
+    RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
 };
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
@@ -31,12 +31,14 @@ pub(super) fn checkout_remote_branch(
     remote: String,
     branch: String,
     local_branch: String,
+    mode: CheckoutRemoteBranchMode,
 ) -> Vec<Effect> {
     vec![Effect::CheckoutRemoteBranch {
         repo_id,
         remote,
         branch,
         local_branch,
+        mode,
     }]
 }
 
@@ -82,19 +84,27 @@ pub(super) fn create_branch_and_checkout(
     repo_id: RepoId,
     name: String,
     target: String,
+    force: bool,
 ) -> Vec<Effect> {
     vec![Effect::CreateBranchAndCheckout {
         repo_id,
         name,
         target,
+        force,
     }]
 }
 
-pub(super) fn rename_branch(repo_id: RepoId, old_name: String, new_name: String) -> Vec<Effect> {
+pub(super) fn rename_branch(
+    repo_id: RepoId,
+    old_name: String,
+    new_name: String,
+    force: bool,
+) -> Vec<Effect> {
     vec![Effect::RenameBranch {
         repo_id,
         old_name,
         new_name,
+        force,
     }]
 }
 
@@ -158,6 +168,7 @@ pub(super) fn add_submodule(
     name: Option<String>,
     force: bool,
     approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::AddSubmodule {
         repo_id,
@@ -167,6 +178,7 @@ pub(super) fn add_submodule(
         name,
         force,
         approved_sources,
+        remote_url_policy,
         auth: None,
     }]
 }
@@ -174,10 +186,12 @@ pub(super) fn add_submodule(
 pub(super) fn update_submodules(
     repo_id: RepoId,
     approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::UpdateSubmodules {
         repo_id,
         approved_sources,
+        remote_url_policy,
         auth: None,
     }]
 }
@@ -186,11 +200,13 @@ pub(super) fn load_submodule(
     repo_id: RepoId,
     path: PathBuf,
     approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::LoadSubmodule {
         repo_id,
         path,
         approved_sources,
+        remote_url_policy,
         auth: None,
     }]
 }
@@ -312,11 +328,7 @@ pub(super) fn fetch_all(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
-    let prune = state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .is_some_and(|repo_state| repo_state.fetch_prune_deleted_remote_tracking_branches);
+    let prune = state.remote_settings.prune_deleted_remote_branches_on_fetch;
     bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
     vec![Effect::FetchAll {
         repo_id,
@@ -353,6 +365,7 @@ pub(super) fn pull(
     vec![Effect::Pull {
         repo_id,
         mode,
+        prune: state.remote_settings.prune_deleted_remote_branches_on_fetch,
         auth: None,
     }]
 }
@@ -369,6 +382,7 @@ pub(super) fn pull_branch(
         repo_id,
         remote,
         branch,
+        prune: state.remote_settings.prune_deleted_remote_branches_on_fetch,
         auth: None,
     }]
 }
@@ -722,8 +736,18 @@ pub(super) fn delete_remote_tag(
     }]
 }
 
-pub(super) fn add_remote(repo_id: RepoId, name: String, url: String) -> Vec<Effect> {
-    vec![Effect::AddRemote { repo_id, name, url }]
+pub(super) fn add_remote(
+    repo_id: RepoId,
+    name: String,
+    url: String,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
+) -> Vec<Effect> {
+    vec![Effect::AddRemote {
+        repo_id,
+        name,
+        url,
+        remote_url_policy,
+    }]
 }
 
 pub(super) fn remove_remote(repo_id: RepoId, name: String) -> Vec<Effect> {
@@ -735,12 +759,14 @@ pub(super) fn set_remote_url(
     name: String,
     url: String,
     kind: RemoteUrlKind,
+    remote_url_policy: gitcomet_core::remote_url::RemoteUrlPolicy,
 ) -> Vec<Effect> {
     vec![Effect::SetRemoteUrl {
         repo_id,
         name,
         url,
         kind,
+        remote_url_policy,
     }]
 }
 
@@ -812,53 +838,7 @@ pub(super) fn commit_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
-    let mut clear_banner = false;
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
-    repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_sub(1);
-    repo_state.bump_ops_rev();
-    match result {
-        Ok(()) => {
-            repo_state.last_error = None;
-            clear_banner = true;
-            repo_state.set_recent_commit_messages(Loadable::NotLoaded);
-            repo_state.set_diff_target(None);
-            repo_state.diff_state.diff = Loadable::NotLoaded;
-            repo_state.diff_state.diff_file = Loadable::NotLoaded;
-            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
-            repo_state.diff_state.inline_submodule_diff = None;
-            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
-            repo_state.bump_diff_state_rev();
-            invalidate_loaded_blame(repo_state);
-            push_action_log(
-                repo_state,
-                true,
-                "Commit".to_string(),
-                "Commit: Completed".to_string(),
-                None,
-            );
-        }
-        Err(e) => {
-            let summary = format_failure_summary("Commit", &e);
-            repo_state.last_error = Some(summary.clone());
-            push_action_log(repo_state, false, "Commit".to_string(), summary, Some(&e));
-        }
-    }
-    if clear_banner {
-        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-            return Vec::new();
-        };
-        let effects = refresh_primary_effects(repo_state);
-        clear_banner_error_for_repo(state, repo_id);
-        return effects;
-    }
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    refresh_primary_effects(repo_state)
+    commit_completion_finished(state, repo_id, result, CommitCompletionKind::Commit)
 }
 
 pub(super) fn commit_amend_finished(
@@ -866,6 +846,32 @@ pub(super) fn commit_amend_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
+    commit_completion_finished(state, repo_id, result, CommitCompletionKind::Amend)
+}
+
+#[derive(Clone, Copy)]
+enum CommitCompletionKind {
+    Commit,
+    Amend,
+}
+
+impl CommitCompletionKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Commit => "Commit",
+            Self::Amend => "Amend",
+        }
+    }
+}
+
+/// Shared completion handling for `Msg::CommitFinished` / `Msg::CommitAmendFinished`.
+fn commit_completion_finished(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<(), Error>,
+    kind: CommitCompletionKind,
+) -> Vec<Effect> {
+    let label = kind.label();
     let mut clear_banner = false;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -875,7 +881,7 @@ pub(super) fn commit_amend_finished(
     repo_state.bump_ops_rev();
     match result {
         Ok(()) => {
-            repo_state.last_error = None;
+            repo_state.feedback.last_error = None;
             clear_banner = true;
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             repo_state.set_diff_target(None);
@@ -890,15 +896,15 @@ pub(super) fn commit_amend_finished(
             push_action_log(
                 repo_state,
                 true,
-                "Amend".to_string(),
-                "Amend: Completed".to_string(),
+                label.to_string(),
+                format!("{label}: Completed"),
                 None,
             );
         }
         Err(e) => {
-            let summary = format_failure_summary("Amend", &e);
-            repo_state.last_error = Some(summary.clone());
-            push_action_log(repo_state, false, "Amend".to_string(), summary, Some(&e));
+            let summary = format_failure_summary(label, &e);
+            repo_state.feedback.last_error = Some(summary.clone());
+            push_action_log(repo_state, false, label.to_string(), summary, Some(&e));
         }
     }
     if clear_banner {
@@ -925,13 +931,13 @@ pub(super) fn safe_push_after_commit_finished(
     match result {
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push { target }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_force_push_lease = None;
+                repo_state.pending.force_push_lease = None;
             }
             push_after_commit_with_auth(repos, state, repo_id, target, false, auth)
         }
         Ok(gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream { target }) => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.pending_force_push_lease = None;
+                repo_state.pending.force_push_lease = None;
             }
             push_after_commit_with_auth(repos, state, repo_id, target, true, auth)
         }
@@ -941,8 +947,8 @@ pub(super) fn safe_push_after_commit_finished(
                 return Vec::new();
             };
             let full_summary = format!("Push after commit blocked: {summary}");
-            repo_state.pending_force_push_lease = lease;
-            repo_state.last_error = Some(full_summary.clone());
+            repo_state.pending.force_push_lease = lease;
+            repo_state.feedback.last_error = Some(full_summary.clone());
             push_action_log(
                 repo_state,
                 false,
@@ -957,9 +963,9 @@ pub(super) fn safe_push_after_commit_finished(
             let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
                 return Vec::new();
             };
-            repo_state.pending_force_push_lease = None;
+            repo_state.pending.force_push_lease = None;
             let summary = format_failure_summary("Push after commit", &e);
-            repo_state.last_error = Some(summary.clone());
+            repo_state.feedback.last_error = Some(summary.clone());
             push_action_log(
                 repo_state,
                 false,
@@ -1085,6 +1091,27 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
+    let fetch_like_command = matches!(
+        &command,
+        RepoCommandKind::FetchAll
+            | RepoCommandKind::PruneMergedBranches
+            | RepoCommandKind::Pull { .. }
+            | RepoCommandKind::PullBranch { .. }
+    );
+    let refresh_remote_branches = fetch_like_command
+        || matches!(
+            &command,
+            RepoCommandKind::DeleteRemoteBranch { .. }
+                | RepoCommandKind::DeleteRemoteBranches { .. }
+                | RepoCommandKind::RemoveRemote { .. }
+        );
+    let refresh_synced_tag_metadata = command_succeeded && fetch_like_command;
+    let refresh_remote_tag_metadata = refresh_synced_tag_metadata
+        || command_succeeded
+            && matches!(
+                &command,
+                RepoCommandKind::PushTag { .. } | RepoCommandKind::DeleteRemoteTag { .. }
+            );
     let refresh_tags = command_succeeded
         && matches!(
             &command,
@@ -1099,6 +1126,12 @@ pub(super) fn repo_command_finished(
     };
 
     let mut extra_effects = Vec::new();
+    if refresh_remote_branches {
+        // A fetch may have updated or pruned refs even when a later phase failed.
+        // Hide the pre-command snapshot until the coalesced full refresh publishes
+        // a list that was read after the command completed.
+        repo_state.set_remote_branches(Loadable::Loading);
+    }
     match &command {
         RepoCommandKind::FetchAll
         | RepoCommandKind::PruneMergedBranches
@@ -1139,10 +1172,10 @@ pub(super) fn repo_command_finished(
 
     match result {
         Ok(output) => {
-            repo_state.last_error = None;
+            repo_state.feedback.last_error = None;
             clear_banner = true;
             if command_clears_pending_force_push_lease(&command) {
-                repo_state.pending_force_push_lease = None;
+                repo_state.pending.force_push_lease = None;
             }
             repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             if matches!(
@@ -1189,7 +1222,8 @@ pub(super) fn repo_command_finished(
                 &CommandOutput::default(),
                 Some(&e),
             );
-            repo_state.last_error = repo_state
+            repo_state.feedback.last_error = repo_state
+                .feedback
                 .command_log
                 .last()
                 .map(|entry| entry.summary.clone());
@@ -1225,6 +1259,20 @@ pub(super) fn repo_command_finished(
         repo_state.set_tags(Loadable::NotLoaded);
         if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
             extra_effects.push(Effect::LoadTags { repo_id });
+        }
+    } else if refresh_synced_tag_metadata && !matches!(repo_state.tags, Loadable::NotLoaded) {
+        repo_state.set_tags(Loadable::Loading);
+        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+            extra_effects.push(Effect::LoadTags { repo_id });
+        }
+    }
+    if refresh_remote_tag_metadata && !matches!(repo_state.remote_tags, Loadable::NotLoaded) {
+        repo_state.set_remote_tags(Loadable::Loading);
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::REMOTE_TAGS)
+        {
+            extra_effects.push(Effect::LoadRemoteTags { repo_id });
         }
     }
     if matches!(

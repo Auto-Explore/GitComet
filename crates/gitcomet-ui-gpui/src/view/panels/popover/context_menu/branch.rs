@@ -122,7 +122,7 @@ pub(super) fn model(
         }),
     };
     if let Some(commit_id) = branch_commit_id {
-        let comparison_mark = repo.and_then(|r| r.comparison_mark.clone());
+        let comparison_mark = repo.and_then(|r| r.navigation.comparison_mark.clone());
         items.push(ContextMenuItem::Entry {
             label: format!("Mark {name} for comparison").into(),
             icon: Some("icons/git_branch.svg".into()),
@@ -195,7 +195,7 @@ pub(super) fn model(
             items.push(ContextMenuItem::Entry {
                 label: "Pull into current".into(),
                 icon: Some("icons/arrow_down.svg".into()),
-                shortcut: Some("P".into()),
+                shortcut: None,
                 disabled: false,
                 action: Box::new(ContextMenuAction::PullBranch {
                     repo_id,
@@ -206,7 +206,7 @@ pub(super) fn model(
             items.push(ContextMenuItem::Entry {
                 label: "Merge into current".into(),
                 icon: Some("icons/swap.svg".into()),
-                shortcut: Some("M".into()),
+                shortcut: None,
                 disabled: false,
                 action: Box::new(ContextMenuAction::MergeRef {
                     repo_id,
@@ -216,7 +216,7 @@ pub(super) fn model(
             items.push(ContextMenuItem::Entry {
                 label: "Squash into current".into(),
                 icon: Some("icons/arrow_right.svg".into()),
-                shortcut: Some("S".into()),
+                shortcut: None,
                 disabled: false,
                 action: Box::new(ContextMenuAction::SquashRef {
                     repo_id,
@@ -226,7 +226,7 @@ pub(super) fn model(
             items.push(ContextMenuItem::Entry {
                 label: format!("Rebase {current_branch_label} onto {name}").into(),
                 icon: Some("icons/arrow_up.svg".into()),
-                shortcut: Some("B".into()),
+                shortcut: None,
                 disabled: history_rewrite_disabled,
                 action: Box::new(ContextMenuAction::OpenPopover {
                     kind: PopoverKind::RebaseOntoConfirm {
@@ -254,7 +254,7 @@ pub(super) fn model(
             items.push(ContextMenuItem::Entry {
                 label: "Pull into current".into(),
                 icon: Some("icons/arrow_down.svg".into()),
-                shortcut: Some("P".into()),
+                shortcut: None,
                 disabled: false,
                 action: Box::new(ContextMenuAction::PullBranch {
                     repo_id,
@@ -265,7 +265,7 @@ pub(super) fn model(
             items.push(ContextMenuItem::Entry {
                 label: "Merge into current".into(),
                 icon: Some("icons/swap.svg".into()),
-                shortcut: Some("M".into()),
+                shortcut: None,
                 disabled: false,
                 action: Box::new(ContextMenuAction::MergeRef {
                     repo_id,
@@ -275,7 +275,7 @@ pub(super) fn model(
             items.push(ContextMenuItem::Entry {
                 label: "Squash into current".into(),
                 icon: Some("icons/arrow_right.svg".into()),
-                shortcut: Some("S".into()),
+                shortcut: None,
                 disabled: false,
                 action: Box::new(ContextMenuAction::SquashRef {
                     repo_id,
@@ -285,7 +285,7 @@ pub(super) fn model(
             items.push(ContextMenuItem::Entry {
                 label: format!("Rebase {current_branch_label} onto {name}").into(),
                 icon: Some("icons/arrow_up.svg".into()),
-                shortcut: Some("B".into()),
+                shortcut: None,
                 disabled: history_rewrite_disabled,
                 action: Box::new(ContextMenuAction::OpenPopover {
                     kind: PopoverKind::RebaseOntoConfirm {
@@ -343,7 +343,7 @@ pub(super) fn model(
         items.push(ContextMenuItem::Entry {
             label: "Fetch all".into(),
             icon: Some("icons/arrow_down.svg".into()),
-            shortcut: Some("F".into()),
+            shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::FetchAll { repo_id }),
         });

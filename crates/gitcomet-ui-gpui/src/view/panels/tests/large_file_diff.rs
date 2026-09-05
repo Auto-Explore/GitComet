@@ -1035,8 +1035,6 @@ fn oversized_json_file_diff_uses_visible_line_fallback_without_prepared_syntax_d
 ) {
     const OBJECT_COUNT: usize = 512;
     const PAYLOAD_BYTES: usize = 16 * 1024;
-    const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
-
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -1262,9 +1260,12 @@ fn oversized_json_file_diff_uses_visible_line_fallback_without_prepared_syntax_d
     std::fs::remove_dir_all(&workdir).expect("cleanup oversized JSON diff workdir");
 }
 
+/// Ceiling for the prepared-document path; the large-file fixtures build
+/// payloads past this so the streamed path is what runs.
+const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
+
 #[gpui::test]
 fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpui::TestAppContext) {
-    const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
     const PAYLOAD_BYTES: usize = PREPARED_DOCUMENT_MAX_BYTES + 256 * 1024;
 
     let (store, events) = AppStore::new(Arc::new(TestBackend));

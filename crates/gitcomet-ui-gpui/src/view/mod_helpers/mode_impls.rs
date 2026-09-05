@@ -78,6 +78,10 @@ impl AutosquashMode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
+    HookActivity {
+        repo_id: RepoId,
+        operation_id: Option<GitOperationId>,
+    },
     RepoPicker,
     BranchPicker {
         purpose: BranchPickerPurpose,
@@ -169,6 +173,15 @@ pub(crate) enum PopoverKind {
     MergeAbortConfirm {
         repo_id: RepoId,
     },
+    /// Shown when a branch-creation checkout names a branch that already exists
+    /// locally. Asks whether to check out the existing branch, overwrite it
+    /// with the target commit and check it out, or cancel.
+    BranchExistsPrompt {
+        repo_id: RepoId,
+        name: String,
+        target: String,
+        operation: BranchExistsPromptOperation,
+    },
     ForceDeleteBranchConfirm {
         repo_id: RepoId,
         name: String,
@@ -215,6 +228,7 @@ pub(crate) enum PopoverKind {
     CommitOptionsMenu {
         repo_id: RepoId,
     },
+    CommitFileSortMenu,
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
     },
@@ -239,6 +253,10 @@ pub(crate) enum PopoverKind {
     /// commit message.
     WebLinkMenu {
         url: SharedString,
+        /// Exact remote image URL represented by a linked image, but only
+        /// while Ask mode is waiting for approval. Ordinary text links and
+        /// images under either other policy leave this empty.
+        load_remote_image_url: Option<SharedString>,
     },
     /// Actions for a commit id clicked in a commit message or a SHA field.
     CommitShaLinkMenu {
@@ -312,6 +330,13 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         section: BranchSection,
         name: String,
+    },
+    /// Disambiguates a compact history chip that represents more than one
+    /// exact branch ref before handing off to the ordinary branch menu.
+    BranchRefsMenu {
+        repo_id: RepoId,
+        display_name: String,
+        targets: Vec<BranchMenuTarget>,
     },
     BranchSectionMenu {
         repo_id: RepoId,
@@ -396,6 +421,16 @@ pub(crate) enum PopoverKind {
         can_drop: bool,
     },
     InteractiveRebaseAutosquashMenu,
+}
+
+impl BranchMenuTarget {
+    pub(in crate::view) fn popover_kind(&self, repo_id: RepoId) -> PopoverKind {
+        PopoverKind::BranchMenu {
+            repo_id,
+            section: self.section,
+            name: self.name.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -843,6 +878,15 @@ impl RepoTerminalSession {
 
     pub(crate) fn instance_by_seq_mut(&mut self, seq: u64) -> Option<&mut TerminalInstance> {
         self.instances.iter_mut().find(|i| i.session_seq == seq)
+    }
+
+    /// Tab index for a stable session sequence. Backend events and delayed
+    /// confirmations resolve through this at close time, never by a stored
+    /// index that sibling closings may have shifted.
+    pub(crate) fn index_by_seq(&self, seq: u64) -> Option<usize> {
+        self.instances
+            .iter()
+            .position(|instance| instance.session_seq == seq)
     }
 }
 

@@ -5,7 +5,9 @@ use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictSession, ConflictStageParts, canonicalize_stage_parts,
 };
 use gitcomet_core::domain::*;
+use gitcomet_core::git_operation::{GitOperationId, GitOutputStream, HookExecutionId};
 use gitcomet_core::process::GitRuntimeState;
+use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
     BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext, SequencerState,
     SubmoduleTrustTarget,
@@ -15,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 pub type Shared<T> = Arc<T>;
 
@@ -72,6 +74,19 @@ impl GitLogSettings {
             self.tag_fetch_mode,
             GitLogTagFetchMode::OnRepositoryActivation
         )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoteSettings {
+    pub prune_deleted_remote_branches_on_fetch: bool,
+}
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self {
+            prune_deleted_remote_branches_on_fetch: true,
+        }
     }
 }
 
@@ -600,6 +615,7 @@ pub struct AppState {
     pub notifications: Vec<AppNotification>,
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
+    pub branch_exists_prompt: Option<BranchExistsPromptState>,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
     /// A submodule trust check is running in the background. Set the moment the
     /// add/update/load is triggered and cleared when the check resolves, so the
@@ -607,9 +623,26 @@ pub struct AppState {
     /// trust dialog (or a silent proceed) appears.
     pub submodule_trust_check_pending: Option<SubmoduleTrustCheckState>,
     pub git_runtime: GitRuntimeState,
+    pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
+    pub remote_settings: RemoteSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum BranchExistsPromptOperation {
+    CreateBranch,
+    CheckoutRemoteBranch { remote: String, branch: String },
+    RenameBranch { old_name: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchExistsPromptState {
+    pub repo_id: RepoId,
+    pub name: String,
+    pub target: String,
+    pub operation: BranchExistsPromptOperation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -771,6 +804,104 @@ pub struct CommandLogEntry {
     /// a toast per staged line is noise — but they still belong in the log.
     /// Failures are always surfaced, whatever this says.
     pub announce_success: bool,
+    /// The hook-activity entry that owns user-facing reporting for this
+    /// command. When present, the UI does not also show the generic command
+    /// completion toast/banner.
+    pub hook_operation_id: Option<GitOperationId>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitHookOperationStatus {
+    Running,
+    Cancelling,
+    Succeeded,
+    SucceededWithHookFailure,
+    Failed,
+    Cancelled,
+    TimedOut,
+}
+
+impl GitHookOperationStatus {
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Running | Self::Cancelling)
+    }
+
+    pub fn is_warning(self) -> bool {
+        matches!(self, Self::SucceededWithHookFailure | Self::Cancelled)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitHookRunStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitHookRun {
+    pub id: HookExecutionId,
+    pub name: String,
+    pub status: GitHookRunStatus,
+    pub exit_code: Option<i32>,
+    pub duration: Option<Duration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitHookOutputChunk {
+    pub stream: GitOutputStream,
+    pub text: Arc<str>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GitHookOperation {
+    pub id: GitOperationId,
+    pub label: String,
+    /// Single-line, user-facing context for the operation that invoked these
+    /// hooks, such as a commit subject or branch/remote direction.
+    pub context: Option<String>,
+    pub time: SystemTime,
+    pub duration: Option<Duration>,
+    pub status: GitHookOperationStatus,
+    pub hooks: Vec<GitHookRun>,
+    pub output: Arc<VecDeque<GitHookOutputChunk>>,
+    pub output_bytes: usize,
+    pub output_truncated: bool,
+    pub latest_line: String,
+}
+
+impl GitHookOperation {
+    pub fn has_hooks(&self) -> bool {
+        !self.hooks.is_empty()
+    }
+
+    pub fn active_hook_name(&self) -> Option<&str> {
+        self.hooks
+            .iter()
+            .rev()
+            .find(|hook| hook.status == GitHookRunStatus::Running)
+            .map(|hook| hook.name.as_str())
+    }
+
+    pub fn combined_output(&self) -> String {
+        let mut output = String::new();
+        if self.output_truncated {
+            output.push_str("[Earlier hook output was truncated]\n");
+        }
+        for chunk in self.output.iter() {
+            output.push_str(&chunk.text);
+        }
+        output
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitOperationOuterOutcome {
+    Succeeded,
+    Failed,
+    Cancelled,
+    TimedOut,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1147,6 +1278,44 @@ pub struct InteractiveCherryPickSetup {
     pub full_messages: Loadable<()>,
 }
 
+/// User-visible repository feedback and bounded diagnostic/activity history.
+///
+/// Keeping this together makes the lifecycle explicit: a successful reopen can
+/// reset repository feedback without touching loaded Git data or navigation.
+#[derive(Clone, Debug, Default)]
+pub struct RepoFeedbackState {
+    pub missing_on_disk: bool,
+    pub last_error: Option<String>,
+    pub diagnostics: Vec<DiagnosticEntry>,
+    pub command_log: Vec<CommandLogEntry>,
+    pub hook_activity: Vec<GitHookOperation>,
+    pub hook_activity_rev: u64,
+    /// Set only while reducing the existing command completion nested inside a
+    /// `GitOperationFinished` message.
+    pub(crate) command_log_operation_id: Option<GitOperationId>,
+}
+
+/// Deferred operation context retained between an initial failure and the
+/// user's follow-up action (authentication retry or confirmed force-push).
+#[derive(Clone, Debug, Default)]
+pub struct RepoPendingState {
+    pub commit_retry: Option<PendingCommitRetry>,
+    pub force_push_lease: Option<ForcePushLease>,
+}
+
+/// The three related navigation mechanisms owned by one repository.
+#[derive(Clone, Debug, Default)]
+pub struct RepoNavigationState {
+    /// Commits browsed through the file browser during this session.
+    pub browse_history: Vec<CommitId>,
+    /// Back/forward history within the file viewer.
+    pub view_history: NavStack<ViewHistoryEntry>,
+    /// Back/forward history across the entire main content view.
+    pub main_history: NavStack<MainViewSnapshot>,
+    /// A commit, branch, or tag waiting to be compared with another target.
+    pub comparison_mark: Option<ComparisonMark>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
@@ -1169,7 +1338,6 @@ pub struct RepoState {
 
     pub open: Loadable<()>,
     pub history_state: HistoryState,
-    pub fetch_prune_deleted_remote_tracking_branches: bool,
     pub head_branch: Loadable<String>,
     pub detached_head_commit: Option<CommitId>,
     pub head_branch_rev: u64,
@@ -1191,6 +1359,10 @@ pub struct RepoState {
     pub staged_status_rev: u64,
     pub status: Loadable<Shared<RepoStatus>>,
     pub status_rev: u64,
+    /// Paths confirmed as gitlinks in the current HEAD tree. This small cache
+    /// preserves the classification of staged submodule deletions across view
+    /// navigation without leaking backend-specific tree objects into state.
+    pub head_gitlink_paths: FxHashSet<PathBuf>,
     /// Cached flag: true when the current unstaged/worktree lane contains at
     /// least one `FileStatusKind::Conflicted` entry. Recomputed in
     /// `set_worktree_status` and `set_status`.
@@ -1233,17 +1405,7 @@ pub struct RepoState {
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
     pub branch_sidebar_rev: u64,
     pub file_browser: FileBrowserState,
-    /// Commits the user has browsed this session (file directory pinned to a
-    /// historical point). The current point is `file_browser.source`; this is the
-    /// stack the badge dropdown lists. Cleared by "Go live".
-    pub browse_history: Vec<CommitId>,
-    /// Browser-style back/forward stack of opened file-content views, shared
-    /// across files. Drives the viewer header's back/forward controls.
-    pub view_history: NavStack<ViewHistoryEntry>,
-    /// Broader, global back/forward stack of main-content-view snapshots
-    /// (diffs, file content, the history log, commit selections). Drives the
-    /// mouse side buttons.
-    pub nav_history: NavStack<MainViewSnapshot>,
+    pub navigation: RepoNavigationState,
 
     pub diff_state: DiffState,
     pub conflict_state: ConflictState,
@@ -1252,19 +1414,9 @@ pub struct RepoState {
     pub ops_rev: u64,
     pub last_active_at: Option<SystemTime>,
 
-    pub missing_on_disk: bool,
-    pub last_error: Option<String>,
-    pub diagnostics: Vec<DiagnosticEntry>,
-
-    pub command_log: Vec<CommandLogEntry>,
-    pub pending_commit_retry: Option<PendingCommitRetry>,
+    pub feedback: RepoFeedbackState,
+    pub pending: RepoPendingState,
     pub load_epoch: u64,
-    pub pending_force_push_lease: Option<ForcePushLease>,
-    /// A commit/branch/tag the user "marked for comparison" via the context
-    /// menu. The next "Compare with marked" resolves the target's commit and
-    /// starts a range comparison (mark = base, target = tip). `None` when
-    /// nothing is marked.
-    pub comparison_mark: Option<ComparisonMark>,
 }
 
 /// A point marked for comparison via the "Mark for comparison" context-menu
@@ -1293,7 +1445,6 @@ impl RepoState {
             commit_in_flight: 0,
             open: Loadable::Loading,
             history_state: HistoryState::default(),
-            fetch_prune_deleted_remote_tracking_branches: true,
             head_branch: Loadable::NotLoaded,
             detached_head_commit: None,
             head_branch_rev: 0,
@@ -1315,6 +1466,7 @@ impl RepoState {
             staged_status_rev: 0,
             status: Loadable::NotLoaded,
             status_rev: 0,
+            head_gitlink_paths: FxHashSet::default(),
             has_unstaged_conflicts: false,
             log: Loadable::NotLoaded,
             log_loading_more: false,
@@ -1344,22 +1496,15 @@ impl RepoState {
             sidebar_data_request: SidebarDataRequest::default(),
             branch_sidebar_rev: 0,
             file_browser: FileBrowserState::default(),
-            browse_history: Vec::new(),
-            view_history: NavStack::default(),
-            nav_history: NavStack::default(),
+            navigation: RepoNavigationState::default(),
             diff_state: DiffState::default(),
             conflict_state: ConflictState::default(),
             open_rev: 0,
             ops_rev: 0,
             last_active_at: None,
-            missing_on_disk: false,
-            last_error: None,
-            diagnostics: Vec::new(),
-            command_log: Vec::new(),
-            pending_commit_retry: None,
+            feedback: RepoFeedbackState::default(),
+            pending: RepoPendingState::default(),
             load_epoch: 0,
-            pending_force_push_lease: None,
-            comparison_mark: None,
         }
     }
 
@@ -1505,7 +1650,8 @@ impl RepoState {
     }
 
     pub(crate) fn clear_head_dependent_cached_state(&mut self) {
-        self.pending_force_push_lease = None;
+        self.pending.force_push_lease = None;
+        self.head_gitlink_paths.clear();
         self.set_recent_commit_messages(Loadable::NotLoaded);
     }
 

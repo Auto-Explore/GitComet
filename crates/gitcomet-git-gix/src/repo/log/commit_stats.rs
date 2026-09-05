@@ -183,22 +183,32 @@ pub(crate) fn commit_file_changes(
     commit: &gix::Commit<'_>,
     parent_ids: &[gix::ObjectId],
 ) -> Result<Vec<CommitFileChange>> {
-    if parent_ids.len() > 1 {
-        return Ok(Vec::new());
-    }
-
     let commit_tree = commit
         .tree()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit tree: {e}"))))?;
-    let parent_tree = parent_ids
-        .first()
-        .map(|&id| {
-            repo.find_commit(id)
+    let parent_tree = match parent_ids.first() {
+        None => None,
+        Some(&id) => {
+            // Shallow-boundary commits retain parent ids even though the parent
+            // objects were intentionally not cloned. The comparison is
+            // unavailable in that case, but the rest of the commit metadata is
+            // still valid and should remain displayable.
+            let Some(parent_object) = repo
+                .try_find_object(id)
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix parent commit: {e}"))))?
-                .tree()
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix parent tree: {e}"))))
-        })
-        .transpose()?;
+            else {
+                return Ok(Vec::new());
+            };
+            let parent_commit = parent_object
+                .try_into_commit()
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix parent commit: {e}"))))?;
+            Some(
+                parent_commit
+                    .tree()
+                    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix parent tree: {e}"))))?,
+            )
+        }
+    };
 
     tree_diff_file_changes(repo, parent_tree.as_ref(), &commit_tree)
 }

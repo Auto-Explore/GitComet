@@ -1,6 +1,6 @@
 use crate::cli::{DifftoolConfig, DifftoolInputKind, classify_difftool_input, exit_code};
-use crate::git_root::is_git_root_marker;
-use gitcomet_core::process::git_command;
+use crate::git_root::find_git_root;
+use gitcomet_core::process::{bytes_to_text_preserving_utf8, git_command};
 use rustc_hash::FxHashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -92,44 +92,6 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
         }
         None => Err("`git diff --no-index` terminated by signal".to_string()),
     }
-}
-
-fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
-    const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
-
-    let mut out = String::with_capacity(bytes.len());
-    let mut cursor = 0usize;
-    while cursor < bytes.len() {
-        match std::str::from_utf8(&bytes[cursor..]) {
-            Ok(valid) => {
-                out.push_str(valid);
-                break;
-            }
-            Err(err) => {
-                let valid_len = err.valid_up_to();
-                if valid_len > 0 {
-                    let valid = &bytes[cursor..cursor + valid_len];
-                    out.push_str(
-                        std::str::from_utf8(valid)
-                            .expect("slice identified by valid_up_to must be valid UTF-8"),
-                    );
-                    cursor += valid_len;
-                }
-
-                let invalid_len = err.error_len().unwrap_or(1);
-                let invalid_end = cursor.saturating_add(invalid_len).min(bytes.len());
-                for &byte in &bytes[cursor..invalid_end] {
-                    out.push('\\');
-                    out.push('x');
-                    out.push(HEX_DIGITS[(byte >> 4) as usize] as char);
-                    out.push(HEX_DIGITS[(byte & 0x0f) as usize] as char);
-                }
-                cursor = invalid_end;
-            }
-        }
-    }
-
-    out
 }
 
 struct PreparedDiffInputs {
@@ -279,20 +241,6 @@ fn push_unique_root(roots: &mut Vec<PathBuf>, root: PathBuf) {
     if !roots.iter().any(|existing| existing == &root) {
         roots.push(root);
     }
-}
-
-fn find_git_root(start: &Path) -> Option<PathBuf> {
-    let start_dir = if start.is_dir() {
-        start
-    } else {
-        start.parent()?
-    };
-    for candidate in start_dir.ancestors() {
-        if is_git_root_marker(&candidate.join(".git")) {
-            return Some(fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf()));
-        }
-    }
-    None
 }
 
 fn resolve_allowed_staging_roots(local: &Path, remote: &Path) -> Result<Vec<PathBuf>, String> {
@@ -667,7 +615,9 @@ fn resolve_labels(config: &DifftoolConfig) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::path::Path;
+    use std::path::PathBuf;
 
     fn write_file(path: &std::path::Path, content: &str) {
         std::fs::write(path, content).expect("write fixture file");
@@ -677,6 +627,7 @@ mod tests {
         std::fs::write(path, content).expect("write fixture bytes");
     }
 
+    #[cfg(unix)]
     fn create_git_root_marker(repo_root: &Path) {
         let git_dir = repo_root.join(".git");
         std::fs::create_dir_all(&git_dir).expect("create git dir marker");

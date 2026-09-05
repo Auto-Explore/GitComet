@@ -213,7 +213,7 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
-    state.repos[0].pending_commit_retry = Some(PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(PendingCommitRetry {
         message: "ship it".to_string(),
         amend: false,
         push_after_commit: false,
@@ -231,7 +231,7 @@ fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
         }),
     );
 
-    assert!(state.repos[0].pending_commit_retry.is_none());
+    assert!(state.repos[0].pending.commit_retry.is_none());
     let prompt = state.auth_prompt.expect("expected auth prompt");
     assert_eq!(prompt.kind, AuthPromptKind::UsernamePassword);
     assert_eq!(
@@ -271,7 +271,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
     let id_alloc = AtomicU64::new(1);
-    state.repos[0].pending_commit_retry = Some(PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(PendingCommitRetry {
         message: "fixup".to_string(),
         amend: true,
         push_after_commit: false,
@@ -289,7 +289,7 @@ fn commit_amend_finished_auth_error_uses_pending_retry_with_amend() {
         }),
     );
 
-    assert!(state.repos[0].pending_commit_retry.is_none());
+    assert!(state.repos[0].pending.commit_retry.is_none());
     let prompt = state.auth_prompt.expect("expected auth prompt");
     assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
     assert_eq!(
@@ -587,7 +587,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
     assert_eq!(commit_auth.kind, GitAuthKind::Passphrase);
     assert_eq!(commit_auth.secret, "passphrase");
     assert_eq!(
-        state.repos[0].pending_commit_retry,
+        state.repos[0].pending.commit_retry,
         Some(PendingCommitRetry {
             message: "first".to_string(),
             amend: false,
@@ -626,7 +626,7 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
     assert_eq!(amend_auth.kind, GitAuthKind::Passphrase);
     assert_eq!(amend_auth.secret, "passphrase");
     assert_eq!(
-        state.repos[0].pending_commit_retry,
+        state.repos[0].pending.commit_retry,
         Some(PendingCommitRetry {
             message: "second".to_string(),
             amend: true,
@@ -906,6 +906,7 @@ fn submit_auth_prompt_validation_failure_keeps_prompt_and_sets_diagnostic() {
     assert!(state.auth_prompt.is_some());
     let repo_state = &state.repos[0];
     let diagnostic = repo_state
+        .feedback
         .diagnostics
         .last()
         .expect("expected validation diagnostic");
@@ -1107,6 +1108,7 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
             name,
             url,
             kind: RemoteUrlKind::Push,
+            ..
         }] if name == "origin" && url == "https://example.com/repo.git"
     ));
 

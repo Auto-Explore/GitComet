@@ -972,6 +972,27 @@ impl GixRepo {
             validate_hex_commit_id(&CommitId(entry.commit_id.clone().into()))?;
         }
 
+        // For a cherry-pick, `drop` means "leave this commit out", which is
+        // exactly the same as not listing it — so resolve it here rather than
+        // emitting a `drop` line. Not merely tidier: `git rebase -i` without
+        // `--rebase-merges` cannot represent a merge commit in its todo at
+        // all, and a `drop <merge>` line makes its sequencer abort the whole
+        // plan with "BUG: sequencer.c: unexpected todo_command" instead of
+        // ignoring the line. Removing dropped entries keeps a dropped merge
+        // from ever reaching git, and often leaves a pure-pick plan that takes
+        // the plain `git cherry-pick` path below.
+        let planned: Vec<InteractiveRebaseEntry> = entries
+            .iter()
+            .filter(|entry| entry.action != InteractiveRebaseAction::Drop)
+            .cloned()
+            .collect();
+        if planned.is_empty() {
+            return Err(Error::new(ErrorKind::Backend(
+                "cherry-pick: every selected commit was dropped; nothing to apply".to_string(),
+            )));
+        }
+        let entries = planned.as_slice();
+
         // `git cherry-pick` refuses a merge commit without `-m`, but only
         // when the sequence reaches it: earlier picks are already committed
         // by then, and that mid-sequence stop leaves sequencer state the UI
@@ -979,9 +1000,6 @@ impl GixRepo {
         // selection, so reject merges before launching any step.
         let repo = self._repo.to_thread_local();
         for entry in entries {
-            if entry.action == InteractiveRebaseAction::Drop {
-                continue;
-            }
             let commit = peel_commit(&repo, &entry.commit_id)?;
             if commit.parent_ids().count() > 1 {
                 let short = entry.commit_id.get(..8).unwrap_or(&entry.commit_id);
@@ -1022,6 +1040,8 @@ impl GixRepo {
         let mut seen_commit_step = false;
         for entry in entries {
             match entry.action {
+                // Already resolved away above; the arm only keeps the match
+                // exhaustive.
                 InteractiveRebaseAction::Drop => {}
                 InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup => {
                     if !seen_commit_step {
@@ -1049,10 +1069,11 @@ impl GixRepo {
         // The rebase machinery below needs HEAD as its upstream; on an
         // unborn branch git only says "invalid upstream 'HEAD'", so name
         // the actual limitation. Plain multi-picks work there (git can
-        // cherry-pick root commits onto an unborn branch).
+        // cherry-pick root commits onto an unborn branch), and a plan whose
+        // only non-pick steps were drops already took that path above.
         if gix_head_id_or_none(&repo)?.is_none() {
             return Err(Error::new(ErrorKind::Backend(
-                "cherry-pick: reword, squash, and drop plans need an existing commit on the \
+                "cherry-pick: reword and squash plans need an existing commit on the \
                  current branch; pick the commits unmodified first, or make an initial commit"
                     .to_string(),
             )));
@@ -1236,7 +1257,7 @@ impl RebaseScripts {
 /// Git for Windows' bundled shell — so an unquoted path containing spaces
 /// word-splits, and POSIX single-quote quoting applies on every platform.
 fn shell_quote_path(path: &Path) -> String {
-    format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
+    gitcomet_core::text_utils::shell_single_quote(&path.to_string_lossy())
 }
 
 enum PersistedReword {
@@ -1510,7 +1531,7 @@ mod tests {
     fn editor_path_uses_posix_shell_quotes() {
         assert_eq!(
             shell_quote_path(Path::new("/repo with 'quotes'/editor.sh")),
-            r"'/repo with '\''quotes'\''/editor.sh'"
+            "'/repo with '\"'\"'quotes'\"'\"'/editor.sh'"
         );
         assert_eq!(
             shell_quote_path(Path::new(r"C:\repo with spaces\editor.sh")),

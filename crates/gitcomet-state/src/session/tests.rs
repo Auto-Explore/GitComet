@@ -1,4 +1,5 @@
 use super::history_mode::HistoryScopeSetting;
+#[cfg(unix)]
 use super::paths::hex_encode;
 use super::repos::SESSION_REPOS_SNAPSHOT_CACHE;
 use super::survey::SurveyPromptSession;
@@ -114,10 +115,6 @@ fn session_file_persist_lock_is_shared_by_session_writers() {
         let repo = path.with_file_name("history-scope-repo");
         persist_repo_history_scope_to_path(&repo, LogScope::AllBranches, &path)
     });
-    assert_session_writer_waits_for_shared_lock("persist-fetch-prune", |path| {
-        let repo = path.with_file_name("fetch-prune-repo");
-        persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(&repo, true, &path)
-    });
     assert_session_writer_waits_for_shared_lock("persist-survey-opened", |path| {
         persist_survey_prompt_opened_to_path(&path, "survey", 123)
     });
@@ -173,10 +170,8 @@ fn load_repo_session_preferences_collects_current_and_legacy_history_settings() 
     let session_file = dir.join("session.json");
     let repo_mode = dir.join("repo-mode");
     let repo_legacy = dir.join("repo-legacy");
-    let repo_fetch = dir.join("repo-fetch");
     let _ = fs::create_dir_all(&repo_mode);
     let _ = fs::create_dir_all(&repo_legacy);
-    let _ = fs::create_dir_all(&repo_fetch);
 
     assert_eq!(
         load_repo_session_preferences_from_path(&dir.join("missing.json")),
@@ -195,12 +190,6 @@ fn load_repo_session_preferences_collects_current_and_legacy_history_settings() 
         .expect("persist explicit history mode");
     persist_repo_history_scope_to_path(&repo_legacy, LogScope::CurrentBranch, &session_file)
         .expect("persist legacy history scope");
-    persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
-        &repo_fetch,
-        true,
-        &session_file,
-    )
-    .expect("persist fetch-prune setting");
 
     let loaded = load_repo_session_preferences_from_path(&session_file);
     assert_eq!(loaded.default_history_mode, Some(HistoryMode::MergesOnly));
@@ -213,12 +202,6 @@ fn load_repo_session_preferences_collects_current_and_legacy_history_settings() 
             .repo_history_scopes
             .get(&path_storage_key(&repo_legacy)),
         Some(&HistoryMode::FirstParent)
-    );
-    assert_eq!(
-        loaded
-            .repo_fetch_prune_deleted_remote_tracking_branches
-            .get(&path_storage_key(&repo_fetch)),
-        Some(&true)
     );
 }
 
@@ -301,8 +284,6 @@ fn persist_repo_history_modes_batch_skips_empty_and_unchanged_updates() {
     .expect("persist default history mode");
     persist_repo_history_scope_to_path(&repo_b, LogScope::CurrentBranch, &session_file)
         .expect("persist legacy history scope");
-    persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(&repo_c, true, &session_file)
-        .expect("persist fetch-prune setting");
     persist_repo_history_mode_to_path(&repo_a, HistoryMode::FirstParent, &session_file)
         .expect("persist repo_a history mode");
 
@@ -351,12 +332,6 @@ fn persist_repo_history_modes_batch_skips_empty_and_unchanged_updates() {
     assert_eq!(
         loaded.repo_history_scopes.get(&path_storage_key(&repo_b)),
         Some(&HistoryMode::FirstParent)
-    );
-    assert_eq!(
-        loaded
-            .repo_fetch_prune_deleted_remote_tracking_branches
-            .get(&path_storage_key(&repo_c)),
-        Some(&true)
     );
 }
 
@@ -2355,6 +2330,42 @@ fn persist_ui_settings_round_trips_auto_save_file_edits() {
 }
 
 #[test]
+fn persist_ui_settings_round_trips_security_preferences() {
+    let dir = unique_session_test_dir("security-preferences");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            remote_markdown_image_policy: Some("ask".to_string()),
+            allowed_remote_protocols: Some(
+                ["https", "ssh", "http"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+            check_for_updates_on_startup: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist security preferences");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.remote_markdown_image_policy.as_deref(), Some("ask"));
+    assert_eq!(
+        loaded.allowed_remote_protocols,
+        Some(
+            ["http", "https", "ssh"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        )
+    );
+    assert_eq!(loaded.check_for_updates_on_startup, Some(false));
+}
+
+#[test]
 fn persist_ui_settings_round_trips_change_tracking_heights() {
     let dir = env::temp_dir().join(format!(
         "gitcomet-ui-settings-test-{}-{}",
@@ -2655,6 +2666,90 @@ fn persist_ui_settings_round_trips_commit_push_after_enabled() {
 
     let loaded = load_from_path(&path);
     assert_eq!(loaded.commit_push_after_enabled, Some(true));
+}
+
+#[test]
+fn persist_ui_settings_round_trips_fetch_prune_deleted_remote_branches() {
+    let dir = env::temp_dir().join(format!(
+        "gitcomet-ui-settings-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    persist_to_path(
+        &path,
+        &UiSessionFile {
+            version: CURRENT_SESSION_FILE_VERSION,
+            open_repos: Vec::new(),
+            active_repo: None,
+            ..UiSessionFile::default()
+        },
+    )
+    .expect("seed session file");
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            fetch_prune_deleted_remote_branches: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist remote pruning setting");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.fetch_prune_deleted_remote_branches, Some(false));
+}
+
+#[test]
+fn v3_repo_prune_preferences_migrate_to_a_conservative_global_preference() {
+    let dir = unique_session_test_dir("legacy-repo-fetch-prune-migration");
+    let path = dir.join("session.json");
+    let legacy_session = serde_json::json!({
+        "version": SESSION_FILE_VERSION_V3,
+        "open_repos": [],
+        "active_repo": null,
+        "repo_fetch_prune_deleted_remote_tracking_branches": {
+            "/repos/pruning-enabled": true,
+            "/repos/pruning-disabled": false
+        }
+    });
+    fs::write(
+        &path,
+        serde_json::to_vec(&legacy_session).expect("serialize legacy session"),
+    )
+    .expect("write legacy session");
+
+    let loaded = load_from_path(&path);
+    assert_eq!(
+        loaded.fetch_prune_deleted_remote_branches,
+        Some(false),
+        "one saved opt-out must keep pruning disabled after the setting becomes global"
+    );
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            sidebar_collapsed: Some(true),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist an unrelated UI setting");
+
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read migrated session"))
+            .expect("parse migrated session");
+    assert_eq!(
+        persisted
+            .get("fetch_prune_deleted_remote_branches")
+            .and_then(serde_json::Value::as_bool),
+        Some(false),
+        "the migrated global choice must survive the next session save"
+    );
 }
 
 #[test]

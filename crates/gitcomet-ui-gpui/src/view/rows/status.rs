@@ -527,6 +527,12 @@ fn status_row(
     let row_group: SharedString =
         format!("status_row_{}_{}_{}", repo_id.0, section.id_label(), ix).into();
     let row_debug_selector = format!("status_row_{}_{}_{}", repo_id.0, section.id_label(), ix);
+    let action_debug_selector = format!(
+        "status_row_action_{}_{}_{}",
+        repo_id.0,
+        section.id_label(),
+        ix
+    );
 
     let stage_button = components::Button::new(format!("stage_btn_{ix}"), stage_label)
         .style(components::ButtonStyle::Solid)
@@ -603,7 +609,6 @@ fn status_row(
         .px(scaled_px(8.0))
         .h(scaled_px(STATUS_ROW_HEIGHT_PX))
         .w_full()
-        .rounded(px(theme.radii.row))
         .cursor(CursorStyle::PointingHand)
         .when(selected, |s| {
             s.bg(theme.colors.interaction.hover_background)
@@ -675,8 +680,9 @@ fn status_row(
         )
         .child(
             div()
+                .debug_selector(move || action_debug_selector.clone())
                 .absolute()
-                .right(scaled_px(6.0))
+                .right_0()
                 .top_0()
                 .bottom_0()
                 .flex()

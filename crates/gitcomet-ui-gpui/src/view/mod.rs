@@ -14,13 +14,17 @@ use gitcomet_core::domain::{
     UpstreamDivergence,
 };
 use gitcomet_core::file_diff::FileDiffRow;
+use gitcomet_core::git_operation::GitOperationId;
 use gitcomet_core::process::refresh_git_runtime;
-use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
+use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
-    AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DefaultTagType,
-    DiagnosticKind, Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
+    AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptOperation,
+    BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind,
+    GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable, RemoteSettings, RepoId,
+    RepoState, SubmoduleTrustPromptOperation,
 };
-use gitcomet_state::msg::{Msg, StoreEvent};
+use gitcomet_state::msg::{BranchExistsChoice, Msg, StoreEvent};
 use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
@@ -34,6 +38,8 @@ use gpui::{
     fill, point, px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+#[cfg(test)]
+use std::cell::Cell;
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::hash::Hash;
@@ -102,6 +108,8 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
+            // Ctrl/Cmd+Shift+A is the app-level recent-repositories shortcut.
+            && (key != "a" || !mods.shift)
             && matches!(
                 key,
                 "1" | "2" | "3" | "a" | "c" | "e" | "s" | "d" | "h" | "u"
@@ -179,6 +187,8 @@ mod perf;
 mod permalink;
 pub(super) mod platform_open;
 mod poller;
+mod preference_sync;
+mod preferences;
 mod reflog_panel;
 mod repo_open;
 pub(crate) mod rows;
@@ -196,16 +206,17 @@ mod toast_host;
 mod tooltip;
 mod tooltip_host;
 mod update_check;
+pub(crate) use update_check::update_checks_disabled_by_environment;
 mod user_survey;
 mod word_diff;
 
 use app_model::AppUiModel;
-use branch_sidebar::{BranchSection, BranchSidebarRow};
+use branch_sidebar::{BranchMenuTarget, BranchSection, BranchSidebarRow};
 use caches::{
-    HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryCache,
-    HistoryCacheBuildRequest, HistoryDecorationCache, HistoryDecorationCacheRequest,
-    HistoryDecorationRowVm, HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind,
-    HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
+    HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryBranchChipKind,
+    HistoryBranchChipVm, HistoryCache, HistoryCacheBuildRequest, HistoryDecorationCache,
+    HistoryDecorationCacheRequest, HistoryDecorationRowVm, HistoryDisplayKey, HistoryRefListItem,
+    HistoryRefListItemKind, HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
 };
 use chrome::TitleBarView;
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
@@ -217,6 +228,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
+use preferences::{RemoteMarkdownImagePolicy, UiPreferences};
 pub(in crate::view) use terminal_preferences::{
     ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
     TerminalPreferences, parse_terminal_args_multiline, resolve_embedded_shell_program,
@@ -229,7 +241,8 @@ use commit_message_hover::{CommitMessageHoverHost, CommitMessageHoverState};
 use diff_text_model::CachedDiffTextSegment;
 use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
 use diff_text_selection::{
-    ConflictRowSelectionTracker, DiffTextSelectionOverlay, DiffTextSelectionTracker,
+    ConflictRowSelectionTracker, DiffTextEmptySpaceDecoration, DiffTextSelectionOverlay,
+    DiffTextSelectionTracker, empty_diff_text_document, flowing_diff_text_empty_space,
 };
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
@@ -250,11 +263,15 @@ pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
-use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
+use panels::{
+    ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
+    action_bar_height,
+};
 pub(crate) use panes::MainPaneView;
 use panes::{
     CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryPrimarySelection,
-    HistoryView, ReflogPaneInit, ReflogPaneView, SidebarPaneView, history_primary_selection,
+    HistoryView, MainPaneInit, ReflogPaneInit, ReflogPaneView, SidebarPaneView,
+    history_primary_selection,
 };
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
@@ -360,15 +377,58 @@ pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: 
     element
 }
 
-// Only use these wrappers for views that remain mounted while their parent is mounted.
-// Parent-controlled mount/unmount boundaries, like collapsible panes, must rebuild their child.
+// A cached view reuses its previous frame's layout and paint whenever the frame
+// was requested through `notify` on some other view (spinner ticks, store
+// updates elsewhere) and its own bounds, content mask and text style are
+// unchanged; `window.refresh()` frames (hover changes) bypass every cache.
+//
+// Unmounting is safe: GPUI keeps only the element states accessed during a
+// frame, so a pane collapsed for one frame loses its cache entry and renders
+// from scratch when it returns. The wrapper needs a definite size, which the
+// helpers below provide; the view's own root must fill it (`size_full`), since
+// a cached root is laid out against the wrapper's bounds rather than stretched
+// by a flex parent.
+#[cfg(test)]
+thread_local! {
+    static STABLE_CACHED_VIEWS_ENABLED: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+struct StableCachedViewsTestGuard(bool);
+
+#[cfg(test)]
+impl Drop for StableCachedViewsTestGuard {
+    fn drop(&mut self) {
+        STABLE_CACHED_VIEWS_ENABLED.with(|enabled| enabled.set(self.0));
+    }
+}
+
+#[cfg(test)]
+fn enable_stable_cached_views_for_test() -> StableCachedViewsTestGuard {
+    let previous = STABLE_CACHED_VIEWS_ENABLED.with(|enabled| enabled.replace(true));
+    StableCachedViewsTestGuard(previous)
+}
+
+fn stable_cached_views_enabled() -> bool {
+    #[cfg(test)]
+    {
+        STABLE_CACHED_VIEWS_ENABLED.with(Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        true
+    }
+}
+
 fn stable_cached_view<V: Render>(view: Entity<V>, style: StyleRefinement) -> AnyElement {
     let view = AnyView::from(view);
-    // GPUI's cached mount path skips some test-only debug bounds and paint tracking.
-    if cfg!(test) {
-        view.into_any_element()
-    } else {
+    // Most visual tests need uncached mounts because GPUI's reuse path does not
+    // replay test-only debug bounds. Focused cache-invalidation tests opt in so
+    // production cache behavior remains covered.
+    if stable_cached_views_enabled() {
         view.cached(style).into_any_element()
+    } else {
+        view.into_any_element()
     }
 }
 

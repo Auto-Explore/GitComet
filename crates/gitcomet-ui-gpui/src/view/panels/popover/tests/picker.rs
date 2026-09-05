@@ -1,4 +1,4 @@
-use super::branch::create_tracking_store;
+use super::branch::{create_tracking_store, wait_until};
 use super::*;
 use gitcomet_core::domain::{Branch, CommitId};
 
@@ -1787,6 +1787,19 @@ fn popover_feeds_pointer_positions_to_the_tooltip_host(cx: &mut gpui::TestAppCon
 fn rebase_onto_picker_excludes_current_branch_and_opens_confirm(cx: &mut gpui::TestAppContext) {
     let (store, events, _repo, _workdir) = create_tracking_store("rebase-onto-picker");
     let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    // The store's own repo-load races the injected branches below and only
+    // knows "main", and in gpui tests the view freezes the store snapshot it is
+    // constructed with — so let the load settle first, and only then inject.
+    wait_until("rebase-onto test repo to load", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.branches.ready().is_some() && repo.head_branch.ready().is_some()
+            })
+    });
     store.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {
             repo_id,
@@ -1806,6 +1819,20 @@ fn rebase_onto_picker_excludes_current_branch_and_opens_confirm(cx: &mut gpui::T
             ]),
         },
     ));
+    // Dispatch is asynchronous; the view below must be constructed from a
+    // snapshot that already contains the injected branches.
+    wait_until("injected branches to reach the store", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.branches
+                    .ready()
+                    .is_some_and(|branches| branches.iter().any(|branch| branch.name == "feature"))
+            })
+    });
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));

@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn is_git_root_marker(dot_git: &Path) -> bool {
     if dot_git.is_dir() {
@@ -18,6 +18,25 @@ pub(crate) fn is_git_root_marker(dot_git: &Path) -> bool {
         line.strip_prefix(b"gitdir:")
             .is_some_and(|path| !path.trim_ascii().is_empty())
     })
+}
+
+/// Walks `start`'s ancestors looking for a `.git` root marker.
+///
+/// Pure filesystem traversal: no git process is spawned, so this works for
+/// paths outside a repository too. `rev-parse --show-toplevel` remains the
+/// authoritative probe where git is available (see `cli/git_config.rs`).
+pub(crate) fn find_git_root(start: &Path) -> Option<PathBuf> {
+    let start_dir = if start.is_dir() {
+        start
+    } else {
+        start.parent()?
+    };
+    for candidate in start_dir.ancestors() {
+        if is_git_root_marker(&candidate.join(".git")) {
+            return Some(fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf()));
+        }
+    }
+    None
 }
 
 #[cfg(test)]

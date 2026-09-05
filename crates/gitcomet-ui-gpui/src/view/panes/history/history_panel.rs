@@ -47,9 +47,7 @@ impl HistoryView {
                 None => {
                     components::empty_state(theme, "History", "No repository.").into_any_element()
                 }
-                Some(Loadable::Loading) => {
-                    components::empty_state(theme, "History", "Loading").into_any_element()
-                }
+                Some(Loadable::Loading) => div().into_any_element(),
                 Some(Loadable::Error(e)) => {
                     components::empty_state(theme, "History", e.clone()).into_any_element()
                 }

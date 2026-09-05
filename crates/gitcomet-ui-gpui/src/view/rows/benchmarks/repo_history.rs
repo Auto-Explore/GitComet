@@ -2225,6 +2225,7 @@ pub struct CommitDetailsFixture {
     details: CommitDetails,
     message_render: Option<CommitDetailsMessageRenderState>,
     file_rows: RefCell<CommitFileRowPresentationCache<CommitId>>,
+    file_projection: RefCell<CommitFileProjectionCache<CommitId>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2255,6 +2256,7 @@ impl CommitDetailsFixture {
             details: build_synthetic_commit_details(files, depth),
             message_render: None,
             file_rows: RefCell::new(CommitFileRowPresentationCache::default()),
+            file_projection: RefCell::new(CommitFileProjectionCache::default()),
         }
     }
 
@@ -2283,26 +2285,37 @@ impl CommitDetailsFixture {
             )),
             details,
             file_rows: RefCell::new(CommitFileRowPresentationCache::default()),
+            file_projection: RefCell::new(CommitFileProjectionCache::default()),
         }
     }
 
     pub fn prewarm_runtime_state(&self) {
         let mut file_rows = self.file_rows.borrow_mut();
         let _ = file_rows.rows_for(&self.details.id, &self.details.files);
+        let mut file_projection = self.file_projection.borrow_mut();
+        let _ = file_projection.projection_for(
+            &self.details.id,
+            &self.details.files,
+            CommitFileSort::PathAscending,
+            CommitFileFilter::All,
+        );
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn reset_runtime_state(&self) {
         self.file_rows.borrow_mut().clear();
+        self.file_projection.borrow_mut().clear();
     }
 
     pub fn run(&self) -> u64 {
         {
             let mut file_rows = self.file_rows.borrow_mut();
+            let mut file_projection = self.file_projection.borrow_mut();
             commit_details_cached_row_hash(
                 &self.details,
                 self.message_render.as_ref(),
                 &mut file_rows,
+                &mut file_projection,
             )
         }
     }
@@ -2368,6 +2381,7 @@ pub struct CommitSelectReplaceFixture {
     commit_a: CommitDetails,
     commit_b: CommitDetails,
     prewarmed_file_rows: CommitFileRowPresentationCache<CommitId>,
+    prewarmed_file_projection: CommitFileProjectionCache<CommitId>,
 }
 
 impl CommitSelectReplaceFixture {
@@ -2376,10 +2390,18 @@ impl CommitSelectReplaceFixture {
         let commit_b = build_synthetic_commit_details_with_id(files, depth, "e");
         let mut prewarmed_file_rows = CommitFileRowPresentationCache::default();
         let _ = prewarmed_file_rows.rows_for(&commit_a.id, &commit_a.files);
+        let mut prewarmed_file_projection = CommitFileProjectionCache::default();
+        let _ = prewarmed_file_projection.projection_for(
+            &commit_a.id,
+            &commit_a.files,
+            CommitFileSort::PathAscending,
+            CommitFileFilter::All,
+        );
         Self {
             commit_a,
             commit_b,
             prewarmed_file_rows,
+            prewarmed_file_projection,
         }
     }
 
@@ -2387,13 +2409,20 @@ impl CommitSelectReplaceFixture {
     /// file rows, then switch to commit_b and hash the replacement work only.
     pub fn run(&self) -> u64 {
         let mut file_rows = self.prewarmed_file_rows.clone();
-        commit_details_cached_row_hash(&self.commit_b, None, &mut file_rows)
+        let mut file_projection = self.prewarmed_file_projection.clone();
+        commit_details_cached_row_hash(&self.commit_b, None, &mut file_rows, &mut file_projection)
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn run_with_metrics(&self) -> (u64, CommitSelectReplaceMetrics) {
         let mut file_rows_a = self.prewarmed_file_rows.clone();
-        let hash_a = commit_details_cached_row_hash(&self.commit_a, None, &mut file_rows_a);
+        let mut file_projection_a = self.prewarmed_file_projection.clone();
+        let hash_a = commit_details_cached_row_hash(
+            &self.commit_a,
+            None,
+            &mut file_rows_a,
+            &mut file_projection_a,
+        );
         let hash_b = self.run();
         let metrics = CommitSelectReplaceMetrics {
             files_a: self.commit_a.files.len(),

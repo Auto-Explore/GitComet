@@ -64,7 +64,7 @@ pub(super) fn panel(
                             "Enter",
                         ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
+                        .on_click(theme, cx, |this, _e, _window, cx| {
                             this.submit_checkout_remote_branch(cx);
                         }),
                 ),

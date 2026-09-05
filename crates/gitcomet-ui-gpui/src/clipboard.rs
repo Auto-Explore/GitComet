@@ -10,7 +10,7 @@ pub(crate) enum CopySource {
     TextInputContextMenu,
     TerminalShortcut,
     TerminalContextMenu,
-    TerminalProtocol,
+    HookActivity,
     ContextMenu,
 }
 
@@ -28,7 +28,7 @@ impl CopySource {
             Self::TextInputContextMenu => "text-input-context-menu",
             Self::TerminalShortcut => "terminal-shortcut",
             Self::TerminalContextMenu => "terminal-context-menu",
-            Self::TerminalProtocol => "terminal-protocol",
+            Self::HookActivity => "hook-activity",
             Self::ContextMenu => "context-menu",
         }
     }
@@ -124,7 +124,6 @@ fn write_copy_diagnostic_inner(
     let dir = std::path::PathBuf::from(base)
         .join("gitcomet")
         .join("crashes");
-    std::fs::create_dir_all(&dir)?;
 
     let text = format!(
         "copy_source={}\ncopy_text_bytes={text_len}\ndisplay={}\nwayland_display={}\n\
@@ -137,11 +136,10 @@ fn write_copy_diagnostic_inner(
             ClipboardBackend::X11 => "x11",
         },
     );
-    let mut file =
-        std::fs::File::create(dir.join(format!("last-operation-{}.log", std::process::id())))?;
-    use std::io::Write as _;
-    file.write_all(text.as_bytes())?;
-    file.sync_data()
+    gitcomet_core::fs_utils::write_private_file(
+        &dir.join(format!("last-operation-{}.log", std::process::id())),
+        text.as_bytes(),
+    )
 }
 
 #[cfg(all(target_os = "linux", not(test)))]

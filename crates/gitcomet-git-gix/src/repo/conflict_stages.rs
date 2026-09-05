@@ -69,27 +69,8 @@ pub(super) fn gix_index_stage_blob_bytes_optional(
     path: &Path,
     stage: u8,
 ) -> Result<Option<Vec<u8>>> {
-    let Some(object_id) = gix_index_stage_object_id_optional(repo, path, stage)? else {
-        return Ok(None);
-    };
-
-    let Some(object) = repo
-        .try_find_object(object_id)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_object: {e}"))))?
-    else {
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "missing conflict stage object for :{stage}:{}",
-            path.display()
-        ))));
-    };
-
-    let mut blob = object.try_into_blob().map_err(|_| {
-        Error::new(ErrorKind::Backend(format!(
-            "conflict stage object for :{stage}:{} is not a blob",
-            path.display()
-        )))
-    })?;
-    Ok(Some(blob.take_data()))
+    let object_id = gix_index_stage_object_id_optional(repo, path, stage)?;
+    gix_blob_bytes_from_object_id_optional(repo, path, stage, object_id)
 }
 
 fn gix_blob_bytes_from_object_id_optional(

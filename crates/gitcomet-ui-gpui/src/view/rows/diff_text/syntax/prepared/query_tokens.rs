@@ -18,7 +18,6 @@ pub(crate) fn syntax_tokens_for_line_treesitter(
     let highlight = tree_sitter_highlight_spec(language)?;
     let ts_language = &highlight.ts_language;
 
-    let input_len = text.len();
     let tree = TS_INPUT.with(|input| {
         let mut input = input.borrow_mut();
         input.clear();
@@ -28,54 +27,28 @@ pub(crate) fn syntax_tokens_for_line_treesitter(
         with_ts_parser_parse_result(ts_language, |parser| parser.parse(&*input, None))
     })?;
 
-    let mut tokens: Vec<SyntaxToken> = Vec::new();
-    let query_succeeded = catch_treesitter_query_panic(|| {
-        TS_INPUT.with(|input| {
-            let input = input.borrow();
-            let query_pass = TreesitterQueryPass {
-                byte_range: 0..input.len(),
-                containing_byte_range: None,
-            };
-            TS_CURSOR.with(|cursor| {
-                let mut cursor = cursor.borrow_mut();
-                configure_query_cursor(&mut cursor, &query_pass, input.len());
-                let mut captures =
-                    cursor.captures(&highlight.query, tree.root_node(), input.as_bytes());
-                tree_sitter::StreamingIterator::advance(&mut captures);
-                while let Some((m, capture_ix)) = captures.get() {
-                    let Some(capture) = m.captures.get(*capture_ix) else {
-                        tree_sitter::StreamingIterator::advance(&mut captures);
-                        continue;
-                    };
-
-                    let Some(kind) = highlight
-                        .capture_kinds
-                        .get(capture.index as usize)
-                        .copied()
-                        .flatten()
-                    else {
-                        tree_sitter::StreamingIterator::advance(&mut captures);
-                        continue;
-                    };
-
-                    let mut range = capture.node.byte_range();
-                    range.start = range.start.min(input_len);
-                    range.end = range.end.min(input_len);
-                    if range.start < range.end {
-                        tokens.push(SyntaxToken { range, kind });
-                    }
-
-                    tree_sitter::StreamingIterator::advance(&mut captures);
-                }
-            });
-        });
+    // Patch rows are parsed one line at a time, but they must still use the same
+    // host-plus-injection token collector as a prepared whole-file document.
+    // Jinja makes the difference visible: its root grammar sees ordinary markup
+    // as opaque `text`, and the injected HTML grammar supplies every tag and
+    // attribute token. Running only `highlight.query` here therefore made an
+    // `.njk` patch look plain while the file-content view was highlighted.
+    TS_INPUT.with(|input| {
+        let input = input.borrow();
+        let line_starts = [0usize];
+        let document_hash = treesitter_document_hash(language, input.as_str());
+        let (mut per_line, host_query_succeeded) =
+            collect_treesitter_document_line_tokens_for_line_window_with_host_query_status(
+                &tree,
+                highlight,
+                input.as_bytes(),
+                &line_starts,
+                0,
+                1,
+                document_hash,
+            );
+        host_query_succeeded.then(|| per_line.pop().unwrap_or_default())
     })
-    .is_some();
-    if !query_succeeded {
-        return None;
-    }
-
-    Some(normalize_non_overlapping_tokens(tokens))
 }
 
 pub(crate) fn treesitter_document_cache_key(
@@ -202,7 +175,31 @@ pub(crate) fn collect_treesitter_document_line_tokens_for_line_window(
     end_line_ix: usize,
     document_hash: u64,
 ) -> Vec<Vec<SyntaxToken>> {
-    collect_treesitter_document_line_tokens_for_line_window_at(
+    collect_treesitter_document_line_tokens_for_line_window_with_host_query_status(
+        tree,
+        highlight,
+        input,
+        line_starts,
+        start_line_ix,
+        end_line_ix,
+        document_hash,
+    )
+    .0
+}
+
+/// Collects host and injected tokens while preserving whether every host
+/// highlight-query pass completed. Injection collection still runs after a
+/// recovered host panic so callers can choose their own fallback policy.
+pub(crate) fn collect_treesitter_document_line_tokens_for_line_window_with_host_query_status(
+    tree: &tree_sitter::Tree,
+    highlight: &TreesitterHighlightSpec,
+    input: &[u8],
+    line_starts: &[usize],
+    start_line_ix: usize,
+    end_line_ix: usize,
+    document_hash: u64,
+) -> (Vec<Vec<SyntaxToken>>, bool) {
+    collect_treesitter_document_line_tokens_for_line_window_at_with_host_query_status(
         tree,
         highlight,
         input,
@@ -224,15 +221,39 @@ pub(crate) fn collect_treesitter_document_line_tokens_for_line_window_at(
     document_hash: u64,
     document_byte_start: usize,
 ) -> Vec<Vec<SyntaxToken>> {
+    collect_treesitter_document_line_tokens_for_line_window_at_with_host_query_status(
+        tree,
+        highlight,
+        input,
+        line_starts,
+        start_line_ix,
+        end_line_ix,
+        document_hash,
+        document_byte_start,
+    )
+    .0
+}
+
+fn collect_treesitter_document_line_tokens_for_line_window_at_with_host_query_status(
+    tree: &tree_sitter::Tree,
+    highlight: &TreesitterHighlightSpec,
+    input: &[u8],
+    line_starts: &[usize],
+    start_line_ix: usize,
+    end_line_ix: usize,
+    document_hash: u64,
+    document_byte_start: usize,
+) -> (Vec<Vec<SyntaxToken>>, bool) {
     if line_starts.is_empty() {
-        return Vec::new();
+        return (Vec::new(), true);
     }
     let end_line_ix = end_line_ix.min(line_starts.len());
     if start_line_ix >= end_line_ix {
-        return Vec::new();
+        return (Vec::new(), true);
     }
 
     let mut per_line: Vec<Vec<SyntaxToken>> = vec![Vec::new(); end_line_ix - start_line_ix];
+    let mut host_query_succeeded = true;
     let query_passes = treesitter_document_query_passes_for_line_window(
         line_starts,
         input.len(),
@@ -248,7 +269,9 @@ pub(crate) fn collect_treesitter_document_line_tokens_for_line_window_at(
             per_line: &mut per_line,
         };
         for pass in &query_passes {
-            collect_query_pass_tokens_for_document(tree, highlight, input, pass, &mut context);
+            if !collect_query_pass_tokens_for_document(tree, highlight, input, pass, &mut context) {
+                host_query_succeeded = false;
+            }
         }
         apply_injection_query_tokens_for_document(
             tree,
@@ -263,7 +286,7 @@ pub(crate) fn collect_treesitter_document_line_tokens_for_line_window_at(
         let normalized = normalize_non_overlapping_tokens(std::mem::take(line_tokens));
         *line_tokens = normalized;
     }
-    per_line
+    (per_line, host_query_succeeded)
 }
 
 pub(crate) fn line_ix_for_byte(line_starts: &[usize], byte: usize) -> usize {
@@ -415,7 +438,7 @@ pub(crate) fn collect_query_pass_tokens_for_document(
     input: &[u8],
     pass: &TreesitterQueryPass,
     context: &mut DocumentTokenCollectionContext<'_>,
-) {
+) -> bool {
     catch_treesitter_query_panic(|| {
         TS_CURSOR.with(|cursor| {
             let mut cursor = cursor.borrow_mut();
@@ -424,7 +447,7 @@ pub(crate) fn collect_query_pass_tokens_for_document(
             let mut captures = cursor.captures(&highlight.query, tree.root_node(), input);
             tree_sitter::StreamingIterator::advance(&mut captures);
             while let Some((m, capture_ix)) = captures.get() {
-                let Some(capture) = m.captures.get(*capture_ix) else {
+                let Some(capture) = m.captures().get(*capture_ix) else {
                     tree_sitter::StreamingIterator::advance(&mut captures);
                     continue;
                 };
@@ -472,7 +495,8 @@ pub(crate) fn collect_query_pass_tokens_for_document(
                 tree_sitter::StreamingIterator::advance(&mut captures);
             }
         });
-    });
+    })
+    .is_some()
 }
 
 pub(crate) struct InjectionDepthGuard(usize);

@@ -2,7 +2,7 @@
 //!
 //! Extracted from `diff_view.rs`: the kdiff3-style three-way resolver pane,
 //! its toolbar control clusters, and the rendered (SVG/Markdown) conflict
-//! previews. See UI_DESIGN.md section 30 for the design spec.
+//! previews.
 
 use super::*;
 
@@ -2264,6 +2264,11 @@ impl MainPaneView {
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         self.ensure_conflict_image_preview_cache(cx);
+        let clamp_preview_size = self
+            .conflict_resolver
+            .path
+            .as_deref()
+            .is_some_and(preview_path_uses_scale_down);
 
         let base_has_source = !self.conflict_resolver.three_way_text.base.is_empty();
         let ours_has_source = !self.conflict_resolver.three_way_text.ours.is_empty();
@@ -2286,7 +2291,7 @@ impl MainPaneView {
 
         let preview_cell = |id: &'static str,
                             label: &'static str,
-                            image: Loadable<Option<Arc<gpui::Image>>>,
+                            image: Loadable<Option<ConflictPreviewImage>>,
                             has_source: bool| {
             div()
                 .id(id)
@@ -2319,11 +2324,19 @@ impl MainPaneView {
                         .items_center()
                         .justify_center()
                         .child(match image {
-                            Loadable::Ready(Some(data)) => gpui::img(data)
-                                .w_full()
-                                .h_full()
-                                .object_fit(gpui::ObjectFit::Contain)
-                                .into_any_element(),
+                            Loadable::Ready(Some(ConflictPreviewImage::Encoded(image))) => {
+                                gpui::img(image)
+                                    .w_full()
+                                    .h_full()
+                                    .object_fit(gpui::ObjectFit::Contain)
+                                    .into_any_element()
+                            }
+                            Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) => {
+                                preview_render_image_element(image, 0, clamp_preview_size)
+                                    .w_full()
+                                    .h_full()
+                                    .into_any_element()
+                            }
                             Loadable::NotLoaded | Loadable::Loading if has_source => div()
                                 .text_xs()
                                 .text_color(theme.colors.foreground.secondary)

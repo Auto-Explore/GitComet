@@ -223,7 +223,7 @@ fn merge_entry_names_and_gates_on_the_commits_own_repository(cx: &mut gpui::Test
                     ..Default::default()
                 });
                 this.state = Arc::clone(&state);
-                this._ui_model
+                this.ui_model
                     .update(cx, |model, cx| model.set_state(state, cx));
                 cx.notify();
             });

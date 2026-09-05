@@ -30,6 +30,17 @@ pub(super) enum BranchSection {
     Remote,
 }
 
+/// Exact branch identity behind a compact history decoration.
+///
+/// History can collapse a local branch and one or more same-named remote
+/// branches into a single chip, but branch actions still need the original
+/// section and the full ref name (`origin/main` for a remote branch).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct BranchMenuTarget {
+    pub(super) section: BranchSection,
+    pub(super) name: String,
+}
+
 type BranchSidebarDepth = u16;
 
 pub(super) const fn pinned_section_storage_key(section: BranchSection) -> &'static str {
@@ -874,16 +885,10 @@ pub(super) fn branch_sidebar_rows(
     let approx_rows = 16 + visible_rows + visible_rows / 8;
     let mut rows = Vec::with_capacity(approx_rows);
     let mut head_upstream_full = None;
-    let mut local_upstreams: SmallVec<[(&str, &str); 4]> = SmallVec::new();
 
     if local_collapsed && let Loadable::Ready(branches) = &repo.branches {
         for branch in branches.iter() {
-            record_local_branch_sidebar_metadata(
-                branch,
-                head,
-                &mut local_upstreams,
-                &mut head_upstream_full,
-            );
+            record_local_branch_sidebar_metadata(branch, head, &mut head_upstream_full);
         }
     }
 
@@ -937,15 +942,10 @@ pub(super) fn branch_sidebar_rows(
                 let mut tree = SlashTree::default();
                 let mut local_leaf_meta = Vec::with_capacity(branches.len());
                 for branch in branches.iter() {
-                    // Metadata (upstream tracking, HEAD upstream) is recorded for
-                    // every local branch so remote tinting stays correct even when
-                    // the filter hides the branch from the tree.
-                    record_local_branch_sidebar_metadata(
-                        branch,
-                        head,
-                        &mut local_upstreams,
-                        &mut head_upstream_full,
-                    );
+                    // Record the checked-out branch's upstream even when the
+                    // filter hides its local row, so a real matching remote row
+                    // retains its upstream tint.
+                    record_local_branch_sidebar_metadata(branch, head, &mut head_upstream_full);
                     if !matches_branch_filter(&branch.name, &filter) {
                         continue;
                     }
@@ -1057,15 +1057,6 @@ pub(super) fn branch_sidebar_rows(
         }
 
         if !remote_section_is_loading_or_error {
-            for (remote, branch) in local_upstreams.iter().copied() {
-                if !matches_remote_branch_filter(remote, branch, &filter) {
-                    continue;
-                }
-                if push_remote_group_branch(&mut remotes, &mut remote_indexes, remote, branch) {
-                    remote_names_need_sort |= slash_tree_label_needs_sort(remote);
-                }
-            }
-
             // Empty remote groups (and the "No remotes" hint) only make sense in
             // the unfiltered view; while filtering, a group is shown only if it
             // has a matching branch.
@@ -1469,17 +1460,15 @@ fn slash_tree_leaf_after_chain<'a>(name: &'a str, chain_segments: &[&str]) -> Op
     Some(&name[leaf_start..leaf_end])
 }
 
-fn record_local_branch_sidebar_metadata<'a>(
-    branch: &'a Branch,
+fn record_local_branch_sidebar_metadata(
+    branch: &Branch,
     head: Option<&str>,
-    local_upstreams: &mut SmallVec<[(&'a str, &'a str); 4]>,
     head_upstream_full: &mut Option<String>,
 ) {
     let Some(upstream) = branch.upstream.as_ref() else {
         return;
     };
 
-    local_upstreams.push((upstream.remote.as_str(), upstream.branch.as_str()));
     if head_upstream_full.is_none() && head.is_some_and(|current| current == branch.name.as_str()) {
         let mut full = String::with_capacity(upstream.remote.len() + 1 + upstream.branch.len());
         full.push_str(&upstream.remote);
@@ -2421,6 +2410,54 @@ mod tests {
             .count();
 
         assert_eq!(matches, 1, "remote branch rows should be deduplicated");
+    }
+
+    #[test]
+    fn remote_rows_do_not_recreate_a_missing_upstream_tracking_ref() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "fix/below_EOF_click".to_string(),
+            target: commit_id("aaaaaaaa"),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "fix/below_EOF_click".to_string(),
+            }),
+            divergence: None,
+        }]));
+        repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: Some("https://example.com/origin.git".to_string()),
+        }]));
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+
+        let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "");
+
+        assert!(rows.iter().all(|row| {
+            !matches!(
+                row,
+                BranchSidebarRow::Branch {
+                    section: BranchSection::Remote,
+                    name,
+                    ..
+                } if name.as_ref() == "origin/fix/below_EOF_click"
+            )
+        }));
+        assert!(rows.iter().any(|row| {
+            matches!(
+                row,
+                BranchSidebarRow::Branch {
+                    section: BranchSection::Local,
+                    name,
+                    ..
+                } if name.as_ref() == "fix/below_EOF_click"
+            )
+        }));
     }
 
     #[test]

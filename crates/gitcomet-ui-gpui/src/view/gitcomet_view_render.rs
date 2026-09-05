@@ -31,6 +31,27 @@ impl Render for GitCometView {
             self.schedule_ui_settings_persist(cx);
         }
 
+        if self
+            .pending_branch_exists_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+        {
+            let prompt = self
+                .pending_branch_exists_prompt
+                .take()
+                .expect("branch-exists prompt checked above");
+            self.open_popover_centered(
+                PopoverKind::BranchExistsPrompt {
+                    repo_id: prompt.repo_id,
+                    name: prompt.name,
+                    target: prompt.target,
+                    operation: prompt.operation,
+                },
+                window,
+                cx,
+            );
+        }
+
         if let Some(repo_id) = self.pending_pull_reconcile_prompt.take()
             && self.active_repo_id() == Some(repo_id)
         {
@@ -126,6 +147,38 @@ impl Render for GitCometView {
                 window,
                 cx,
             );
+        }
+
+        if let Some((repo_id, operation_id)) = self.pending_hook_activity_open.take() {
+            let operation_exists = self
+                .state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| {
+                    repo.feedback
+                        .hook_activity
+                        .iter()
+                        .find(|operation| operation.id == operation_id)
+                })
+                .is_some_and(GitHookOperation::has_hooks);
+
+            if !operation_exists {
+                self.set_hook_activity_dialog_repo(None, cx);
+            } else if self.hook_activity_workflow_is_open(cx) {
+                // A manual open won the race with the queued automatic open.
+            } else if self.is_overlay_open(cx) || self.command_palette_open {
+                self.minimize_hook_activity_chains([(repo_id, operation_id)], cx);
+            } else {
+                self.open_popover_centered(
+                    PopoverKind::HookActivity {
+                        repo_id,
+                        operation_id: Some(operation_id),
+                    },
+                    window,
+                    cx,
+                );
+            }
         }
 
         let decorations = window.window_decorations();

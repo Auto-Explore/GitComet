@@ -35,7 +35,7 @@ fn repo_with_head_dependent_cached_state(repo_id: RepoId) -> RepoState {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.pending_force_push_lease = Some(test_force_push_lease());
+    repo_state.pending.force_push_lease = Some(test_force_push_lease());
     repo_state.set_recent_commit_messages(Loadable::Ready(vec![test_recent_commit_message()]));
     repo_state
 }
@@ -327,34 +327,37 @@ fn pull_error_is_formatted_as_command_and_output() {
     );
 
     let repo_state = &state.repos[0];
-    assert!(repo_state.diagnostics.is_empty());
-    assert_eq!(repo_state.command_log.len(), 1);
+    assert!(repo_state.feedback.diagnostics.is_empty());
+    assert_eq!(repo_state.feedback.command_log.len(), 1);
 
-    let summary = &repo_state.command_log[0].summary;
+    let summary = &repo_state.feedback.command_log[0].summary;
     assert!(summary.starts_with("Pull failed:\n\n    git pull --no-rebase origin main"));
     assert!(summary.contains(
         "\n\n    From https://example.com\n     * branch main -> FETCH_HEAD\n    fatal: refusing to merge unrelated histories"
     ));
     assert!(!summary.contains("\\n"));
-    assert_eq!(repo_state.last_error.as_deref(), Some(summary.as_str()));
+    assert_eq!(
+        repo_state.feedback.last_error.as_deref(),
+        Some(summary.as_str())
+    );
 }
 
 #[test]
-fn fetch_all_emits_effect_with_repo_prune_setting() {
+fn fetch_all_emits_effect_with_global_prune_setting() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
     let repo_id = RepoId(1);
     repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
-    let mut repo_state = RepoState::new_opening(
+    let repo_state = RepoState::new_opening(
         repo_id,
         RepoSpec {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.fetch_prune_deleted_remote_tracking_branches = false;
     state.repos.push(repo_state);
+    state.remote_settings.prune_deleted_remote_branches_on_fetch = false;
 
     let fetch_without_prune = reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
     assert!(matches!(
@@ -367,7 +370,7 @@ fn fetch_all_emits_effect_with_repo_prune_setting() {
     ));
     assert_eq!(state.repos[0].pull_in_flight, 1);
 
-    state.repos[0].fetch_prune_deleted_remote_tracking_branches = true;
+    state.remote_settings.prune_deleted_remote_branches_on_fetch = true;
     let fetch_with_prune = reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
     assert!(matches!(
         fetch_with_prune.as_slice(),
@@ -378,6 +381,63 @@ fn fetch_all_emits_effect_with_repo_prune_setting() {
         }]
     ));
     assert_eq!(state.repos[0].pull_in_flight, 2);
+}
+
+#[test]
+fn pull_variants_snapshot_the_global_remote_prune_setting() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    state.remote_settings.prune_deleted_remote_branches_on_fetch = false;
+    let pull = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Pull {
+            repo_id,
+            mode: PullMode::Rebase,
+        },
+    );
+    assert!(matches!(
+        pull.as_slice(),
+        [Effect::Pull {
+            repo_id: RepoId(1),
+            mode: PullMode::Rebase,
+            prune: false,
+            ..
+        }]
+    ));
+
+    state.remote_settings.prune_deleted_remote_branches_on_fetch = true;
+    let pull_branch = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PullBranch {
+            repo_id,
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        },
+    );
+    assert!(matches!(
+        pull_branch.as_slice(),
+        [Effect::PullBranch {
+            repo_id: RepoId(1),
+            remote,
+            branch,
+            prune: true,
+            ..
+        }] if remote == "origin" && branch == "feature"
+    ));
 }
 
 #[test]
@@ -1020,6 +1080,7 @@ fn create_rename_and_delete_branch_emit_effects() {
             repo_id: RepoId(1),
             old_name: "feature".to_string(),
             new_name: "renamed-feature".to_string(),
+            force: false,
         },
     );
     assert!(matches!(
@@ -1028,6 +1089,7 @@ fn create_rename_and_delete_branch_emit_effects() {
             repo_id: RepoId(1),
             old_name,
             new_name,
+            force: false,
         }] if old_name == "feature" && new_name == "renamed-feature"
     ));
 
@@ -2020,12 +2082,14 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             remote: "origin".to_string(),
             branch: "feature".to_string(),
             local_branch: "feature".to_string(),
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
         },
     );
     assert!(matches!(
         effects.as_slice(),
         [Effect::CheckoutRemoteBranch {
             repo_id: RepoId(1),
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
             ..
         }]
     ));
@@ -2061,6 +2125,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             repo_id,
             name: "feature/new".to_string(),
             target: "HEAD".to_string(),
+            force: false,
         },
     );
     assert!(matches!(
@@ -2068,8 +2133,31 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         [Effect::CreateBranchAndCheckout {
             repo_id: RepoId(1),
             target,
+            force: false,
             ..
         }] if target == "HEAD"
+    ));
+
+    // The force flag travels with the message: an overwrite request still
+    // reaches the effect layer, just marked.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CreateBranchAndCheckout {
+            repo_id,
+            name: "feature/new".to_string(),
+            target: "HEAD".to_string(),
+            force: true,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateBranchAndCheckout {
+            repo_id: RepoId(1),
+            force: true,
+            ..
+        }]
     ));
 
     let effects = reduce(
@@ -2160,7 +2248,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     ));
 
     assert_eq!(
-        state.repos[0].local_actions_in_flight, 9,
+        state.repos[0].local_actions_in_flight, 10,
         "expected begin_local_action for all routed local-action messages"
     );
 
@@ -2442,6 +2530,186 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
 }
 
 #[test]
+fn branch_collision_prompt_choices_emit_exact_follow_up_actions() {
+    fn seeded_state(repo_id: RepoId) -> AppState {
+        let mut state = AppState::default();
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(repo_id);
+        state
+    }
+
+    let repo_id = RepoId(1);
+    let prompt = crate::model::BranchExistsPromptState {
+        repo_id,
+        name: "feature".to_string(),
+        target: "origin/feature-one".to_string(),
+        operation: crate::model::BranchExistsPromptOperation::CreateBranch,
+    };
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: prompt.clone(),
+            choice: crate::msg::BranchExistsChoice::Cancel,
+        },
+    );
+    assert!(effects.is_empty());
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: prompt.clone(),
+            choice: crate::msg::BranchExistsChoice::CheckoutExisting,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CheckoutBranch { repo_id: id, name }]
+            if *id == repo_id && name == "feature"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let remote_prompt = crate::model::BranchExistsPromptState {
+        repo_id,
+        name: "feature".to_string(),
+        target: "upstream/feature-two".to_string(),
+        operation: crate::model::BranchExistsPromptOperation::CheckoutRemoteBranch {
+            remote: "upstream".to_string(),
+            branch: "feature-two".to_string(),
+        },
+    };
+    let mut state = seeded_state(repo_id);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ShowBranchExistsPrompt {
+            prompt: remote_prompt.clone(),
+        },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.branch_exists_prompt, Some(remote_prompt.clone()));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: remote_prompt,
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CheckoutRemoteBranch {
+            repo_id: id,
+            remote,
+            branch,
+            local_branch,
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
+        }] if *id == repo_id
+            && remote == "upstream"
+            && branch == "feature-two"
+            && local_branch == "feature"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: prompt.clone(),
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateBranchAndCheckout {
+            repo_id: id,
+            name,
+            target,
+            force: true,
+        }] if *id == repo_id
+            && name == "feature"
+            && target == "origin/feature-one"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let rename_prompt = crate::model::BranchExistsPromptState {
+        repo_id,
+        name: "feature".to_string(),
+        target: "old".to_string(),
+        operation: crate::model::BranchExistsPromptOperation::RenameBranch {
+            old_name: "old".to_string(),
+        },
+    };
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(rename_prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: rename_prompt,
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RenameBranch {
+            repo_id: id,
+            old_name,
+            new_name,
+            force: true,
+        }] if *id == repo_id && old_name == "old" && new_name == "feature"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let stale_prompt = crate::model::BranchExistsPromptState {
+        name: "different".to_string(),
+        ..prompt.clone()
+    };
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: stale_prompt,
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.branch_exists_prompt, Some(prompt));
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+}
+
+#[test]
 fn repo_command_finished_error_summaries_cover_additional_labels() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -2603,6 +2871,7 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
         );
 
         let summary = state.repos[0]
+            .feedback
             .command_log
             .last()
             .expect("command log entry")
@@ -2725,6 +2994,7 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
         );
 
         let summary = state.repos[0]
+            .feedback
             .command_log
             .last()
             .expect("command log entry")
@@ -2870,7 +3140,10 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
     );
     assert!(matches!(
         update_submodules.as_slice(),
-        [Effect::CheckSubmoduleUpdateTrust { repo_id: RepoId(1) }]
+        [Effect::CheckSubmoduleUpdateTrust {
+            repo_id: RepoId(1),
+            ..
+        }]
     ));
 
     let remove_submodule = reduce(
@@ -3314,7 +3587,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
     let repo = &state.repos[0];
     assert_eq!(repo.local_actions_in_flight, 0);
     assert_eq!(repo.commit_in_flight, 0);
-    assert!(repo.last_error.is_none());
+    assert!(repo.feedback.last_error.is_none());
     assert!(repo.diff_state.diff_target.is_none());
     assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
@@ -3323,7 +3596,10 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         Loadable::NotLoaded
     ));
     assert_eq!(
-        repo.command_log.last().map(|entry| entry.summary.as_str()),
+        repo.feedback
+            .command_log
+            .last()
+            .map(|entry| entry.summary.as_str()),
         Some("Commit: Completed")
     );
 
@@ -3340,6 +3616,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
     );
     assert!(
         state.repos[0]
+            .feedback
             .last_error
             .as_deref()
             .unwrap_or_default()
@@ -3359,6 +3636,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
     );
     assert_eq!(
         state.repos[0]
+            .feedback
             .command_log
             .last()
             .map(|entry| entry.summary.as_str()),
@@ -3377,6 +3655,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
     );
     assert!(
         state.repos[0]
+            .feedback
             .last_error
             .as_deref()
             .unwrap_or_default()
@@ -3420,7 +3699,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
     ));
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].pending_commit_retry = Some(crate::model::PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
@@ -3450,12 +3729,12 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
                 && context.post_head.as_ref().is_some_and(|id| id.as_ref() == "2222222222222222222222222222222222222222")))
     );
     assert_eq!(state.repos[0].push_in_flight, 0);
-    assert!(state.repos[0].pending_commit_retry.is_none());
+    assert!(state.repos[0].pending.commit_retry.is_none());
 
     state.repos[0].push_in_flight = 0;
     state.repos[0].local_actions_in_flight = 1;
     state.repos[0].commit_in_flight = 1;
-    state.repos[0].pending_commit_retry = Some(crate::model::PendingCommitRetry {
+    state.repos[0].pending.commit_retry = Some(crate::model::PendingCommitRetry {
         message: "ship".to_string(),
         amend: false,
         push_after_commit: true,
@@ -3635,9 +3914,10 @@ fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
         effect,
         Effect::Push { .. } | Effect::PushAfterCommit { .. } | Effect::PushSetUpstream { .. }
     )));
-    assert_eq!(state.repos[0].pending_force_push_lease, Some(lease));
+    assert_eq!(state.repos[0].pending.force_push_lease, Some(lease));
     assert!(
         state.repos[0]
+            .feedback
             .last_error
             .as_deref()
             .unwrap_or_default()
@@ -3698,7 +3978,7 @@ fn safe_push_after_commit_published_amend_lease_survives_followup_git_state_refr
         },
     );
 
-    assert_eq!(state.repos[0].pending_force_push_lease, Some(lease));
+    assert_eq!(state.repos[0].pending.force_push_lease, Some(lease));
 }
 
 #[test]
@@ -3729,7 +4009,7 @@ fn checkout_branch_clears_stale_force_push_lease_and_recent_messages() {
                 if *id == repo_id && name == "feature"
         )
     }));
-    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(state.repos[0].pending.force_push_lease, None);
     assert!(matches!(
         &state.repos[0].recent_commit_messages,
         Loadable::NotLoaded
@@ -3765,7 +4045,7 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
         &state.repos[0].recent_commit_messages,
         Loadable::NotLoaded
     ));
-    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(state.repos[0].pending.force_push_lease, None);
 }
 
 #[test]
@@ -3797,7 +4077,7 @@ fn interactive_cherry_pick_finished_clears_stale_force_push_lease() {
         }),
     );
 
-    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(state.repos[0].pending.force_push_lease, None);
 }
 
 #[test]
@@ -3825,7 +4105,7 @@ fn head_changing_repo_action_finish_invalidates_data_loaded_while_in_flight() {
         &state.repos[0].recent_commit_messages,
         Loadable::NotLoaded
     ));
-    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(state.repos[0].pending.force_push_lease, None);
     assert_eq!(state.repos[0].local_actions_in_flight, 0);
 }
 
@@ -3975,7 +4255,7 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
     assert!(!effects.is_empty());
     let repo = &state.repos[0];
     assert!(repo.diff_state.diff_target.is_none());
-    assert_eq!(repo.pending_force_push_lease, None);
+    assert_eq!(repo.pending.force_push_lease, None);
     assert!(matches!(&repo.recent_commit_messages, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
@@ -4029,12 +4309,13 @@ fn hunk_staging_is_logged_without_announcing_success() {
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     assert_eq!(
-        repo_state.command_log.len(),
+        repo_state.feedback.command_log.len(),
         2,
         "staging a hunk still belongs in the command log"
     );
     assert!(
         repo_state
+            .feedback
             .command_log
             .iter()
             .all(|entry| !entry.announce_success),
@@ -4055,7 +4336,7 @@ fn hunk_staging_is_logged_without_announcing_success() {
         }),
     );
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
-    let last = repo_state.command_log.last().unwrap();
+    let last = repo_state.feedback.command_log.last().unwrap();
     assert!(!last.ok, "the failure must be recorded as such");
 }
 
@@ -4128,6 +4409,55 @@ fn repo_state_with_tags_loaded(repo_id: RepoId) -> RepoState {
         target: CommitId("abc123".into()),
     }]));
     repo_state
+}
+
+#[test]
+fn fetch_completion_reloads_remote_refs_and_loaded_tag_metadata() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let mut repo_state = repo_state_with_tags_loaded(repo_id);
+    repo_state.pull_in_flight = 1;
+    repo_state.set_remote_branches(Loadable::Ready(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "deleted".to_string(),
+        target: CommitId("abc123".into()),
+    }]));
+    repo_state.set_remote_tags(Loadable::Ready(vec![gitcomet_core::domain::RemoteTag {
+        remote: "origin".to_string(),
+        name: "v1.0.0".to_string(),
+        target: CommitId("abc123".into()),
+    }]));
+    state.repos.push(repo_state);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::FetchAll,
+            result: Ok(CommandOutput::empty_success("git fetch --all --prune")),
+        }),
+    );
+
+    assert!(matches!(state.repos[0].remote_branches, Loadable::Loading));
+    assert!(matches!(state.repos[0].tags, Loadable::Loading));
+    assert!(matches!(state.repos[0].remote_tags, Loadable::Loading));
+    assert!(effects.iter().any(
+        |effect| matches!(effect, Effect::LoadRemoteBranches { repo_id: id } if *id == repo_id)
+    ));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadTags { repo_id: id } if *id == repo_id))
+    );
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::LoadRemoteTags { repo_id: id } if *id == repo_id)
+        )
+    );
 }
 
 #[test]

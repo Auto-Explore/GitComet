@@ -1143,65 +1143,58 @@ impl MainPaneView {
             .and_then(rows::prepared_diff_syntax_reparse_seed);
         let split_right_edit_hint = split_right_edit_hint.filter(|_| needs_split_right_async);
 
-        cx.spawn(
-            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let prepare_documents = move || FileDiffBackgroundPreparedSyntaxDocuments {
-                    split_left: split_left_source.and_then(|(text, line_starts)| {
-                        rows::prepare_diff_syntax_document_in_background_text_with_reuse(
-                            language,
-                            FULL_DOCUMENT_SYNTAX_MODE,
-                            text,
-                            line_starts,
-                            split_left_background_reparse_seed,
-                            split_left_edit_hint,
-                        )
-                    }),
-                    split_right: split_right_source.and_then(|(text, line_starts)| {
-                        rows::prepare_diff_syntax_document_in_background_text_with_reuse(
-                            language,
-                            FULL_DOCUMENT_SYNTAX_MODE,
-                            text,
-                            line_starts,
-                            split_right_background_reparse_seed,
-                            split_right_edit_hint,
-                        )
-                    }),
-                };
-                let parsed_documents = if crate::ui_runtime::current().uses_background_compute() {
-                    smol::unblock(prepare_documents).await
-                } else {
-                    prepare_documents()
-                };
+        crate::ui_runtime::run_background_compute(
+            cx,
+            move || FileDiffBackgroundPreparedSyntaxDocuments {
+                split_left: split_left_source.and_then(|(text, line_starts)| {
+                    rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                        language,
+                        FULL_DOCUMENT_SYNTAX_MODE,
+                        text,
+                        line_starts,
+                        split_left_background_reparse_seed,
+                        split_left_edit_hint,
+                    )
+                }),
+                split_right: split_right_source.and_then(|(text, line_starts)| {
+                    rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                        language,
+                        FULL_DOCUMENT_SYNTAX_MODE,
+                        text,
+                        line_starts,
+                        split_right_background_reparse_seed,
+                        split_right_edit_hint,
+                    )
+                }),
+            },
+            move |this, cx, parsed_documents| {
+                if this.file_diff_syntax_generation != syntax_generation {
+                    return;
+                }
+                if this.file_diff_cache_repo_id != repo_id
+                    || this.file_diff_cache_rev != diff_file_rev
+                    || this.file_diff_cache_target != diff_target
+                {
+                    return;
+                }
 
-                let _ = view.update(cx, |this, cx| {
-                    if this.file_diff_syntax_generation != syntax_generation {
-                        return;
-                    }
-                    if this.file_diff_cache_repo_id != repo_id
-                        || this.file_diff_cache_rev != diff_file_rev
-                        || this.file_diff_cache_target != diff_target
-                    {
-                        return;
-                    }
+                let applied = this.apply_background_syntax_documents(
+                    &split_left_key,
+                    parsed_documents.split_left,
+                    &split_right_key,
+                    parsed_documents.split_right,
+                );
 
-                    let applied = this.apply_background_syntax_documents(
-                        &split_left_key,
-                        parsed_documents.split_left,
-                        &split_right_key,
-                        parsed_documents.split_right,
-                    );
-
-                    if applied.any() {
-                        if applied.split_left {
-                            this.file_diff_style_cache_epochs.bump_left();
-                        }
-                        if applied.split_right {
-                            this.file_diff_style_cache_epochs.bump_right();
-                        }
-                        this.retry_pending_diff_text_syntax_click();
-                        cx.notify();
+                if applied.any() {
+                    if applied.split_left {
+                        this.file_diff_style_cache_epochs.bump_left();
                     }
-                });
+                    if applied.split_right {
+                        this.file_diff_style_cache_epochs.bump_right();
+                    }
+                    this.retry_pending_diff_text_syntax_click();
+                    cx.notify();
+                }
             },
         )
         .detach();

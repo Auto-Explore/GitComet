@@ -1,18 +1,25 @@
 use crate::model::GitLogTagFetchMode;
-use crate::model::{ConflictFileLoadMode, DefaultTagType, RepoId, SidebarDataRequest, SidebarMode};
+use crate::model::{
+    BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, GitOperationOuterOutcome,
+    RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
+};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
+use gitcomet_core::git_operation::{GitOperationEvent, GitOperationId};
 use gitcomet_core::process::GitRuntimeState;
+use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
-    CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, InteractiveRebaseEntry,
-    PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision,
-    SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    CheckoutRemoteBranchMode, CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease,
+    InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
+    SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
+    SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use super::repo_command_kind::RepoCommandKind;
 use super::repo_external_change::RepoExternalChange;
@@ -41,6 +48,36 @@ pub enum RepoActionKind {
     ApplyStash,
     PopStash,
     DropStash,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BranchExistsChoice {
+    Cancel,
+    CheckoutExisting,
+    OverwriteAndCheckout,
+}
+
+impl RepoActionKind {
+    pub(crate) fn hook_activity_label(self) -> &'static str {
+        match self {
+            Self::CheckoutBranch | Self::CheckoutRemoteBranch | Self::CheckoutCommit => "Checkout",
+            Self::CherryPickCommit => "Cherry-pick",
+            Self::RevertCommit => "Revert",
+            Self::CreateBranch => "Create branch",
+            Self::CreateBranchAndCheckout => "Create branch and checkout",
+            Self::RenameBranch => "Rename branch",
+            Self::DeleteBranch | Self::ForceDeleteBranch | Self::DeleteBranches => "Delete branch",
+            Self::StagePath | Self::StagePaths => "Stage",
+            Self::UnstagePath | Self::UnstagePaths => "Unstage",
+            Self::DiscardWorktreeChangesPath | Self::DiscardWorktreeChangesPaths => {
+                "Discard changes"
+            }
+            Self::Stash => "Stash",
+            Self::ApplyStash => "Apply stash",
+            Self::PopStash => "Pop stash",
+            Self::DropStash => "Drop stash",
+        }
+    }
 }
 
 /// How a history-row click mutates the commit selection.
@@ -168,16 +205,22 @@ pub enum Msg {
     DismissRepoError {
         repo_id: RepoId,
     },
+    CancelGitOperation {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
+    },
     SubmitAuthPrompt {
         username: Option<String>,
         secret: String,
     },
     CancelAuthPrompt,
     SetGitRuntimeState(GitRuntimeState),
+    SetRemoteUrlPolicy(RemoteUrlPolicy),
     SetGitLogSettings {
         show_history_tags: bool,
         tag_fetch_mode: GitLogTagFetchMode,
     },
+    SetRemoteSettings(RemoteSettings),
     SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,
@@ -212,10 +255,6 @@ pub enum Msg {
     SetHistoryAuthorFilter {
         repo_id: RepoId,
         author: Option<String>,
-    },
-    SetFetchPruneDeletedRemoteTrackingBranches {
-        repo_id: RepoId,
-        enabled: bool,
     },
     LoadMoreHistory {
         repo_id: RepoId,
@@ -497,6 +536,7 @@ pub enum Msg {
         remote: String,
         branch: String,
         local_branch: String,
+        mode: CheckoutRemoteBranchMode,
     },
     CheckoutCommit {
         repo_id: RepoId,
@@ -522,11 +562,23 @@ pub enum Msg {
         repo_id: RepoId,
         name: String,
         target: String,
+        /// Reset the branch to `target` first when a branch with this name
+        /// already exists, instead of failing with "already exists".
+        force: bool,
+    },
+    ResolveBranchExistsPrompt {
+        prompt: BranchExistsPromptState,
+        choice: BranchExistsChoice,
+    },
+    ShowBranchExistsPrompt {
+        prompt: BranchExistsPromptState,
     },
     RenameBranch {
         repo_id: RepoId,
         old_name: String,
         new_name: String,
+        /// Replace an existing `new_name` instead of failing with "already exists".
+        force: bool,
     },
     DeleteBranch {
         repo_id: RepoId,
@@ -977,6 +1029,27 @@ pub enum Msg {
 }
 
 pub enum InternalMsg {
+    GitOperationStarted {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
+        label: String,
+        context: Option<String>,
+        time: SystemTime,
+    },
+    GitOperationEvent {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
+        event: GitOperationEvent,
+    },
+    /// Wraps the operation's ordinary completion so the command log and hook
+    /// activity are reduced atomically and cannot produce duplicate notices.
+    GitOperationFinished {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
+        outer_outcome: GitOperationOuterOutcome,
+        duration: Duration,
+        message: Box<InternalMsg>,
+    },
     SessionPersistFailed {
         repo_id: Option<RepoId>,
         action: &'static str,
@@ -1241,6 +1314,19 @@ pub enum InternalMsg {
     RepoActionFinished {
         repo_id: RepoId,
         action: RepoActionKind,
+        result: Result<(), Error>,
+    },
+    /// The action ran into an existing branch; open the collision prompt.
+    BranchAlreadyExists {
+        action: RepoActionKind,
+        prompt: BranchExistsPromptState,
+    },
+    /// The action was carried out in (or redirected to) another worktree that
+    /// has the branch checked out; on success that worktree is opened.
+    RepoActionFinishedInWorktree {
+        repo_id: RepoId,
+        action: RepoActionKind,
+        worktree_path: PathBuf,
         result: Result<(), Error>,
     },
     CommitFinished {

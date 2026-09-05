@@ -29,6 +29,11 @@ pub(crate) enum ToastAction {
         postpone_seconds: u64,
         label: String,
     },
+    OpenHookActivity {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
+        label: String,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

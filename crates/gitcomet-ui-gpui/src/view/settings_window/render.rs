@@ -437,6 +437,56 @@ impl Render for SettingsWindowView {
                             this.set_diff_show_line_numbers(!this.diff_show_line_numbers, cx);
                         }));
 
+                    let allowed_remote_protocols_row = self
+                        .summary_row(
+                            "settings_window_allowed_remote_protocols",
+                            "Allowed remote protocols",
+                            remote_url_policy_settings_label(self.remote_url_policy).into(),
+                            self.expanded_section
+                                == Some(SettingsSection::AllowedRemoteProtocols),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::AllowedRemoteProtocols, cx);
+                        }));
+
+                    let remote_markdown_images_row = self
+                        .summary_row(
+                            "settings_window_remote_markdown_images",
+                            "Remote Markdown images",
+                            self.remote_markdown_image_policy.settings_label().into(),
+                            self.expanded_section == Some(SettingsSection::RemoteMarkdownImages),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::RemoteMarkdownImages, cx);
+                        }));
+
+                    let update_check_locked =
+                        crate::view::update_checks_disabled_by_environment();
+                    let update_check_effective =
+                        self.check_for_updates_on_startup && !update_check_locked;
+                    let mut update_check_row = self
+                        .toggle_row(
+                            "settings_window_check_for_updates_on_startup",
+                            "Automatically check for updates on startup",
+                            update_check_effective,
+                            theme,
+                        )
+                        .border_color(no_separator);
+                    if update_check_locked {
+                        update_check_row = update_check_row.opacity(0.6).cursor(CursorStyle::Arrow);
+                    } else {
+                        update_check_row = update_check_row.on_click(cx.listener(
+                            |this, _e: &ClickEvent, _window, cx| {
+                                this.set_check_for_updates_on_startup(
+                                    !this.check_for_updates_on_startup,
+                                    cx,
+                                );
+                            },
+                        ));
+                    }
+
                     let history_default_mode_row = self
                         .summary_row(
                             "settings_window_git_log_default_mode",
@@ -753,32 +803,42 @@ impl Render for SettingsWindowView {
                         ))
                         .child(external_editor_row);
                     if self.expanded_section == Some(SettingsSection::ExternalCodeEditor) {
-                        let list = uniform_list(
-                            "settings_window_external_code_editor_list",
-                            self.external_editor_options.len(),
-                            cx.processor(Self::render_external_editor_option_rows),
-                        )
-                        .w_full()
-                        .min_w(px(0.0))
-                        .h_full()
-                        .min_h(px(0.0))
-                        .track_scroll(&self.external_editor_scroll)
-                        .on_scroll_wheel({
-                            let scroll = self.external_editor_scroll.clone();
-                            move |event, window, cx| {
-                                if uniform_list_should_stop_scroll_propagation(
-                                    &scroll, event, window,
-                                ) {
-                                    cx.stop_propagation();
-                                }
-                            }
-                        })
-                        .into_any_element();
+                        let (item_count, list) = if self.external_editor_options_loading() {
+                            (
+                                1,
+                                self.empty_dropdown_list("Detecting installed editors…", theme),
+                            )
+                        } else {
+                            (
+                                self.external_editor_options.len(),
+                                uniform_list(
+                                    "settings_window_external_code_editor_list",
+                                    self.external_editor_options.len(),
+                                    cx.processor(Self::render_external_editor_option_rows),
+                                )
+                                .w_full()
+                                .min_w(px(0.0))
+                                .h_full()
+                                .min_h(px(0.0))
+                                .track_scroll(&self.external_editor_scroll)
+                                .on_scroll_wheel({
+                                    let scroll = self.external_editor_scroll.clone();
+                                    move |event, window, cx| {
+                                        if uniform_list_should_stop_scroll_propagation(
+                                            &scroll, event, window,
+                                        ) {
+                                            cx.stop_propagation();
+                                        }
+                                    }
+                                })
+                                .into_any_element(),
+                            )
+                        };
                         general_card = general_card.child(self.dropdown_list_container(
                             "settings_window_external_code_editor_list_container",
                             "settings_window_external_code_editor_scrollbar",
                             self.external_editor_scroll.clone(),
-                            self.external_editor_options.len(),
+                            item_count,
                             SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
                             SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
                             list,
@@ -1182,6 +1242,126 @@ impl Render for SettingsWindowView {
                         );
                     }
 
+                    let mut security_privacy_card = self
+                        .card(
+                            "settings_window_security_privacy_card",
+                            "Security / Privacy",
+                            theme,
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pt_1()
+                                .pb_3()
+                                .text_xs()
+                                .text_color(theme.colors.foreground.secondary)
+                                .child(
+                                    "Only selected built-in URL protocols may be passed to Git. Custom remote helpers stay blocked. Local paths and SCP-style SSH locations remain available.",
+                                ),
+                        )
+                        .child(allowed_remote_protocols_row);
+
+                    if self.expanded_section == Some(SettingsSection::AllowedRemoteProtocols) {
+                        let list = uniform_list(
+                            "settings_window_remote_protocols_list",
+                            REMOTE_PROTOCOL_OPTIONS.len(),
+                            cx.processor(Self::render_remote_protocol_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.remote_protocols_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.remote_protocols_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
+                        security_privacy_card = security_privacy_card.child(
+                            self.dropdown_list_container(
+                                "settings_window_remote_protocols_list_container",
+                                "settings_window_remote_protocols_scrollbar",
+                                self.remote_protocols_scroll.clone(),
+                                REMOTE_PROTOCOL_OPTIONS.len(),
+                                SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                                SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                                list,
+                                theme,
+                            ),
+                        );
+                    }
+
+                    security_privacy_card = security_privacy_card
+                        .child(
+                            div()
+                                .px_2()
+                                .pt_1()
+                                .pb_3()
+                                .text_xs()
+                                .text_color(theme.colors.foreground.secondary)
+                                .child(
+                                    "Repository-controlled HTTP/HTTPS images can act as tracking pixels and reveal that you opened a document. Safe relative images from the repository continue to load in every mode.",
+                                ),
+                        )
+                        .child(remote_markdown_images_row);
+
+                    if self.expanded_section == Some(SettingsSection::RemoteMarkdownImages) {
+                        let list = uniform_list(
+                            "settings_window_remote_markdown_images_list",
+                            REMOTE_MARKDOWN_IMAGE_OPTIONS.len(),
+                            cx.processor(Self::render_remote_markdown_image_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.remote_markdown_images_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.remote_markdown_images_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
+                        security_privacy_card = security_privacy_card.child(
+                            self.dropdown_list_container(
+                                "settings_window_remote_markdown_images_list_container",
+                                "settings_window_remote_markdown_images_scrollbar",
+                                self.remote_markdown_images_scroll.clone(),
+                                REMOTE_MARKDOWN_IMAGE_OPTIONS.len(),
+                                SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                                SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                                list,
+                                theme,
+                            ),
+                        );
+                    }
+
+                    security_privacy_card = security_privacy_card.child(update_check_row);
+                    if update_check_locked {
+                        security_privacy_card = security_privacy_card.child(
+                            div()
+                                .id("settings_window_update_check_environment_note")
+                                .px_2()
+                                .pb_3()
+                                .text_xs()
+                                .text_color(theme.colors.foreground.secondary)
+                                .child(
+                                    "Disabled by GITCOMET_NO_UPDATE_CHECK. Remove the environment variable and restart GitComet to change this setting.",
+                                ),
+                        );
+                    }
+
                     let mut change_tracking_card = self
                         .card(
                             "settings_window_change_tracking_card",
@@ -1581,6 +1761,36 @@ impl Render for SettingsWindowView {
                         }
                     }
 
+                    let remotes_card = self
+                        .card("settings_window_remotes_card", "Remotes", theme)
+                        .child(
+                            self.toggle_row(
+                                "settings_window_prune_deleted_remote_branches",
+                                "Automatically prune deleted remote branches on every fetch",
+                                self.prune_deleted_remote_branches_on_fetch,
+                                theme,
+                            )
+                            .border_color(no_separator)
+                            .on_click(cx.listener(
+                                |this, _e: &ClickEvent, _window, cx| {
+                                    this.set_prune_deleted_remote_branches_on_fetch(
+                                        !this.prune_deleted_remote_branches_on_fetch,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_2()
+                                .text_xs()
+                                .text_color(theme.colors.foreground.secondary)
+                                .child(
+                                    "Also applies to the fetch performed by Pull and Pull into current. Local branches whose fetched upstream was deleted are unlinked, but local branches and tags are never deleted.",
+                                ),
+                        );
+
                     let tags_card = self
                         .card("settings_window_tags_card", "Tags", theme)
                         .child(
@@ -1850,11 +2060,13 @@ impl Render for SettingsWindowView {
 
                     let active_card = match active_category {
                         SettingsCategory::General => general_card,
+                        SettingsCategory::SecurityPrivacy => security_privacy_card,
                         SettingsCategory::Terminal => terminal_card,
                         SettingsCategory::ChangeTracking => change_tracking_card,
                         SettingsCategory::Diff => diff_card,
                         SettingsCategory::FileEditing => file_editing_card,
                         SettingsCategory::GitLog => git_log_card,
+                        SettingsCategory::Remotes => remotes_card,
                         SettingsCategory::Tags => tags_card,
                         SettingsCategory::GitExecutable => git_executable_card,
                         SettingsCategory::Environment => environment_card,

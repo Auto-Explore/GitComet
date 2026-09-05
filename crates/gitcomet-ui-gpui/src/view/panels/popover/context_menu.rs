@@ -2,11 +2,13 @@ use super::*;
 
 mod branch;
 mod branch_group;
+mod branch_refs;
 mod branch_section;
 mod browse_history;
 mod change_tracking_settings;
 mod commit;
 mod commit_file;
+mod commit_file_sort;
 mod commit_options;
 mod commit_sha_link;
 mod conflict_resolver_chunk;
@@ -436,6 +438,11 @@ impl PopoverHost {
                 section,
                 name,
             } => Some(branch::model(self, *repo_id, *section, name)),
+            PopoverKind::BranchRefsMenu {
+                repo_id,
+                display_name,
+                targets,
+            } => Some(branch_refs::model(*repo_id, display_name, targets)),
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 Some(branch_section::model(self, *repo_id, *section))
             }
@@ -443,7 +450,16 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { name }),
             } => Some(remote::model(self, *repo_id, name)),
-            PopoverKind::WebLinkMenu { url } => Some(web_link::model(url)),
+            PopoverKind::WebLinkMenu {
+                url,
+                load_remote_image_url,
+            } => {
+                let load_remote_image_url = load_remote_image_url.as_deref().filter(|_| {
+                    self.main_pane.read(cx).remote_markdown_image_policy
+                        == RemoteMarkdownImagePolicy::AskBeforeLoading
+                });
+                Some(web_link::model(url, load_remote_image_url))
+            }
             PopoverKind::CommitShaLinkMenu {
                 repo_id,
                 commit_id,
@@ -475,6 +491,7 @@ impl PopoverHost {
                 commit_id,
                 path,
             } => Some(commit_file::model(self, *repo_id, commit_id, path)),
+            PopoverKind::CommitFileSortMenu => Some(commit_file_sort::model(self, cx)),
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 Some(file_browser_file::model(self, *repo_id, path, cx))
             }
@@ -1005,6 +1022,11 @@ impl PopoverHost {
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
             }
+            ContextMenuAction::SetCommitFileSort { sort } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.set_commit_file_sort(sort, cx);
+                });
+            }
             ContextMenuAction::SetDiffContentMode { mode } => {
                 self.diff_content_mode = mode;
                 let main_pane = self.main_pane.clone();
@@ -1280,7 +1302,32 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::Push { repo_id } => {
-                self.store.dispatch(Msg::Push { repo_id });
+                let request = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .map(push_request)
+                    .unwrap_or(PushRequest::NotReady);
+                match request {
+                    PushRequest::Push => self.store.dispatch(Msg::Push { repo_id }),
+                    PushRequest::SetUpstream { remote } => {
+                        let anchor = self.popover_anchor_point();
+                        self.open_popover_at(
+                            PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
+                            anchor,
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+                    PushRequest::NoRemotes => self.push_toast(
+                        components::ToastKind::Error,
+                        "Cannot push: no remotes configured".to_string(),
+                        cx,
+                    ),
+                    PushRequest::NotReady => {}
+                }
             }
             ContextMenuAction::SetUpstreamBranch {
                 repo_id,
@@ -1470,6 +1517,11 @@ impl PopoverHost {
                     "Link copied to clipboard".to_string(),
                     cx,
                 );
+            }
+            ContextMenuAction::LoadRemoteMarkdownImage { url } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.approve_remote_markdown_image(url, cx);
+                });
             }
             ContextMenuAction::OpenWebUrl { url } => {
                 crate::view::platform_open::spawn_launch(

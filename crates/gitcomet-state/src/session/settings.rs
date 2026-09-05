@@ -30,6 +30,9 @@ pub struct UiSettings {
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
+    pub remote_markdown_image_policy: Option<String>,
+    pub allowed_remote_protocols: Option<BTreeSet<String>>,
+    pub check_for_updates_on_startup: Option<bool>,
     pub auto_save_file_edits: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
@@ -53,6 +56,7 @@ pub struct UiSettings {
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub default_tag_type: Option<DefaultTagType>,
+    pub fetch_prune_deleted_remote_branches: Option<bool>,
     pub git_executable_path: Option<Option<PathBuf>>,
     pub external_code_editor: Option<Option<ExternalCodeEditorSetting>>,
 }
@@ -64,6 +68,15 @@ pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
     persist_ui_settings_to_path(settings, &path)
 }
 
+/// Copies one optional `UiSettings` field onto the session file when set.
+macro_rules! apply_setting {
+    ($settings:expr, $file:expr, $field:ident) => {
+        if let Some(value) = $settings.$field {
+            $file.$field = Some(value);
+        }
+    };
+}
+
 pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Result<()> {
     with_session_file_persist_lock(|| {
         let mut file = load_file(path).unwrap_or_default();
@@ -72,15 +85,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
             file.window_width = settings.window_width;
             file.window_height = settings.window_height;
         }
-        if let Some(w) = settings.sidebar_width {
-            file.sidebar_width = Some(w);
-        }
-        if let Some(w) = settings.details_width {
-            file.details_width = Some(w);
-        }
-        if let Some(collapsed) = settings.sidebar_collapsed {
-            file.sidebar_collapsed = Some(collapsed);
-        }
+        apply_setting!(settings, file, sidebar_width);
+        apply_setting!(settings, file, details_width);
+        apply_setting!(settings, file, sidebar_collapsed);
         if let Some(items) = settings.repo_sidebar_collapsed_items {
             let items = path_keyed_string_sets_to_storage(items);
             file.repo_sidebar_collapsed_items = (!items.is_empty()).then_some(items);
@@ -89,106 +96,43 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
             let items = path_keyed_string_sets_to_storage(items);
             file.repo_sidebar_pinned_branches = (!items.is_empty()).then_some(items);
         }
-        if let Some(theme_mode) = settings.theme_mode {
-            file.theme_mode = Some(theme_mode);
-        }
-        if let Some(percent) = settings.ui_scale_percent {
-            file.ui_scale_percent = Some(percent);
-        }
-        if let Some(font_family) = settings.ui_font_family {
-            file.ui_font_family = Some(font_family);
-        }
-        if let Some(font_family) = settings.editor_font_family {
-            file.editor_font_family = Some(font_family);
-        }
-        if let Some(value) = settings.use_font_ligatures {
-            file.use_font_ligatures = Some(value);
-        }
-        if let Some(fmt) = settings.date_time_format {
-            file.date_time_format = Some(fmt);
-        }
-        if let Some(tz) = settings.timezone {
-            file.timezone = Some(tz);
-        }
-        if let Some(value) = settings.show_timezone {
-            file.show_timezone = Some(value);
-        }
-        if let Some(value) = settings.change_tracking_view {
-            file.change_tracking_view = Some(value);
-        }
-        if let Some(value) = settings.repo_picker_sort {
-            file.repo_picker_sort = Some(value);
-        }
+        apply_setting!(settings, file, theme_mode);
+        apply_setting!(settings, file, ui_scale_percent);
+        apply_setting!(settings, file, ui_font_family);
+        apply_setting!(settings, file, editor_font_family);
+        apply_setting!(settings, file, use_font_ligatures);
+        apply_setting!(settings, file, date_time_format);
+        apply_setting!(settings, file, timezone);
+        apply_setting!(settings, file, show_timezone);
+        apply_setting!(settings, file, change_tracking_view);
+        apply_setting!(settings, file, repo_picker_sort);
         // Owned by the repository picker (`repo_picker::persist_collapsed_sections`).
-        if let Some(value) = settings.repo_picker_collapsed_sections {
-            file.repo_picker_collapsed_sections = Some(value);
-        }
-        if let Some(value) = settings.diff_scroll_sync {
-            file.diff_scroll_sync = Some(value);
-        }
-        if let Some(value) = settings.diff_content_mode {
-            file.diff_content_mode = Some(value);
-        }
-        if let Some(value) = settings.diff_whitespace_mode {
-            file.diff_whitespace_mode = Some(value);
-        }
-        if let Some(value) = settings.diff_view_mode {
-            file.diff_view_mode = Some(value);
-        }
-        if let Some(value) = settings.annotate_enabled {
-            file.annotate_enabled = Some(value);
-        }
-        if let Some(value) = settings.diff_reveal_whitespace_chars {
-            file.diff_reveal_whitespace_chars = Some(value);
-        }
-        if let Some(value) = settings.mergetool_auto_advance {
-            file.mergetool_auto_advance = Some(value);
-        }
-        if let Some(value) = settings.mergetool_collapse_unchanged {
-            file.mergetool_collapse_unchanged = Some(value);
-        }
-        if let Some(value) = settings.mergetool_output_scroll_sync {
-            file.mergetool_output_scroll_sync = Some(value);
-        }
-        if let Some(value) = settings.mergetool_show_line_numbers {
-            file.mergetool_show_line_numbers = Some(value);
-        }
-        if let Some(value) = settings.mergetool_view_three_way {
-            file.mergetool_view_three_way = Some(value);
-        }
-        if let Some(value) = settings.diff_word_wrap {
-            file.diff_word_wrap = Some(value);
-        }
-        if let Some(value) = settings.auto_save_file_edits {
-            file.auto_save_file_edits = Some(value);
-        }
-        if let Some(value) = settings.diff_show_line_numbers {
-            file.diff_show_line_numbers = Some(value);
-        }
-        if let Some(value) = settings.change_tracking_height {
-            file.change_tracking_height = Some(value);
-        }
-        if let Some(value) = settings.untracked_height {
-            file.untracked_height = Some(value);
-        }
-        if let Some(value) = settings.history_show_graph {
-            file.history_show_graph = Some(value);
-        }
-        if let Some(value) = settings.history_show_author {
-            file.history_show_author = Some(value);
-        }
-        if let Some(value) = settings.history_show_date {
-            file.history_show_date = Some(value);
-        }
-        if let Some(value) = settings.history_show_sha {
-            file.history_show_sha = Some(value);
-        }
-        if let Some(value) = settings.terminal_external_mode {
-            file.terminal_external_mode = Some(value);
-        }
-        if let Some(value) = settings.terminal_external_program {
-            file.terminal_external_program = Some(value);
-        }
+        apply_setting!(settings, file, repo_picker_collapsed_sections);
+        apply_setting!(settings, file, diff_scroll_sync);
+        apply_setting!(settings, file, diff_content_mode);
+        apply_setting!(settings, file, diff_whitespace_mode);
+        apply_setting!(settings, file, diff_view_mode);
+        apply_setting!(settings, file, annotate_enabled);
+        apply_setting!(settings, file, diff_reveal_whitespace_chars);
+        apply_setting!(settings, file, mergetool_auto_advance);
+        apply_setting!(settings, file, mergetool_collapse_unchanged);
+        apply_setting!(settings, file, mergetool_output_scroll_sync);
+        apply_setting!(settings, file, mergetool_show_line_numbers);
+        apply_setting!(settings, file, mergetool_view_three_way);
+        apply_setting!(settings, file, diff_word_wrap);
+        apply_setting!(settings, file, remote_markdown_image_policy);
+        apply_setting!(settings, file, allowed_remote_protocols);
+        apply_setting!(settings, file, check_for_updates_on_startup);
+        apply_setting!(settings, file, auto_save_file_edits);
+        apply_setting!(settings, file, diff_show_line_numbers);
+        apply_setting!(settings, file, change_tracking_height);
+        apply_setting!(settings, file, untracked_height);
+        apply_setting!(settings, file, history_show_graph);
+        apply_setting!(settings, file, history_show_author);
+        apply_setting!(settings, file, history_show_date);
+        apply_setting!(settings, file, history_show_sha);
+        apply_setting!(settings, file, terminal_external_mode);
+        apply_setting!(settings, file, terminal_external_program);
         if let Some(value) = settings.terminal_external_args {
             let values = value
                 .into_iter()
@@ -197,30 +141,17 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
                 .collect::<Vec<_>>();
             file.terminal_external_args = Some(values);
         }
-        if let Some(value) = settings.terminal_action_bar_target {
-            file.terminal_action_bar_target = Some(value);
-        }
-        if let Some(value) = settings.history_show_tags {
-            file.history_show_tags = Some(value);
-        }
-        if let Some(value) = settings.history_highlight_commit_chain {
-            file.history_highlight_commit_chain = Some(value);
-        }
-        if let Some(value) = settings.history_relative_dates {
-            file.history_relative_dates = Some(value);
-        }
-        if let Some(value) = settings.history_tag_fetch_mode {
-            file.history_tag_fetch_mode = Some(value);
-        }
+        apply_setting!(settings, file, terminal_action_bar_target);
+        apply_setting!(settings, file, history_show_tags);
+        apply_setting!(settings, file, history_highlight_commit_chain);
+        apply_setting!(settings, file, history_relative_dates);
+        apply_setting!(settings, file, history_tag_fetch_mode);
         if let Some(value) = settings.default_history_mode {
             file.default_history_mode = Some(value.into());
         }
-        if let Some(value) = settings.commit_push_after_enabled {
-            file.commit_push_after_enabled = Some(value);
-        }
-        if let Some(value) = settings.default_tag_type {
-            file.default_tag_type = Some(value);
-        }
+        apply_setting!(settings, file, commit_push_after_enabled);
+        apply_setting!(settings, file, default_tag_type);
+        apply_setting!(settings, file, fetch_prune_deleted_remote_branches);
         if let Some(path) = settings.git_executable_path {
             file.git_executable_path = path.map(|path| path_storage_key(&path));
         }

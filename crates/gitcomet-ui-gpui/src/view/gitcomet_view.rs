@@ -1,6 +1,63 @@
 use super::*;
 
 impl GitCometView {
+    fn hook_activity_workflow_repo(kind: &PopoverKind) -> Option<RepoId> {
+        match kind {
+            PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
+            _ => None,
+        }
+    }
+
+    pub(in crate::view) fn set_hook_activity_dialog_repo(
+        &mut self,
+        repo_id: Option<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.toast_host.update(cx, |host, cx| {
+            host.set_hook_activity_dialog_repo(repo_id, cx)
+        });
+    }
+
+    pub(in crate::view) fn minimize_hook_activity_chains(
+        &mut self,
+        chains: impl IntoIterator<Item = (RepoId, GitOperationId)>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.minimized_hook_activity_chains.extend(chains);
+        self.pending_hook_activity_open = None;
+        self.set_hook_activity_dialog_repo(None, cx);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn minimize_hook_activity_repo(
+        &mut self,
+        repo_id: RepoId,
+        chains: impl IntoIterator<Item = (RepoId, GitOperationId)>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.minimized_hook_activity_repos.insert(repo_id);
+        self.minimize_hook_activity_chains(chains, cx);
+    }
+
+    pub(in crate::view) fn resume_hook_activity_auto_open(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.minimized_hook_activity_repos.remove(&repo_id);
+        self.minimized_hook_activity_chains
+            .retain(|(minimized_repo_id, _)| *minimized_repo_id != repo_id);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn hook_activity_workflow_is_open(&self, cx: &App) -> bool {
+        self.popover_host.read(cx).is_hook_activity_workflow_open()
+    }
+
+    pub(in crate::view) fn hook_activity_workflow_repo_id(&self, cx: &App) -> Option<RepoId> {
+        self.popover_host.read(cx).hook_activity_workflow_repo_id()
+    }
+
     pub(in crate::view) fn open_popover_at(
         &mut self,
         kind: PopoverKind,
@@ -8,6 +65,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
@@ -38,6 +96,12 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if let PopoverKind::HookActivity { repo_id, .. } = &kind {
+            self.pending_hook_activity_open = None;
+            self.minimized_hook_activity_chains
+                .retain(|(suppressed_repo_id, _)| suppressed_repo_id != repo_id);
+        }
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host
@@ -60,6 +124,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
@@ -283,22 +348,66 @@ impl GitCometView {
                 // TODO: Open remote branch picker
             }
             "pull" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::Pull {
+                let Some(repo) = self.active_repo() else {
+                    return;
+                };
+                let repo_id = repo.id;
+                match pull_request(repo) {
+                    PullRequest::Pull => self.store.dispatch(Msg::Pull {
                         repo_id,
                         mode: PullMode::Default,
-                    });
+                    }),
+                    PullRequest::NoRemotes => self.push_toast(
+                        components::ToastKind::Error,
+                        "Cannot pull: no remotes configured".to_string(),
+                        cx,
+                    ),
+                    PullRequest::NotReady => {}
                 }
             }
             "push" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::Push { repo_id });
+                let Some(repo) = self.active_repo() else {
+                    return;
+                };
+                let repo_id = repo.id;
+                match push_request(repo) {
+                    PushRequest::Push => self.store.dispatch(Msg::Push { repo_id }),
+                    PushRequest::SetUpstream { remote } => {
+                        if let Some(window) = window {
+                            self.open_popover_centered(
+                                PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
+                                window,
+                                cx,
+                            );
+                        }
+                    }
+                    PushRequest::NoRemotes => self.push_toast(
+                        components::ToastKind::Error,
+                        "Cannot push: no remotes configured".to_string(),
+                        cx,
+                    ),
+                    PushRequest::NotReady => {}
                 }
             }
             "force-push" => {
-                if let Some(repo_id) = self.active_repo_id()
-                    && let Some(window) = window
-                {
+                let Some(repo) = self.active_repo() else {
+                    return;
+                };
+                let repo_id = repo.id;
+                if !head_branch_has_live_upstream(repo) {
+                    let reason = if head_is_detached(repo) {
+                        "HEAD is detached"
+                    } else {
+                        "current branch has no remote upstream"
+                    };
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Cannot force push: {reason}"),
+                        cx,
+                    );
+                    return;
+                }
+                if let Some(window) = window {
                     self.open_popover_centered(
                         PopoverKind::ForcePushConfirm { repo_id },
                         window,
@@ -725,7 +834,12 @@ impl GitCometView {
         let store = Arc::new(store);
 
         let mut ui_session = session::load();
+        let mut ui_preferences = UiPreferences::from_session(&ui_session);
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+        // The application-wide scale may already have been initialized by
+        // another window. Keep the shared runtime preferences aligned with the
+        // value every view will actually render with.
+        ui_preferences.appearance.ui_scale_percent = ui_scale.percent;
         let _font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
         if should_seed_initial_repository_from_session(
@@ -741,77 +855,45 @@ impl GitCometView {
             ui_session.active_repo = Some(path.clone());
         }
 
-        let restored_sidebar_width = ui_session.sidebar_width;
-        let restored_details_width = ui_session.details_width;
-        let restored_sidebar_collapsed = ui_session.sidebar_collapsed.unwrap_or(false);
+        let restored_sidebar_width = ui_preferences.window.sidebar_width;
+        let restored_details_width = ui_preferences.window.details_width;
+        let restored_sidebar_collapsed = ui_preferences.window.sidebar_collapsed;
         let _ = crate::theme::ensure_user_themes_dir_exists();
-        let theme_mode = ui_session
-            .theme_mode
-            .as_deref()
-            .and_then(ThemeMode::from_key)
-            .unwrap_or_default();
+        let theme_mode = ui_preferences.appearance.theme_mode.clone();
         let initial_theme = theme_mode.resolve_theme(window.appearance());
-        let date_time_format = ui_session
-            .date_time_format
-            .as_deref()
-            .and_then(DateTimeFormat::from_key)
-            .unwrap_or(DateTimeFormat::YmdHm);
-        let timezone = ui_session
-            .timezone
-            .as_deref()
-            .and_then(Timezone::from_key)
-            .unwrap_or_default();
-        let show_timezone = ui_session.show_timezone.unwrap_or(true);
-        let change_tracking_view = ui_session
-            .change_tracking_view
-            .as_deref()
-            .and_then(ChangeTrackingView::from_key)
-            .unwrap_or_default();
-        let terminal_preferences = TerminalPreferences::from_ui_session(&ui_session);
-        let diff_scroll_sync = ui_session
-            .diff_scroll_sync
-            .as_deref()
-            .and_then(DiffScrollSync::from_key)
-            .unwrap_or_default();
-        let diff_content_mode = ui_session
-            .diff_content_mode
-            .as_deref()
-            .and_then(DiffContentMode::from_key)
-            .unwrap_or_default();
-        let diff_whitespace_mode = ui_session
-            .diff_whitespace_mode
-            .as_deref()
-            .and_then(DiffWhitespaceMode::from_key)
-            .unwrap_or_default();
-        let diff_view_mode = ui_session
-            .diff_view_mode
-            .as_deref()
-            .and_then(DiffViewMode::from_key)
-            .unwrap_or(DiffViewMode::Split);
-        let annotate_enabled = ui_session.annotate_enabled.unwrap_or(false);
-        let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
-        let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
-        let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
-        let auto_save_file_edits = ui_session.auto_save_file_edits.unwrap_or(false);
-        let commit_push_after_enabled = ui_session.commit_push_after_enabled.unwrap_or(false);
-        let restored_change_tracking_height = ui_session.change_tracking_height;
-        let restored_untracked_height = ui_session.untracked_height;
-
-        let history_show_graph = ui_session.history_show_graph.unwrap_or(true);
-        let history_show_author = ui_session.history_show_author.unwrap_or(true);
-        let history_show_date = ui_session.history_show_date.unwrap_or(true);
-        let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
-        let history_relative_dates = ui_session.history_relative_dates.unwrap_or(true);
-        let history_highlight_commit_chain =
-            ui_session.history_highlight_commit_chain.unwrap_or(true);
-        let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
-        let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
-        let default_tag_type = ui_session.default_tag_type.unwrap_or_default();
+        let date_time_format = ui_preferences.appearance.date_time_format;
+        let timezone = ui_preferences.appearance.timezone;
+        let show_timezone = ui_preferences.appearance.show_timezone;
+        let change_tracking_view = ui_preferences.change_tracking.view;
+        let terminal_preferences = ui_preferences.terminal.clone();
+        let diff_scroll_sync = ui_preferences.diff.scroll_sync;
+        let diff_content_mode = ui_preferences.diff.content_mode;
+        let diff_whitespace_mode = ui_preferences.diff.whitespace_mode;
+        let diff_view_mode = ui_preferences.diff.view_mode;
+        let annotate_enabled = ui_preferences.diff.annotate_enabled;
+        let diff_reveal_whitespace_chars = ui_preferences.diff.reveal_whitespace_chars;
+        let diff_word_wrap = ui_preferences.diff.word_wrap;
+        let diff_show_line_numbers = ui_preferences.diff.show_line_numbers;
+        let auto_save_file_edits = ui_preferences.file_editing.auto_save;
+        let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
+        let remote_url_policy = ui_preferences.security.remote_url_policy;
+        let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
+        let commit_push_after_enabled = ui_preferences.repository.commit_push_after_enabled;
+        let history_show_tags = ui_preferences.history.show_tags;
+        let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
+        let default_tag_type = ui_preferences.repository.default_tag_type;
+        let remote_settings = RemoteSettings {
+            prune_deleted_remote_branches_on_fetch: ui_preferences
+                .remotes
+                .prune_deleted_remote_branches_on_fetch,
+        };
+        store.dispatch(Msg::SetRemoteUrlPolicy(remote_url_policy));
         store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: history_show_tags,
             tag_fetch_mode: history_tag_fetch_mode,
         });
         store.dispatch(Msg::SetDefaultTagType(default_tag_type));
+        store.dispatch(Msg::SetRemoteSettings(remote_settings));
         let saved_open_repos = ui_session.open_repos.clone();
         let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;
@@ -864,7 +946,9 @@ impl GitCometView {
         if !initial_state.repos.is_empty() {
             startup_repo_bootstrap_pending = false;
         }
-        let ui_model = cx.new(|_cx| AppUiModel::new(Arc::clone(&initial_state)));
+        let ui_model = cx.new(|_cx| {
+            AppUiModel::new_with_preferences(Arc::clone(&initial_state), ui_preferences.clone())
+        });
 
         let ui_model_subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
@@ -915,8 +999,9 @@ impl GitCometView {
                 cx,
             )
         });
-        let bottom_status_bar =
-            cx.new(|_cx| BottomStatusBarView::new(initial_theme, weak_view.clone()));
+        let bottom_status_bar = cx.new(|cx| {
+            BottomStatusBarView::new(initial_theme, ui_model.clone(), weak_view.clone(), cx)
+        });
 
         let sidebar_pane = cx.new(|cx| {
             SidebarPaneView::new(
@@ -934,64 +1019,60 @@ impl GitCometView {
             MainPaneView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
-                initial_theme,
-                date_time_format,
-                timezone,
-                show_timezone,
-                history_relative_dates,
-                history_highlight_commit_chain,
-                diff_scroll_sync,
-                diff_content_mode,
-                diff_whitespace_mode,
-                diff_view_mode,
-                annotate_enabled,
-                diff_reveal_whitespace_chars,
-                diff_word_wrap,
-                diff_show_line_numbers,
-                auto_save_file_edits,
-                history_show_graph,
-                history_show_author,
-                history_show_date,
-                history_show_sha,
-                history_show_tags,
-                matches!(
-                    history_tag_fetch_mode,
-                    gitcomet_state::model::GitLogTagFetchMode::OnRepositoryActivation
-                ),
-                view_mode,
-                focused_mergetool_labels,
-                focused_mergetool_exit_code.clone(),
-                weak_view.clone(),
-                tooltip_host.downgrade(),
+                MainPaneInit {
+                    theme: initial_theme,
+                    view_mode,
+                    focused_mergetool_labels,
+                    focused_mergetool_exit_code: focused_mergetool_exit_code.clone(),
+                    root_view: weak_view.clone(),
+                    tooltip_host: tooltip_host.downgrade(),
+                },
                 window,
                 cx,
             )
         });
-        main_pane.update(cx, |pane, _cx| {
-            pane.mergetool_auto_advance = ui_session.mergetool_auto_advance.unwrap_or(true);
-            pane.mergetool_collapse_unchanged =
-                ui_session.mergetool_collapse_unchanged.unwrap_or(false);
-            pane.mergetool_output_scroll_sync =
-                ui_session.mergetool_output_scroll_sync.unwrap_or(true);
-            pane.mergetool_show_line_numbers =
-                ui_session.mergetool_show_line_numbers.unwrap_or(true);
-            pane.mergetool_view_three_way = ui_session.mergetool_view_three_way.unwrap_or(true);
-        });
+        window
+            .observe_release(&main_pane, cx, |pane, window, cx| {
+                if let Some(cancel) = pane.conflict_image_preview_cancel.take() {
+                    cancel.store(true, std::sync::atomic::Ordering::Release);
+                }
+                pane.conflict_image_preview_task = None;
+                pane.file_image_preview_animation_task = None;
+
+                let mut images = Vec::new();
+                if let Some(image) = pane.file_image_diff_cache_old.take() {
+                    images.push(image);
+                }
+                if let Some(image) = pane.file_image_diff_cache_new.take()
+                    && images
+                        .iter()
+                        .all(|known: &Arc<gpui::RenderImage>| known.id != image.id)
+                {
+                    images.push(image);
+                }
+                for side in ThreeWayColumn::ALL {
+                    if let Loadable::Ready(Some(ConflictPreviewImage::Rendered(image))) =
+                        pane.conflict_resolver.image_preview.image(side)
+                        && images
+                            .iter()
+                            .all(|known: &Arc<gpui::RenderImage>| known.id != image.id)
+                    {
+                        images.push(Arc::clone(image));
+                    }
+                }
+                for image in images {
+                    cx.drop_image(image, Some(&mut *window));
+                }
+            })
+            .detach();
         let details_pane = cx.new(|cx| {
             DetailsPaneView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
                 DetailsPaneInit {
                     theme: initial_theme,
-                    change_tracking_view,
-                    change_tracking_height: restored_change_tracking_height,
-                    untracked_height: restored_untracked_height,
-                    ui_scale_percent: ui_scale.percent,
-                    commit_push_after_enabled,
-                    date_time_format,
-                    timezone,
-                    show_timezone,
                     root_view: weak_view.clone(),
+                    main_pane: main_pane.downgrade(),
                     tooltip_host: tooltip_host.downgrade(),
                 },
                 window,
@@ -1005,10 +1086,6 @@ impl GitCometView {
                 ui_model.clone(),
                 ReflogPaneInit {
                     theme: initial_theme,
-                    ui_scale_percent: ui_scale.percent,
-                    date_time_format,
-                    timezone,
-                    show_timezone,
                     root_view: weak_view.clone(),
                 },
                 cx,
@@ -1019,27 +1096,18 @@ impl GitCometView {
             PopoverHost::new(
                 Arc::clone(&store),
                 ui_model.clone(),
-                initial_theme,
-                theme_mode.clone(),
-                date_time_format,
-                timezone,
-                show_timezone,
-                change_tracking_view,
-                commit_push_after_enabled,
-                diff_content_mode,
-                diff_whitespace_mode,
-                diff_reveal_whitespace_chars,
-                diff_word_wrap,
-                diff_show_line_numbers,
-                weak_view.clone(),
-                view_mode,
-                tooltip_host.downgrade(),
-                main_pane.clone(),
-                details_pane.clone(),
-                reflog_pane.clone(),
-                sidebar_pane.clone(),
-                ui_session.repo_sidebar_pinned_branches.clone(),
-                ui_session.repo_sidebar_collapsed_items.clone(),
+                PopoverHostInit {
+                    theme: initial_theme,
+                    root_view: weak_view.clone(),
+                    root_view_mode: view_mode,
+                    tooltip_host: tooltip_host.downgrade(),
+                    main_pane: main_pane.clone(),
+                    details_pane: details_pane.clone(),
+                    reflog_pane: reflog_pane.clone(),
+                    sidebar_pane: sidebar_pane.clone(),
+                    pinned_branches_by_repo: ui_session.repo_sidebar_pinned_branches.clone(),
+                    collapsed_items_by_repo: ui_session.repo_sidebar_collapsed_items.clone(),
+                },
                 window,
                 cx,
             )
@@ -1249,7 +1317,7 @@ impl GitCometView {
         let mut view = Self {
             state: Arc::clone(&initial_state),
             window_handle: window.window_handle(),
-            _ui_model: ui_model,
+            ui_model,
             store,
             _poller: poller,
             _ui_model_subscription: ui_model_subscription,
@@ -1313,6 +1381,11 @@ impl GitCometView {
             diff_word_wrap,
             diff_show_line_numbers,
             auto_save_file_edits,
+            remote_markdown_image_policy,
+            remote_url_policy,
+            check_for_updates_on_startup,
+            update_check_in_flight: false,
+            update_check_manual_feedback_requested: false,
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
@@ -1344,11 +1417,15 @@ impl GitCometView {
             pending_unsaved_file_edits_flush: None,
             pending_quit_other_views: Vec::new(),
             pending_pull_reconcile_prompt: None,
+            pending_branch_exists_prompt: initial_state.branch_exists_prompt.clone(),
             pending_force_delete_branch_prompt: None,
             pending_force_delete_branch_centered: false,
             pending_force_remove_worktree_prompt: None,
             pending_submodule_trust_prompt: None,
             pending_submodule_trust_check: None,
+            pending_hook_activity_open: None,
+            minimized_hook_activity_chains: FxHashSet::default(),
+            minimized_hook_activity_repos: FxHashSet::default(),
             pending_worktree_branch_removals: FxHashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
@@ -1475,513 +1552,6 @@ impl GitCometView {
     ) {
         self.sidebar_pane.update(cx, |_pane, cx| cx.notify());
         cx.notify();
-    }
-
-    pub(super) fn ui_scale(&self) -> ui_scale::UiScale {
-        ui_scale::UiScale::from_percent(self.ui_scale_percent)
-    }
-
-    pub(super) fn sync_cached_pane_widths_from_design(&mut self) {
-        let scale = self.ui_scale();
-        self.sidebar_width = scale.px(self.sidebar_width_design);
-        self.details_width = scale.px(self.details_width_design);
-    }
-
-    pub(super) fn set_sidebar_width_from_pixels(&mut self, width: Pixels) {
-        self.sidebar_width = width;
-        self.sidebar_width_design = self.ui_scale().design_units_from_pixels(width);
-    }
-
-    pub(super) fn set_details_width_from_pixels(&mut self, width: Pixels) {
-        self.details_width = width;
-        self.details_width_design = self.ui_scale().design_units_from_pixels(width);
-    }
-
-    pub(super) fn scaled_px(&self, value: f32) -> Pixels {
-        self.ui_scale().px(value)
-    }
-
-    pub(super) fn pane_collapsed_width(&self) -> Pixels {
-        self.scaled_px(PANE_COLLAPSED_PX)
-    }
-
-    pub(super) fn main_min_width(&self) -> Pixels {
-        self.scaled_px(MAIN_MIN_PX)
-    }
-
-    pub(super) fn sidebar_min_width(&self) -> Pixels {
-        self.scaled_px(SIDEBAR_MIN_PX)
-    }
-
-    pub(super) fn details_min_width(&self) -> Pixels {
-        self.scaled_px(DETAILS_MIN_PX)
-    }
-
-    pub(super) fn pane_resize_handle_width(&self) -> Pixels {
-        self.scaled_px(PANE_RESIZE_HANDLE_PX)
-    }
-
-    pub(crate) fn apply_ui_scale_percent(
-        &mut self,
-        percent: u32,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let percent = ui_scale::sanitize_percent(Some(percent));
-        if self.ui_scale_percent == percent {
-            return;
-        }
-
-        let previous_percent = self.ui_scale_percent;
-        let scale = self.ui_scale();
-        self.sidebar_width_design = scale.design_units_from_pixels(self.sidebar_width);
-        self.details_width_design = scale.design_units_from_pixels(self.details_width);
-        self.ui_scale_percent = percent;
-        self.pane_resize = None;
-        self.sidebar_width_anim_seq = self.sidebar_width_anim_seq.wrapping_add(1);
-        self.details_width_anim_seq = self.details_width_anim_seq.wrapping_add(1);
-        self.sidebar_width_animating = false;
-        self.details_width_animating = false;
-
-        ui_scale::apply_to_window(window, percent);
-        crate::app::ensure_window_respects_min_size(
-            window,
-            crate::app::main_window_min_size_for_percent(percent),
-        );
-
-        self.last_window_size = window.viewport_size();
-        self.ui_window_size_last_seen = self.last_window_size;
-        self.sync_cached_pane_widths_from_design();
-
-        let change_tracking_view = self.change_tracking_view;
-        self.details_pane.update(cx, |pane, cx| {
-            pane.apply_ui_scale_percent(previous_percent, percent, change_tracking_view, cx);
-        });
-        self.main_pane.update(cx, |pane, cx| {
-            pane.apply_ui_scale_percent(previous_percent, percent, cx);
-        });
-        self.reflog_pane.update(cx, |pane, cx| {
-            pane.set_ui_scale_percent(percent, cx);
-        });
-        self.popover_host.update(cx, |_host, cx| {
-            cx.notify();
-        });
-
-        self.clamp_pane_widths_to_window();
-        self.notify_font_preferences_changed(cx);
-        self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(super) fn set_theme_mode(
-        &mut self,
-        mode: ThemeMode,
-        appearance: gpui::WindowAppearance,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.theme_mode == mode {
-            return;
-        }
-
-        self.theme_mode = mode.clone();
-        self.set_theme(mode.resolve_theme(appearance), cx);
-        self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(in crate::view) fn set_change_tracking_view(
-        &mut self,
-        next: ChangeTrackingView,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.change_tracking_view == next {
-            return;
-        }
-
-        self.change_tracking_view = next;
-        self.details_pane
-            .update(cx, |pane, cx| pane.set_change_tracking_view(next, cx));
-        self.popover_host
-            .update(cx, |host, cx| host.sync_change_tracking_view(next, cx));
-        self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(in crate::view) fn set_commit_push_after_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.commit_push_after_enabled == enabled {
-            return;
-        }
-
-        self.commit_push_after_enabled = enabled;
-        self.details_pane.update(cx, |pane, cx| {
-            pane.set_commit_push_after_enabled(enabled, cx)
-        });
-        self.popover_host.update(cx, |host, cx| {
-            host.sync_commit_push_after_enabled(enabled, cx)
-        });
-        self.schedule_ui_settings_persist(cx);
-        cx.notify();
-    }
-
-    pub(in crate::view) fn set_commit_amend_enabled(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.details_pane
-            .update(cx, |pane, cx| pane.set_commit_amend_enabled(enabled, cx));
-        self.popover_host
-            .update(cx, |host, cx| host.sync_commit_amend_enabled(enabled, cx));
-        cx.notify();
-    }
-
-    pub(in crate::view) fn set_diff_scroll_sync(
-        &mut self,
-        next: DiffScrollSync,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.diff_scroll_sync == next {
-            return;
-        }
-
-        self.diff_scroll_sync = next;
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_diff_scroll_sync(next, cx));
-        self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(in crate::view) fn set_diff_view_mode(
-        &mut self,
-        next: DiffViewMode,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.diff_view_mode == next {
-            return;
-        }
-
-        self.diff_view_mode = next;
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_diff_view_mode(next, cx));
-        self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(in crate::view) fn set_annotate_enabled(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.annotate_enabled == next {
-            return;
-        }
-
-        self.annotate_enabled = next;
-        // Blame is an annotation column, not a view mode: it renders in the left
-        // column in Split (see `rows::diff`, `annotation_active() && is_left`)
-        // just as it does in Inline, and the wrap widths already account for it
-        // in both. Toggling it must leave the selected mode alone.
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_annotate_enabled(next, cx));
-        self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(super) fn apply_diff_content_mode_preference(
-        &mut self,
-        next: DiffContentMode,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        if self.diff_content_mode == next {
-            return false;
-        }
-
-        self.diff_content_mode = next;
-        self.popover_host
-            .update(cx, |host, cx| host.sync_diff_content_mode(next, cx));
-        self.schedule_ui_settings_persist(cx);
-        true
-    }
-
-    // MainPaneView sometimes owns the active GPUI update when the diff-header
-    // toggle is clicked, so syncing the root preference must not call back into
-    // `main_pane.update(...)`.
-    pub(in crate::view) fn sync_diff_content_mode_from_pane(
-        &mut self,
-        next: DiffContentMode,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.apply_diff_content_mode_preference(next, cx);
-    }
-
-    pub(in crate::view) fn set_diff_content_mode(
-        &mut self,
-        next: DiffContentMode,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if !self.apply_diff_content_mode_preference(next, cx) {
-            return;
-        }
-
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_diff_content_mode(next, cx));
-    }
-
-    pub(super) fn apply_diff_whitespace_mode_preference(
-        &mut self,
-        next: DiffWhitespaceMode,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        if self.diff_whitespace_mode == next {
-            return false;
-        }
-
-        self.diff_whitespace_mode = next;
-        self.popover_host
-            .update(cx, |host, cx| host.sync_diff_whitespace_mode(next, cx));
-        self.schedule_ui_settings_persist(cx);
-        true
-    }
-
-    pub(in crate::view) fn sync_diff_whitespace_mode_from_pane(
-        &mut self,
-        next: DiffWhitespaceMode,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.apply_diff_whitespace_mode_preference(next, cx);
-    }
-
-    pub(in crate::view) fn set_diff_whitespace_mode(
-        &mut self,
-        next: DiffWhitespaceMode,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if !self.apply_diff_whitespace_mode_preference(next, cx) {
-            return;
-        }
-
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_diff_whitespace_mode(next, cx));
-    }
-
-    pub(super) fn apply_diff_reveal_whitespace_chars_preference(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        if self.diff_reveal_whitespace_chars == next {
-            return false;
-        }
-
-        self.diff_reveal_whitespace_chars = next;
-        self.popover_host.update(cx, |host, cx| {
-            host.sync_diff_reveal_whitespace_chars(next, cx)
-        });
-        self.schedule_ui_settings_persist(cx);
-        true
-    }
-
-    pub(in crate::view) fn sync_diff_reveal_whitespace_chars_from_pane(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.apply_diff_reveal_whitespace_chars_preference(next, cx);
-    }
-
-    pub(in crate::view) fn set_diff_reveal_whitespace_chars(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if !self.apply_diff_reveal_whitespace_chars_preference(next, cx) {
-            return;
-        }
-
-        self.main_pane.update(cx, |pane, cx| {
-            pane.set_diff_reveal_whitespace_chars(next, cx)
-        });
-    }
-
-    pub(super) fn apply_diff_word_wrap_preference(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        if self.diff_word_wrap == next {
-            return false;
-        }
-
-        self.diff_word_wrap = next;
-        self.popover_host
-            .update(cx, |host, cx| host.sync_diff_word_wrap(next, cx));
-        self.schedule_ui_settings_persist(cx);
-        true
-    }
-
-    pub(in crate::view) fn sync_diff_word_wrap_from_pane(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.apply_diff_word_wrap_preference(next, cx);
-    }
-
-    pub(in crate::view) fn set_diff_word_wrap(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
-        if !self.apply_diff_word_wrap_preference(next, cx) {
-            return;
-        }
-
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_diff_word_wrap(next, cx));
-    }
-
-    pub(super) fn apply_diff_show_line_numbers_preference(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        if self.diff_show_line_numbers == next {
-            return false;
-        }
-
-        self.diff_show_line_numbers = next;
-        self.popover_host
-            .update(cx, |host, cx| host.sync_diff_show_line_numbers(next, cx));
-        self.schedule_ui_settings_persist(cx);
-        true
-    }
-
-    pub(in crate::view) fn sync_diff_show_line_numbers_from_pane(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.apply_diff_show_line_numbers_preference(next, cx);
-    }
-
-    pub(in crate::view) fn set_diff_show_line_numbers(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if !self.apply_diff_show_line_numbers_preference(next, cx) {
-            return;
-        }
-
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_diff_show_line_numbers(next, cx));
-    }
-
-    /// Show the file the main pane has open in the sidebar's file explorer,
-    /// expanding the folders on the way to it and scrolling it into view.
-    ///
-    /// Switches the sidebar to Files when it is showing Branches — the action is
-    /// reachable from the menu, the palette and a shortcut, so the tree it acts
-    /// on may not even be visible.
-    pub(crate) fn locate_open_file_in_explorer(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.sidebar_collapsed {
-            self.set_sidebar_collapsed(false, cx);
-        }
-        self.sidebar_pane
-            .update(cx, |pane, cx| pane.locate_open_file(cx));
-        cx.notify();
-    }
-
-    /// Mirrors the settings window's auto-save toggle into the pane that owns
-    /// the file editor. The main window never writes this back (the settings
-    /// window is the only writer), so there is no persist call here.
-    pub(in crate::view) fn set_auto_save_file_edits(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.auto_save_file_edits == next {
-            return;
-        }
-        self.auto_save_file_edits = next;
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_auto_save_file_edits(next, cx));
-    }
-
-    pub(in crate::view) fn set_history_column_preferences(
-        &mut self,
-        show_graph: bool,
-        show_author: bool,
-        show_date: bool,
-        show_sha: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.main_pane.update(cx, |pane, cx| {
-            pane.set_history_column_preferences(show_graph, show_author, show_date, show_sha, cx);
-        });
-        self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(in crate::view) fn reset_history_column_widths(&mut self, cx: &mut gpui::Context<Self>) {
-        self.main_pane
-            .update(cx, |pane, cx| pane.reset_history_column_widths(cx));
-        self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(in crate::view) fn set_history_highlight_commit_chain(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.main_pane.update(cx, |pane, cx| {
-            pane.set_history_highlight_commit_chain(enabled, cx);
-        });
-        cx.notify();
-    }
-
-    pub(in crate::view) fn set_history_relative_dates(
-        &mut self,
-        enabled: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.main_pane.update(cx, |pane, cx| {
-            pane.set_history_relative_dates(enabled, cx);
-        });
-        self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(in crate::view) fn set_history_tag_preferences(
-        &mut self,
-        show_tags: bool,
-        tag_fetch_mode: gitcomet_state::model::GitLogTagFetchMode,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let auto_fetch_tags_on_repo_activation = matches!(
-            tag_fetch_mode,
-            gitcomet_state::model::GitLogTagFetchMode::OnRepositoryActivation
-        );
-        self.main_pane.update(cx, |pane, cx| {
-            pane.set_history_tag_preferences(show_tags, auto_fetch_tags_on_repo_activation, cx);
-        });
-        self.store.dispatch(Msg::SetGitLogSettings {
-            show_history_tags: show_tags,
-            tag_fetch_mode,
-        });
-        if show_tags
-            && auto_fetch_tags_on_repo_activation
-            && let Some(repo) = self.main_pane.read(cx).active_repo()
-        {
-            if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
-                self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
-            }
-            if matches!(repo.remote_tags, Loadable::NotLoaded | Loadable::Error(_)) {
-                self.store
-                    .dispatch(Msg::LoadRemoteTags { repo_id: repo.id });
-            }
-        }
-        self.schedule_ui_settings_persist(cx);
-    }
-
-    pub(in crate::view) fn set_default_tag_type_preference(
-        &mut self,
-        tag_type: DefaultTagType,
-        _cx: &mut gpui::Context<Self>,
-    ) {
-        self.store.dispatch(Msg::SetDefaultTagType(tag_type));
     }
 
     pub(super) fn refresh_main_pane_after_panel_animation(&mut self, cx: &mut gpui::Context<Self>) {

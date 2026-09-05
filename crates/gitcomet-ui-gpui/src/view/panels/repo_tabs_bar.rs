@@ -304,7 +304,7 @@ impl RepoTabsBarView {
         for repo in &state.repos {
             repo.id.hash(&mut hasher);
             repo.spec.workdir.hash(&mut hasher);
-            repo.missing_on_disk.hash(&mut hasher);
+            repo.feedback.missing_on_disk.hash(&mut hasher);
         }
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
@@ -335,7 +335,7 @@ impl RepoTabsBarView {
     }
 
     fn repo_tab_tooltip(repo: &RepoState) -> SharedString {
-        if repo.missing_on_disk {
+        if repo.feedback.missing_on_disk {
             return format!(
                 "Repository not found!\n{}",
                 path_display::path_display_string(&repo.spec.workdir)
@@ -347,7 +347,7 @@ impl RepoTabsBarView {
     }
 
     fn repo_tab_shows_missing_warning(repo: &RepoState, show_spinner: bool) -> bool {
-        repo.missing_on_disk && !show_spinner
+        repo.feedback.missing_on_disk && !show_spinner
     }
 
     fn repo_tab_click_message(active_repo: Option<RepoId>, repo_id: RepoId) -> Option<Msg> {
@@ -1406,7 +1406,7 @@ mod tests {
     #[test]
     fn repo_tab_tooltip_reports_missing_repository() {
         let mut repo = repo_state("/tmp/missing-repo");
-        repo.missing_on_disk = true;
+        repo.feedback.missing_on_disk = true;
         assert_eq!(
             RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
             "Repository not found!\n/tmp/missing-repo"
@@ -1416,7 +1416,7 @@ mod tests {
     #[test]
     fn missing_repo_warning_icon_yields_to_spinner() {
         let mut repo = repo_state("/tmp/missing-repo");
-        repo.missing_on_disk = true;
+        repo.feedback.missing_on_disk = true;
         assert!(RepoTabsBarView::repo_tab_shows_missing_warning(
             &repo, false
         ));

@@ -67,7 +67,7 @@ pub fn path_from_storage_key(raw: &str) -> PathBuf {
             && bytes.len() % 2 == 0
         {
             let mut wide = Vec::with_capacity(bytes.len() / 2);
-            for chunk in bytes.chunks_exact(2) {
+            for chunk in bytes.as_chunks::<2>().0 {
                 wide.push(u16::from_le_bytes([chunk[0], chunk[1]]));
             }
             return PathBuf::from(OsString::from_wide(&wide));
@@ -77,35 +77,5 @@ pub fn path_from_storage_key(raw: &str) -> PathBuf {
     PathBuf::from(raw)
 }
 
-pub(super) fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
-pub(super) fn hex_decode(hex: &str) -> Option<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(hex.len() / 2);
-    let bytes = hex.as_bytes();
-    for pair in bytes.as_chunks::<2>().0 {
-        let high = hex_value(pair[0])?;
-        let low = hex_value(pair[1])?;
-        out.push((high << 4) | low);
-    }
-    Some(out)
-}
-
-pub(super) fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
+pub(super) use gitcomet_core::hex::decode as hex_decode;
+pub(super) use gitcomet_core::hex::encode as hex_encode;

@@ -169,6 +169,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     let mut items = vec![ContextMenuItem::Header(
         components::ContextMenuText::new(header_text).max_lines(2),
     )];
+    let mut entry_tooltips = FxHashMap::default();
     if !commit_summary.is_empty() {
         items.push(ContextMenuItem::Label(
             components::ContextMenuText::new(commit_summary).max_lines(4),
@@ -284,7 +285,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.comparison_mark.clone());
+        .and_then(|repo| repo.navigation.comparison_mark.clone());
     items.push(ContextMenuItem::Entry {
         label: format!("Mark {short} for comparison").into(),
         icon: Some("icons/git_commit.svg".into()),
@@ -337,11 +338,13 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             commit_id: commit_id.clone(),
         }),
     });
+    let add_tag_disabled = !this.state.git_log_settings.show_history_tags;
+    let add_tag_ix = items.len();
     items.push(ContextMenuItem::Entry {
         label: "Add tag…".into(),
         icon: Some("icons/tag.svg".into()),
         shortcut: Some("T".into()),
-        disabled: false,
+        disabled: add_tag_disabled,
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::CreateTagPrompt {
                 repo_id,
@@ -349,6 +352,12 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             },
         }),
     });
+    if add_tag_disabled {
+        entry_tooltips.insert(
+            add_tag_ix,
+            "Enable “Show tags in history view” in Settings > Git log to add tags.".into(),
+        );
+    }
     items.push(ContextMenuItem::Entry {
         label: "Checkout (detached)".into(),
         icon: Some("icons/git_branch.svg".into()),
@@ -532,7 +541,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         });
     }
 
-    ContextMenuModel::new(items)
+    ContextMenuModel::new(items).with_entry_tooltips(entry_tooltips)
 }
 
 #[cfg(test)]

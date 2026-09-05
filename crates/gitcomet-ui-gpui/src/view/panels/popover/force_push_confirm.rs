@@ -11,7 +11,7 @@ pub(super) fn panel(
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.pending_force_push_lease.clone());
+        .and_then(|repo| repo.pending.force_push_lease.clone());
     let body = if let Some(lease) = lease.as_ref() {
         format!(
             "This will update {}/{} only if it still points at {} and {} is still checked out at {}.",

@@ -3,6 +3,43 @@ use super::message::InternalMsg;
 impl std::fmt::Debug for InternalMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InternalMsg::GitOperationStarted {
+                repo_id,
+                operation_id,
+                label,
+                context,
+                ..
+            } => f
+                .debug_struct("GitOperationStarted")
+                .field("repo_id", repo_id)
+                .field("operation_id", operation_id)
+                .field("label", label)
+                .field("context", context)
+                .finish(),
+            InternalMsg::GitOperationEvent {
+                repo_id,
+                operation_id,
+                event,
+            } => f
+                .debug_struct("GitOperationEvent")
+                .field("repo_id", repo_id)
+                .field("operation_id", operation_id)
+                .field("event", event)
+                .finish(),
+            InternalMsg::GitOperationFinished {
+                repo_id,
+                operation_id,
+                outer_outcome,
+                duration,
+                message,
+            } => f
+                .debug_struct("GitOperationFinished")
+                .field("repo_id", repo_id)
+                .field("operation_id", operation_id)
+                .field("outer_outcome", outer_outcome)
+                .field("duration", duration)
+                .field("message", message)
+                .finish(),
             InternalMsg::SessionPersistFailed {
                 repo_id,
                 action,
@@ -443,6 +480,23 @@ impl std::fmt::Debug for InternalMsg {
                 .debug_struct("RepoActionFinished")
                 .field("repo_id", repo_id)
                 .field("action", action)
+                .field("result", result)
+                .finish(),
+            InternalMsg::BranchAlreadyExists { action, prompt } => f
+                .debug_struct("BranchAlreadyExists")
+                .field("action", action)
+                .field("prompt", prompt)
+                .finish(),
+            InternalMsg::RepoActionFinishedInWorktree {
+                repo_id,
+                action,
+                worktree_path,
+                result,
+            } => f
+                .debug_struct("RepoActionFinishedInWorktree")
+                .field("repo_id", repo_id)
+                .field("action", action)
+                .field("worktree_path", worktree_path)
                 .field("result", result)
                 .finish(),
             InternalMsg::CommitFinished { repo_id, result } => f

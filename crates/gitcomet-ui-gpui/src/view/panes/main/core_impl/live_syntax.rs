@@ -196,14 +196,10 @@ impl MainPaneView {
 
         let build_mask = Arc::clone(&mask);
         self.conflict_resolved_output_live_syntax_build =
-            Some(cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
-                let build = move || rows::LiveSyntaxDocument::new(language, rope, build_mask, None);
-                let built = if crate::ui_runtime::current().uses_background_compute() {
-                    smol::unblock(build).await
-                } else {
-                    build()
-                };
-                let _ = view.update(cx, |this, cx| {
+            Some(crate::ui_runtime::run_background_compute(
+                cx,
+                move || rows::LiveSyntaxDocument::new(language, rope, build_mask, None),
+                move |this, cx, built| {
                     if this.conflict_resolved_output_live_syntax_building != Some(revision) {
                         // A newer generation owns the guard. Leave it alone --
                         // clearing it here would let its own scheduling check
@@ -236,8 +232,8 @@ impl MainPaneView {
                     // again and schedules another build -- forever.
                     this.conflict_resolved_output_live_syntax_source = Some((revision, mask));
                     this.rebind_conflict_resolved_output_highlight_provider(cx);
-                });
-            }));
+                },
+            ));
     }
 
     /// Re-run the off-thread first parse against the buffer as it stands now.
@@ -293,17 +289,13 @@ impl MainPaneView {
         };
 
         self.conflict_resolved_output_live_syntax_reparse =
-            Some(cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
-                let reparse = move || rows::live_syntax_reparse(request);
-                let parsed = if crate::ui_runtime::current().uses_background_compute() {
-                    smol::unblock(reparse).await
-                } else {
-                    reparse()
-                };
-                let Some((version, tree, injections)) = parsed else {
-                    return;
-                };
-                let _ = view.update(cx, |this, cx| {
+            Some(crate::ui_runtime::run_background_compute(
+                cx,
+                move || rows::live_syntax_reparse(request),
+                move |this, cx, parsed| {
+                    let Some((version, tree, injections)) = parsed else {
+                        return;
+                    };
                     let adopted = this
                         .conflict_resolved_output_live_syntax
                         .as_mut()
@@ -320,8 +312,8 @@ impl MainPaneView {
                     }
                     this.conflict_resolved_output_live_syntax_reparse = None;
                     this.rebind_conflict_resolved_output_highlight_provider(cx);
-                });
-            }));
+                },
+            ));
     }
 
     /// Hand the input a provider over the document's current tree.
