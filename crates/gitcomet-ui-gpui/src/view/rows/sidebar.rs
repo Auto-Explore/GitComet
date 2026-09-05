@@ -70,15 +70,20 @@ struct WorktreeBadgeColors {
 }
 
 /// Shared chip palette for the sidebar badges (workspace/worktree/upstream),
-/// with a transparent body and a quiet border at rest, accent-tinted when the
-/// badge refers to an open workspace. Text stays high-contrast while the icon
-/// retains the state color that previously colored the whole badge.
+/// with a transparent body and a quiet border at rest. Badges that refer to an
+/// open workspace use the main canvas surface on light themes and a lighter,
+/// raised surface on dark themes. Their text stays high-contrast and the icon
+/// retains the workspace state color.
 pub(in crate::view) fn worktree_badge_palette(theme: AppTheme) -> WorktreeBadgePalette {
     let transparent = gpui::rgba(0x00000000);
     let text = theme.colors.foreground.emphasis;
     WorktreeBadgePalette {
         bg: transparent,
-        active_bg: transparent,
+        active_bg: if theme.is_dark {
+            theme.colors.surface.raised
+        } else {
+            theme.colors.surface.canvas
+        },
         border: with_alpha(theme.colors.stroke.default, 0.90),
         hover_border: with_alpha(
             theme.colors.foreground.secondary,
@@ -1979,15 +1984,13 @@ impl SidebarPaneView {
                                 }) else {
                                     return;
                                 };
-                                this.set_selected_branch(repo_id, target_for_reveal.clone(), cx);
-                                this.reveal_branch_commit_in_history(
+                                this.select_branch_and_reveal_tip(
                                     repo_id,
                                     target_for_reveal.clone(),
                                     target.commit_id,
                                     target.fallback_scope,
                                     cx,
                                 );
-                                cx.notify();
                                 return;
                             }
                             if e.click_count() < 2 {
@@ -2650,29 +2653,34 @@ mod tests {
     }
 
     #[test]
-    fn worktree_badges_keep_a_transparent_body_and_stateful_icon_and_border() {
-        let theme = AppTheme::gitcomet_dark();
-        let palette = worktree_badge_palette(theme);
+    fn worktree_badges_use_a_theme_surface_only_for_the_active_body() {
+        let light = AppTheme::gitcomet_light();
+        let dark = AppTheme::gitcomet_dark();
+        for (theme, expected_active_bg) in [
+            (light, light.colors.surface.canvas),
+            (dark, dark.colors.surface.raised),
+        ] {
+            let palette = worktree_badge_palette(theme);
 
-        assert_eq!(palette.bg.alpha, 0.0);
-        assert_eq!(palette.active_bg.alpha, 0.0);
-        assert_eq!(palette.text, gpui::rgba(0xffffffff));
-        assert_eq!(palette.text, theme.colors.foreground.emphasis);
+            assert_eq!(palette.bg.alpha, 0.0);
+            assert_eq!(palette.active_bg, expected_active_bg);
+            assert_eq!(palette.text, theme.colors.foreground.emphasis);
 
-        let closed = worktree_badge_colors(palette, false, false);
-        assert_eq!(closed.border, palette.border);
-        assert_eq!(closed.icon, palette.icon);
-        assert_eq!(closed.text, palette.text);
+            let closed = worktree_badge_colors(palette, false, false);
+            assert_eq!(closed.border, palette.border);
+            assert_eq!(closed.icon, palette.icon);
+            assert_eq!(closed.text, palette.text);
 
-        let open = worktree_badge_colors(palette, true, false);
-        assert_eq!(open.border, palette.open_border);
-        assert_eq!(open.icon, palette.open_icon);
-        assert_eq!(open.text, palette.open_text);
+            let open = worktree_badge_colors(palette, true, false);
+            assert_eq!(open.border, palette.open_border);
+            assert_eq!(open.icon, palette.open_icon);
+            assert_eq!(open.text, palette.open_text);
 
-        let menu_active = worktree_badge_colors(palette, true, true);
-        assert_eq!(menu_active.border, palette.active_border);
-        assert_eq!(menu_active.icon, palette.active_icon);
-        assert_eq!(menu_active.text, palette.active_text);
+            let menu_active = worktree_badge_colors(palette, true, true);
+            assert_eq!(menu_active.border, palette.active_border);
+            assert_eq!(menu_active.icon, palette.active_icon);
+            assert_eq!(menu_active.text, palette.active_text);
+        }
     }
 
     #[test]
