@@ -4802,10 +4802,9 @@ fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
-fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestAppContext) {
-    // It used to be gated on a file being open as well, so the strip's contents
-    // changed as files were opened and closed — and it was simply absent for
-    // anyone who had not opened one yet.
+fn each_sidebar_tab_keeps_its_own_locate_button_present(cx: &mut gpui::TestAppContext) {
+    // The trailing action stays put as its data becomes available; switching
+    // tabs swaps it for the action belonging to that tree.
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -4818,7 +4817,11 @@ fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestApp
     sync_view_snapshot(cx, &view);
     assert!(
         cx.debug_bounds("sidebar_locate_open_file").is_none(),
-        "the Branches tab has no tree to locate anything in"
+        "the file-locate action belongs only to Files"
+    );
+    assert!(
+        cx.debug_bounds("sidebar_locate_active_branch").is_some(),
+        "Branches keeps its disabled locate action before HEAD is available"
     );
 
     // Files, still with no file open: present, and disabled rather than absent.
@@ -4829,6 +4832,10 @@ fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestApp
         cx.debug_bounds("sidebar_locate_open_file").is_some(),
         "the locate button belongs to the Files tab, open file or not"
     );
+    assert!(
+        cx.debug_bounds("sidebar_locate_active_branch").is_none(),
+        "the branch-locate action belongs only to Branches"
+    );
 
     state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
         path: PathBuf::from("src/main.rs"),
@@ -4838,6 +4845,139 @@ fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestApp
     store.replace_snapshot_for_test(Arc::new(state));
     sync_view_snapshot(cx, &view);
     assert!(cx.debug_bounds("sidebar_locate_open_file").is_some());
+}
+
+#[gpui::test]
+fn active_branch_locate_button_expands_scrolls_and_selects_like_its_row(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let active_name = "zzzz/deep/topic";
+    let active_tip = CommitId("active-branch-tip".into());
+    let branch = |name: String, target: CommitId| Branch {
+        name,
+        target,
+        upstream: None,
+        divergence: None,
+    };
+    let mut branches = (0..80)
+        .map(|ix| {
+            branch(
+                format!("group-{ix:03}/topic"),
+                CommitId(format!("tip-{ix:03}").into()),
+            )
+        })
+        .collect::<Vec<_>>();
+    branches.push(branch(active_name.to_string(), active_tip));
+    branches.push(branch(
+        "zzzz/deep/other".to_string(),
+        CommitId("other-tip".into()),
+    ));
+
+    let mut state = view_state_with_active_ready_repo(repo_id);
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Branches;
+    state.repos[0].head_branch = Loadable::Ready(active_name.to_string());
+    state.repos[0].branches = Loadable::Ready(Arc::new(branches));
+    state.repos[0].branches_rev = 1;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    let sidebar_pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+    cx.update(|_window, app| {
+        sidebar_pane.update(app, |pane, _cx| {
+            pane.set_branch_filter_query_for_test("does-not-match-head");
+            pane.set_collapsed_keys_for_test(&[
+                branch_sidebar::local_section_storage_key(),
+                "group:local:zzzz",
+                "group:local:zzzz/deep",
+                "group:local:release",
+            ]);
+        });
+    });
+    test_support::redraw(cx);
+
+    let button_center = cx
+        .debug_bounds("sidebar_locate_active_branch")
+        .expect("expected the Branches locate action")
+        .center();
+    cx.simulate_mouse_move(button_center, None, gpui::Modifiers::default());
+    test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some(format!(
+            "Show and select the active local branch: {active_name}"
+        ))
+    );
+
+    click_debug_selector(cx, "sidebar_locate_active_branch");
+
+    let target_ix = cx.update(|_window, app| {
+        sidebar_pane.update(app, |pane, _cx| {
+            assert!(pane.branch_filter_query.is_empty());
+            assert_eq!(
+                pane.selected_branch(),
+                Some(&SelectedBranch {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: active_name.to_string(),
+                })
+            );
+
+            let collapsed = pane.collapsed_items_for_test();
+            for expanded in [
+                branch_sidebar::local_section_storage_key(),
+                "group:local:zzzz",
+                "group:local:zzzz/deep",
+            ] {
+                assert!(!collapsed.contains(expanded), "{expanded} stayed collapsed");
+            }
+            assert!(
+                collapsed.contains("group:local:release"),
+                "unrelated groups should retain their state"
+            );
+
+            let presentation = pane
+                .branch_sidebar_presentation_cached()
+                .expect("expected the expanded branch presentation");
+            presentation
+                .rows
+                .iter()
+                .rposition(|row| {
+                    matches!(
+                        row,
+                        BranchSidebarRow::Branch {
+                            name,
+                            section: BranchSection::Local,
+                            ..
+                        } if name.as_ref() == active_name
+                    )
+                })
+                .expect("expected the active branch row after expansion")
+        })
+    });
+    test_support::redraw(cx);
+    let target_selector: &'static str =
+        Box::leak(format!("branch_row_{}_{}", repo_id.0, target_ix).into_boxed_str());
+    assert!(
+        cx.debug_bounds(target_selector).is_some(),
+        "the locate action should scroll the distant active branch row into the rendered viewport"
+    );
+
+    // Drawing the programmatic scroll starts the branch scrollbar's auto-hide
+    // task. Remove that scrollbar from the element tree so its state drops and
+    // cancels the task on this test's thread, before another GPUI test installs
+    // a different test scheduler.
+    let mut teardown_state = store.snapshot().as_ref().clone();
+    teardown_state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    store.replace_snapshot_for_test(Arc::new(teardown_state));
+    sync_view_snapshot(cx, &view);
+    cx.run_until_parked();
 }
 
 #[gpui::test]
