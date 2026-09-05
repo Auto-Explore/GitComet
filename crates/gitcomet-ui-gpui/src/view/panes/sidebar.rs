@@ -530,15 +530,10 @@ impl SidebarPaneView {
     pub(in super::super) fn set_selected_branch(
         &mut self,
         repo_id: RepoId,
-        section: BranchSection,
-        name: &str,
+        target: BranchMenuTarget,
         cx: &mut gpui::Context<Self>,
     ) {
-        let next = Some(SelectedBranch {
-            repo_id,
-            section,
-            name: name.to_string(),
-        });
+        let next = Some(SelectedBranch { repo_id, target });
         if self.selected_branch.as_ref() == next.as_ref() {
             return;
         }
@@ -2674,21 +2669,18 @@ impl SidebarPaneView {
     pub(in super::super) fn reveal_branch_commit_in_history(
         &mut self,
         repo_id: RepoId,
-        section: BranchSection,
-        branch_name: &str,
+        target: BranchMenuTarget,
         commit_id: CommitId,
         fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let branch_name = branch_name.to_string();
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
                 root.main_pane.update(cx, |pane, cx| {
                     pane.reveal_history_branch_commit(
                         repo_id,
-                        section,
-                        &branch_name,
+                        target,
                         commit_id,
                         fallback_scope,
                         cx,

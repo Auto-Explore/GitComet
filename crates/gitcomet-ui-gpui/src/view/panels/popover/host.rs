@@ -32,6 +32,36 @@ fn stale_checkout_remote_branch_prompt(
     .then(|| StaleCheckoutPrompt::BranchGone(format!("{remote}/{branch}")))
 }
 
+pub(super) fn upstream_prompt_submission(
+    kind: &PopoverKind,
+    remote: String,
+    remote_branch: String,
+) -> Option<Msg> {
+    let PopoverKind::PushSetUpstreamPrompt {
+        repo_id,
+        configure_only_for,
+        ..
+    } = kind
+    else {
+        return None;
+    };
+    Some(match configure_only_for {
+        Some(local_branch) => Msg::SetUpstreamBranch {
+            repo_id: *repo_id,
+            branch: local_branch.clone(),
+            upstream: Upstream {
+                remote,
+                branch: remote_branch,
+            },
+        },
+        None => Msg::PushSetUpstream {
+            repo_id: *repo_id,
+            remote,
+            branch: remote_branch,
+        },
+    })
+}
+
 impl PopoverHost {
     #[cfg(test)]
     pub(in crate::view) fn create_branch_input_focus_handle_for_test(
@@ -725,6 +755,7 @@ impl PopoverHost {
         let remote_add_focus = DialogFocus::new(cx);
         let remote_edit_focus = DialogFocus::new(cx);
         let push_upstream_focus = DialogFocus::new(cx);
+        let push_upstream_remote_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let worktree_browse_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let worktree_focus = DialogFocus::new(cx);
         let submodule_advanced_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
@@ -750,6 +781,7 @@ impl PopoverHost {
             _ui_model_subscription: subscription,
             _repo_picker_search_input_subscription: None,
             _branch_picker_search_input_subscription: None,
+            _upstream_picker_search_input_subscription: None,
             _worktree_picker_search_input_subscription: None,
             _workspace_picker_search_input_subscription: None,
             _submodule_picker_search_input_subscription: None,
@@ -792,6 +824,7 @@ impl PopoverHost {
             repo_picker_sort_menu_open: false,
             picker_row_menu: None,
             branch_picker_selected_index: None,
+            upstream_picker_selected_index: None,
             worktree_picker_selected_index: None,
             workspace_picker_selected_index: None,
             pending_worktree_add_prefill: None,
@@ -800,6 +833,7 @@ impl PopoverHost {
             history_author_filter_selected_index: None,
             history_author_suggestions: None,
             branch_picker_rows_cache: rows_cache::RowsCache::default(),
+            upstream_picker_rows_cache: rows_cache::RowsCache::default(),
             workspace_picker_rows_cache: rows_cache::RowsCache::default(),
             repo_picker_rows_cache: rows_cache::RowsCache::default(),
             stash_picker_rows_cache: rows_cache::RowsCache::default(),
@@ -862,6 +896,9 @@ impl PopoverHost {
             remote_add_focus,
             remote_edit_focus,
             push_upstream_focus,
+            push_upstream_remote_focus_handle,
+            push_upstream_remote_menu_open: false,
+            push_upstream_remote_selected_index: None,
             worktree_browse_focus_handle,
             worktree_focus,
             submodule_advanced_focus_handle,
@@ -1965,26 +2002,86 @@ impl PopoverHost {
     }
 
     pub(super) fn can_submit_push_set_upstream(&self, cx: &mut gpui::Context<Self>) -> bool {
-        self.push_upstream_branch_input
-            .read_with(cx, |i, _| !i.text().trim().is_empty())
+        let local_branch_is_current = match self.popover.as_ref() {
+            Some(PopoverKind::PushSetUpstreamPrompt {
+                repo_id,
+                configure_only_for: Some(branch),
+                ..
+            }) => self
+                .state
+                .repos
+                .iter()
+                .find(|repo| repo.id == *repo_id)
+                .is_some_and(|repo| {
+                    matches!(&repo.head_branch, Loadable::Ready(head) if head == branch)
+                        && repo.branches.ready().is_some_and(|branches| {
+                            branches.iter().any(|candidate| candidate.name == *branch)
+                        })
+                }),
+            Some(PopoverKind::PushSetUpstreamPrompt { .. }) => true,
+            _ => false,
+        };
+        local_branch_is_current
+            && self.selected_push_upstream_remote().is_some()
+            && self
+                .push_upstream_branch_input
+                .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
+    pub(super) fn selected_push_upstream_remote(&self) -> Option<String> {
+        let PopoverKind::PushSetUpstreamPrompt {
+            repo_id, remote, ..
+        } = self.popover.as_ref()?
+        else {
+            return None;
+        };
+        let repo = self.state.repos.iter().find(|repo| repo.id == *repo_id)?;
+        push_set_upstream_prompt::selected_remote(repo, remote)
+    }
+
+    pub(super) fn select_push_upstream_remote(
+        &mut self,
+        selected: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(PopoverKind::PushSetUpstreamPrompt {
+            repo_id, remote, ..
+        }) = self.popover.as_mut()
+        else {
+            return;
+        };
+        let is_configured = self
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == *repo_id)
+            .map(push_set_upstream_prompt::remote_names)
+            .is_some_and(|names| names.contains(&selected));
+        if is_configured {
+            *remote = selected;
+        }
+        self.push_upstream_remote_menu_open = false;
+        self.push_upstream_remote_selected_index = None;
+        cx.notify();
     }
 
     pub(super) fn submit_push_set_upstream(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(PopoverKind::PushSetUpstreamPrompt { repo_id, remote }) = self.popover.clone()
-        else {
+        let Some(kind @ PopoverKind::PushSetUpstreamPrompt { .. }) = self.popover.clone() else {
             return;
         };
         if !self.can_submit_push_set_upstream(cx) {
             return;
         }
+        let Some(remote) = self.selected_push_upstream_remote() else {
+            return;
+        };
         let branch = self
             .push_upstream_branch_input
             .read_with(cx, |i, _| i.text().trim().to_string());
-        self.store.dispatch(Msg::PushSetUpstream {
-            repo_id,
-            remote,
-            branch,
-        });
+        let Some(message) = upstream_prompt_submission(&kind, remote, branch) else {
+            return;
+        };
+        self.store.dispatch(message);
         self.close_popover(cx);
     }
 
@@ -2180,6 +2277,7 @@ impl PopoverHost {
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => Some(*repo_id),
             PopoverKind::CommitOptionsMenu { repo_id } => Some(*repo_id),
             PopoverKind::BranchPicker { .. } => self.state.active_repo,
+            PopoverKind::UpstreamPicker { repo_id, .. } => Some(*repo_id),
             _ => None,
         };
         let Some(repo_id) = repo_id else {
@@ -2189,8 +2287,12 @@ impl PopoverHost {
             return;
         };
 
-        if matches!(kind, PopoverKind::BranchPicker { .. }) {
-            // Decorates the checkout picker's rows; load once, retry on error.
+        if matches!(
+            kind,
+            PopoverKind::BranchPicker { .. } | PopoverKind::UpstreamPicker { .. }
+        ) {
+            // Decorates the checkout and upstream pickers' shared branch rows;
+            // load once, retry on error.
             if matches!(repo.ref_metadata, Loadable::NotLoaded | Loadable::Error(_)) {
                 self.store.dispatch(Msg::LoadRefMetadata { repo_id });
             }
@@ -2274,6 +2376,7 @@ impl PopoverHost {
                     | PopoverKind::BranchPicker {
                         purpose: BranchPickerPurpose::Checkout,
                     }
+                    | PopoverKind::UpstreamPicker { .. }
                     | PopoverKind::Repo {
                         kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
                         ..
@@ -2292,6 +2395,7 @@ impl PopoverHost {
         // picker would spread its occluding scrim over an unrelated popover.
         self.picker_row_menu = None;
         self.branch_picker_selected_index = None;
+        self.upstream_picker_selected_index = None;
         self.worktree_picker_selected_index = None;
         self.workspace_picker_selected_index = None;
         self.submodule_picker_selected_index = None;
@@ -2301,6 +2405,7 @@ impl PopoverHost {
         // only be reused when that data is unchanged. Dropping them on open still
         // keeps the memory from outliving the picker that needed it.
         self.branch_picker_rows_cache.clear();
+        self.upstream_picker_rows_cache.clear();
         self.workspace_picker_rows_cache.clear();
         self.repo_picker_rows_cache.clear();
         self.stash_picker_rows_cache.clear();
@@ -2361,6 +2466,11 @@ impl PopoverHost {
                 }
                 PopoverKind::BranchPicker { .. } => {
                     let _ = self.ensure_branch_picker_search_input(window, cx);
+                }
+                PopoverKind::UpstreamPicker { repo_id, branch } => {
+                    let _ = self.ensure_upstream_picker_search_input(window, cx);
+                    self.upstream_picker_selected_index =
+                        upstream_picker::initial_selected_index(self, *repo_id, branch);
                 }
                 PopoverKind::CreateBranchFromRefPrompt {
                     source_selectable,
@@ -2691,21 +2801,28 @@ impl PopoverHost {
                 PopoverKind::HistoryAuthorFilter { .. } => {
                     self.ensure_history_author_filter_search_input(window, cx);
                 }
-                PopoverKind::PushSetUpstreamPrompt { repo_id, .. } => {
+                PopoverKind::PushSetUpstreamPrompt {
+                    repo_id,
+                    configure_only_for,
+                    ..
+                } => {
                     let theme = self.theme;
+                    self.push_upstream_remote_menu_open = false;
+                    self.push_upstream_remote_selected_index = None;
                     let current_text = self
                         .push_upstream_branch_input
                         .read_with(cx, |i, _| i.text().to_string());
-                    let text = self
-                        .state
-                        .repos
-                        .iter()
-                        .find(|r| r.id == *repo_id)
-                        .and_then(|repo| match &repo.head_branch {
-                            Loadable::Ready(head) if !head.is_empty() => Some(head.clone()),
-                            _ => None,
-                        })
-                        .unwrap_or(current_text);
+                    let text = configure_only_for.clone().unwrap_or_else(|| {
+                        self.state
+                            .repos
+                            .iter()
+                            .find(|r| r.id == *repo_id)
+                            .and_then(|repo| match &repo.head_branch {
+                                Loadable::Ready(head) if !head.is_empty() => Some(head.clone()),
+                                _ => None,
+                            })
+                            .unwrap_or(current_text)
+                    });
                     self.push_upstream_branch_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text(text, cx);

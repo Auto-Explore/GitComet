@@ -652,10 +652,20 @@ pub(in crate::view) struct HistoryRefListItem {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) enum HistoryRefListItemKind {
-    Tag { name: String },
-    LocalBranch { name: String },
-    RemoteBranch { name: String },
-    AttachedHead { branch: String },
+    Tag {
+        name: String,
+    },
+    LocalBranch {
+        name: String,
+    },
+    RemoteBranch {
+        name: String,
+        remote: String,
+        branch: String,
+    },
+    AttachedHead {
+        branch: String,
+    },
     DetachedHead,
 }
 
@@ -1094,7 +1104,7 @@ pub(in crate::view) fn build_history_branch_text_by_target<'a>(
 #[derive(Clone, Default)]
 struct HistoryBranchChipGroup {
     has_local: bool,
-    remote_names: SmallVec<[String; 2]>,
+    remote_targets: SmallVec<[BranchMenuTarget; 2]>,
 }
 
 type HistoryBranchChipGroups = FxHashMap<String, HistoryBranchChipGroup>;
@@ -1126,22 +1136,16 @@ fn history_branch_chips_from_groups(
     }
 
     for (name, mut group) in groups {
-        group.remote_names.sort_unstable();
-        group.remote_names.dedup();
+        group.remote_targets.sort_unstable();
+        group.remote_targets.dedup();
 
         let mut targets = Vec::with_capacity(
-            usize::from(group.has_local).saturating_add(group.remote_names.len()),
+            usize::from(group.has_local).saturating_add(group.remote_targets.len()),
         );
         if group.has_local {
-            targets.push(BranchMenuTarget {
-                section: BranchSection::Local,
-                name: name.clone(),
-            });
+            targets.push(BranchMenuTarget::local(name.clone()));
         }
-        targets.extend(group.remote_names.into_iter().map(|name| BranchMenuTarget {
-            section: BranchSection::Remote,
-            name,
-        }));
+        targets.extend(group.remote_targets);
 
         chips.push(HistoryBranchChipVm {
             text: HistoryTextVm::new(SharedString::from(name.clone())),
@@ -1177,14 +1181,13 @@ pub(in crate::view) fn build_history_branch_chips_by_target<'a>(
     }
 
     for branch in remote_branches {
-        let full_name = format!("{}/{}", branch.remote, branch.name);
         groups_by_target
             .entry(branch.target.as_ref())
             .or_default()
             .entry(branch.name.clone())
             .or_default()
-            .remote_names
-            .push(full_name);
+            .remote_targets
+            .push(BranchMenuTarget::remote(&branch.remote, &branch.name));
     }
 
     let head_branch_chips = head_branch.map(|head| {
@@ -1219,6 +1222,8 @@ fn history_branch_ref_item(name: HistoryBranchNameRef<'_>) -> HistoryRefListItem
         },
         HistoryBranchNameRef::Remote { remote, name } => HistoryRefListItemKind::RemoteBranch {
             name: format!("{remote}/{name}"),
+            remote: remote.to_string(),
+            branch: name.to_string(),
         },
     };
 
@@ -1833,18 +1838,9 @@ mod tests {
         assert_eq!(
             targets.as_ref(),
             [
-                BranchMenuTarget {
-                    section: BranchSection::Local,
-                    name: "main".to_string(),
-                },
-                BranchMenuTarget {
-                    section: BranchSection::Remote,
-                    name: "origin/main".to_string(),
-                },
-                BranchMenuTarget {
-                    section: BranchSection::Remote,
-                    name: "upstream/main".to_string(),
-                },
+                BranchMenuTarget::local("main"),
+                BranchMenuTarget::remote("origin", "main"),
+                BranchMenuTarget::remote("upstream", "main"),
             ]
         );
     }
@@ -1874,18 +1870,12 @@ mod tests {
         assert!(matches!(
             &local_chip.kind,
             HistoryBranchChipKind::Branch { targets, .. }
-                if targets.as_ref() == [BranchMenuTarget {
-                    section: BranchSection::Local,
-                    name: "topic".to_string(),
-                }]
+                if targets.as_ref() == [BranchMenuTarget::local("topic")]
         ));
         assert!(matches!(
             &remote_chip.kind,
             HistoryBranchChipKind::Branch { targets, .. }
-                if targets.as_ref() == [BranchMenuTarget {
-                    section: BranchSection::Remote,
-                    name: "origin/topic".to_string(),
-                }]
+                if targets.as_ref() == [BranchMenuTarget::remote("origin", "topic")]
         ));
     }
 
@@ -2057,7 +2047,7 @@ mod tests {
         ));
         assert!(matches!(
             ref_items[4].kind,
-            HistoryRefListItemKind::RemoteBranch { ref name } if name == "origin/main"
+            HistoryRefListItemKind::RemoteBranch { ref name, .. } if name == "origin/main"
         ));
 
         let hidden_tags = Arc::<[HistoryTextVm]>::from([]);
@@ -2110,7 +2100,7 @@ mod tests {
         ));
         assert!(matches!(
             items[2].kind,
-            HistoryRefListItemKind::RemoteBranch { ref name } if name == "origin/main"
+            HistoryRefListItemKind::RemoteBranch { ref name, .. } if name == "origin/main"
         ));
     }
 
@@ -2157,7 +2147,7 @@ mod tests {
         ));
         assert!(matches!(
             items[1].kind,
-            HistoryRefListItemKind::RemoteBranch { ref name } if name == "origin/main"
+            HistoryRefListItemKind::RemoteBranch { ref name, .. } if name == "origin/main"
         ));
     }
 

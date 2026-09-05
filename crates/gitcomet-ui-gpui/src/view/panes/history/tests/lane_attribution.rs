@@ -101,6 +101,8 @@ fn attribution_reads_origin_prefixed_remotes_as_their_branch() {
             text: HistoryTextVm::new("origin/dev".into()),
             kind: HistoryRefListItemKind::RemoteBranch {
                 name: "origin/dev".to_string(),
+                remote: "origin".to_string(),
+                branch: "dev".to_string(),
             },
         },
     ];

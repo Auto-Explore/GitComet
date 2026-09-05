@@ -1,5 +1,5 @@
 use gitcomet_core::domain::{Upstream, UpstreamDivergence};
-use gitcomet_core::services::GitBackend;
+use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
@@ -31,6 +31,193 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+fn initialize_repo_with_commit(repo: &Path) {
+    fs::create_dir_all(repo).unwrap();
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(repo.join("file.txt"), "base\n").unwrap();
+    run_git(repo, &["add", "file.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+}
+
+fn upstream(remote: &str, branch: &str) -> Upstream {
+    Upstream {
+        remote: remote.to_string(),
+        branch: branch.to_string(),
+    }
+}
+
+#[test]
+fn overlapping_remote_names_keep_exact_branch_identities() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    initialize_repo_with_commit(&repo);
+
+    // `git remote add` rejects this overlapping pair, but the configuration is
+    // valid syntax and can arise from hand-edited or generated config.
+    run_git(&repo, &["config", "remote.team.url", "."]);
+    run_git(
+        &repo,
+        &[
+            "config",
+            "remote.team.fetch",
+            "+refs/heads/*:refs/remotes/team/*",
+        ],
+    );
+    run_git(&repo, &["config", "remote.team/alice.url", "."]);
+    run_git(
+        &repo,
+        &[
+            "config",
+            "remote.team/alice.fetch",
+            "+refs/heads/*:refs/remotes/team/alice/*",
+        ],
+    );
+    run_git(
+        &repo,
+        &["update-ref", "refs/remotes/team/alice/main", "HEAD"],
+    );
+
+    let opened = GixBackend.open(&repo).unwrap();
+    let branches = opened.list_remote_branches().unwrap();
+    assert_eq!(
+        branches
+            .iter()
+            .map(|branch| (branch.remote.as_str(), branch.name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("team", "alice/main"), ("team/alice", "main")]
+    );
+}
+
+#[test]
+fn structured_upstream_target_preserves_an_ambiguous_name_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    initialize_repo_with_commit(&repo);
+    run_git(&repo, &["branch", "feature"]);
+    run_git(&repo, &["config", "remote.team.url", "."]);
+    run_git(
+        &repo,
+        &[
+            "config",
+            "remote.team.fetch",
+            "+refs/heads/*:refs/remotes/team/*",
+        ],
+    );
+    run_git(&repo, &["config", "remote.team/alice.url", "."]);
+    run_git(
+        &repo,
+        &[
+            "config",
+            "remote.team/alice.fetch",
+            "+refs/heads/*:refs/remotes/team/alice/*",
+        ],
+    );
+    run_git(
+        &repo,
+        &["update-ref", "refs/remotes/team/alice/main", "HEAD"],
+    );
+
+    let opened = GixBackend.open(&repo).unwrap();
+    for target in [
+        upstream("team", "alice/main"),
+        upstream("team/alice", "main"),
+    ] {
+        opened
+            .set_upstream_branch_with_output("feature", &target)
+            .expect("set exact upstream");
+
+        assert_eq!(
+            run_git_capture(&repo, &["config", "--get", "branch.feature.remote"]).trim(),
+            target.remote
+        );
+        assert_eq!(
+            run_git_capture(&repo, &["config", "--get", "branch.feature.merge"]).trim(),
+            format!("refs/heads/{}", target.branch)
+        );
+        assert_eq!(
+            run_git_capture(
+                &repo,
+                &[
+                    "for-each-ref",
+                    "--format=%(upstream:short)|%(upstream:track)|%(upstream:remotename)|%(upstream:remoteref)",
+                    "refs/heads/feature",
+                ],
+            )
+            .trim(),
+            format!(
+                "team/alice/main||{}|refs/heads/{}",
+                target.remote, target.branch
+            )
+        );
+        let feature = opened
+            .list_branches()
+            .unwrap()
+            .into_iter()
+            .find(|branch| branch.name == "feature")
+            .expect("feature branch");
+        assert_eq!(feature.upstream, Some(target));
+    }
+}
+
+#[test]
+fn checkout_remote_branch_uses_the_fetch_refspec_tracking_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    initialize_repo_with_commit(&repo);
+
+    run_git(&repo, &["config", "remote.origin.url", "."]);
+    run_git(
+        &repo,
+        &[
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/main:refs/remotes/origin/review",
+        ],
+    );
+    run_git(&repo, &["update-ref", "refs/remotes/origin/review", "HEAD"]);
+
+    let opened = GixBackend.open(&repo).unwrap();
+    assert!(
+        opened
+            .list_remote_branches()
+            .unwrap()
+            .iter()
+            .any(|branch| branch.remote == "origin" && branch.name == "main")
+    );
+
+    opened
+        .checkout_remote_branch(
+            "origin",
+            "main",
+            "review-local",
+            CheckoutRemoteBranchMode::Create,
+        )
+        .expect("checkout should resolve the mapped local tracking ref");
+
+    assert_eq!(
+        run_git_capture(&repo, &["branch", "--show-current"]).trim(),
+        "review-local"
+    );
+    assert_eq!(
+        run_git_capture(
+            &repo,
+            &[
+                "for-each-ref",
+                "--format=%(upstream:remotename)|%(upstream:remoteref)",
+                "refs/heads/review-local",
+            ],
+        )
+        .trim(),
+        "origin|refs/heads/main"
+    );
 }
 
 fn git_remote_url(path: &Path) -> String {
@@ -373,7 +560,7 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
     assert_eq!(feature_before.upstream, None);
 
     let output = opened
-        .set_upstream_branch_with_output("feature", "origin/feature")
+        .set_upstream_branch_with_output("feature", &upstream("origin", "feature"))
         .expect("set upstream");
     assert_eq!(output.exit_code, Some(0));
 
@@ -398,6 +585,205 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
             remote: "origin".to_string(),
             branch: "feature".to_string(),
         })
+    );
+}
+
+#[test]
+fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
+    if !require_git_shell_for_refs_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    fs::create_dir_all(&remote_repo).unwrap();
+    fs::create_dir_all(&work_repo).unwrap();
+
+    run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
+    run_git(&work_repo, &["init", "-b", "main"]);
+    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
+    run_git(&work_repo, &["config", "user.name", "You"]);
+    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    let origin_url = git_remote_url(&remote_repo);
+    run_git(
+        &work_repo,
+        &["remote", "add", "origin", origin_url.as_str()],
+    );
+
+    fs::write(work_repo.join("file.txt"), "base\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    run_git(&work_repo, &["checkout", "-b", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).unwrap();
+    let target = upstream("origin", "review/feature");
+    opened
+        .set_upstream_branch_with_output("feature", &target)
+        .expect("configure not-yet-pushed upstream");
+    opened
+        .fetch_all_with_output_prune(true)
+        .expect("pending upstream survives a pruning fetch before its first push");
+
+    assert!(
+        run_git_capture(
+            &work_repo,
+            &[
+                "ls-remote",
+                "--heads",
+                "origin",
+                "refs/heads/review/feature"
+            ],
+        )
+        .trim()
+        .is_empty(),
+        "setting upstream must not push or create the remote ref"
+    );
+    assert_eq!(
+        run_git_capture(&work_repo, &["config", "--get", "branch.feature.remote"]).trim(),
+        "origin"
+    );
+    assert_eq!(
+        run_git_capture(&work_repo, &["config", "--get", "branch.feature.merge"]).trim(),
+        "refs/heads/review/feature"
+    );
+    assert_eq!(
+        run_git_capture(
+            &work_repo,
+            &["config", "--get", "branch.feature.gitcometPendingUpstream"],
+        )
+        .trim(),
+        "true"
+    );
+
+    let branches = opened.list_branches().unwrap();
+    let feature = branches
+        .iter()
+        .find(|branch| branch.name == "feature")
+        .expect("feature branch present");
+    assert_eq!(feature.upstream.as_ref(), Some(&target));
+    assert_eq!(feature.divergence, None);
+
+    opened
+        .push_with_output()
+        .expect("later push uses the configured target");
+    assert!(
+        !run_git_capture(
+            &work_repo,
+            &[
+                "ls-remote",
+                "--heads",
+                "origin",
+                "refs/heads/review/feature"
+            ],
+        )
+        .trim()
+        .is_empty(),
+        "the next normal push must create the configured remote branch"
+    );
+    assert!(
+        run_git_capture(
+            &work_repo,
+            &["ls-remote", "--heads", "origin", "refs/heads/feature"],
+        )
+        .trim()
+        .is_empty(),
+        "the push must not silently fall back to the local branch name"
+    );
+    let pending_marker = Command::new("git")
+        .arg("-C")
+        .arg(&work_repo)
+        .args(["config", "--get", "branch.feature.gitcometPendingUpstream"])
+        .status()
+        .expect("read pending-upstream marker");
+    assert!(
+        !pending_marker.success(),
+        "a successful push must clear the pending-upstream marker"
+    );
+}
+
+#[test]
+fn fetching_a_pending_upstream_that_now_exists_clears_the_pending_marker() {
+    if !require_git_shell_for_refs_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    fs::create_dir_all(&remote_repo).unwrap();
+    fs::create_dir_all(&work_repo).unwrap();
+
+    run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
+    run_git(&work_repo, &["init", "-b", "main"]);
+    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
+    run_git(&work_repo, &["config", "user.name", "You"]);
+    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    let origin_url = git_remote_url(&remote_repo);
+    run_git(
+        &work_repo,
+        &["remote", "add", "origin", origin_url.as_str()],
+    );
+    fs::write(work_repo.join("file.txt"), "base\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    run_git(&work_repo, &["checkout", "-b", "feature"]);
+
+    let opened = GixBackend.open(&work_repo).unwrap();
+    let target = upstream("origin", "review/feature");
+    opened
+        .set_upstream_branch_with_output("feature", &target)
+        .expect("configure future upstream");
+
+    // Simulate another client creating the configured target. Remove the
+    // push-updated local tracking ref so this fetch is what observes it.
+    run_git(
+        &work_repo,
+        &["push", "origin", "HEAD:refs/heads/review/feature"],
+    );
+    run_git(
+        &work_repo,
+        &["update-ref", "-d", "refs/remotes/origin/review/feature"],
+    );
+    opened
+        .fetch_all_with_output_prune(true)
+        .expect("fetch newly live upstream");
+
+    let marker = Command::new("git")
+        .arg("-C")
+        .arg(&work_repo)
+        .args(["config", "--get", "branch.feature.gitcometPendingUpstream"])
+        .status()
+        .expect("read pending-upstream marker");
+    assert!(
+        !marker.success(),
+        "observing the mapped tracking ref must clear the pending marker"
+    );
+
+    run_git(
+        &work_repo,
+        &["push", "origin", "--delete", "review/feature"],
+    );
+    opened
+        .fetch_all_with_output_prune(true)
+        .expect("prune removed upstream");
+    let feature = opened
+        .list_branches()
+        .unwrap()
+        .into_iter()
+        .find(|branch| branch.name == "feature")
+        .expect("feature branch");
+    assert_eq!(
+        feature.upstream, None,
+        "once live, a later pruned upstream must be unlinked normally"
     );
 }
 
@@ -457,7 +843,7 @@ fn list_branches_reflects_repeated_tracking_toggles_on_same_repo_instance() {
     assert_eq!(feature_upstream(&opened.list_branches().unwrap()), None);
 
     let output = opened
-        .set_upstream_branch_with_output("feature", "origin/feature")
+        .set_upstream_branch_with_output("feature", &upstream("origin", "feature"))
         .expect("set upstream");
     assert_eq!(output.exit_code, Some(0));
     assert_eq!(
@@ -475,7 +861,7 @@ fn list_branches_reflects_repeated_tracking_toggles_on_same_repo_instance() {
     assert_eq!(feature_upstream(&opened.list_branches().unwrap()), None);
 
     let output = opened
-        .set_upstream_branch_with_output("feature", "origin/feature")
+        .set_upstream_branch_with_output("feature", &upstream("origin", "feature"))
         .expect("restore upstream");
     assert_eq!(output.exit_code, Some(0));
     assert_eq!(

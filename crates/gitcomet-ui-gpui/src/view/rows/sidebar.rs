@@ -332,37 +332,33 @@ struct BranchHistoryRevealTarget {
     fallback_scope: Option<LogScope>,
 }
 
-fn branch_commit_id(repo: &RepoState, section: BranchSection, name: &str) -> Option<CommitId> {
-    match section {
-        BranchSection::Local => match &repo.branches {
+fn branch_commit_id(repo: &RepoState, target: &BranchMenuTarget) -> Option<CommitId> {
+    match target {
+        BranchMenuTarget::Local { name } => match &repo.branches {
             Loadable::Ready(branches) => branches
                 .iter()
-                .find(|branch| branch.name == name)
+                .find(|branch| branch.name == *name)
                 .map(|branch| branch.target.clone()),
             _ => None,
         },
-        BranchSection::Remote => {
-            let (remote, branch_name) = name.split_once('/')?;
-            match &repo.remote_branches {
-                Loadable::Ready(branches) => branches
-                    .iter()
-                    .find(|branch| branch.remote == remote && branch.name == branch_name)
-                    .map(|branch| branch.target.clone()),
-                _ => None,
-            }
-        }
+        BranchMenuTarget::Remote { remote, branch } => match &repo.remote_branches {
+            Loadable::Ready(branches) => branches
+                .iter()
+                .find(|candidate| candidate.remote == *remote && candidate.name == *branch)
+                .map(|candidate| candidate.target.clone()),
+            _ => None,
+        },
     }
 }
 
 fn branch_click_history_reveal_target(
     repo: &RepoState,
-    section: BranchSection,
-    name: &str,
+    target: &BranchMenuTarget,
     is_head: bool,
 ) -> Option<BranchHistoryRevealTarget> {
-    let commit_id = branch_commit_id(repo, section, name)?;
+    let commit_id = branch_commit_id(repo, target)?;
 
-    let fallback_scope = match section {
+    let fallback_scope = match target.section() {
         BranchSection::Local if is_head => Some(LogScope::FullReachable),
         BranchSection::Local | BranchSection::Remote => Some(LogScope::AllBranches),
     };
@@ -376,15 +372,13 @@ fn branch_click_history_reveal_target(
 fn branch_row_is_selected(
     selected_branch: Option<&SelectedBranch>,
     repo_id: RepoId,
-    section: BranchSection,
-    name: &str,
+    target: &BranchMenuTarget,
     selected_commit: Option<&CommitId>,
     selected_branch_commit_id: Option<&CommitId>,
 ) -> bool {
     selected_branch.is_some_and(|selected_branch| {
         selected_branch.repo_id == repo_id
-            && selected_branch.section == section
-            && selected_branch.name == name
+            && selected_branch.target == *target
             && selected_branch_commit_id.is_some_and(|commit_id| selected_commit == Some(commit_id))
     })
 }
@@ -459,9 +453,7 @@ impl SidebarPaneView {
                 let selected_branch_commit_id = selected_branch
                     .as_ref()
                     .filter(|selected| selected.repo_id == repo_id)
-                    .and_then(|selected| {
-                        branch_commit_id(repo, selected.section, selected.name.as_str())
-                    });
+                    .and_then(|selected| branch_commit_id(repo, &selected.target));
                 (selected_commit, selected_branch_commit_id)
             });
 
@@ -1620,6 +1612,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::Branch {
                     name,
+                    target,
                     section,
                     depth,
                     muted,
@@ -1629,9 +1622,11 @@ impl SidebarPaneView {
                     is_upstream,
                 } => {
                     let full_name_for_checkout: SharedString = name.clone();
-                    let full_name_for_reveal: SharedString = name.clone();
                     let full_name_for_menu: SharedString = name.clone();
                     let full_name_for_tooltip: SharedString = name.clone();
+                    let target_for_reveal = target.clone();
+                    let target_for_checkout = target.clone();
+                    let target_for_menu = target.clone();
                     let section_key = match section {
                         BranchSection::Local => "local",
                         BranchSection::Remote => "remote",
@@ -1663,8 +1658,7 @@ impl SidebarPaneView {
                     let branch_selected = branch_row_is_selected(
                         selected_branch.as_ref(),
                         repo_id,
-                        section,
-                        full_name_for_reveal.as_ref(),
+                        &target,
                         selected_commit.as_ref(),
                         selected_branch_commit_id.as_ref(),
                     );
@@ -1724,16 +1718,23 @@ impl SidebarPaneView {
                             badge
                         };
                     let upstream_badge = |debug_selector: Option<String>| {
-                        // Accent-tinted variant of the shared badge chip, in
-                        // line with the history table's tag chips.
+                        // The active upstream is a ref relationship, but it
+                        // uses the same compact control-shaped chip as the
+                        // worktree badge so the sidebar's status badges read as
+                        // one family.
+                        let colors = worktree_badge_colors(worktree_badge_palette, true, false);
                         let mut badge = div()
+                            .flex()
+                            .items_center()
+                            .gap(scaled_px(3.0))
                             .px(scaled_px(6.0))
-                            .rounded(px(theme.radii.pill))
+                            .rounded(px(theme.radii.control))
                             .text_size(scaled_px(11.0))
-                            .text_color(theme.colors.accent.foreground)
-                            .bg(with_alpha(theme.colors.accent.foreground, 0.12))
+                            .text_color(colors.text)
+                            .bg(worktree_badge_palette.bg)
                             .border_1()
-                            .border_color(with_alpha(theme.colors.accent.foreground, 0.35))
+                            .border_color(colors.border)
+                            .child(svg_icon("icons/cloud.svg", colors.icon, 9.0))
                             .child("Upstream");
                         if let Some(debug_selector) = debug_selector {
                             badge = badge.debug_selector(move || debug_selector.clone());
@@ -1861,9 +1862,8 @@ impl SidebarPaneView {
                             .gap(scaled_px(3.0))
                             .px(scaled_px(6.0))
                             // Squared off on the control radius the buttons and
-                            // tabs use, rather than the fully-round `pill` the
-                            // decorative chips (upstream, submodule) keep: this
-                            // badge is a click target, so it reads as one.
+                            // tabs use, matching the upstream status chip rather
+                            // than the fully-round decorative pills.
                             .rounded(px(theme.radii.control))
                             .border_1()
                             .border_color(badge_colors.border)
@@ -1973,23 +1973,16 @@ impl SidebarPaneView {
                                 let Some(target) = this.active_repo().and_then(|repo| {
                                     branch_click_history_reveal_target(
                                         repo,
-                                        section,
-                                        full_name_for_reveal.as_ref(),
+                                        &target_for_reveal,
                                         is_head,
                                     )
                                 }) else {
                                     return;
                                 };
-                                this.set_selected_branch(
-                                    repo_id,
-                                    section,
-                                    full_name_for_reveal.as_ref(),
-                                    cx,
-                                );
+                                this.set_selected_branch(repo_id, target_for_reveal.clone(), cx);
                                 this.reveal_branch_commit_in_history(
                                     repo_id,
-                                    section,
-                                    full_name_for_reveal.as_ref(),
+                                    target_for_reveal.clone(),
                                     target.commit_id,
                                     target.fallback_scope,
                                     cx,
@@ -2020,7 +2013,7 @@ impl SidebarPaneView {
                                 }
                                 BranchSection::Remote => {
                                     if let Some((remote, branch)) =
-                                        full_name_for_checkout.as_ref().split_once('/')
+                                        target_for_checkout.remote_parts()
                                     {
                                         this.open_popover_at(
                                             PopoverKind::CheckoutRemoteBranchPrompt {
@@ -2048,8 +2041,7 @@ impl SidebarPaneView {
                                 this.open_popover_at(
                                     PopoverKind::BranchMenu {
                                         repo_id,
-                                        section,
-                                        name: full_name_for_menu.as_ref().to_owned(),
+                                        target: target_for_menu.clone(),
                                     },
                                     e.position,
                                     window,
@@ -3256,23 +3248,22 @@ mod tests {
         let target = commit_id("shared-tip");
         let selected_branch = SelectedBranch {
             repo_id: RepoId(1),
-            section: BranchSection::Local,
-            name: "main".into(),
+            target: BranchMenuTarget::local("main"),
         };
+        let local_main = BranchMenuTarget::local("main");
+        let remote_main = BranchMenuTarget::remote("origin", "main");
 
         assert!(branch_row_is_selected(
             Some(&selected_branch),
             RepoId(1),
-            BranchSection::Local,
-            "main",
+            &local_main,
             Some(&target),
             Some(&target)
         ));
         assert!(!branch_row_is_selected(
             Some(&selected_branch),
             RepoId(1),
-            BranchSection::Remote,
-            "origin/main",
+            &remote_main,
             Some(&target),
             Some(&target)
         ));
@@ -3284,23 +3275,21 @@ mod tests {
         let other = commit_id("other-tip");
         let selected_branch = SelectedBranch {
             repo_id: RepoId(1),
-            section: BranchSection::Local,
-            name: "main".into(),
+            target: BranchMenuTarget::local("main"),
         };
+        let local_main = BranchMenuTarget::local("main");
 
         assert!(!branch_row_is_selected(
             Some(&selected_branch),
             RepoId(1),
-            BranchSection::Local,
-            "main",
+            &local_main,
             Some(&other),
             Some(&target)
         ));
         assert!(!branch_row_is_selected(
             Some(&selected_branch),
             RepoId(1),
-            BranchSection::Local,
-            "main",
+            &local_main,
             None,
             Some(&target)
         ));
@@ -3311,15 +3300,14 @@ mod tests {
         let target = commit_id("main-tip");
         let selected_branch = SelectedBranch {
             repo_id: RepoId(1),
-            section: BranchSection::Local,
-            name: "main".into(),
+            target: BranchMenuTarget::local("main"),
         };
+        let local_main = BranchMenuTarget::local("main");
 
         assert!(!branch_row_is_selected(
             Some(&selected_branch),
             RepoId(1),
-            BranchSection::Local,
-            "main",
+            &local_main,
             Some(&target),
             None
         ));
@@ -3343,7 +3331,7 @@ mod tests {
         }]));
 
         assert_eq!(
-            branch_click_history_reveal_target(&repo, BranchSection::Local, "main", true),
+            branch_click_history_reveal_target(&repo, &BranchMenuTarget::local("main"), true,),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
                 fallback_scope: Some(LogScope::FullReachable),
@@ -3369,7 +3357,7 @@ mod tests {
         }]));
 
         assert_eq!(
-            branch_click_history_reveal_target(&repo, BranchSection::Local, "feature", false),
+            branch_click_history_reveal_target(&repo, &BranchMenuTarget::local("feature"), false,),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
                 fallback_scope: Some(LogScope::AllBranches),
@@ -3396,12 +3384,46 @@ mod tests {
         assert_eq!(
             branch_click_history_reveal_target(
                 &repo,
-                BranchSection::Remote,
-                "origin/feature/topic",
+                &BranchMenuTarget::remote("origin", "feature/topic"),
                 false,
             ),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
+                fallback_scope: Some(LogScope::AllBranches),
+            })
+        );
+    }
+
+    #[test]
+    fn branch_click_history_reveal_target_preserves_a_slash_remote_identity() {
+        let selected_target = commit_id("team-alice-main-tip");
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![
+            RemoteBranch {
+                remote: "team".to_string(),
+                name: "alice/main".to_string(),
+                target: commit_id("team-alice-main-as-a-branch"),
+            },
+            RemoteBranch {
+                remote: "team/alice".to_string(),
+                name: "main".to_string(),
+                target: selected_target.clone(),
+            },
+        ]));
+
+        assert_eq!(
+            branch_click_history_reveal_target(
+                &repo,
+                &BranchMenuTarget::remote("team/alice", "main"),
+                false,
+            ),
+            Some(BranchHistoryRevealTarget {
+                commit_id: selected_target,
                 fallback_scope: Some(LogScope::AllBranches),
             })
         );
@@ -3604,8 +3626,7 @@ mod tests {
                 popover_kind,
                 Some(PopoverKind::BranchMenu {
                     repo_id: opened_repo_id,
-                    section: BranchSection::Local,
-                    ref name,
+                    target: BranchMenuTarget::Local { ref name },
                     ..
                 }) if opened_repo_id == repo_id && name == "feature"
             ),
@@ -3806,8 +3827,7 @@ mod tests {
             sidebar_pane.update(app, |pane, cx| {
                 pane.reveal_branch_commit_in_history(
                     repo_id,
-                    BranchSection::Local,
-                    "feature",
+                    BranchMenuTarget::local("feature"),
                     feature_tip.clone(),
                     None,
                     cx,
@@ -3837,8 +3857,7 @@ mod tests {
         assert_eq!(
             marked,
             Some(SelectedHistoryBranch {
-                section: BranchSection::Local,
-                name: "feature".into(),
+                target: BranchMenuTarget::local("feature"),
             }),
             "the revealed row should mark the clicked branch's chip as selected"
         );
@@ -3939,8 +3958,7 @@ mod tests {
             sidebar_pane.update(app, |pane, cx| {
                 pane.reveal_branch_commit_in_history(
                     repo_id,
-                    BranchSection::Local,
-                    "main",
+                    BranchMenuTarget::local("main"),
                     target.clone(),
                     None,
                     cx,
@@ -4075,8 +4093,7 @@ mod tests {
             sidebar_pane.update(app, |pane, cx| {
                 pane.reveal_branch_commit_in_history(
                     repo_id,
-                    BranchSection::Local,
-                    "main",
+                    BranchMenuTarget::local("main"),
                     target.clone(),
                     None,
                     cx,

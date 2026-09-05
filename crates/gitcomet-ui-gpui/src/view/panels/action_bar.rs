@@ -5,6 +5,53 @@ use std::sync::Arc;
 
 const ACTION_BAR_HEIGHT_PX: f32 = components::CONTROL_HEIGHT_PX + 12.0;
 
+// The main window supports widths down to 820 design pixels. At that size the
+// branch/upstream run and the fixed actions on the right cannot all retain full
+// text. Pull/Push always retain their labels because they describe the remote
+// operation beside the upstream badge. Only compact mode hides the remaining
+// action labels; condensed mode keeps them while using tighter spacing.
+// Tooltips keep omitted labels available in compact mode.
+const COMPACT_ACTION_BAR_MAX_WIDTH_PX: f32 = 1120.0;
+const CONDENSED_ACTION_BAR_MAX_WIDTH_PX: f32 = 1400.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in super::super) enum ActionBarDensity {
+    Compact,
+    Condensed,
+    Wide,
+}
+
+pub(in super::super) fn action_bar_density(
+    window_width: Pixels,
+    ui_scale_percent: u32,
+) -> ActionBarDensity {
+    if window_width
+        <= crate::ui_scale::design_px_from_percent(
+            COMPACT_ACTION_BAR_MAX_WIDTH_PX,
+            ui_scale_percent,
+        )
+    {
+        ActionBarDensity::Compact
+    } else if window_width
+        <= crate::ui_scale::design_px_from_percent(
+            CONDENSED_ACTION_BAR_MAX_WIDTH_PX,
+            ui_scale_percent,
+        )
+    {
+        ActionBarDensity::Condensed
+    } else {
+        ActionBarDensity::Wide
+    }
+}
+
+fn secondary_action_label(density: ActionBarDensity, label: &'static str) -> &'static str {
+    if density == ActionBarDensity::Compact {
+        ""
+    } else {
+        label
+    }
+}
+
 pub(in super::super) fn action_bar_height<C>(cx: &mut C) -> Pixels
 where
     C: gpui::BorrowAppContext,
@@ -12,16 +59,17 @@ where
     crate::ui_scale::design_px(ACTION_BAR_HEIGHT_PX, cx)
 }
 
-/// Longest badge label rendered before eliding. The badges sit in the action
-/// bar's `flex_1` left group and `components::Button` takes a plain string with
-/// no truncation of its own, so an unbounded branch name or folder name would
-/// squeeze the Pull/Push/Terminal controls off the right edge. The full value
+/// Longest badge label rendered before eliding. `components::Button` takes a
+/// plain string with no truncation of its own, so an unbounded branch name or
+/// folder name would squeeze other actions off the right edge. The full value
 /// stays available in each badge's tooltip.
 const BADGE_LABEL_MAX_CHARS: usize = 28;
+const CONDENSED_BADGE_LABEL_MAX_CHARS: usize = 16;
+const COMPACT_BADGE_LABEL_MAX_CHARS: usize = 10;
 
-fn truncate_badge_label(label: &str) -> SharedString {
+fn truncate_badge_label_to(label: &str, max_chars: usize) -> SharedString {
     let mut chars = label.chars();
-    let head: String = chars.by_ref().take(BADGE_LABEL_MAX_CHARS).collect();
+    let head: String = chars.by_ref().take(max_chars).collect();
     if chars.next().is_some() {
         format!("{head}…").into()
     } else {
@@ -29,11 +77,9 @@ fn truncate_badge_label(label: &str) -> SharedString {
     }
 }
 
-fn head_branch_has_tracking_upstream(
-    head_branch: &Loadable<String>,
-    branches: &Loadable<Arc<Vec<Branch>>>,
-) -> bool {
-    head_branch_tracking_upstream_name(head_branch, branches).is_some()
+#[cfg(test)]
+fn truncate_badge_label(label: &str) -> SharedString {
+    truncate_badge_label_to(label, BADGE_LABEL_MAX_CHARS)
 }
 
 fn head_branch_tracking_upstream_name(
@@ -51,6 +97,26 @@ fn head_branch_tracking_upstream_name(
         .find(|branch| branch.name == *head)
         .and_then(|branch| branch.upstream.as_ref())
         .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
+}
+
+/// Returns the local branch that owns the upstream badge and its optional
+/// tracking target. Badge visibility intentionally depends only on having a
+/// checked-out local branch: an absent (or not-yet-loaded) upstream is the
+/// state in which the badge offers to configure one, not a reason to hide it.
+fn upstream_badge_state<'a>(
+    head_branch: &'a Loadable<String>,
+    branches: &Loadable<Arc<Vec<Branch>>>,
+) -> Option<(&'a str, Option<String>)> {
+    let Loadable::Ready(branch) = head_branch else {
+        return None;
+    };
+    if branch.is_empty() || branch == "HEAD" {
+        return None;
+    }
+    Some((
+        branch.as_str(),
+        head_branch_tracking_upstream_name(head_branch, branches),
+    ))
 }
 
 fn pull_tooltip_text(pull_count: usize, tracking_branch_name: Option<&str>) -> SharedString {
@@ -90,6 +156,8 @@ impl ActionBarView {
             repo.open_rev.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
+            repo.remotes_rev.hash(&mut hasher);
+            repo.remote_branches_rev.hash(&mut hasher);
             repo.upstream_divergence_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
@@ -235,12 +303,40 @@ impl ActionBarView {
 }
 
 impl Render for ActionBarView {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let action_bar_height = action_bar_height(cx);
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let density = action_bar_density(window.viewport_size().width, ui_scale_percent);
+        let dense_spacing = density != ActionBarDensity::Wide;
+        let badge_label_max_chars = match density {
+            ActionBarDensity::Compact => COMPACT_BADGE_LABEL_MAX_CHARS,
+            ActionBarDensity::Condensed => CONDENSED_BADGE_LABEL_MAX_CHARS,
+            ActionBarDensity::Wide => BADGE_LABEL_MAX_CHARS,
+        };
+        let action_label = |label: &'static str| secondary_action_label(density, label);
+        let action_group_gap = if dense_spacing {
+            scaled_px(4.0)
+        } else {
+            scaled_px(8.0)
+        };
+        let tracking_action_gap = if dense_spacing {
+            scaled_px(2.0)
+        } else {
+            scaled_px(4.0)
+        };
+        let action_bar_padding_x = if dense_spacing {
+            scaled_px(4.0)
+        } else {
+            scaled_px(8.0)
+        };
+        let merge_abort_label = if dense_spacing {
+            "Abort"
+        } else {
+            "Abort merge"
+        };
         let icon_primary = theme.colors.accent.foreground;
         let icon_muted = with_alpha(
             theme.colors.accent.foreground,
@@ -364,9 +460,9 @@ impl Render for ActionBarView {
             .active_repo()
             .and_then(|repo| head_branch_tracking_upstream_name(&repo.head_branch, &repo.branches));
         let active_repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
-        let pull_default_enabled = self.active_repo().is_some_and(|repo| {
-            head_branch_has_tracking_upstream(&repo.head_branch, &repo.branches)
-        });
+        let pull_default_enabled = self
+            .active_repo()
+            .is_some_and(head_branch_has_live_upstream);
 
         let can_stash = self
             .active_repo()
@@ -440,6 +536,7 @@ impl Render for ActionBarView {
             );
         let global_nav = div()
             .id("global_nav")
+            .debug_selector(|| "global_nav".to_string())
             .flex()
             .items_center()
             .gap(px(2.0))
@@ -447,13 +544,14 @@ impl Render for ActionBarView {
             .child(nav_back)
             .child(nav_forward);
 
-        // Workspace (worktree) and branch badges: current state at a glance,
-        // each opening a filterable picker. Both sit right after the nav arrows.
+        // Workspace (worktree) and branch badges show the current state at a
+        // glance, with each opening a filterable picker.
         let workspace_badge = self.active_repo().map(|repo| {
             let repo_id = repo.id;
-            let label = truncate_badge_label(&crate::view::path_display::repo_path_name(
-                &repo.spec.workdir,
-            ));
+            let label = truncate_badge_label_to(
+                &crate::view::path_display::repo_path_name(&repo.spec.workdir),
+                badge_label_max_chars,
+            );
             let workdir = repo.spec.workdir.display().to_string();
             let invoker: SharedString = "workspace_badge".into();
             let is_active = active_invoker
@@ -487,7 +585,7 @@ impl Render for ActionBarView {
             let label: SharedString = if detached {
                 "detached".into()
             } else {
-                truncate_badge_label(head)
+                truncate_badge_label_to(head, badge_label_max_chars)
             };
             let invoker: SharedString = "branch_badge".into();
             let is_active = active_invoker
@@ -520,6 +618,69 @@ impl Render for ActionBarView {
             )
         });
 
+        let upstream_badge = self.active_repo().and_then(|repo| {
+            let (branch, upstream) = upstream_badge_state(&repo.head_branch, &repo.branches)?;
+            let has_upstream = upstream.is_some();
+            let repo_id = repo.id;
+            let local_branch = branch.to_string();
+            let label = upstream
+                .as_deref()
+                .map(|upstream| truncate_badge_label_to(upstream, badge_label_max_chars))
+                .unwrap_or_else(|| "No upstream".into());
+            let badge_color = if has_upstream {
+                icon_primary
+            } else {
+                theme.colors.foreground.secondary
+            };
+            let tooltip: SharedString = upstream.as_deref().map_or_else(
+                || "No upstream branch configured\nClick to select one".into(),
+                |upstream| {
+                    format!("Tracking upstream {upstream}\nClick to change or unlink").into()
+                },
+            );
+            let invoker: SharedString = "upstream_badge".into();
+            let is_active = active_invoker
+                .as_ref()
+                .is_some_and(|id| id.as_ref() == invoker.as_ref());
+            Some(
+                components::Button::new("upstream_badge", label)
+                    .start_slot(icon("icons/cloud.svg", badge_color))
+                    .style(components::ButtonStyle::Subtle)
+                    .text_color(if has_upstream {
+                        theme.colors.foreground.primary
+                    } else {
+                        theme.colors.foreground.secondary
+                    })
+                    .selected(is_active)
+                    .selected_bg(menu_selected_bg)
+                    .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                        this.activate_context_menu_invoker(invoker.clone(), cx);
+                        this.open_popover_for_bounds(
+                            PopoverKind::UpstreamPicker {
+                                repo_id,
+                                branch: local_branch.clone(),
+                            },
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    })
+                    .debug_selector(|| "upstream_badge".to_string())
+                    .gitcomet_tooltip(theme, tooltip),
+            )
+        });
+        let upstream_arrow = upstream_badge.is_some().then(|| {
+            div()
+                .debug_selector(|| "upstream_arrow".to_string())
+                .flex()
+                .items_center()
+                .child(svg_icon(
+                    "icons/arrow_right.svg",
+                    theme.colors.foreground.secondary,
+                    scaled_px(12.0),
+                ))
+        });
+
         let pull_color = if pull_count > 0 {
             theme.colors.status.warning.foreground
         } else {
@@ -532,8 +693,7 @@ impl Render for ActionBarView {
             } else {
                 icon("icons/arrow_down.svg", pull_color).into_any_element()
             })
-            .style(components::ButtonStyle::Subtle)
-            .disabled(!pull_default_enabled);
+            .style(components::ButtonStyle::Subtle);
         if pull_count > 0 {
             pull_main = pull_main.end_slot(count_badge(pull_count, pull_color));
         }
@@ -543,9 +703,9 @@ impl Render for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == pull_picker_invoker.as_ref());
         let pull_tracking_branch_name = tracking_branch_name.clone();
-        let pull_request_ready = self
+        let pull_request_enabled = self
             .active_repo()
-            .is_some_and(|repo| !matches!(pull_request(repo), PullRequest::NotReady));
+            .is_some_and(|repo| matches!(pull_request(repo), PullRequest::Pull));
         let pull_menu_icon_color = if pull_picker_active {
             theme.colors.accent.foreground
         } else {
@@ -560,12 +720,12 @@ impl Render for ActionBarView {
 
         let pull = div()
             .id("pull")
+            .debug_selector(|| "pull".to_string())
             .child(
                 components::SplitButton::new(
-                    pull_main.disabled(!pull_request_ready).on_click(
-                        theme,
-                        cx,
-                        |this, _e, _w, cx| {
+                    pull_main
+                        .disabled(!pull_default_enabled || !pull_request_enabled)
+                        .on_click(theme, cx, |this, _e, _w, cx| {
                             let Some(repo) = this.active_repo() else {
                                 return;
                             };
@@ -582,8 +742,7 @@ impl Render for ActionBarView {
                                 ),
                                 PullRequest::NotReady => {}
                             }
-                        },
-                    ),
+                        }),
                     pull_menu.on_click_with_bounds(
                         theme,
                         cx,
@@ -624,18 +783,20 @@ impl Render for ActionBarView {
         } else {
             "Show terminal".into()
         };
-        let terminal = components::Button::new("terminal", "Terminal")
-            .start_slot(icon("icons/terminal.svg", icon_primary))
-            .style(components::ButtonStyle::Subtle)
-            .selected(terminal_is_open)
-            .selected_bg(menu_selected_bg)
-            .disabled(self.active_repo_id().is_none())
-            .on_click(theme, cx, move |this, _e, window, cx| {
-                let _ = this.root_view.update(cx, |root, cx| {
-                    root.activate_terminal_button_for_active_repo(window, cx);
-                });
-            })
-            .gitcomet_tooltip(theme, terminal_tooltip);
+        let terminal = div().debug_selector(|| "terminal".to_string()).child(
+            components::Button::new("terminal", action_label("Terminal"))
+                .start_slot(icon("icons/terminal.svg", icon_primary))
+                .style(components::ButtonStyle::Subtle)
+                .selected(terminal_is_open)
+                .selected_bg(menu_selected_bg)
+                .disabled(self.active_repo_id().is_none())
+                .on_click(theme, cx, move |this, _e, window, cx| {
+                    let _ = this.root_view.update(cx, |root, cx| {
+                        root.activate_terminal_button_for_active_repo(window, cx);
+                    });
+                })
+                .gitcomet_tooltip(theme, terminal_tooltip),
+        );
         let mut push_main = components::Button::new("push_main", "Push")
             .rounded_left()
             .start_slot(if push_loading {
@@ -670,6 +831,7 @@ impl Render for ActionBarView {
 
         let push = div()
             .id("push")
+            .debug_selector(|| "push".to_string())
             .child(
                 components::SplitButton::new(
                     push_main.disabled(!push_request_ready).on_click(
@@ -683,7 +845,11 @@ impl Render for ActionBarView {
                             match push_request(repo) {
                                 PushRequest::Push => this.store.dispatch(Msg::Push { repo_id }),
                                 PushRequest::SetUpstream { remote } => this.open_popover_at(
-                                    PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
+                                    PopoverKind::PushSetUpstreamPrompt {
+                                        repo_id,
+                                        remote,
+                                        configure_only_for: None,
+                                    },
                                     e.position(),
                                     window,
                                     cx,
@@ -726,85 +892,111 @@ impl Render for ActionBarView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == stash_prompt_invoker.as_ref());
-        let stash = components::Button::new("stash", "Stash")
-            .start_slot(icon(crate::view::icons::STASH_ICON_PATH, icon_primary))
-            .style(components::ButtonStyle::Subtle)
-            .selected(stash_prompt_active)
-            .selected_bg(menu_selected_bg)
-            .disabled(!can_stash)
-            .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                this.activate_context_menu_invoker(stash_prompt_invoker.clone(), cx);
-                this.open_popover_for_bounds(PopoverKind::StashPrompt, bounds, window, cx);
-            })
-            .gitcomet_tooltip(
-                theme,
-                if can_stash {
-                    "Create stash".into()
-                } else {
-                    "No changes to stash".into()
-                },
-            );
+        let stash = div().debug_selector(|| "stash".to_string()).child(
+            components::Button::new("stash", action_label("Stash"))
+                .start_slot(icon(crate::view::icons::STASH_ICON_PATH, icon_primary))
+                .style(components::ButtonStyle::Subtle)
+                .selected(stash_prompt_active)
+                .selected_bg(menu_selected_bg)
+                .disabled(!can_stash)
+                .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                    this.activate_context_menu_invoker(stash_prompt_invoker.clone(), cx);
+                    this.open_popover_for_bounds(PopoverKind::StashPrompt, bounds, window, cx);
+                })
+                .gitcomet_tooltip(
+                    theme,
+                    if can_stash {
+                        "Create stash".into()
+                    } else {
+                        "No changes to stash".into()
+                    },
+                ),
+        );
 
         let create_branch_invoker: SharedString = "create_branch_btn".into();
         let create_branch_active = self
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == create_branch_invoker.as_ref());
-        let create_branch = components::Button::new("create_branch", "Branch")
-            .start_slot(icon("icons/git_branch.svg", icon_primary))
-            .style(components::ButtonStyle::Subtle)
-            .selected(create_branch_active)
-            .selected_bg(menu_selected_bg)
-            .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                this.activate_context_menu_invoker(create_branch_invoker.clone(), cx);
-                if let Some(repo_id) = this.state.active_repo {
-                    let target = this
-                        .active_repo()
-                        .and_then(|repo| {
-                            if let Loadable::Ready(head) = &repo.head_branch {
-                                Some(head.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_else(|| "HEAD".to_string());
-                    this.open_popover_for_bounds(
-                        PopoverKind::CreateBranchFromRefPrompt {
-                            repo_id,
-                            target,
-                            source_selectable: true,
-                            name_prefix: String::new(),
-                        },
-                        bounds,
-                        window,
-                        cx,
-                    );
-                }
-            })
-            .gitcomet_tooltip(theme, "Create branch".into());
+        let create_branch = div().debug_selector(|| "create_branch".to_string()).child(
+            components::Button::new("create_branch", action_label("Branch"))
+                .start_slot(icon("icons/git_branch.svg", icon_primary))
+                .style(components::ButtonStyle::Subtle)
+                .selected(create_branch_active)
+                .selected_bg(menu_selected_bg)
+                .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                    this.activate_context_menu_invoker(create_branch_invoker.clone(), cx);
+                    if let Some(repo_id) = this.state.active_repo {
+                        let target = this
+                            .active_repo()
+                            .and_then(|repo| {
+                                if let Loadable::Ready(head) = &repo.head_branch {
+                                    Some(head.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| "HEAD".to_string());
+                        this.open_popover_for_bounds(
+                            PopoverKind::CreateBranchFromRefPrompt {
+                                repo_id,
+                                target,
+                                source_selectable: true,
+                                name_prefix: String::new(),
+                            },
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    }
+                })
+                .gitcomet_tooltip(theme, "Create branch".into()),
+        );
+
+        // Keep the branch, its tracking target, and the operations that use
+        // that target together. Pull/Push stay in this run even before the
+        // branch has an upstream, so the action bar does not jump around after
+        // the first push.
+        let tracking_actions = div()
+            .id("tracking_actions")
+            .debug_selector(|| "tracking_actions".to_string())
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(tracking_action_gap)
+            .children(branch_badge)
+            .children(upstream_arrow)
+            .children(upstream_badge)
+            .child(pull)
+            .child(push);
 
         div()
+            .debug_selector(|| "action_bar".to_string())
             .w_full()
             .h(action_bar_height)
             .flex_none()
             .flex()
             .items_center()
             .justify_between()
-            .px_2()
+            .px(action_bar_padding_x)
             .bg(theme.colors.surface.chrome)
             .child(
                 div()
+                    .debug_selector(|| "left_action_group".to_string())
                     .flex()
                     .items_center()
-                    .gap_2()
+                    .gap(action_group_gap)
                     .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
                     .child(global_nav)
                     .children(workspace_badge)
-                    .children(branch_badge)
+                    .child(tracking_actions)
                     .children(historical_badge)
                     .when(is_merging, |d| {
                         d.child(
                             div()
+                                .debug_selector(|| "merge_controls".to_string())
                                 .flex()
                                 .items_center()
                                 .gap_1()
@@ -816,7 +1008,7 @@ impl Render for ActionBarView {
                                         .child("MERGING"),
                                 )
                                 .child(
-                                    components::Button::new("abort_merge", "Abort merge")
+                                    components::Button::new("abort_merge", merge_abort_label)
                                         .style(components::ButtonStyle::Danger)
                                         .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
                                             if let Some(repo_id) = this.active_repo_id() {
@@ -892,11 +1084,11 @@ impl Render for ActionBarView {
             )
             .child(
                 div()
+                    .debug_selector(|| "right_action_group".to_string())
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .child(pull)
-                    .child(push)
+                    .gap(action_group_gap)
+                    .flex_none()
                     .child(terminal)
                     .child(create_branch)
                     .child(stash),
@@ -943,36 +1135,69 @@ mod tests {
     }
 
     #[test]
-    fn head_branch_has_tracking_upstream_returns_true_for_configured_head() {
-        let head_branch = Loadable::Ready("main".to_string());
-        let branches = Loadable::Ready(Arc::new(vec![test_branch(
-            "main",
-            Some(Upstream {
-                remote: "origin".to_string(),
-                branch: "main".to_string(),
-            }),
-        )]));
-        assert!(head_branch_has_tracking_upstream(&head_branch, &branches));
+    fn action_bar_density_changes_at_scaled_breakpoints() {
+        assert_eq!(
+            action_bar_density(px(960.0), 100),
+            ActionBarDensity::Compact
+        );
+        assert_eq!(
+            action_bar_density(px(961.0), 100),
+            ActionBarDensity::Compact
+        );
+        assert_eq!(
+            action_bar_density(px(1120.0), 100),
+            ActionBarDensity::Compact
+        );
+        assert_eq!(
+            action_bar_density(px(1121.0), 100),
+            ActionBarDensity::Condensed
+        );
+        assert_eq!(
+            action_bar_density(px(1400.0), 100),
+            ActionBarDensity::Condensed
+        );
+        assert_eq!(action_bar_density(px(1401.0), 100), ActionBarDensity::Wide);
+        assert_eq!(
+            action_bar_density(px(1200.0), 125),
+            ActionBarDensity::Compact
+        );
     }
 
     #[test]
-    fn head_branch_has_tracking_upstream_returns_false_without_upstream() {
+    fn secondary_action_labels_remain_visible_in_condensed_mode() {
+        assert_eq!(
+            secondary_action_label(ActionBarDensity::Compact, "Terminal"),
+            ""
+        );
+        assert_eq!(
+            secondary_action_label(ActionBarDensity::Condensed, "Terminal"),
+            "Terminal"
+        );
+        assert_eq!(
+            secondary_action_label(ActionBarDensity::Wide, "Terminal"),
+            "Terminal"
+        );
+    }
+
+    #[test]
+    fn upstream_badge_state_remains_present_without_tracking_upstream() {
         let head_branch = Loadable::Ready("feat/no-upstream".to_string());
         let branches = Loadable::Ready(Arc::new(vec![test_branch("feat/no-upstream", None)]));
-        assert!(!head_branch_has_tracking_upstream(&head_branch, &branches));
+
+        assert_eq!(
+            upstream_badge_state(&head_branch, &branches),
+            Some(("feat/no-upstream", None))
+        );
     }
 
     #[test]
-    fn head_branch_has_tracking_upstream_returns_false_when_head_not_loaded() {
-        let head_branch = Loadable::NotLoaded;
-        let branches = Loadable::Ready(Arc::new(vec![test_branch(
-            "main",
-            Some(Upstream {
-                remote: "origin".to_string(),
-                branch: "main".to_string(),
-            }),
-        )]));
-        assert!(!head_branch_has_tracking_upstream(&head_branch, &branches));
+    fn upstream_badge_state_remains_present_while_branch_metadata_loads() {
+        let head_branch = Loadable::Ready("feat/no-upstream".to_string());
+
+        assert_eq!(
+            upstream_badge_state(&head_branch, &Loadable::Loading),
+            Some(("feat/no-upstream", None))
+        );
     }
 
     #[test]
@@ -1033,6 +1258,27 @@ mod tests {
             }),
         )]));
         state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
+        let after = ActionBarView::notify_fingerprint(&state);
+
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn notify_fingerprint_changes_when_remote_branches_rev_changes() {
+        let repo_id = RepoId(1);
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+
+        let before = ActionBarView::notify_fingerprint(&state);
+        state.repos[0].remote_branches_rev = state.repos[0].remote_branches_rev.wrapping_add(1);
         let after = ActionBarView::notify_fingerprint(&state);
 
         assert_ne!(before, after);

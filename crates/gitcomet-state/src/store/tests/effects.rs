@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::Upstream;
 
 static MERGETOOL_TRACE_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
@@ -5808,7 +5809,10 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::SetUpstreamBranch {
                 repo_id,
                 branch: "main".to_string(),
-                upstream: "origin/main".to_string(),
+                upstream: Upstream {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                },
             },
             1,
         ),

@@ -335,18 +335,17 @@ impl HistoryRefsHoverHost {
             }),
             HistoryRefListItemKind::LocalBranch { name } => Some(PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Local,
-                name: name.clone(),
+                target: BranchMenuTarget::local(name),
             }),
-            HistoryRefListItemKind::RemoteBranch { name } => Some(PopoverKind::BranchMenu {
-                repo_id,
-                section: BranchSection::Remote,
-                name: name.clone(),
-            }),
+            HistoryRefListItemKind::RemoteBranch { remote, branch, .. } => {
+                Some(PopoverKind::BranchMenu {
+                    repo_id,
+                    target: BranchMenuTarget::remote(remote, branch),
+                })
+            }
             HistoryRefListItemKind::AttachedHead { branch } => Some(PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Local,
-                name: branch.clone(),
+                target: BranchMenuTarget::local(branch),
             }),
             HistoryRefListItemKind::DetachedHead => None,
         }
@@ -719,6 +718,8 @@ mod tests {
         };
         let remote = HistoryRefListItemKind::RemoteBranch {
             name: "origin/main".to_string(),
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
         };
 
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {

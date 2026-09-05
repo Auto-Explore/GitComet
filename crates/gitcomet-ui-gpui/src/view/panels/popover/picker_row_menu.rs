@@ -67,14 +67,12 @@ impl PickerRowMenuTarget {
             Self::Branch { repo_id, row } => match row {
                 branch_picker::BranchPickerNavTarget::Ref(name) => Some(PopoverKind::BranchMenu {
                     repo_id: *repo_id,
-                    section: BranchSection::Local,
-                    name: name.clone(),
+                    target: BranchMenuTarget::local(name),
                 }),
                 branch_picker::BranchPickerNavTarget::RemoteBranch { remote, branch } => {
                     Some(PopoverKind::BranchMenu {
                         repo_id: *repo_id,
-                        section: BranchSection::Remote,
-                        name: format!("{remote}/{branch}"),
+                        target: BranchMenuTarget::remote(remote, branch),
                     })
                 }
                 // The create row names a branch that does not exist yet, and a

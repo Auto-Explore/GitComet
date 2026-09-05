@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::Upstream;
 use gitcomet_core::services::InteractiveRebaseAction;
 
 const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
@@ -352,7 +353,7 @@ pub(in crate::view) enum ContextMenuAction {
     SetUpstreamBranch {
         repo_id: RepoId,
         branch: String,
-        upstream: String,
+        upstream: Upstream,
     },
     UnsetUpstreamBranch {
         repo_id: RepoId,
@@ -611,7 +612,7 @@ mod main;
 mod popover;
 mod repo_tabs_bar;
 
-pub(super) use action_bar::{ActionBarView, action_bar_height};
+pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height};
 pub(super) use bottom_status_bar::BottomStatusBarView;
 pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]

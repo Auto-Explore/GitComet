@@ -399,6 +399,74 @@ impl PopoverHost {
         input
     }
 
+    pub(super) fn ensure_upstream_picker_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<components::TextInput> {
+        let input = Self::ensure_search_input_entity(
+            &mut self.remote_picker_search_input,
+            "Filter remote branches",
+            window,
+            cx,
+        );
+        if self._upstream_picker_search_input_subscription.is_none() {
+            self._upstream_picker_search_input_subscription =
+                Some(Self::picker_search_subscription(
+                    &input,
+                    window,
+                    cx,
+                    |this| upstream_picker_state(this).is_some(),
+                    |this| &mut this.upstream_picker_selected_index,
+                    |this, query, _cx| {
+                        let (repo_id, branch) = upstream_picker_state(this)?;
+                        Some(upstream_picker::nav_targets(this, repo_id, &branch, query))
+                    },
+                    |this, cx| this.close_popover(cx),
+                    |this, sel, cx| {
+                        let Some((repo_id, branch)) = upstream_picker_state(this) else {
+                            return;
+                        };
+                        let query = this
+                            .remote_picker_search_input
+                            .as_ref()
+                            .map(|input| input.read(cx).text().trim().to_string())
+                            .unwrap_or_default();
+                        let rows = upstream_picker::cached(this, repo_id, &branch, &query);
+                        // The fixed Create new / unlink action leads the branch
+                        // list in the same navigation model and sits outside its
+                        // scroll viewport. Translate global navigation indices to
+                        // branch-row indices before revealing a row.
+                        let Some(branch_sel) = sel.checked_sub(
+                            upstream_picker::leading_action_count(this, repo_id, &branch),
+                        ) else {
+                            return;
+                        };
+                        if branch_sel >= rows.layout.item_indices.len() {
+                            return;
+                        }
+                        this.scroll_picker_prompt_to_row(
+                            &rows.items,
+                            &rows.layout,
+                            branch_sel,
+                            upstream_picker::UPSTREAM_PICKER_LIST_MAX_HEIGHT_PX,
+                            cx,
+                        );
+                    },
+                    |this, payload, _query, window, cx| {
+                        let (Some(target), Some((repo_id, branch))) =
+                            (payload, upstream_picker_state(this))
+                        else {
+                            return;
+                        };
+                        upstream_picker::activate(this, repo_id, &branch, target, window, cx);
+                    },
+                ));
+        }
+        self.reset_picker_search_input(&input, window, cx);
+        input
+    }
+
     pub(super) fn ensure_worktree_picker_search_input(
         &mut self,
         window: &mut Window,
@@ -837,6 +905,13 @@ fn submodule_picker_state(this: &PopoverHost) -> Option<(RepoId, bool)> {
                     kind @ (SubmodulePopoverKind::OpenPicker | SubmodulePopoverKind::RemovePicker),
                 ),
         }) => Some((*repo_id, matches!(kind, SubmodulePopoverKind::RemovePicker))),
+        _ => None,
+    }
+}
+
+fn upstream_picker_state(this: &PopoverHost) -> Option<(RepoId, String)> {
+    match &this.popover {
+        Some(PopoverKind::UpstreamPicker { repo_id, branch }) => Some((*repo_id, branch.clone())),
         _ => None,
     }
 }

@@ -1108,8 +1108,8 @@ impl PickerPromptItem {
             .collect()
     }
 
-    #[cfg(feature = "benchmarks")]
-    pub fn debug_display_text(&self) -> &str {
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(crate) fn debug_display_text(&self) -> &str {
         self.display_text.as_ref()
     }
 

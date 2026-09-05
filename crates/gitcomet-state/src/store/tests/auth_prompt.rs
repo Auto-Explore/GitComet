@@ -3,6 +3,7 @@ use crate::model::{AuthPromptKind, AuthPromptState, AuthRetryOperation, PendingC
 use gitcomet_core::auth::{
     GitAuthKind, StagedGitAuth, clear_staged_git_auth, stage_git_auth, take_staged_git_auth,
 };
+use gitcomet_core::domain::Upstream;
 use gitcomet_core::services::{ConflictSide, RemoteUrlKind, ResetMode};
 
 fn auth_error(message: &str) -> Error {
@@ -1072,7 +1073,10 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
 
     let set_upstream_effects = replay_case(RepoCommandKind::SetUpstreamBranch {
         branch: "feature/current".to_string(),
-        upstream: "origin/feature/current".to_string(),
+        upstream: Upstream {
+            remote: "origin".to_string(),
+            branch: "feature/current".to_string(),
+        },
     });
     assert!(matches!(
         set_upstream_effects.as_slice(),
@@ -1080,7 +1084,9 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
             repo_id: RepoId(1),
             branch,
             upstream,
-        }] if branch == "feature/current" && upstream == "origin/feature/current"
+        }] if branch == "feature/current"
+            && upstream.remote == "origin"
+            && upstream.branch == "feature/current"
     ));
 
     let reset_effects = replay_case(RepoCommandKind::Reset {

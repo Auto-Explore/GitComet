@@ -478,14 +478,14 @@ fn history_ref_is_selected_branch(
     let Some(selected) = selected_branch else {
         return false;
     };
-    let is = |section: BranchSection, name: &str| {
-        selected.section == section && selected.name.as_ref() == name
-    };
-
     match kind {
-        HistoryRefListItemKind::AttachedHead { branch } => is(BranchSection::Local, branch),
-        HistoryRefListItemKind::LocalBranch { name } => is(BranchSection::Local, name),
-        HistoryRefListItemKind::RemoteBranch { name } => is(BranchSection::Remote, name),
+        HistoryRefListItemKind::AttachedHead { branch }
+        | HistoryRefListItemKind::LocalBranch { name: branch } => {
+            selected.target == BranchMenuTarget::local(branch)
+        }
+        HistoryRefListItemKind::RemoteBranch { remote, branch, .. } => {
+            selected.target == BranchMenuTarget::remote(remote, branch)
+        }
         HistoryRefListItemKind::Tag { .. } | HistoryRefListItemKind::DetachedHead => false,
     }
 }
@@ -589,12 +589,8 @@ fn history_branch_chip_style_kind(
         HistoryBranchChipKind::DetachedHead => HistoryChipStyleKind::Head,
         HistoryBranchChipKind::Branch { is_head: true, .. } => HistoryChipStyleKind::Head,
         HistoryBranchChipKind::Branch { targets, .. } => HistoryChipStyleKind::Branch {
-            selected: selected_branch.is_some_and(|selected| {
-                targets.iter().any(|target| {
-                    target.section == selected.section
-                        && target.name.as_str() == selected.name.as_ref()
-                })
-            }),
+            selected: selected_branch
+                .is_some_and(|selected| targets.iter().any(|target| target == &selected.target)),
         },
     }
 }
@@ -646,10 +642,10 @@ fn history_branch_chip_icons(chip: &HistoryBranchChipVm) -> SmallVec<[HistoryBra
     };
     let has_local = targets
         .iter()
-        .any(|target| target.section == BranchSection::Local);
+        .any(|target| target.section() == BranchSection::Local);
     let has_remote = targets
         .iter()
-        .any(|target| target.section == BranchSection::Remote);
+        .any(|target| target.section() == BranchSection::Remote);
     let mut icons = SmallVec::new();
     if has_local && has_remote {
         icons.push(HistoryBranchChipIcon::LocalRemote);
@@ -1808,10 +1804,19 @@ mod tests {
         .expect("history canvas test window should stay open");
     }
 
+    fn test_branch_target(section: BranchSection, name: &str) -> BranchMenuTarget {
+        match section {
+            BranchSection::Local => BranchMenuTarget::local(name),
+            BranchSection::Remote => {
+                let (remote, branch) = name.split_once('/').expect("test remote branch");
+                BranchMenuTarget::remote(remote, branch)
+            }
+        }
+    }
+
     fn selected(section: BranchSection, name: &str) -> SelectedHistoryBranch {
         SelectedHistoryBranch {
-            section,
-            name: name.into(),
+            target: test_branch_target(section, name),
         }
     }
 
@@ -1822,10 +1827,7 @@ mod tests {
     ) -> HistoryBranchChipVm {
         let targets = targets
             .iter()
-            .map(|(section, name)| BranchMenuTarget {
-                section: *section,
-                name: (*name).to_string(),
-            })
+            .map(|(section, name)| test_branch_target(*section, name))
             .collect::<Vec<_>>()
             .into();
         HistoryBranchChipVm {
@@ -1955,14 +1957,8 @@ mod tests {
             }) if routed_repo == repo_id
                 && display_name == "feature/x"
                 && targets == &vec![
-                    BranchMenuTarget {
-                        section: BranchSection::Local,
-                        name: "feature/x".to_string(),
-                    },
-                    BranchMenuTarget {
-                        section: BranchSection::Remote,
-                        name: "origin/feature/x".to_string(),
-                    },
+                    BranchMenuTarget::local("feature/x"),
+                    BranchMenuTarget::remote("origin", "feature/x"),
                 ]
         ));
 
@@ -1985,9 +1981,8 @@ mod tests {
             history_branch_chip_popover_kind(repo_id, &remote_only),
             Some(PopoverKind::BranchMenu {
                 repo_id: routed_repo,
-                section: BranchSection::Remote,
-                ref name,
-            }) if routed_repo == repo_id && name == "origin/feature/x"
+                target: BranchMenuTarget::Remote { ref remote, ref branch },
+            }) if routed_repo == repo_id && remote == "origin" && branch == "feature/x"
         ));
 
         let detached = HistoryBranchChipVm {
@@ -2027,6 +2022,8 @@ mod tests {
 
         let remote_row = [ref_item(HistoryRefListItemKind::RemoteBranch {
             name: "origin/main".to_string(),
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
         })];
         assert!(history_row_is_selected_branch_tip(
             &remote_row,

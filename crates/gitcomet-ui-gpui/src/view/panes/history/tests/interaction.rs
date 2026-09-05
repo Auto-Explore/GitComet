@@ -869,14 +869,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
                 repo_id,
                 display_name: "main".to_string(),
                 targets: vec![
-                    BranchMenuTarget {
-                        section: BranchSection::Local,
-                        name: "main".to_string(),
-                    },
-                    BranchMenuTarget {
-                        section: BranchSection::Remote,
-                        name: "origin/main".to_string(),
-                    },
+                    BranchMenuTarget::local("main"),
+                    BranchMenuTarget::remote("origin", "main"),
                 ],
             })
         );
@@ -975,8 +969,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Local,
-                name: "feature".to_string(),
+                target: BranchMenuTarget::Local {
+                    name: "feature".to_string(),
+                },
             })
         );
     });
@@ -1057,8 +1052,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Local,
-                name: "feature".to_string(),
+                target: BranchMenuTarget::Local {
+                    name: "feature".to_string(),
+                },
             })
         );
     });
@@ -1193,8 +1189,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
                 crate::view::test_support::popover_kind(view.read(app), app),
                 Some(PopoverKind::BranchMenu {
                     repo_id,
-                    section: BranchSection::Local,
-                    name: "feature".to_string(),
+                    target: BranchMenuTarget::Local {
+                        name: "feature".to_string(),
+                    },
                 })
             );
             assert_eq!(
@@ -1219,8 +1216,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Local,
-                name: "feature".to_string(),
+                target: BranchMenuTarget::Local {
+                    name: "feature".to_string(),
+                },
             })
         );
         assert_eq!(
@@ -1955,8 +1953,9 @@ fn history_refs_hover_item_click_keeps_existing_history_selection(cx: &mut gpui:
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Local,
-                name: "feature".to_string(),
+                target: BranchMenuTarget::Local {
+                    name: "feature".to_string(),
+                },
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -2113,8 +2112,9 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
             crate::view::test_support::popover_kind(view.read(app), app),
             Some(PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Local,
-                name: "feature".to_string(),
+                target: BranchMenuTarget::Local {
+                    name: "feature".to_string(),
+                },
             })
         );
     });

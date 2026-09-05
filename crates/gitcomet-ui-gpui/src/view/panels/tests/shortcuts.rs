@@ -1361,6 +1361,11 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
         }),
         divergence: None,
     }]));
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+        remote: "origin".to_string(),
+        name: "main".to_string(),
+        target: commit_id.clone(),
+    }]));
     apply_state(cx, &view, app_state_with_active_repo(repo));
 
     let pull_model =
@@ -1453,8 +1458,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             app,
             PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Local,
-                name: local_branch_name.clone(),
+                target: BranchMenuTarget::local(local_branch_name.clone()),
             },
         )
     });
@@ -1482,15 +1486,13 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
         )
     }));
 
-    let remote_branch_name = "origin/feature".to_string();
     let remote_branch_model = cx.update(|_window, app| {
         context_menu_model_for(
             &view,
             app,
             PopoverKind::BranchMenu {
                 repo_id,
-                section: BranchSection::Remote,
-                name: remote_branch_name.clone(),
+                target: BranchMenuTarget::remote("origin", "feature"),
             },
         )
     });
@@ -2127,8 +2129,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
                 app,
                 PopoverKind::BranchMenu {
                     repo_id,
-                    section: BranchSection::Local,
-                    name: "feature".to_string(),
+                    target: BranchMenuTarget::local("feature"),
                 },
             )
         });

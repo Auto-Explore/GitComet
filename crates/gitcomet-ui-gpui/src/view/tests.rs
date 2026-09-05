@@ -274,7 +274,7 @@ fn repo_with_push_state(
 }
 
 #[test]
-fn push_request_uses_live_upstream_without_waiting_for_remote_list() {
+fn push_request_uses_configured_upstream_without_claiming_it_is_live() {
     let repo = repo_with_push_state(
         Some(Upstream {
             remote: "origin".to_string(),
@@ -284,7 +284,52 @@ fn push_request_uses_live_upstream_without_waiting_for_remote_list() {
     );
 
     assert_eq!(push_request(&repo), PushRequest::Push);
+    assert!(!head_branch_has_live_upstream(&repo));
+}
+
+#[test]
+fn live_upstream_requires_the_exact_loaded_remote_tracking_ref() {
+    let mut repo = repo_with_push_state(
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        }),
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: None,
+        }])),
+    );
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "feature".to_string(),
+        target: CommitId("remote-feature".into()),
+    }]));
+
     assert!(head_branch_has_live_upstream(&repo));
+    assert_eq!(pull_request(&repo), PullRequest::Pull);
+}
+
+#[test]
+fn configured_but_unpushed_upstream_is_a_push_target_without_being_live() {
+    let mut repo = repo_with_push_state(
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "review/feature".to_string(),
+        }),
+        Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: None,
+        }])),
+    );
+    repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+
+    assert_eq!(push_request(&repo), PushRequest::Push);
+    assert!(!head_branch_has_live_upstream(&repo));
+    assert_eq!(
+        pull_request(&repo),
+        PullRequest::NotReady,
+        "Pull must stay disabled until the configured branch exists remotely"
+    );
 }
 
 #[test]
@@ -350,8 +395,7 @@ fn a_selected_remote_branch_is_invalidated_only_after_a_ready_refresh_omits_it()
     );
     let selected = SelectedBranch {
         repo_id,
-        section: BranchSection::Remote,
-        name: "origin/deleted".to_string(),
+        target: BranchMenuTarget::remote("origin", "deleted"),
     };
     let mut state = AppState {
         repos: vec![repo.clone()],
@@ -419,8 +463,7 @@ fn a_selected_remote_branch_survives_a_remote_name_containing_a_slash() {
     };
     let selected = SelectedBranch {
         repo_id,
-        section: BranchSection::Remote,
-        name: "forks/alice/main".to_string(),
+        target: BranchMenuTarget::remote("forks/alice", "main"),
     };
 
     assert!(!selected_remote_branch_is_missing(&state, Some(&selected)));
