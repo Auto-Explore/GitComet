@@ -1,9 +1,9 @@
 ; Protocol Buffers.
 ;
-; Authored here: `tree-sitter-proto` (0.5.0) ships a parser and node types but no
-; highlights query at all, so every construct below has to be named by hand --
-; including anything a grammar bump adds. 0.5.0 added three: the proto2 `group`
-; declaration and the edition-2023 `export`/`local` visibility modifiers.
+; Authored here for `tree-sitter-proto` 0.6.0. Keep every construct below in
+; sync with that grammar when it is bumped; 0.5.0 added the proto2 `group`
+; declaration and the edition-2023 `export`/`local` visibility modifiers, and
+; 0.6.0 changed syntax versions from anonymous tokens to `string` nodes.
 ;
 ; The grammar spells the scalar types (`int32`, `string`, `bytes`, ...) and the
 ; declaration words as *anonymous* tokens, so most of this is a literal list
@@ -13,14 +13,6 @@
 
 (string) @string
 (escape_sequence) @string.escape
-
-; `syntax = "proto3"` -- the grammar spells the two legal values as literal
-; tokens, quotes included, rather than as `string` nodes, so the most prominent
-; string in every `.proto` file needs naming separately.
-[
-  "\"proto2\""
-  "\"proto3\""
-] @string
 
 [
   (int_lit)
