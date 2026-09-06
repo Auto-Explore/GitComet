@@ -1090,8 +1090,15 @@ fn reduce_inner(
                 }
                 git_hook_activity::finished(repo, operation_id, outer_outcome, duration);
             }
-            if outer_outcome == crate::model::GitOperationOuterOutcome::Cancelled {
-                effects.extend(external_and_history::reload_repo(repos, state, repo_id));
+            if outer_outcome == crate::model::GitOperationOuterOutcome::Cancelled
+                && !effects.iter().any(|effect| matches!(effect, Effect::LoadLog { repo_id: id, .. } if *id == repo_id))
+            {
+                // Cancellation may leave partial Git changes, so refresh the
+                // retained panes. Explicit Reload would discard history and
+                // selection after the nested action already refreshed them.
+                effects.extend(external_and_history::repo_externally_changed(
+                    repos, state, repo_id, crate::msg::RepoExternalChange::all(),
+                ));
             }
             effects
         }

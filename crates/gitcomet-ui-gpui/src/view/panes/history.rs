@@ -2496,12 +2496,68 @@ impl HistoryView {
                     }
 
                     this.history_cache_inflight = None;
-                    this.history_cache = Some(rebuild);
+                    this.replace_history_cache(rebuild);
                     cx.notify();
                 });
             },
         )
         .detach();
+    }
+
+    /// Keep the commit at the viewport's top in place when a refreshed page
+    /// inserts or removes rows above it. Read the offset when the rebuild lands
+    /// so scrolling during the background build is respected too.
+    fn replace_history_cache(&mut self, rebuild: HistoryCache) {
+        let old_plan = self.ensure_history_list_plan();
+        let anchor = (|| {
+            if self.pending_history_reveal.is_some()
+                || !self
+                    .active_repo()
+                    .is_some_and(|repo| matches!(repo.log, Loadable::Ready(_)))
+            {
+                return None;
+            }
+            let old = self.history_cache.as_ref()?;
+            if old.base.request.repo_id != rebuild.base.request.repo_id
+                || old.base.request.history_scope != rebuild.base.request.history_scope
+                || old.base.request.log_fingerprint == rebuild.base.request.log_fingerprint
+            {
+                return None;
+            }
+            let scroll = self.history_scroll.0.borrow();
+            let height = crate::view::rows::history_row_height(self.ui_scale());
+            let offset = scroll.base_handle.offset();
+            // At the top, follow new commits instead of scrolling past them.
+            if height <= px(0.0) || offset.y >= px(0.0) {
+                return None;
+            }
+            let top = (-offset.y / height).floor() as usize;
+            let visible_ix = match old_plan.row_at(top)? {
+                crate::view::caches::HistoryListRow::Commit { visible_ix }
+                | crate::view::caches::HistoryListRow::WorktreeUncommitted { visible_ix, .. } => {
+                    visible_ix
+                }
+                crate::view::caches::HistoryListRow::WorkingTreeSummary => return None,
+            };
+            let (id, _) = old
+                .base
+                .visible_ix_by_commit
+                .iter()
+                .find(|(_, ix)| **ix == visible_ix)?;
+            let next_visible = *rebuild.base.visible_ix_by_commit.get(id)?;
+            let relative_y = offset.y + height * old_plan.list_ix_for_visible(visible_ix) as f32;
+            Some((next_visible, relative_y, height, offset.x))
+        })();
+        self.history_cache = Some(rebuild);
+        if let Some((visible_ix, relative_y, height, x)) = anchor {
+            let plan = self.ensure_history_list_plan();
+            let y = relative_y - height * plan.list_ix_for_visible(visible_ix) as f32;
+            self.history_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(point(x, y.min(px(0.0))));
+        }
     }
 
     fn log_fingerprint(commits: &[Commit]) -> u64 {

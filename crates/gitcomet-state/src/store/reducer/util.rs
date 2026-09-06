@@ -22,6 +22,7 @@ use std::time::SystemTime;
 
 /// Default page size for log fetches.
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
+const MAX_REFRESH_LOG_ROWS: usize = 5000;
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
 const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;
@@ -655,24 +656,29 @@ pub(super) fn first_page_log_request(repo_state: &RepoState) -> crate::model::Pe
     }
 }
 
-/// The request a refresh walks: the first page again, but at least as deep as
-/// the log already on screen. A refresh *replaces* the page, so one that walked
-/// a single default page would discard every "load more" page the user scrolled
-/// through — the selected commit would vanish and the shorter list would clamp
-/// the scroll back toward the top (alt-tab back to the window did exactly that).
+/// Refresh a Ready log to its paged depth plus headroom, bounded to keep routine
+/// refresh work finite. Open, Reload and filter changes reset to the first page
+/// because they put the log into Loading before building the request.
 pub(super) fn refresh_log_request(repo_state: &RepoState) -> crate::model::PendingLogLoad {
     crate::model::PendingLogLoad {
-        limit: DEFAULT_LOG_PAGE_SIZE.max(loaded_log_depth(repo_state)),
+        limit: refresh_log_limit(repo_state),
         ..first_page_log_request(repo_state)
     }
 }
 
-/// Rows the finished log holds. A walk still running counts for nothing: its
-/// retained page may belong to the scope the user just left.
-pub(super) fn loaded_log_depth(repo_state: &RepoState) -> usize {
-    match &repo_state.log {
-        Loadable::Ready(page) => page.commits.len(),
+/// Size both immediately dispatched and promoted refreshes from explicit
+/// pagination, not from the extra rows returned by the previous refresh.
+pub(super) fn refresh_log_limit(repo_state: &RepoState) -> usize {
+    let depth = match &repo_state.log {
+        Loadable::Ready(_) => repo_state.history_state.log_paged_depth,
         Loadable::Loading | Loadable::NotLoaded | Loadable::Error(_) => 0,
+    };
+    if depth < DEFAULT_LOG_PAGE_SIZE {
+        DEFAULT_LOG_PAGE_SIZE
+    } else {
+        depth
+            .saturating_add(DEFAULT_LOG_PAGE_SIZE)
+            .min(MAX_REFRESH_LOG_ROWS)
     }
 }
 

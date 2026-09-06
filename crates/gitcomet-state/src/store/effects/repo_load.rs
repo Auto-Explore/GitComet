@@ -483,6 +483,7 @@ pub(super) fn schedule_load_log(
     author: Option<String>,
     limit: usize,
     cursor: Option<LogCursor>,
+    stream: bool,
     cancellation: CancellationToken,
 ) {
     let cursor_on_missing = cursor.clone();
@@ -493,7 +494,7 @@ pub(super) fn schedule_load_log(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let result = {
+            let result = if stream {
                 let cursor_ref = cursor.as_ref();
                 // Report the page as it fills in. Finding one page of a rare
                 // author means walking the whole history — over ten seconds on
@@ -517,6 +518,14 @@ pub(super) fn schedule_load_log(
                     cursor_ref,
                     &cancellation,
                     &mut on_chunk,
+                )
+            } else {
+                repo.log_history_mode_page_filtered_cancellable(
+                    scope,
+                    author.as_deref(),
+                    limit,
+                    cursor.as_ref(),
+                    &cancellation,
                 )
             };
             send_or_log(

@@ -1657,6 +1657,14 @@ pub(super) fn schedule_effect(
             limit,
             cursor,
         } => {
+            let stream = cursor.is_none() && {
+                let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .is_some_and(|repo| repo.log.is_loading())
+            };
             if let Some((msg_tx, cancellation)) =
                 log_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
@@ -1670,6 +1678,7 @@ pub(super) fn schedule_effect(
                     author,
                     limit,
                     cursor,
+                    stream,
                     cancellation,
                 );
             }

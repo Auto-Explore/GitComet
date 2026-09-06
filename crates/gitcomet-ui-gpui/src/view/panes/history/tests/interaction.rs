@@ -1,5 +1,125 @@
 use super::*;
 
+#[gpui::test]
+fn refresh_keeps_the_top_visible_commit_at_the_same_pixel(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let commits: Vec<_> = (0..600)
+        .map(|i| commit(&format!("c{i}"), &[], "commit"))
+        .collect();
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/history-scroll-anchor"),
+        },
+    );
+    repo.history_state.history_scope = LogScope::AllBranches;
+    repo.log = Loadable::Ready(Arc::new(log_page(commits.clone(), None)));
+    repo.log_rev = 1;
+    let mut state = AppState {
+        repos: vec![repo],
+        active_repo: Some(RepoId(1)),
+        ..Default::default()
+    };
+    cx.update(|_, app| {
+        let model = view.read(app).ui_model.clone();
+        model.update(app, |model, cx| {
+            model.set_state(Arc::new(state.clone()), cx)
+        });
+    });
+    ensure_history_cache_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "initial history cache", |cx| {
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            history
+                .history_cache
+                .as_ref()
+                .is_some_and(|cache| cache.base.row_vms.len() == 600)
+                && history.history_scroll.0.borrow().last_item_size.is_some()
+        })
+    });
+    let (before, row_height) = cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        let scroll = history.history_scroll.0.borrow();
+        let row_height = scroll.last_item_size.unwrap().contents.height / 600.0;
+        let y = -(row_height * 450.0 + px(7.0));
+        scroll.base_handle.set_offset(point(px(0.0), y));
+        (y, row_height)
+    });
+    let updated: Vec<_> = vec![commit("new", &[], "new")]
+        .into_iter()
+        .chain(commits.clone())
+        .collect();
+    state.repos[0].log = Loadable::Ready(Arc::new(log_page(updated, None)));
+    state.repos[0].log_rev += 1;
+    ensure_history_cache_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "refreshed history cache", |cx| {
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            history
+                .history_cache
+                .as_ref()
+                .is_some_and(|cache| cache.base.row_vms.len() == 601)
+        })
+    });
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        let after = history.history_scroll.0.borrow().base_handle.offset().y;
+        assert_eq!(
+            after,
+            before - row_height,
+            "the viewport must follow the commit, including its partial-row offset"
+        );
+    });
+
+    // Removing a row above the viewport moves the offset back; a user at the
+    // top stays there when another commit is added.
+    for (at_top, rows) in [
+        (false, commits.clone()),
+        (
+            true,
+            vec![commit("another", &[], "another")]
+                .into_iter()
+                .chain(commits)
+                .collect(),
+        ),
+    ] {
+        if at_top {
+            cx.update(|_, app| {
+                let history = view.read(app).main_pane.read(app).history_view.read(app);
+                history
+                    .history_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(px(0.0), px(0.0)));
+            });
+        }
+        let count = rows.len();
+        state.repos[0].log = Loadable::Ready(Arc::new(log_page(rows, None)));
+        state.repos[0].log_rev += 1;
+        ensure_history_cache_for_tests(cx, &view, Arc::new(state.clone()));
+        wait_until(cx, "next refreshed history cache", |cx| {
+            cx.update(|_, app| {
+                let history = view.read(app).main_pane.read(app).history_view.read(app);
+                history
+                    .history_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.base.row_vms.len() == count)
+            })
+        });
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            assert_eq!(
+                history.history_scroll.0.borrow().base_handle.offset().y,
+                if at_top { px(0.0) } else { before }
+            );
+        });
+    }
+}
+
 /// A worktree reveal scrolls to the worktree's own row, which sits one line
 /// *above* the commit that located it. The selected-list-index cache it
 /// writes is keyed on that commit, though, so it has to remember the

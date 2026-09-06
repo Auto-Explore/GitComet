@@ -1463,6 +1463,198 @@ fn paginated_repo_state(commits: &[Commit]) -> AppState {
     state
 }
 
+fn log_effect(effects: &[Effect]) -> (u64, usize, Option<LogCursor>) {
+    effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::LoadLog {
+                seq, limit, cursor, ..
+            } => Some((*seq, *limit, cursor.clone())),
+            _ => None,
+        })
+        .expect("a log load was dispatched")
+}
+
+/// Model the backend faithfully: it can only return the requested prefix.
+fn answer_log(state: &mut AppState, effects: &[Effect], history: &[Commit]) -> Vec<Effect> {
+    let (seq, limit, cursor) = log_effect(effects);
+    let start = cursor.as_ref().map_or(0, |cursor| {
+        history
+            .iter()
+            .position(|c| c.id == cursor.last_seen)
+            .unwrap()
+            + 1
+    });
+    let commits: Vec<_> = history.iter().skip(start).take(limit).cloned().collect();
+    let next_cursor = (start + commits.len() < history.len()).then(|| cursor_after(&commits));
+    reduce(
+        &mut FxHashMap::default(),
+        &AtomicU64::new(1),
+        state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: LogScope::CurrentBranch,
+            cursor,
+            result: Ok(LogPage {
+                commits,
+                next_cursor,
+            }),
+        }),
+    )
+}
+
+fn history_message(state: &mut AppState, msg: Msg) -> Vec<Effect> {
+    reduce(&mut FxHashMap::default(), &AtomicU64::new(1), state, msg)
+}
+
+fn refresh_history(state: &mut AppState) -> Vec<Effect> {
+    history_message(
+        state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    )
+}
+
+#[test]
+fn refresh_headroom_preserves_selected_root_after_new_commit() {
+    let old = commits_named("old", 600);
+    let mut state = paginated_repo_state(&old);
+    state.repos[0].set_log(Loadable::Ready(Arc::new(LogPage {
+        commits: old.clone(),
+        next_cursor: None,
+    })));
+    let selected = old.last().unwrap().id.clone();
+    state.repos[0].set_selected_commit(Some(selected.clone()));
+    state.repos[0].set_commit_multi_selection(crate::model::CommitMultiSelection {
+        commits: vec![selected.clone()],
+        anchor: Some(selected.clone()),
+        ..Default::default()
+    });
+    let history: Vec<_> = commits_named("new", 1).into_iter().chain(old).collect();
+    let effects = refresh_history(&mut state);
+    answer_log(&mut state, &effects, &history);
+    assert_eq!(
+        state.repos[0].history_state.selected_commit.as_ref(),
+        Some(&selected)
+    );
+}
+
+#[test]
+fn refresh_headroom_does_not_ratchet_on_repeated_refreshes() {
+    let history = commits_named("c", 2000);
+    let mut state = paginated_repo_state(&history[..600]);
+    for _ in 0..3 {
+        let effects = refresh_history(&mut state);
+        assert_eq!(log_effect(&effects).1, 800);
+        answer_log(&mut state, &effects, &history);
+    }
+}
+
+#[test]
+fn refresh_depth_is_bounded_for_direct_and_promoted_loads() {
+    for queued in [false, true] {
+        let history = commits_named("c", 10_200);
+        let mut state = paginated_repo_state(&history[..10_000]);
+        state.repos[0].history_state.history_author_filter = Some("alice".into());
+        let pending = queued
+            .then(|| history_message(&mut state, Msg::LoadMoreHistory { repo_id: RepoId(1) }));
+        let mut effects = refresh_history(&mut state);
+        if let Some(pending) = pending {
+            assert!(!effects.iter().any(|e| matches!(e, Effect::LoadLog { .. })));
+            effects = answer_log(&mut state, &pending, &history);
+        }
+        assert_eq!(log_effect(&effects).1, 5000);
+        assert!(effects.iter().any(
+            |e| matches!(e, Effect::LoadLog { author: Some(author), .. } if author == "alice")
+        ));
+    }
+}
+
+#[test]
+fn full_refresh_of_ready_log_keeps_depth_with_headroom() {
+    let mut state = paginated_repo_state(&commits_named("c", 600));
+    state.active_repo = None;
+    let effects = history_message(&mut state, Msg::SetActiveRepo { repo_id: RepoId(1) });
+    assert_eq!(log_effect(&effects).1, 800);
+}
+
+#[test]
+fn load_more_during_refresh_does_not_queue_a_stale_cursor_or_drop_later_refresh() {
+    let history = commits_named("c", 1200);
+    let mut state = paginated_repo_state(&history[..600]);
+    let first = refresh_history(&mut state);
+    let pagination = history_message(&mut state, Msg::LoadMoreHistory { repo_id: RepoId(1) });
+    assert!(pagination.is_empty());
+    refresh_history(&mut state);
+    let next = answer_log(&mut state, &first, &history);
+    assert!(
+        log_effect(&next).2.is_none(),
+        "the later refresh must run from the tips"
+    );
+    answer_log(&mut state, &next, &history);
+    let pagination = history_message(&mut state, Msg::LoadMoreHistory { repo_id: RepoId(1) });
+    assert_eq!(
+        log_effect(&pagination).2,
+        Some(cursor_after(&history[..800]))
+    );
+    answer_log(&mut state, &pagination, &history);
+    assert!(
+        matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history[..1000])
+    );
+}
+
+#[test]
+fn reload_supersedes_refresh_and_pagination_and_restarts_at_first_page() {
+    for paginating in [false, true] {
+        let history = commits_named("c", 1200);
+        let mut state = paginated_repo_state(&history[..600]);
+        let old = if paginating {
+            history_message(&mut state, Msg::LoadMoreHistory { repo_id: RepoId(1) })
+        } else {
+            refresh_history(&mut state)
+        };
+        let reload = history_message(&mut state, Msg::ReloadRepo { repo_id: RepoId(1) });
+        assert_eq!(log_effect(&reload).1, 200);
+        assert!(answer_log(&mut state, &old, &history).is_empty());
+        assert!(state.repos[0].log.is_loading());
+        answer_log(&mut state, &reload, &history);
+        assert!(
+            matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history[..200])
+        );
+    }
+}
+
+#[test]
+fn cancelled_operation_keeps_ready_history_and_selection() {
+    let history = commits_named("c", 600);
+    let mut state = paginated_repo_state(&history);
+    let selected = history[450].id.clone();
+    state.repos[0].set_selected_commit(Some(selected.clone()));
+    let effects = history_message(
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::GitOperationFinished {
+            repo_id: RepoId(1),
+            operation_id: gitcomet_core::git_operation::GitOperationId(1),
+            outer_outcome: crate::model::GitOperationOuterOutcome::Cancelled,
+            duration: std::time::Duration::ZERO,
+            message: Box::new(crate::msg::InternalMsg::RepoActionFinished {
+                repo_id: RepoId(1),
+                action: RepoActionKind::CheckoutBranch,
+                result: Err(Error::new(gitcomet_core::error::ErrorKind::Cancelled)),
+            }),
+        }),
+    );
+    assert!(matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history));
+    assert_eq!(
+        state.repos[0].history_state.selected_commit.as_ref(),
+        Some(&selected)
+    );
+    assert_eq!(log_effect(&effects).1, 800);
+}
+
 /// Alt-tabbing back to the window refreshes the log through
 /// `RepoExternallyChanged`. With three "load more" pages on screen and the
 /// selection on the last of them, a refresh that walked one default page
@@ -1499,7 +1691,7 @@ fn activation_refresh_reloads_the_depth_the_user_paginated_to() {
             Effect::LoadLog {
                 repo_id: RepoId(1),
                 scope: LogScope::CurrentBranch,
-                limit: 600,
+                limit: 800,
                 cursor: None,
                 ..
             }
@@ -1507,22 +1699,7 @@ fn activation_refresh_reloads_the_depth_the_user_paginated_to() {
         "expected the refresh to walk as deep as the loaded log, got {effects:?}"
     );
 
-    let seq = active_log_seq(&state.repos[0]);
-    let _effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
-            repo_id: RepoId(1),
-            seq,
-            scope: LogScope::CurrentBranch,
-            cursor: None,
-            result: Ok(LogPage {
-                commits: commits.clone(),
-                next_cursor: Some(cursor_after(&commits)),
-            }),
-        }),
-    );
+    answer_log(&mut state, &effects, &commits);
 
     let repo_state = &state.repos[0];
     assert!(
@@ -1631,7 +1808,7 @@ fn queued_refresh_promoted_after_load_more_covers_the_grown_log() {
         matches!(
             effects.as_slice(),
             [Effect::LoadLog {
-                limit: 600,
+                limit: 800,
                 cursor: None,
                 ..
             }]

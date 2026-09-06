@@ -270,7 +270,7 @@ fn history_message_border(ui_scale: ui_scale::UiScale, color: gpui::Rgba) -> imp
         .bg(color)
 }
 
-fn history_row_height(ui_scale: ui_scale::UiScale) -> Pixels {
+pub(in crate::view) fn history_row_height(ui_scale: ui_scale::UiScale) -> Pixels {
     ui_scale.px(HISTORY_ROW_HEIGHT_PX)
 }
 

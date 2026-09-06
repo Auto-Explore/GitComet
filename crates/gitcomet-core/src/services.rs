@@ -366,6 +366,19 @@ pub trait GitRepository: Send + Sync {
         Ok(page)
     }
 
+    /// A filtered, cancellable page without progress snapshots. Backends can
+    /// override this to avoid constructing chunks that the caller will discard.
+    fn log_history_mode_page_filtered_cancellable(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        self.log_history_mode_page_streaming(mode, author, limit, cursor, cancellation, &mut |_| {})
+    }
+
     /// [`Self::log_history_mode_page_streaming`] for callers with nothing to
     /// cancel and no use for the intermediate pages.
     fn log_history_mode_page_filtered(
@@ -375,13 +388,12 @@ pub trait GitRepository: Send + Sync {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
-        self.log_history_mode_page_streaming(
+        self.log_history_mode_page_filtered_cancellable(
             mode,
             author,
             limit,
             cursor,
             &CancellationToken::new(),
-            &mut |_| {},
         )
     }
 

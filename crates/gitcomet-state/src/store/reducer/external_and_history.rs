@@ -71,6 +71,10 @@ pub(super) fn reload_repo(
     let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    // Explicit Reload supersedes even same-scope walks. Their replies must not
+    // refill Loading with an old prefix or a continuation page.
+    let mut effects = Vec::new();
+    append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
     let repo_state = &mut state.repos[repo_ix];
 
     repo_state.set_head_branch(Loadable::Loading);
@@ -115,7 +119,7 @@ pub(super) fn reload_repo(
     // results can use the freshly cleared cache.
     super::refresh_selected_head_gitlink(repos, state, repo_id);
     let repo_state = &mut state.repos[repo_ix];
-    let mut effects = refresh_full_effects(repo_state, git_log_settings);
+    effects.extend(refresh_full_effects(repo_state, git_log_settings));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
     // Linked-worktree rows survive a reload, so their dirty counts have to be
     // refreshed along with everything else. The monitor only flushes for this
@@ -387,7 +391,11 @@ pub(super) fn load_more_history(
         return Vec::new();
     };
 
-    if repo_state.history_state.log_loading_more {
+    if repo_state.history_state.log_loading_more
+        || repo_state
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::LOG)
+    {
         return Vec::new();
     }
 
@@ -579,6 +587,7 @@ pub(super) fn log_chunk_loaded(
     };
     if !repo_state.loads_in_flight.is_active_log_reply(seq)
         || repo_state.loads_in_flight.active_log_is_load_more()
+        || !repo_state.log.is_loading()
     {
         return Vec::new();
     }
@@ -628,6 +637,8 @@ pub(super) fn log_loaded(
                 }
             }
             Ok(mut page) => {
+                let paged_depth = matches!(repo_state.log, Loadable::Ready(_))
+                    .then_some(repo_state.history_state.log_paged_depth);
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
                     // Drop the history_state copy first so the Arc's refcount
                     // goes to 1 and make_mut can mutate in-place instead of
@@ -637,14 +648,20 @@ pub(super) fn log_loaded(
                     reserve_log_append_capacity(&mut existing.commits, page.commits.len());
                     existing.commits.append(&mut page.commits);
                     existing.next_cursor = page.next_cursor;
+                    repo_state.history_state.log_paged_depth = existing.commits.len();
                     // Re-share the updated Arc with history_state.
                     repo_state.history_state.log = repo_state.log.clone();
                     repo_state.bump_log_revs();
-                } else {
+                } else if !is_load_more {
                     if page.next_cursor.is_some() {
                         reserve_initial_paginated_log_append_slack(&mut page.commits);
                     }
                     repo_state.set_log(Loadable::Ready(Arc::new(page)));
+                    if let Some(depth) = paged_depth
+                        && let Loadable::Ready(page) = &repo_state.log
+                    {
+                        repo_state.history_state.log_paged_depth = depth.min(page.commits.len());
+                    }
                 }
             }
             Err(e) => {
@@ -726,21 +743,19 @@ pub(super) fn log_loaded(
             repo_state.set_log_loading_more(false);
         }
 
-        if let Some((seq, next)) = repo_state.loads_in_flight.finish_log() {
+        let refresh_limit = super::util::refresh_log_limit(repo_state);
+        if let Some((seq, next)) = repo_state.loads_in_flight.finish_log(|next| {
+            if next.cursor.is_none() {
+                next.limit = refresh_limit;
+            }
+        }) {
             repo_state.set_log_loading_more(next.cursor.is_some());
-            // A queued refresh walks the depth the log has *now*: a "load more"
-            // that landed ahead of it grew the page after the refresh was sized.
-            let limit = if next.cursor.is_none() {
-                next.limit.max(super::util::loaded_log_depth(repo_state))
-            } else {
-                next.limit
-            };
             effects.push(Effect::LoadLog {
                 repo_id,
                 seq,
                 scope: next.scope,
                 author: next.author,
-                limit,
+                limit: next.limit,
                 cursor: next.cursor,
             });
         }
