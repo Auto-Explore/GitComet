@@ -2317,6 +2317,61 @@ fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
+fn files_follow_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+
+    assert!(
+        store
+            .snapshot()
+            .file_browser_settings
+            .follow_selected_commit,
+        "following the selected commit should default to enabled"
+    );
+
+    cx.update(|_window, app| {
+        let _ = settings_window.update(app, |settings, _window, cx| {
+            settings.set_files_follow_selected_commit(false, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    // GPUI parking only drains its executor; the store has a separate worker.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while store
+        .snapshot()
+        .file_browser_settings
+        .follow_selected_commit
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    assert!(
+        !store
+            .snapshot()
+            .file_browser_settings
+            .follow_selected_commit,
+        "the Git log setting should update the global store setting"
+    );
+}
+
+#[gpui::test]
 fn allowed_remote_protocol_toggle_reaches_the_main_window_and_store(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));

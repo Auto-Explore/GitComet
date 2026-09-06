@@ -271,7 +271,7 @@ fn model_with_header(
         }),
     });
     items.push(ContextMenuItem::Entry {
-        label: "Browse repository at this point".into(),
+        label: "Start file browsing".into(),
         icon: Some("icons/history.svg".into()),
         shortcut: None,
         disabled: false,

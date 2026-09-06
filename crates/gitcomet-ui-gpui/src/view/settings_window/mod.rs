@@ -410,7 +410,7 @@ impl SettingsCategory {
             }
             Self::GitLog => {
                 "git log default history mode history columns relative dates show tags graph \
-                 author sha"
+                 author sha files tab follows selected commit browse repository file browsing start exit"
             }
             Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
             Self::Tags => "tags automatically fetch tags",
@@ -520,6 +520,7 @@ pub(crate) struct SettingsWindowView {
     history_show_sha: bool,
     history_relative_dates: bool,
     history_highlight_commit_chain: bool,
+    files_follow_selected_commit: bool,
     history_show_tags: bool,
     history_tag_fetch_mode: GitLogTagFetchMode,
     default_history_mode: HistoryMode,
@@ -905,6 +906,7 @@ impl SettingsWindowView {
         let history_show_sha = ui_preferences.history.show_sha;
         let history_relative_dates = ui_preferences.history.relative_dates;
         let history_highlight_commit_chain = ui_preferences.history.highlight_commit_chain;
+        let files_follow_selected_commit = ui_preferences.history.files_follow_selected_commit;
         let history_show_tags = ui_preferences.history.show_tags;
         let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
         let default_history_mode = ui_preferences.history.default_mode;
@@ -1154,6 +1156,7 @@ impl SettingsWindowView {
             history_show_sha,
             history_relative_dates,
             history_highlight_commit_chain,
+            files_follow_selected_commit,
             history_show_tags,
             history_tag_fetch_mode,
             default_history_mode,

@@ -1166,13 +1166,19 @@ fn repo_opened_ok_loads_file_browser_for_active_repo_in_files_mode() {
         &mut state,
         Msg::SetActiveRepo { repo_id: repo1 },
     );
-    reduce(
+    let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::SetSidebarMode {
             mode: SidebarMode::Files,
         },
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadFileBrowser { .. })),
+        "the Files tab must wait for the repository handle before starting a walk"
     );
 
     // The repo was activated before its open completed; the open completing

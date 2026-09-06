@@ -761,14 +761,12 @@ pub(super) fn set_active_repo(
 /// toggles the sidebar tabs.
 fn file_browser_load_for_active_files_mode(
     sidebar_mode: SidebarMode,
-    repo_state: &RepoState,
+    repo_state: &mut RepoState,
 ) -> Option<Effect> {
-    (sidebar_mode == SidebarMode::Files && repo_state.file_browser.needs_load()).then(|| {
-        Effect::LoadFileBrowser {
-            repo_id: repo_state.id,
-            source: repo_state.file_browser.source.clone(),
-        }
-    })
+    if sidebar_mode != SidebarMode::Files || !repo_state.file_browser.needs_load() {
+        return None;
+    }
+    super::effects::request_file_browser_load(repo_state)
 }
 
 pub(super) fn fill_set_active_repo_inline(
@@ -816,6 +814,7 @@ fn fill_set_active_repo_inline_impl(
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
     let git_log_settings = state.git_log_settings;
     let sidebar_mode = state.sidebar_mode;
+    let follow_selection = state.file_browser_settings.follow_selected_commit;
 
     let repo_state = &mut state.repos[repo_ix];
 
@@ -848,6 +847,9 @@ fn fill_set_active_repo_inline_impl(
         // retires multi/range and linked-worktree selections.
         repo_state.set_selected_commit(None);
         repo_state.set_commit_details(Loadable::NotLoaded);
+        // Before `file_browser_load_for_active_files_mode` below reads the
+        // source, so the one load it emits already carries the live tree.
+        super::effects::sync_file_browser_to_selection(repo_state, follow_selection, sidebar_mode);
 
         // Activation is not a user navigation step, so replace the snapshot at
         // the cursor rather than pushing one. This explicit replacement is
@@ -1257,6 +1259,7 @@ pub(super) fn repo_opened_ok(
         return effects;
     }
     let sidebar_mode = state.sidebar_mode;
+    let follow_selection = state.file_browser_settings.follow_selected_commit;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         effects.extend(refresh_full_effects(repo_state, git_log_settings));
         if should_refresh_worktrees
@@ -1275,6 +1278,11 @@ pub(super) fn repo_opened_ok(
         }
         if should_refresh_worktrees {
             append_ensure_sidebar_data_effects(repo_state, &mut effects);
+            super::effects::sync_file_browser_to_selection(
+                repo_state,
+                follow_selection,
+                sidebar_mode,
+            );
             if let Some(effect) = file_browser_load_for_active_files_mode(sidebar_mode, repo_state)
             {
                 effects.push(effect);
