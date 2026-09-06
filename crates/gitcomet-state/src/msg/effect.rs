@@ -106,10 +106,14 @@ pub enum Effect {
         limit: usize,
         request_rev: u64,
     },
+    /// One page of a file's history. `cursor: None` is the bounded first
+    /// page; a cursor page resumes after it and is served from the backend's
+    /// cached full follow walk, so one such request can ask for everything.
     LoadFileHistory {
         repo_id: RepoId,
         path: PathBuf,
         limit: usize,
+        cursor: Option<LogCursor>,
     },
     LoadBlame {
         repo_id: RepoId,
@@ -195,6 +199,7 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
         path: PathBuf,
+        content_preview: bool,
     },
     LoadDiff {
         repo_id: RepoId,

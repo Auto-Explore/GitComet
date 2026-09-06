@@ -256,9 +256,9 @@ impl RepoLoadsInFlight {
             Some(existing) if existing.scope != next.scope || existing.author != next.author => {
                 self.pending_log = Some(next);
             }
-            // Don't let a refresh request (cursor=None) clobber a pending pagination request
-            // for the same scope and author.
-            Some(existing) if existing.cursor.is_some() && next.cursor.is_none() => {}
+            // A fresh walk invalidates pagination cursors. Never let a later
+            // pagination request replace a pending refresh.
+            Some(existing) if existing.cursor.is_none() && next.cursor.is_some() => {}
             _ => {
                 self.pending_log = Some(next);
             }
@@ -271,14 +271,9 @@ impl RepoLoadsInFlight {
     /// layer cancelled). Superseded replies must be dropped without touching
     /// the in-flight bookkeeping — the walk that replaced them is still going.
     pub fn is_active_log_reply(&self, seq: LogLoadSeq) -> bool {
-        match &self.active_log {
-            Some((active, _)) => *active == seq,
-            // Nothing is being tracked, so no walk's bookkeeping can be cleared
-            // out from under it — `active_log` is set for exactly as long as the
-            // `LOG` flag is, so applying this reply finishes a load that is not
-            // running and promotes a queue that is empty.
-            None => true,
-        }
+        self.active_log
+            .as_ref()
+            .is_some_and(|(active, _)| *active == seq)
     }
 
     /// The sequence number of the walk in flight, if any. Tests that answer a
@@ -295,11 +290,16 @@ impl RepoLoadsInFlight {
     }
 
     /// Finishes the walk in flight and starts whichever request queued behind
-    /// it, returning that request and its sequence number.
-    pub fn finish_log(&mut self) -> Option<(LogLoadSeq, PendingLogLoad)> {
+    /// it, returning that request and its sequence number. `prepare` adjusts
+    /// the request before it is recorded, so the effect and bookkeeping agree.
+    pub fn finish_log(
+        &mut self,
+        prepare: impl FnOnce(&mut PendingLogLoad),
+    ) -> Option<(LogLoadSeq, PendingLogLoad)> {
         self.in_flight &= !Self::LOG;
         self.active_log = None;
-        let next = self.pending_log.take()?;
+        let mut next = self.pending_log.take()?;
+        prepare(&mut next);
         self.in_flight |= Self::LOG;
         let seq = self.start_log(next.clone());
         Some((seq, next))
@@ -966,10 +966,10 @@ pub struct HistoryState {
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
-    /// Commits visited so far by a walk that is still running, when it reports
-    /// progress. `None` once the page is complete. An author filter has to walk
-    /// history until it finds a full page, which on a large repository takes
-    /// seconds; this is what tells the user it is working.
+    /// Identity of the exact Git inputs behind the loaded page.
+    pub log_snapshot: Option<gitcomet_core::services::HistorySnapshot>,
+    /// Commits visited by the streaming initial walk, retained for diagnostics.
+    /// `None` once the page is complete. Updating this does not rebuild rows.
     pub log_scan_progress: Option<u64>,
     pub log_rev: u64,
     pub file_history_path: Option<PathBuf>,
@@ -1035,6 +1035,7 @@ impl Default for HistoryState {
             retained_log_while_loading: None,
             log_loading_more: false,
             log_scan_progress: None,
+            log_snapshot: None,
             log_rev: 0,
             file_history_path: None,
             file_history: Loadable::NotLoaded,
@@ -1986,6 +1987,9 @@ impl RepoState {
         if !matches!(log, Loadable::Loading) {
             self.history_state.retained_log_while_loading = None;
         }
+        // A caller accepting a backend result installs its snapshot after this
+        // write. Reload and filter transitions must never reuse the old token.
+        self.history_state.log_snapshot = None;
         self.history_state.log = log.clone();
         self.log = log;
         self.bump_log_revs();
@@ -2900,11 +2904,11 @@ mod tests {
         assert!(!loads.is_active_log_reply(first));
         assert!(loads.is_active_log_reply(latest));
         // Nothing is left queued: the newest request is the one running.
-        assert_eq!(loads.finish_log(), None);
+        assert_eq!(loads.finish_log(|_| {}), None);
     }
 
     #[test]
-    fn request_log_same_scope_refresh_does_not_clobber_pending_pagination() {
+    fn request_log_same_scope_refresh_replaces_stale_pending_pagination() {
         let mut loads = RepoLoadsInFlight::default();
         let cursor = test_cursor("page-1");
 
@@ -2929,13 +2933,19 @@ mod tests {
         );
 
         assert_eq!(
-            loads.finish_log().map(|(_, next)| next),
-            Some(log_request(
-                LogScope::MergesOnly,
-                None,
-                Some(cursor.clone())
-            ))
+            loads.finish_log(|_| {}).map(|(_, next)| next),
+            Some(log_request(LogScope::MergesOnly, None, None))
         );
+    }
+
+    #[test]
+    fn promoted_log_bookkeeping_matches_the_prepared_effect_request() {
+        let mut loads = RepoLoadsInFlight::default();
+        loads.request_log(test_log_request()).unwrap();
+        assert!(loads.request_log(test_log_request()).is_none());
+        let (seq, request) = loads.finish_log(|next| next.limit = 800).unwrap();
+        assert_eq!(request.limit, 800);
+        assert_eq!(loads.active_log.as_ref(), Some(&(seq, request)));
     }
 
     #[test]
@@ -2964,7 +2974,7 @@ mod tests {
             .expect("an author change starts at once");
 
         assert!(loads.is_active_log_reply(latest));
-        assert_eq!(loads.finish_log(), None);
+        assert_eq!(loads.finish_log(|_| {}), None);
     }
 
     /// Replies are matched against the walk that is actually running, and by

@@ -2634,17 +2634,26 @@ mod tests {
         CommitId(id.into())
     }
 
-    /// The sequence number of the log walk the store has in flight, if any. A
-    /// `LogLoaded` answering by hand has to carry it, or the reducer takes the
-    /// reply for a superseded walk's and drops it.
-    fn active_log_seq(store: &AppStore, repo_id: RepoId) -> gitcomet_state::model::LogLoadSeq {
-        store
-            .snapshot()
+    /// The blocking backend never finishes opening, so declare the initial
+    /// walk before answering it by hand. Unsolicited replies are rejected.
+    fn begin_log_for_test(store: &AppStore, repo_id: RepoId) -> gitcomet_state::model::LogLoadSeq {
+        let mut state = (*store.snapshot()).clone();
+        let repo = state
             .repos
-            .iter()
+            .iter_mut()
             .find(|repo| repo.id == repo_id)
-            .and_then(|repo| repo.loads_in_flight.active_log_seq())
-            .unwrap_or_default()
+            .expect("fixture repo");
+        let seq = repo
+            .loads_in_flight
+            .request_log(gitcomet_state::model::PendingLogLoad {
+                scope: repo.history_state.history_scope,
+                author: None,
+                limit: 200,
+                cursor: None,
+            })
+            .expect("initial fixture walk");
+        store.replace_snapshot_for_test(Arc::new(state));
+        seq
     }
 
     fn commit(id: &str) -> Commit {
@@ -3799,6 +3808,7 @@ mod tests {
                 && snapshot.repos.iter().any(|repo| repo.id == repo_id)
         });
 
+        let log_seq = begin_log_for_test(&store_for_assert, repo_id);
         store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
             repo_id,
             result: Ok("main".to_string()),
@@ -3822,13 +3832,14 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
-            seq: active_log_seq(&store_for_assert, repo_id),
+            seq: log_seq,
             scope: initial_scope,
             cursor: None,
             result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("feature-tip"), commit("main-tip")],
                 next_cursor: None,
-            })),
+            })
+            .into()),
         }));
         wait_until(cx, "sidebar repo data", |cx| {
             sync_view_for_tests(cx, &view);
@@ -3912,6 +3923,7 @@ mod tests {
         });
         sync_view_from_store(cx);
 
+        let log_seq = begin_log_for_test(&store_for_assert, repo_id);
         store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
             repo_id,
             result: Ok("main".to_string()),
@@ -3927,13 +3939,14 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
-            seq: active_log_seq(&store_for_assert, repo_id),
+            seq: log_seq,
             scope: initial_scope,
             cursor: None,
             result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("main-tip")],
                 next_cursor: None,
-            })),
+            })
+            .into()),
         }));
         store_for_assert.dispatch(Msg::SelectDiff {
             repo_id,
@@ -4030,6 +4043,7 @@ mod tests {
         });
         sync_view_from_store(cx);
 
+        let log_seq = begin_log_for_test(&store_for_assert, repo_id);
         store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
             repo_id,
             result: Ok("main".to_string()),
@@ -4045,13 +4059,14 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
-            seq: active_log_seq(&store_for_assert, repo_id),
+            seq: log_seq,
             scope: initial_scope,
             cursor: None,
             result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("main-tip")],
                 next_cursor: None,
-            })),
+            })
+            .into()),
         }));
         wait_until(cx, "sidebar repo data", |_cx| {
             let snapshot = store_for_assert.snapshot();

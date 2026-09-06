@@ -642,6 +642,8 @@ impl GitCometView {
         self.main_pane.update(cx, |pane, cx| {
             pane.set_history_relative_dates(enabled, cx);
         });
+        self.popover_host
+            .update(cx, |host, cx| host.set_history_relative_dates(enabled, cx));
         self.schedule_ui_settings_persist(cx);
     }
 

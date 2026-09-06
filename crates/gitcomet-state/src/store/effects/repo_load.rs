@@ -481,8 +481,8 @@ pub(super) fn schedule_load_log(
     seq: crate::model::LogLoadSeq,
     scope: LogScope,
     author: Option<String>,
-    limit: usize,
     cursor: Option<LogCursor>,
+    request: gitcomet_core::services::HistoryReadRequest,
     cancellation: CancellationToken,
 ) {
     let cursor_on_missing = cursor.clone();
@@ -493,32 +493,24 @@ pub(super) fn schedule_load_log(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let result = {
-                let cursor_ref = cursor.as_ref();
-                // Report the page as it fills in. Finding one page of a rare
-                // author means walking the whole history — over ten seconds on
-                // a repository with a million commits — and the user should not
-                // be looking at the previous filter's rows for all of it.
-                let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
-                    send_or_log(
-                        &msg_tx,
-                        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
-                            repo_id,
-                            seq,
-                            commits: chunk.commits,
-                            scanned: chunk.scanned,
-                        }),
-                    );
-                };
-                repo.log_history_mode_page_streaming(
-                    scope,
-                    author.as_deref(),
-                    limit,
-                    cursor_ref,
-                    &cancellation,
-                    &mut on_chunk,
-                )
+            let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+                        repo_id,
+                        seq,
+                        commits: chunk.commits,
+                        scanned: chunk.scanned,
+                    }),
+                );
             };
+            let result = repo.read_history(
+                scope,
+                author.as_deref(),
+                &request,
+                &cancellation,
+                &mut on_chunk,
+            );
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {
@@ -855,14 +847,17 @@ pub(super) fn schedule_load_file_history(
     repo_id: RepoId,
     path: PathBuf,
     limit: usize,
+    cursor: Option<LogCursor>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.log_file_page(&path, limit, cursor.as_ref());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
                 repo_id,
-                path: path.clone(),
-                result: repo.log_file_page(&path, limit, None),
+                path,
+                cursor,
+                result,
             }),
         );
     });
@@ -1701,6 +1696,7 @@ pub(super) fn schedule_open_file_at_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
     path: std::path::PathBuf,
+    content_preview: bool,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         // Resolve the file's name in the target commit (it may differ from the
@@ -1711,14 +1707,22 @@ pub(super) fn schedule_open_file_at_commit(
             .ok()
             .flatten()
             .unwrap_or(path);
-        send_or_log(
-            &msg_tx,
+        let message = if content_preview {
             Msg::OpenFileContent {
                 repo_id,
                 source: gitcomet_core::domain::FileSource::Commit(commit_id),
                 path: resolved,
-            },
-        );
+            }
+        } else {
+            Msg::SelectDiff {
+                repo_id,
+                target: gitcomet_core::domain::DiffTarget::Commit {
+                    commit_id,
+                    path: Some(resolved),
+                },
+            }
+        };
+        send_or_log(&msg_tx, message);
     });
 }
 

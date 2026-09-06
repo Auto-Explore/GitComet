@@ -60,6 +60,7 @@ These shortcuts apply when a GitComet text input has focus.
 | --- | --- | --- | --- |
 | Move by character or line | Arrow keys | Arrow keys | `Left`, `Right`, `Up`, `Down` |
 | Select by character or line | `Shift` + arrow keys | `Shift` + arrow keys | |
+| Move to document start / end | `Cmd-Home`, `Cmd-End` | `Ctrl-Home`, `Ctrl-End` | Picker search inputs also select the first / last result. |
 | Move to line start / end | `Cmd-Left`, `Cmd-Right`, `Home`, `End` | `Home`, `End` | |
 | Select to line start / end | `Cmd-Shift-Left`, `Cmd-Shift-Right`, `Shift-Home`, `Shift-End` | `Shift-Home`, `Shift-End` | |
 | Move by page | `PageUp`, `PageDown` | `PageUp`, `PageDown` | |
@@ -82,6 +83,20 @@ Compatibility note:
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Commit staged changes | `Cmd-Enter` | `Ctrl-Enter` | Commit message input only, and only when the Commit action is enabled. |
+
+## Picker shortcuts
+
+These shortcuts apply while a picker's search input has focus, including file history.
+
+| Action | macOS | Windows / Linux | Notes |
+| --- | --- | --- | --- |
+| Previous / next result | `Up`, `Down` | `Up`, `Down` | `Shift-Tab` / `Tab` also navigate. |
+| First / last result | `Cmd-Home`, `Cmd-End` | `Ctrl-Home`, `Ctrl-End` | `Ctrl-Home` / `Ctrl-End` also work on macOS. |
+| Previous / next page | `PageUp`, `PageDown` | `PageUp`, `PageDown` | Moves by one visible page and stops at the first / last result. |
+| Activate selected result | `Enter` | `Enter` | In file history, opens the file at that commit, following renames. |
+| Close menu or picker | `Escape` | `Escape` | Closes a row's context menu first, keeping the picker open. |
+
+File history filters by SHA, summary, and author while preserving history order. Right-click a row to open a revision or its parent, show the file's changes, reveal the commit in history, copy its SHA, or use the standard commit actions. Copying keeps the history picker open.
 
 ## Embedded terminal shortcuts
 
@@ -109,6 +124,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 
 | Action | macOS | Windows / Linux | Scope / notes |
 | --- | --- | --- | --- |
+| Open file history | `Ctrl-H` | `Ctrl-H` | Working-tree files and files viewed at a commit; not while a text field has focus. |
 | Search the current diff | `Cmd-F` | `Ctrl-F` | If rendered markdown preview is open, GitComet switches back to source mode before opening search. |
 | Insert a newline in diff search | `Shift-Enter` | `Shift-Enter` | Diff search only. The search box also has Match Case, Whole Word, and Regex toggles. |
 | Previous search match | `F2` | `F2` | While diff search is open. |

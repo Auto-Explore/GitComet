@@ -384,6 +384,7 @@ struct AllBranchesTipsCacheEntry {
     tips: Arc<[gix::ObjectId]>,
 }
 const LOG_PAGE_CACHE_LIMIT: usize = 32;
+const LOG_PAGE_CACHE_ROW_LIMIT: usize = 10_000;
 const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
 const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
 /// Date-order walks retain in-degree state for the reachable history.
@@ -460,6 +461,17 @@ impl GitRepository for GixRepo {
         &self.spec
     }
 
+    fn read_history(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        request: &gitcomet_core::services::HistoryReadRequest,
+        cancellation: &CancellationToken,
+        on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
+    ) -> Result<gitcomet_core::services::HistoryReadResult> {
+        self.read_history_impl(mode, author, request, cancellation, on_chunk)
+    }
+
     fn log_history_mode_page(
         &self,
         mode: HistoryMode,
@@ -498,6 +510,24 @@ impl GitRepository for GixRepo {
             cursor,
             cancellation,
             on_chunk,
+        )
+    }
+
+    fn log_history_mode_page_filtered_cancellable(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_history_mode_page_filtered_cancellable_impl(
+            mode,
+            author,
+            limit,
+            cursor,
+            cancellation,
         )
     }
 

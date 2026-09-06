@@ -73,6 +73,21 @@ pub(crate) const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         // scrollbar, window draw) rather than its rows.
         threshold_ns: 4.0 * NANOS_PER_MILLISECOND,
     },
+    PerfBudgetSpec {
+        label: "picker_prompt/file_history_hover_frame/1200",
+        estimate_path: "picker_prompt/file_history_hover_frame/1200/new/estimates.json",
+        threshold_ns: 8.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
+        label: "picker_prompt/file_history_query_frame/1200",
+        estimate_path: "picker_prompt/file_history_query_frame_1200/new/estimates.json",
+        threshold_ns: 8.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
+        label: "picker_prompt/file_history_rows_build/1200",
+        estimate_path: "picker_prompt/file_history_rows_build/1200/new/estimates.json",
+        threshold_ns: 4.0 * NANOS_PER_MILLISECOND,
+    },
     // --- keyboard --- sustained arrow-key repeat bursts with frame timing stats
     PerfBudgetSpec {
         label: "keyboard/arrow_scroll_history_sustained_repeat",

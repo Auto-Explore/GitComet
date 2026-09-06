@@ -4002,6 +4002,42 @@ impl GitRepository for RecordingLogRepo {
         &self.spec
     }
 
+    fn log_history_mode_page_streaming(
+        &self,
+        mode: LogScope,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        _cancellation: &gitcomet_core::services::CancellationToken,
+        on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
+    ) -> Result<Arc<LogPage>> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("stream {author:?}"));
+        on_chunk(gitcomet_core::services::LogChunk {
+            commits: Vec::new(),
+            scanned: 1,
+        });
+        self.log_history_mode_page(mode, limit, cursor)
+    }
+
+    fn log_history_mode_page_filtered_cancellable(
+        &self,
+        mode: LogScope,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        cancellation.check_cancelled()?;
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("filtered {author:?}"));
+        self.log_history_mode_page(mode, limit, cursor)
+    }
+
     fn log_history_mode_page(
         &self,
         mode: LogScope,
@@ -5078,7 +5114,7 @@ fn load_log_effect_uses_history_mode_api() {
             seq,
             scope,
             cursor: got_cursor,
-            result: Ok(page),
+            result: Ok(gitcomet_core::services::HistoryReadResult::Page { page, .. }),
         }) => {
             assert_eq!(got_repo_id, repo_id);
             assert_eq!(seq, 1, "the reply carries the sequence of its request");
@@ -5092,8 +5128,76 @@ fn load_log_effect_uses_history_mode_api() {
 
     assert_eq!(
         *calls.lock().expect("log recording mutex"),
-        vec!["history NoMerges 20 cursor".to_string()]
+        vec![
+            "filtered None".to_string(),
+            "history NoMerges 20 cursor".to_string()
+        ]
     );
+}
+
+#[test]
+fn log_effect_streams_only_while_replacing_a_loading_page() {
+    for loading in [false, true] {
+        let repo_id = RepoId(498);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+        let spec = RepoSpec {
+            workdir: unique_temp_path("gitcomet-log-streaming"),
+        };
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+        repos.insert(
+            repo_id,
+            Arc::new(RecordingLogRepo {
+                spec: spec.clone(),
+                calls: Arc::clone(&calls),
+            }),
+        );
+        let mut state = AppState::default();
+        let mut repo = RepoState::new_opening(repo_id, spec);
+        repo.set_log(if loading {
+            Loadable::Loading
+        } else {
+            Loadable::Ready(Arc::new(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }))
+        });
+        state.repos.push(repo);
+        let executor = super::executor::TaskExecutor::new(1);
+        let (tx, rx) = std::sync::mpsc::channel();
+        schedule_effect_with_state_for_test(
+            &executor,
+            &executor,
+            &backend,
+            &repos,
+            state,
+            tx,
+            Effect::LoadLog {
+                repo_id,
+                seq: 1,
+                scope: LogScope::NoMerges,
+                author: Some("alice".into()),
+                limit: 800,
+                cursor: None,
+            },
+        );
+        let mut chunks = 0;
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+                Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded { .. }) => chunks += 1,
+                Msg::Internal(crate::msg::InternalMsg::LogLoaded { result, .. }) => {
+                    result.unwrap();
+                    break;
+                }
+                other => panic!("unexpected message {other:?}"),
+            }
+        }
+        assert_eq!(chunks, usize::from(loading));
+        assert!(calls.lock().unwrap().contains(&format!(
+            "{} Some(\"alice\")",
+            if loading { "stream" } else { "filtered" }
+        )));
+    }
 }
 
 #[test]
@@ -5478,6 +5582,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 path: PathBuf::from("tracked.txt"),
                 limit: 10,
+                cursor: None,
             },
             1,
         ),

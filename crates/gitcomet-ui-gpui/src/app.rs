@@ -2005,6 +2005,10 @@ fn bind_text_input_keys(cx: &mut App) {
         KeyBinding::new("shift-up", crate::kit::SelectUp, Some("TextInput")),
         KeyBinding::new("shift-down", crate::kit::SelectDown, Some("TextInput")),
         KeyBinding::new("home", crate::kit::Home, Some("TextInput")),
+        KeyBinding::new("ctrl-home", crate::kit::DocumentHome, Some("TextInput")),
+        KeyBinding::new("ctrl-end", crate::kit::DocumentEnd, Some("TextInput")),
+        KeyBinding::new("cmd-home", crate::kit::DocumentHome, Some("TextInput")),
+        KeyBinding::new("cmd-end", crate::kit::DocumentEnd, Some("TextInput")),
         KeyBinding::new("shift-home", crate::kit::SelectHome, Some("TextInput")),
         KeyBinding::new("end", crate::kit::End, Some("TextInput")),
         KeyBinding::new("shift-end", crate::kit::SelectEnd, Some("TextInput")),
@@ -2365,6 +2369,8 @@ mod tests {
                 .on_action(record_action_listener!(crate::kit::SelectWordRight))
                 .on_action(record_action_listener!(crate::kit::SelectAll))
                 .on_action(record_action_listener!(crate::kit::Home))
+                .on_action(record_action_listener!(crate::kit::DocumentHome))
+                .on_action(record_action_listener!(crate::kit::DocumentEnd))
                 .on_action(record_action_listener!(crate::kit::SelectHome))
                 .on_action(record_action_listener!(crate::kit::End))
                 .on_action(record_action_listener!(crate::kit::SelectEnd))
@@ -2541,6 +2547,10 @@ mod tests {
             ("shift-up", crate::kit::SelectUp.name()),
             ("shift-down", crate::kit::SelectDown.name()),
             ("home", crate::kit::Home.name()),
+            ("ctrl-home", crate::kit::DocumentHome.name()),
+            ("ctrl-end", crate::kit::DocumentEnd.name()),
+            ("cmd-home", crate::kit::DocumentHome.name()),
+            ("cmd-end", crate::kit::DocumentEnd.name()),
             ("shift-home", crate::kit::SelectHome.name()),
             ("end", crate::kit::End.name()),
             ("shift-end", crate::kit::SelectEnd.name()),

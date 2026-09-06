@@ -332,6 +332,7 @@ pub(in crate::store::reducer) fn append_selected_history_reload_effects(
                     repo_id,
                     path,
                     limit: REACTIVATED_FILE_HISTORY_LIMIT,
+                    cursor: None,
                 });
             }
             SelectedHistoryReload::Blame { path, source } => {

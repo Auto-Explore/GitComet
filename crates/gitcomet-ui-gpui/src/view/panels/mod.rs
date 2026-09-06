@@ -140,6 +140,21 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    ShowFileChangesAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
+    OpenFileAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
+    OpenFileAtCommitParent {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -616,7 +631,9 @@ pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height
 pub(super) use bottom_status_bar::BottomStatusBarView;
 pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]
-pub(in crate::view) use popover::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
+pub(in crate::view) use popover::{
+    benchmark_branch_checkout_rows, benchmark_file_history_rows, benchmark_workspace_rows,
+};
 /// Layout guards outside this module assert against the tab padding, so they
 /// follow the constant instead of hardcoding the current value.
 #[cfg(test)]

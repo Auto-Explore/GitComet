@@ -420,13 +420,17 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::LoadFileHistory { repo_id, path, .. } => {
-            send(Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
-                repo_id,
-                path,
-                result: Err(git_unavailable_error(runtime)),
-            }))
-        }
+        Effect::LoadFileHistory {
+            repo_id,
+            path,
+            cursor,
+            ..
+        } => send(Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
+            repo_id,
+            path,
+            cursor,
+            result: Err(git_unavailable_error(runtime)),
+        })),
         Effect::LoadBlame {
             repo_id,
             path,
@@ -1657,6 +1661,30 @@ pub(super) fn schedule_effect(
             limit,
             cursor,
         } => {
+            let request = {
+                use gitcomet_core::services::HistoryReadRequest;
+                let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                let repo = state.repos.iter().find(|repo| repo.id == repo_id);
+                // Do not let an obsolete effect cancel the replacement walk.
+                if repo
+                    .and_then(|repo| repo.loads_in_flight.active_log_seq())
+                    .is_some_and(|active| active != seq)
+                {
+                    return;
+                }
+                let snapshot = repo.and_then(|repo| repo.history_state.log_snapshot.clone());
+                match (cursor.as_ref(), repo.map(|repo| &repo.log)) {
+                    (None, Some(Loadable::Ready(previous))) => HistoryReadRequest::Refresh {
+                        previous: Arc::clone(previous),
+                        snapshot,
+                    },
+                    _ => HistoryReadRequest::Page {
+                        limit,
+                        cursor: cursor.clone(),
+                        snapshot,
+                    },
+                }
+            };
             if let Some((msg_tx, cancellation)) =
                 log_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
@@ -1668,8 +1696,8 @@ pub(super) fn schedule_effect(
                     seq,
                     scope,
                     author,
-                    limit,
                     cursor,
+                    request,
                     cancellation,
                 );
             }
@@ -1751,12 +1779,13 @@ pub(super) fn schedule_effect(
             repo_id,
             path,
             limit,
+            cursor,
         } => {
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_file_history(
-                    executor, repos, msg_tx, repo_id, path, limit,
+                    executor, repos, msg_tx, repo_id, path, limit, cursor,
                 );
             }
         }
@@ -1996,12 +2025,19 @@ pub(super) fn schedule_effect(
             repo_id,
             commit_id,
             path,
+            content_preview,
         } => {
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_open_file_at_commit(
-                    executor, repos, msg_tx, repo_id, commit_id, path,
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    commit_id,
+                    path,
+                    content_preview,
                 );
             }
         }

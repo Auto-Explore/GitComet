@@ -583,6 +583,45 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
     );
 }
 
+/// `usize::MAX` reads as "every commit": both as a first page and as the
+/// continuation the picker asks for after its bounded first page. Neither may
+/// reserve that much up front or hand git a count it cannot parse.
+#[test]
+fn unbounded_file_history_pages_return_every_commit_without_a_cursor() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+
+    commit_file(workdir, "tracked.txt", "one\n", "one");
+    commit_file(workdir, "tracked.txt", "two\n", "two");
+    git_success(workdir, &["mv", "tracked.txt", "renamed.txt"]);
+    git_success(workdir, &["commit", "-m", "rename"]);
+    commit_file(workdir, "renamed.txt", "four\n", "four");
+
+    let repo = open_repo(workdir);
+    let first = repo
+        .log_file_page_impl(Path::new("renamed.txt"), 1, None)
+        .expect("bounded first page");
+    assert_eq!(first.commits.len(), 1);
+
+    let rest = repo
+        .log_file_page_impl(
+            Path::new("renamed.txt"),
+            usize::MAX,
+            first.next_cursor.as_ref(),
+        )
+        .expect("unbounded continuation");
+    let summaries: Vec<&str> = rest.commits.iter().map(|c| &*c.summary).collect();
+    assert_eq!(summaries, ["rename", "two", "one"]);
+    assert!(rest.next_cursor.is_none());
+
+    let all = repo
+        .log_file_page_impl(Path::new("renamed.txt"), usize::MAX, None)
+        .expect("unbounded first page");
+    assert_eq!(all.commits.len(), 4);
+    assert!(all.next_cursor.is_none());
+}
+
 #[test]
 fn reflog_head_entries_carry_the_committer_as_author() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -670,6 +709,42 @@ fn finishing_a_page_reports_a_request_that_was_superseded_while_it_was_built() {
         repo.cached_log_page(&key).is_some(),
         "a cancelled request still leaves the page it finished in the cache"
     );
+}
+
+#[test]
+fn deep_log_pages_share_a_total_cache_row_budget() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_repo(tmp.path());
+    commit_file(tmp.path(), "a.txt", "one\n", "first");
+    let repo = open_repo(tmp.path());
+    let shallow = shallow_snapshot(&repo._repo.to_thread_local()).expect("shallow snapshot");
+    let commit = repo.log_head_page_impl(1, None).unwrap().commits[0].clone();
+    for limit in [4000, 4001, 4002, 20_000] {
+        let key = repo.log_page_cache_key(
+            HistoryMode::AllBranches,
+            super::super::LogPageSeed::Tips(Arc::from(Vec::new())),
+            &shallow,
+            limit,
+            None,
+            None,
+        );
+        repo.store_log_page(
+            key.clone(),
+            &Arc::new(LogPage {
+                commits: vec![commit.clone(); limit],
+                next_cursor: None,
+            }),
+        );
+        let rows: usize = repo
+            .log_page_cache
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.page.commits.len())
+            .sum();
+        assert!(rows <= 10_000, "cached {rows} rows");
+        assert_eq!(repo.cached_log_page(&key).is_some(), limit <= 10_000);
+    }
 }
 
 #[test]

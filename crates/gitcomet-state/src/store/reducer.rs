@@ -212,6 +212,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::OpenFileEditor { .. }
             | Msg::OpenFileAtCommitParent { .. }
             | Msg::OpenFileAtCommit { .. }
+            | Msg::ShowFileChangesAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             | Msg::RevealCommit { .. }
             | Msg::ResetBrowseToLive { .. }
@@ -882,6 +883,7 @@ fn is_view_navigation(msg: &Msg) -> bool {
             // the editor rather than skipping past it to whatever preceded it.
             | Msg::ExitDiffEditMode { .. }
             | Msg::OpenFileAtCommit { .. }
+            | Msg::ShowFileChangesAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             // A reveal moves the main view when its reference resolves, not
             // when it is asked for.
@@ -1095,8 +1097,15 @@ fn reduce_inner(
                 }
                 git_hook_activity::finished(repo, operation_id, outer_outcome, duration);
             }
-            if outer_outcome == crate::model::GitOperationOuterOutcome::Cancelled {
-                effects.extend(external_and_history::reload_repo(repos, state, repo_id));
+            if outer_outcome == crate::model::GitOperationOuterOutcome::Cancelled
+                && !effects.iter().any(|effect| matches!(effect, Effect::LoadLog { repo_id: id, .. } if *id == repo_id))
+            {
+                // Cancellation may leave partial Git changes, so refresh the
+                // retained panes. Explicit Reload would discard history and
+                // selection after the nested action already refreshed them.
+                effects.extend(external_and_history::repo_externally_changed(
+                    repos, state, repo_id, crate::msg::RepoExternalChange::all(),
+                ));
             }
             effects
         }
@@ -1316,6 +1325,17 @@ fn reduce_inner(
             repo_id,
             commit_id,
             path,
+            content_preview: true,
+        }],
+        Msg::ShowFileChangesAtCommit {
+            repo_id,
+            commit_id,
+            path,
+        } => vec![Effect::OpenFileAtCommit {
+            repo_id,
+            commit_id,
+            path,
+            content_preview: false,
         }],
         Msg::BrowseRepositoryAtCommit { repo_id, commit_id } => {
             effects::browse_repository_at_commit(state, repo_id, commit_id)
@@ -2297,8 +2317,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
             repo_id,
             path,
+            cursor,
             result,
-        }) => effects::file_history_loaded(state, repo_id, path, result),
+        }) => effects::file_history_loaded(state, repo_id, path, cursor, result),
         Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
             repo_id,
             path,

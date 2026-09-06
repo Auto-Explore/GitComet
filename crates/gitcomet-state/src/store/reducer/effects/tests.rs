@@ -145,7 +145,8 @@ fn unknown_repo_handlers_are_noops() {
             &mut state,
             repo_id,
             path.clone(),
-            Ok(std::sync::Arc::new(empty_log_page()))
+            None,
+            Ok(Arc::new(empty_log_page()))
         )
         .is_empty()
     );
@@ -237,7 +238,8 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
         &mut state,
         repo_id,
         PathBuf::from("other.txt"),
-        Ok(std::sync::Arc::new(empty_log_page())),
+        None,
+        Ok(Arc::new(empty_log_page())),
     );
     assert!(matches!(
         repo_mut(&mut state, repo_id).history_state.file_history,
@@ -248,7 +250,8 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
         &mut state,
         repo_id,
         tracked.clone(),
-        Ok(std::sync::Arc::new(empty_log_page())),
+        None,
+        Ok(Arc::new(empty_log_page())),
     );
     assert!(matches!(
         repo_mut(&mut state, repo_id).history_state.file_history,
@@ -259,6 +262,7 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
         &mut state,
         repo_id,
         tracked,
+        None,
         Err(backend_error("file history failed")),
     );
     let repo = repo_mut(&mut state, repo_id);
@@ -266,6 +270,186 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
         repo.history_state.file_history,
         Loadable::Error(_)
     ));
+    assert_eq!(repo.feedback.diagnostics.len(), 1);
+}
+
+fn file_history_cursor(last_seen: &str) -> LogCursor {
+    LogCursor {
+        last_seen: CommitId(last_seen.into()),
+        resume_from: None,
+        resume_token: None,
+    }
+}
+
+fn file_history_page(ids: &[&str], next_cursor: Option<LogCursor>) -> LogPage {
+    LogPage {
+        commits: ids.iter().map(|id| test_commit(id, None)).collect(),
+        next_cursor,
+    }
+}
+
+fn file_history_ids(state: &mut AppState, repo_id: RepoId) -> Vec<String> {
+    let Loadable::Ready(page) = &repo_mut(state, repo_id).history_state.file_history else {
+        panic!("file history should be ready");
+    };
+    page.commits.iter().map(|c| c.id.to_string()).collect()
+}
+
+/// The first page is bounded so the picker opens at once. When it reports
+/// more, the reducer asks for the rest right away — unbounded, since the
+/// backend serves it from one cached follow walk — rather than leaving the
+/// list truncated at the page size.
+#[test]
+fn file_history_first_page_with_more_requests_the_rest() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let tracked = PathBuf::from("tracked.txt");
+    let effects = load_file_history(&mut state, repo_id, tracked.clone(), 2);
+    assert_eq!(effects.len(), 1);
+
+    let cursor = file_history_cursor("b");
+    let effects = file_history_loaded(
+        &mut state,
+        repo_id,
+        tracked.clone(),
+        None,
+        Ok(Arc::new(file_history_page(
+            &["a", "b"],
+            Some(cursor.clone()),
+        ))),
+    );
+    assert!(matches!(
+        &effects[..],
+        [Effect::LoadFileHistory {
+            repo_id: rid,
+            path,
+            limit: usize::MAX,
+            cursor: Some(c),
+        }] if *rid == repo_id && path == &tracked && *c == cursor
+    ));
+    assert_eq!(file_history_ids(&mut state, repo_id), ["a", "b"]);
+
+    // A complete first page has nothing to chain.
+    let effects = file_history_loaded(
+        &mut state,
+        repo_id,
+        tracked,
+        None,
+        Ok(Arc::new(file_history_page(&["a", "b"], None))),
+    );
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn file_history_remainder_extends_the_page_that_requested_it() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let tracked = PathBuf::from("tracked.txt");
+    let cursor = file_history_cursor("b");
+    {
+        let repo = repo_mut(&mut state, repo_id);
+        repo.history_state.file_history_path = Some(tracked.clone());
+        repo.history_state.file_history = Loadable::Ready(Arc::new(file_history_page(
+            &["a", "b"],
+            Some(cursor.clone()),
+        )));
+    }
+
+    let effects = file_history_loaded(
+        &mut state,
+        repo_id,
+        tracked,
+        Some(cursor),
+        Ok(Arc::new(file_history_page(&["c", "d"], None))),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(file_history_ids(&mut state, repo_id), ["a", "b", "c", "d"]);
+    let Loadable::Ready(page) = &repo_mut(&mut state, repo_id).history_state.file_history else {
+        panic!("file history should be ready");
+    };
+    assert!(page.next_cursor.is_none());
+}
+
+/// Every open of the popover reloads the first page. A remainder answering an
+/// earlier open — or one that arrives while the first page is still loading —
+/// belongs to a page that is gone, and appending it would duplicate rows.
+#[test]
+fn file_history_remainder_for_another_page_is_dropped() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let tracked = PathBuf::from("tracked.txt");
+    let stale = file_history_cursor("old");
+    {
+        let repo = repo_mut(&mut state, repo_id);
+        repo.history_state.file_history_path = Some(tracked.clone());
+        repo.history_state.file_history = Loadable::Loading;
+    }
+
+    let effects = file_history_loaded(
+        &mut state,
+        repo_id,
+        tracked.clone(),
+        Some(stale.clone()),
+        Ok(Arc::new(file_history_page(&["x"], None))),
+    );
+    assert!(effects.is_empty());
+    assert!(
+        repo_mut(&mut state, repo_id)
+            .history_state
+            .file_history
+            .is_loading()
+    );
+
+    let current = file_history_cursor("b");
+    repo_mut(&mut state, repo_id).history_state.file_history = Loadable::Ready(Arc::new(
+        file_history_page(&["a", "b"], Some(current.clone())),
+    ));
+    let effects = file_history_loaded(
+        &mut state,
+        repo_id,
+        tracked,
+        Some(stale),
+        Ok(Arc::new(file_history_page(&["x"], None))),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(file_history_ids(&mut state, repo_id), ["a", "b"]);
+    let Loadable::Ready(page) = &repo_mut(&mut state, repo_id).history_state.file_history else {
+        panic!("file history should be ready");
+    };
+    assert_eq!(page.next_cursor.as_ref(), Some(&current));
+}
+
+/// A failed remainder must not throw away the rows already on screen; it
+/// reports the error and stops promising older commits.
+#[test]
+fn file_history_remainder_error_keeps_the_first_page() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let tracked = PathBuf::from("tracked.txt");
+    let cursor = file_history_cursor("b");
+    {
+        let repo = repo_mut(&mut state, repo_id);
+        repo.history_state.file_history_path = Some(tracked.clone());
+        repo.history_state.file_history = Loadable::Ready(Arc::new(file_history_page(
+            &["a", "b"],
+            Some(cursor.clone()),
+        )));
+    }
+
+    let effects = file_history_loaded(
+        &mut state,
+        repo_id,
+        tracked,
+        Some(cursor),
+        Err(backend_error("follow failed")),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(file_history_ids(&mut state, repo_id), ["a", "b"]);
+    let repo = repo_mut(&mut state, repo_id);
+    let Loadable::Ready(page) = &repo.history_state.file_history else {
+        panic!("file history should be ready");
+    };
+    assert!(page.next_cursor.is_none());
     assert_eq!(repo.feedback.diagnostics.len(), 1);
 }
 
@@ -523,7 +707,8 @@ fn load_requests_set_loading_and_emit_effects() {
         Effect::LoadFileHistory {
             repo_id: rid,
             ref path,
-            limit
+            limit,
+            cursor: None,
         } if rid == repo_id && path == &history_path && limit == 25
     ));
     {
@@ -635,6 +820,51 @@ fn load_requests_set_loading_and_emit_effects() {
         assert!(matches!(repo.file_browser.entries, Loadable::Loading));
         assert_eq!(repo.file_browser.source, FileSource::WorkingDirectory);
     }
+}
+
+#[test]
+fn worktree_refresh_retains_badge_data_until_results_arrive() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+    let old_worktree = Worktree {
+        path: PathBuf::from("/tmp/worktree"),
+        head: None,
+        branch: Some("dev".into()),
+        detached: false,
+    };
+    let repo = repo_mut(&mut state, repo_id);
+    repo.set_worktrees(Loadable::Ready(vec![old_worktree.clone()]));
+    let previous = repo.worktrees.clone();
+    let revision = repo.worktrees_rev;
+
+    assert!(matches!(
+        load_worktrees(&mut state, repo_id).as_slice(),
+        [Effect::LoadWorktrees { repo_id: id }] if *id == repo_id
+    ));
+    assert_eq!(repo_mut(&mut state, repo_id).worktrees, previous);
+    assert_eq!(repo_mut(&mut state, repo_id).worktrees_rev, revision);
+
+    // A second refresh is queued without blanking the badges either.
+    assert!(load_worktrees(&mut state, repo_id).is_empty());
+    assert_eq!(repo_mut(&mut state, repo_id).worktrees, previous);
+    let updated = Worktree {
+        branch: Some("feature".into()),
+        ..old_worktree
+    };
+    assert!(matches!(
+        worktrees_loaded(&mut state, repo_id, Ok(vec![updated.clone()])).as_slice(),
+        [Effect::LoadWorktrees { repo_id: id }] if *id == repo_id
+    ));
+    assert_eq!(
+        repo_mut(&mut state, repo_id).worktrees,
+        Loadable::Ready(Arc::new(vec![updated]))
+    );
+    assert!(worktrees_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
+    assert_eq!(
+        repo_mut(&mut state, repo_id).worktrees,
+        Loadable::Ready(Arc::new(Vec::new()))
+    );
 }
 
 #[test]

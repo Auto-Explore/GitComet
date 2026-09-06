@@ -14,8 +14,8 @@ use gitcomet_core::conflict_session::{
 };
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitFileChange, CommitId, EMPTY_TREE_ID, FileEntry, FileSource,
-    FileStatusKind, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
-    RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    FileStatusKind, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
     WorktreeDirtySummary,
 };
 use gitcomet_core::error::Error;
@@ -25,24 +25,78 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// "Everything after the cursor" for the rest of a file's history: cursor
+/// pages come from one cached follow walk, so one request costs the same as
+/// many and the picker gets a complete, searchable list.
+const FILE_HISTORY_REMAINDER_LIMIT: usize = usize::MAX;
+
 pub(super) fn file_history_loaded(
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
+    cursor: Option<LogCursor>,
     result: std::result::Result<Arc<LogPage>, Error>,
 ) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.history_state.file_history_path.as_ref() == Some(&path)
-    {
-        repo_state.history_state.file_history = match result {
-            Ok(v) => Loadable::Ready(v),
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if repo_state.history_state.file_history_path.as_ref() != Some(&path) {
+        return Vec::new();
+    }
+
+    let page = match cursor {
+        None => match result {
+            Ok(page) => page,
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+                repo_state.history_state.file_history = Loadable::Error(e.to_string());
+                return Vec::new();
             }
-        };
-    }
-    Vec::new()
+        },
+        Some(cursor) => {
+            // A continuation only extends the page that asked for it. The
+            // popover reloads the first page on every open, so a late answer
+            // to an earlier open must not be appended to a fresh page.
+            let Loadable::Ready(current) = &repo_state.history_state.file_history else {
+                return Vec::new();
+            };
+            if current.next_cursor.as_ref() != Some(&cursor) {
+                return Vec::new();
+            }
+            let mut commits = current.commits.clone();
+            let next_cursor = match result {
+                Ok(rest) => {
+                    let rest = Arc::unwrap_or_clone(rest);
+                    commits.extend(rest.commits);
+                    rest.next_cursor
+                }
+                Err(e) => {
+                    // Keep what is loaded; clearing the cursor stops the
+                    // picker from reporting that older commits are coming.
+                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    None
+                }
+            };
+            Arc::new(LogPage {
+                commits,
+                next_cursor,
+            })
+        }
+    };
+
+    let effects = page
+        .next_cursor
+        .clone()
+        .map(|cursor| Effect::LoadFileHistory {
+            repo_id,
+            path,
+            limit: FILE_HISTORY_REMAINDER_LIMIT,
+            cursor: Some(cursor),
+        })
+        .into_iter()
+        .collect();
+    repo_state.history_state.file_history = Loadable::Ready(page);
+    effects
 }
 
 pub(super) fn blame_loaded(
@@ -1576,6 +1630,7 @@ pub(super) fn load_file_history(
         repo_id,
         path,
         limit,
+        cursor: None,
     }]
 }
 
@@ -1625,7 +1680,10 @@ pub(super) fn load_worktrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effec
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return Vec::new();
     }
-    repo_state.set_worktrees(Loadable::Loading);
+    // Keep branch badges visible while refreshing after a checkout.
+    if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
+        repo_state.set_worktrees(Loadable::Loading);
+    }
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::WORKTREES)

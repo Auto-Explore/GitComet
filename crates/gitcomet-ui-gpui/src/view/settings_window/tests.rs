@@ -11,10 +11,19 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
 const DIFF_DEFAULTS_SESSION_SUBTEST_ENV: &str = "GITCOMET_DIFF_DEFAULTS_SESSION_SUBTEST";
 
-fn wait_for_store_setting(description: &str, ready: impl Fn() -> bool) {
-    // Draining GPUI's executor does not synchronize with AppStore's worker thread.
+fn wait_for_store(
+    cx: &mut gpui::VisualTestContext,
+    store: &AppStore,
+    description: &str,
+    ready: impl Fn(&AppState) -> bool,
+) {
     let deadline = Instant::now() + Duration::from_secs(3);
-    while !ready() {
+    loop {
+        // GPUI can be idle while the store's separate worker is still running.
+        cx.run_until_parked();
+        if ready(&store.snapshot()) {
+            return;
+        }
         assert!(
             Instant::now() < deadline,
             "timed out waiting for {description}"
@@ -2317,16 +2326,11 @@ fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppCo
             settings.set_prune_deleted_remote_branches_on_fetch(false, cx);
         });
     });
-    cx.run_until_parked();
-
-    wait_for_store_setting(
-        "the Remotes setting to update the global store setting",
-        || {
-            !store
-                .snapshot()
-                .remote_settings
-                .prune_deleted_remote_branches_on_fetch
-        },
+    wait_for_store(
+        cx,
+        &store,
+        "the Remotes setting to reach the store",
+        |state| !state.remote_settings.prune_deleted_remote_branches_on_fetch,
     );
 }
 
@@ -2445,14 +2449,11 @@ fn allowed_remote_protocol_toggle_reaches_the_main_window_and_store(cx: &mut gpu
                 .expect("settings window should remain readable")
         );
     });
-    wait_for_store_setting(
-        "the command store to receive the new protocol policy",
-        || {
-            observed_store
-                .snapshot()
-                .remote_url_policy
-                .allows(RemoteProtocol::Http)
-        },
+    wait_for_store(
+        cx,
+        &observed_store,
+        "the protocol policy to reach the store",
+        |state| state.remote_url_policy.allows(RemoteProtocol::Http),
     );
 }
 

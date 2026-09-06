@@ -71,6 +71,10 @@ pub(super) fn reload_repo(
     let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    // Explicit Reload supersedes even same-scope walks. Their replies must not
+    // refill Loading with an old prefix or a continuation page.
+    let mut effects = Vec::new();
+    append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
     let repo_state = &mut state.repos[repo_ix];
 
     repo_state.set_head_branch(Loadable::Loading);
@@ -115,7 +119,7 @@ pub(super) fn reload_repo(
     // results can use the freshly cleared cache.
     super::refresh_selected_head_gitlink(repos, state, repo_id);
     let repo_state = &mut state.repos[repo_ix];
-    let mut effects = refresh_full_effects(repo_state, git_log_settings);
+    effects.extend(refresh_full_effects(repo_state, git_log_settings));
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
     // Linked-worktree rows survive a reload, so their dirty counts have to be
     // refreshed along with everything else. The monitor only flushes for this
@@ -387,7 +391,11 @@ pub(super) fn load_more_history(
         return Vec::new();
     };
 
-    if repo_state.history_state.log_loading_more {
+    if repo_state.history_state.log_loading_more
+        || repo_state
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::LOG)
+    {
         return Vec::new();
     }
 
@@ -579,6 +587,7 @@ pub(super) fn log_chunk_loaded(
     };
     if !repo_state.loads_in_flight.is_active_log_reply(seq)
         || repo_state.loads_in_flight.active_log_is_load_more()
+        || !repo_state.log.is_loading()
     {
         return Vec::new();
     }
@@ -605,7 +614,7 @@ pub(super) fn log_loaded(
     seq: crate::model::LogLoadSeq,
     scope: LogScope,
     cursor: Option<LogCursor>,
-    result: std::result::Result<Arc<LogPage>, Error>,
+    result: std::result::Result<gitcomet_core::services::HistoryReadResult, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -623,11 +632,20 @@ pub(super) fn log_loaded(
             // A cancelled walk is not a failure: the request that replaced it
             // owns the state now, so leave everything as the newer load found it.
             Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) => {
-                if is_load_more {
-                    repo_state.set_log_loading_more(false);
-                }
+                return finish_log_load(repo_state);
             }
-            Ok(mut page) => {
+            Ok(gitcomet_core::services::HistoryReadResult::Unchanged) => {
+                // A failed checkout may have changed the optimistic detached
+                // HEAD even though the retained history still matches Git.
+                reconcile_detached_head_from_log(repo_state, scope);
+                return finish_log_load(repo_state);
+            }
+            Ok(gitcomet_core::services::HistoryReadResult::Invalidated) => {
+                let request = super::util::refresh_log_request(repo_state);
+                repo_state.loads_in_flight.request_log(request);
+                return finish_log_load(repo_state);
+            }
+            Ok(gitcomet_core::services::HistoryReadResult::Page { mut page, snapshot }) => {
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
                     // Drop the history_state copy first so the Arc's refcount
                     // goes to 1 and make_mut can mutate in-place instead of
@@ -643,7 +661,7 @@ pub(super) fn log_loaded(
                     // Re-share the updated Arc with history_state.
                     repo_state.history_state.log = repo_state.log.clone();
                     repo_state.bump_log_revs();
-                } else {
+                } else if !is_load_more {
                     // Slack for later appends only when the page is ours alone;
                     // a cache-shared page would have to be copied to get it.
                     if page.next_cursor.is_some()
@@ -653,21 +671,18 @@ pub(super) fn log_loaded(
                     }
                     repo_state.set_log(Loadable::Ready(page));
                 }
+                repo_state.history_state.log_snapshot = snapshot;
             }
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                if !is_load_more {
+                if !matches!(repo_state.log, Loadable::Ready(_)) {
                     repo_state.set_log(Loadable::Error(e.to_string()));
                 }
+                return finish_log_load(repo_state);
             }
         }
 
-        if scope.guarantees_head_visibility()
-            && matches!(repo_state.head_branch, Loadable::Ready(ref head) if head == "HEAD")
-            && let Loadable::Ready(page) = &repo_state.log
-        {
-            repo_state.set_detached_head_commit(page.commits.first().map(|c| c.id.clone()));
-        }
+        reconcile_detached_head_from_log(repo_state, scope);
 
         // Reconcile the commit multi-selection against the reloaded page: drop
         // ids that no longer exist, and drop the anchor index hint since row
@@ -737,19 +752,40 @@ pub(super) fn log_loaded(
             repo_state.set_log_loading_more(false);
         }
 
-        if let Some((seq, next)) = repo_state.loads_in_flight.finish_log() {
-            repo_state.set_log_loading_more(next.cursor.is_some());
-            effects.push(Effect::LoadLog {
-                repo_id,
-                seq,
-                scope: next.scope,
-                author: next.author,
-                limit: next.limit,
-                cursor: next.cursor,
-            });
-        }
+        effects.extend(finish_log_load(repo_state));
     }
     effects
+}
+
+fn reconcile_detached_head_from_log(repo_state: &mut crate::model::RepoState, scope: LogScope) {
+    if scope.guarantees_head_visibility()
+        && matches!(repo_state.head_branch, Loadable::Ready(ref head) if head == "HEAD")
+        && let Loadable::Ready(page) = &repo_state.log
+    {
+        repo_state.set_detached_head_commit(page.commits.first().map(|c| c.id.clone()));
+    }
+}
+
+fn finish_log_load(repo_state: &mut crate::model::RepoState) -> Vec<Effect> {
+    repo_state.set_log_loading_more(false);
+    let refresh_limit = super::util::refresh_log_limit(repo_state);
+    if let Some((seq, next)) = repo_state.loads_in_flight.finish_log(|next| {
+        if next.cursor.is_none() {
+            next.limit = refresh_limit;
+        }
+    }) {
+        repo_state.set_log_loading_more(next.cursor.is_some());
+        vec![Effect::LoadLog {
+            repo_id: repo_state.id,
+            seq,
+            scope: next.scope,
+            author: next.author,
+            limit: next.limit,
+            cursor: next.cursor,
+        }]
+    } else {
+        Vec::new()
+    }
 }
 
 enum RepoActionCompletion {
