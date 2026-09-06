@@ -292,11 +292,10 @@ type RefMetadataCache =
 /// an object read per ref, so a page request whose fingerprint matches skips
 /// that entirely.
 /// Identity of a file as it sat on disk when we last read it. Inode and ctime
-/// (Unix only) make it robust against in-place edits and replacements that keep
-/// length and mtime; the temp-dir caches rely on that because their paths are
-/// predictable, so a matching stamp must prove it is still the file *we* wrote
-/// or verified. `None` where those fields are unavailable, which disables the
-/// memo rather than weakening it.
+/// (Unix only) detect replacements and edits that keep length and mtime, but
+/// rapid writes can share even the same ctime. Verification memos must exclude
+/// racy stamps before recording them. `None` where those fields are unavailable,
+/// which disables the memo rather than weakening it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DiskFileStamp {
     len: u64,
@@ -329,10 +328,35 @@ impl DiskFileStamp {
         let metadata = std::fs::symlink_metadata(path).ok()?;
         Self::from_metadata(&metadata)
     }
+
+    /// A stamp is unsafe to memoize while a subsequent write could still get
+    /// the same timestamps. Check ctime too: mtime can be preserved or backdated.
+    fn is_racy_at(&self, now: std::time::SystemTime) -> bool {
+        const RACY_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+        let mtime_is_old = self.modified.is_some_and(|modified| {
+            now.duration_since(modified)
+                .is_ok_and(|age| age >= RACY_WINDOW)
+        });
+        let ctime_is_old = now
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .is_ok_and(|elapsed| {
+                (elapsed.as_nanos() as i128).saturating_sub(self.ctime_nanos)
+                    >= RACY_WINDOW.as_nanos() as i128
+            });
+        !mtime_is_old || !ctime_is_old
+    }
+
+    fn read_for_verification_memo(path: &Path) -> Option<Self> {
+        // Capture the time first: a pause after stat must not make a snapshot
+        // taken inside the racy window eligible for memoization.
+        let now = std::time::SystemTime::now();
+        Self::read(path).filter(|stamp| !stamp.is_racy_at(now))
+    }
 }
 
 /// A temp-dir preview blob whose bytes were hashed and found to match
-/// `blob_id`; a later open with the same stamp skips re-reading and re-hashing.
+/// `blob_id` outside its timestamp race window; a later open with the same stamp
+/// skips re-reading and re-hashing.
 #[derive(Clone, Copy, Debug)]
 struct VerifiedPreviewBlob {
     file: DiskFileStamp,
@@ -1370,6 +1394,62 @@ impl GitRepository for GixRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disk_file_stamp_requires_both_timestamps_outside_the_racy_window() {
+        use std::time::{Duration, SystemTime};
+
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let stamp = DiskFileStamp {
+            len: 15,
+            modified: Some(now - Duration::from_secs(2)),
+            inode: 1,
+            ctime_nanos: 98_000_000_000,
+        };
+        assert!(!stamp.is_racy_at(now), "an aged stamp permits memoization");
+        for (description, candidate) in [
+            (
+                "recent mtime",
+                DiskFileStamp {
+                    modified: Some(now - Duration::from_secs(2) + Duration::from_nanos(1)),
+                    ..stamp
+                },
+            ),
+            (
+                "recent ctime even with backdated mtime",
+                DiskFileStamp {
+                    ctime_nanos: stamp.ctime_nanos + 1,
+                    ..stamp
+                },
+            ),
+            (
+                "future mtime",
+                DiskFileStamp {
+                    modified: Some(now + Duration::from_secs(1)),
+                    ..stamp
+                },
+            ),
+            (
+                "future ctime",
+                DiskFileStamp {
+                    ctime_nanos: 101_000_000_000,
+                    ..stamp
+                },
+            ),
+            (
+                "missing mtime",
+                DiskFileStamp {
+                    modified: None,
+                    ..stamp
+                },
+            ),
+        ] {
+            assert!(
+                candidate.is_racy_at(now),
+                "{description} must bypass the memo"
+            );
+        }
+    }
 
     #[test]
     fn oid_to_arc_str_round_trips_hex_object_id() {

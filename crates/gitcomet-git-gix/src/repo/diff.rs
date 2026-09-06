@@ -567,18 +567,8 @@ impl GixRepo {
         tmp_file.flush().map_err(io_err_to_error)?;
 
         persist_worktree_git_cache_file(tmp_file, &cache_path)?;
-        // What now sits at `cache_path` is either the bytes just written or a
-        // byte-identical predecessor, so record it as verified.
-        if let Some(file) = DiskFileStamp::read(&cache_path) {
-            let mut verified = self
-                .preview_blob_verified
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if verified.len() >= TEMP_FILE_MEMO_LIMIT {
-                verified.clear();
-            }
-            verified.insert(cache_path.clone(), VerifiedPreviewBlob { file, blob_id });
-        }
+        // Do not memoize newly materialized files. They must be hashed again
+        // outside the timestamp race window before their stamp can be trusted.
         Ok(Some(cache_path))
     }
 
@@ -1294,15 +1284,16 @@ fn cached_preview_blob_matches(
 impl GixRepo {
     /// [`cached_preview_blob_matches`] with a memo of files this process already
     /// verified: reading and hashing a large blob on every preview open is the
-    /// whole cost of a cache hit. A replaced or edited file changes its stamp
-    /// (inode/ctime), which forces the full check again.
+    /// whole cost of a cache hit. Only stamps verified outside the timestamp
+    /// race window are reusable, so a later edit changes the stamp and forces
+    /// the full check again.
     fn cached_preview_blob_matches(
         &self,
         repo: &gix::Repository,
         cache_path: &Path,
         blob_id: gix::ObjectId,
     ) -> bool {
-        let stamp = DiskFileStamp::read(cache_path);
+        let stamp = DiskFileStamp::read_for_verification_memo(cache_path);
         if let Some(stamp) = stamp
             && self
                 .preview_blob_verified
@@ -1314,8 +1305,9 @@ impl GixRepo {
             return true;
         }
         let matches = cached_preview_blob_matches(repo, cache_path, blob_id);
-        // Re-read the stamp after hashing so a concurrent rewrite during the
-        // read cannot be memoized under the pre-read stamp.
+        // Require a non-racy stamp from BEFORE hashing as well as an unchanged
+        // stamp afterwards. A fresh snapshot must not become trusted merely
+        // because hashing took long enough to leave the race window.
         if matches && let Some(file) = DiskFileStamp::read(cache_path).filter(|s| Some(*s) == stamp)
         {
             let mut verified = self
@@ -1747,6 +1739,73 @@ mod tests {
         assert_eq!(
             std::fs::read(&served).expect("read served file"),
             b"real blob bytes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_blob_verification_memo_rechecks_matching_racy_stamp() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let logical_path = Path::new("image.bin");
+        let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+        let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id);
+        std::fs::write(&cache_path, b"fake blob bytes").expect("tamper");
+        // Keep the stamp racy regardless of how long the test is descheduled.
+        std::fs::File::options()
+            .write(true)
+            .open(&cache_path)
+            .expect("open cache")
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+            .expect("set future mtime");
+
+        // Model a same-tick rewrite: the metadata still matches the memo, but
+        // the content no longer matches the previously verified blob. Inject
+        // the matching stamp so this also reproduces on fine-grained filesystems.
+        repo.preview_blob_verified.lock().expect("memo").insert(
+            cache_path.clone(),
+            VerifiedPreviewBlob {
+                file: DiskFileStamp::read(&cache_path).expect("stamp"),
+                blob_id,
+            },
+        );
+
+        let served = repo
+            .cached_preview_blob_file_path(blob_id, logical_path)
+            .expect("re-verify")
+            .expect("blob exists");
+        assert_eq!(
+            std::fs::read(served).expect("read served"),
+            b"real blob bytes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_blob_verification_memo_does_not_record_racy_hash_verification() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let logical_path = Path::new("image.bin");
+        let blob_id = stage_blob(tmp.path(), "image.bin", b"real blob bytes");
+        let repo = open_repo(tmp.path());
+        let cache_path = preview_blob_cache_path(&repo.spec.workdir, logical_path, &blob_id);
+        std::fs::write(&cache_path, b"real blob bytes").expect("write cache");
+        std::fs::File::options()
+            .write(true)
+            .open(&cache_path)
+            .expect("open cache")
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+            .expect("set future mtime");
+
+        let served = repo
+            .cached_preview_blob_file_path(blob_id, logical_path)
+            .expect("verify")
+            .expect("blob exists");
+        assert_eq!(served, cache_path);
+        assert!(
+            repo.preview_blob_verified.lock().expect("memo").is_empty(),
+            "verification inside the race window must not become trusted as time passes"
         );
     }
 

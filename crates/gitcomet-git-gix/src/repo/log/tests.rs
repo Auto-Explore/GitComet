@@ -1496,15 +1496,18 @@ fn preview_blob_verification_memo_rechecks_a_rewritten_cache_file() {
         .cached_preview_blob_file_path(blob_id, Path::new("image.bin"))
         .expect("materialize")
         .expect("blob");
-    assert_eq!(repo.preview_blob_verified.lock().expect("memo").len(), 1);
+    assert!(
+        repo.preview_blob_verified.lock().expect("memo").is_empty(),
+        "a newly materialized file must be re-verified outside its timestamp race window"
+    );
     let second = repo
         .cached_preview_blob_file_path(blob_id, Path::new("image.bin"))
         .expect("reuse")
         .expect("blob");
     assert_eq!(first, second);
 
-    // Same-length tampering: the stamp changes, the memo misses, the hash
-    // check fails and the file is rewritten with the real bytes.
+    // Same-length tampering may preserve every stamp field on filesystems with
+    // coarse timestamps. A fresh file must still be hashed again and repaired.
     std::fs::write(&first, b"fake blob bytes").expect("tamper");
     let third = repo
         .cached_preview_blob_file_path(blob_id, Path::new("image.bin"))
