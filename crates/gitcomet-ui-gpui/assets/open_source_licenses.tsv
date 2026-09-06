@@ -130,11 +130,11 @@ cpufeatures	0.3.1	MIT OR Apache-2.0
 crc32fast	1.5.1	MIT OR Apache-2.0
 criterion	0.8.2	Apache-2.0 OR MIT
 criterion-plot	0.8.2	Apache-2.0 OR MIT
-crossbeam-channel	0.5.16	MIT OR Apache-2.0
-crossbeam-deque	0.8.7	MIT OR Apache-2.0
-crossbeam-epoch	0.9.20	MIT OR Apache-2.0
-crossbeam-queue	0.3.13	MIT OR Apache-2.0
-crossbeam-utils	0.8.22	MIT OR Apache-2.0
+crossbeam-channel	0.5.17	MIT OR Apache-2.0
+crossbeam-deque	0.8.8	MIT OR Apache-2.0
+crossbeam-epoch	0.9.21	MIT OR Apache-2.0
+crossbeam-queue	0.3.14	MIT OR Apache-2.0
+crossbeam-utils	0.8.23	MIT OR Apache-2.0
 crunchy	0.2.4	MIT
 crypto-common	0.1.7	MIT OR Apache-2.0
 ctor	1.0.13	Apache-2.0 OR MIT
@@ -336,7 +336,7 @@ image	0.25.10	MIT OR Apache-2.0
 image-webp	0.2.4	MIT OR Apache-2.0
 imagesize	0.15.0	MIT
 imgref	1.12.3	CC0-1.0 OR Apache-2.0
-indexmap	2.14.1	Apache-2.0 OR MIT
+indexmap	2.14.2	Apache-2.0 OR MIT
 inotify	0.11.5	ISC
 inotify-sys	0.1.8	ISC
 inout	0.1.4	MIT OR Apache-2.0
@@ -358,7 +358,7 @@ jni-sys	0.3.1	MIT OR Apache-2.0
 jni-sys	0.4.1	MIT OR Apache-2.0
 jni-sys-macros	0.4.1	MIT OR Apache-2.0
 jobserver	0.1.35	MIT OR Apache-2.0
-js-sys	0.3.104	MIT OR Apache-2.0
+js-sys	0.3.105	MIT OR Apache-2.0
 khronos-egl	6.0.0	MIT/Apache-2.0
 khronos_api	3.1.0	Apache-2.0
 kqueue	1.2.1	MIT
@@ -622,7 +622,7 @@ sval_serde	2.22.0	Apache-2.0 OR MIT
 svgtypes	0.16.1	Apache-2.0 OR MIT
 swash	0.2.10	Apache-2.0 OR MIT
 syn	2.0.119	MIT OR Apache-2.0
-syn	3.0.4	MIT OR Apache-2.0
+syn	3.0.5	MIT OR Apache-2.0
 synstructure	0.13.2	MIT
 sys-locale	0.3.2	MIT OR Apache-2.0
 sysinfo	0.39.6	MIT
@@ -751,8 +751,8 @@ unicode-vo	0.1.0	MIT/Apache-2.0
 unicode-width	0.2.2	MIT OR Apache-2.0
 unicode-xid	0.2.6	MIT OR Apache-2.0
 untrusted	0.9.0	ISC
-ureq	3.4.0	MIT OR Apache-2.0
-ureq-proto	0.6.1	MIT OR Apache-2.0
+ureq	3.4.1	MIT OR Apache-2.0
+ureq-proto	0.6.2	MIT OR Apache-2.0
 url	2.5.8	MIT OR Apache-2.0
 usvg	0.48.1	Apache-2.0 OR MIT
 utf8-zero	0.8.1	MIT OR Apache-2.0
@@ -773,11 +773,11 @@ waker-fn	1.2.0	Apache-2.0 OR MIT
 walkdir	2.5.0	Unlicense/MIT
 wasi	0.11.1+wasi-snapshot-preview1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 wasip2	1.0.4+wasi-0.2.12	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
-wasm-bindgen	0.2.127	MIT OR Apache-2.0
-wasm-bindgen-futures	0.4.77	MIT OR Apache-2.0
-wasm-bindgen-macro	0.2.127	MIT OR Apache-2.0
-wasm-bindgen-macro-support	0.2.127	MIT OR Apache-2.0
-wasm-bindgen-shared	0.2.127	MIT OR Apache-2.0
+wasm-bindgen	0.2.128	MIT OR Apache-2.0
+wasm-bindgen-futures	0.4.78	MIT OR Apache-2.0
+wasm-bindgen-macro	0.2.128	MIT OR Apache-2.0
+wasm-bindgen-macro-support	0.2.128	MIT OR Apache-2.0
+wasm-bindgen-shared	0.2.128	MIT OR Apache-2.0
 wasm_thread	0.3.3	Apache-2.0 OR MIT
 wayland-backend	0.3.17	MIT
 wayland-client	0.31.15	MIT
@@ -787,7 +787,7 @@ wayland-protocols-plasma	0.3.12	MIT
 wayland-protocols-wlr	0.3.12	MIT
 wayland-scanner	0.31.11	MIT
 wayland-sys	0.31.11	MIT
-web-sys	0.3.104	MIT OR Apache-2.0
+web-sys	0.3.105	MIT OR Apache-2.0
 web-time	1.1.0	MIT OR Apache-2.0
 webpki-roots	1.0.9	CDLA-Permissive-2.0
 weezl	0.1.12	MIT OR Apache-2.0
