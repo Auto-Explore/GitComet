@@ -511,12 +511,11 @@ impl Render for HistoryRefsHoverHost {
                 Self::item_popover_kind(state.repo_id, &state.commit_id, item).is_some();
             let frozen = self.item_menu_open;
             let pinned = self.pinned_item_ix == Some(ix);
-            let debug_selector = Self::item_debug_selector(item);
             let icon = Self::item_icon(item);
             let icon_color = Self::item_icon_color(theme, &item.kind);
             div()
                 .id(("history_refs_hover_item", ix))
-                .debug_selector(move || debug_selector.clone())
+                .debug_selector(|| Self::item_debug_selector(item))
                 .h(ui_scale.px(24.0))
                 .w_full()
                 .min_w(px(0.0))

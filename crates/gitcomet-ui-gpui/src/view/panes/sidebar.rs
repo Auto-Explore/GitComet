@@ -2243,9 +2243,11 @@ impl SidebarPaneView {
             .into_any()
     }
 
-    fn file_browser_visible_rows(&self, cx: &gpui::App) -> Vec<FileBrowserVisibleRow> {
+    /// Shared with the cache: the tree rows are read several times per frame
+    /// and were deep-copied on every read, hit or miss.
+    fn file_browser_visible_rows(&self, cx: &gpui::App) -> Rc<[FileBrowserVisibleRow]> {
         let Some(repo) = self.active_repo() else {
-            return Vec::new();
+            return Rc::from(Vec::new());
         };
 
         // Key on the repo id too: file_browser_rev is a per-repo counter, so two
@@ -2267,11 +2269,13 @@ impl SidebarPaneView {
         if let Some((cached_key, cached_rows)) = cache.as_ref()
             && *cached_key == cache_key
         {
-            return cached_rows.to_vec();
+            return Rc::clone(cached_rows);
         }
 
-        let rows = self.compute_file_browser_visible_rows(repo, self.unsaved_file_edit_paths(cx));
-        *cache = Some((cache_key, Rc::from(rows.clone())));
+        let rows: Rc<[FileBrowserVisibleRow]> = self
+            .compute_file_browser_visible_rows(repo, self.unsaved_file_edit_paths(cx))
+            .into();
+        *cache = Some((cache_key, Rc::clone(&rows)));
         rows
     }
 

@@ -10,7 +10,6 @@ use gitcomet_core::git_operation::{
 };
 use gitcomet_core::process::{configure_background_command, git_command};
 use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
-use std::collections::HashMap;
 use std::io::{self, BufRead as _, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdout, Command, Output, Stdio};
@@ -262,7 +261,7 @@ fn trace2_tail_loop(path: &Path, context: &GitOperationContext, done: &AtomicBoo
         return;
     };
     let mut pending = Vec::<u8>::new();
-    let mut hooks = HashMap::<(String, u64), TracedHook>::new();
+    let mut hooks = rustc_hash::FxHashMap::<(String, u64), TracedHook>::default();
     loop {
         let before = pending.len();
         let _ = file.read_to_end(&mut pending);
@@ -282,7 +281,7 @@ fn parse_trace2_lines(
     pending: &mut Vec<u8>,
     eof: bool,
     context: &GitOperationContext,
-    hooks: &mut HashMap<(String, u64), TracedHook>,
+    hooks: &mut rustc_hash::FxHashMap<(String, u64), TracedHook>,
 ) {
     let consumed = pending
         .iter()
@@ -312,7 +311,7 @@ fn trace2_u64(value: &serde_json::Value, key: &str) -> Option<u64> {
 fn apply_trace2_event(
     value: &serde_json::Value,
     context: &GitOperationContext,
-    hooks: &mut HashMap<(String, u64), TracedHook>,
+    hooks: &mut rustc_hash::FxHashMap<(String, u64), TracedHook>,
 ) {
     let event = value.get("event").and_then(serde_json::Value::as_str);
     let sid = value.get("sid").and_then(serde_json::Value::as_str);
@@ -1468,8 +1467,12 @@ pub(crate) fn parse_git_log_pretty_records_from_reader(reader: impl io::Read) ->
         if raw_record.last() == Some(&b'\x1e') {
             raw_record.pop();
         }
-        let record = bytes_to_text_preserving_utf8(&raw_record);
-        state.push_record(&record, &mut commits);
+        // Valid UTF-8 (the usual case) is parsed in place; only a record
+        // with invalid bytes pays for a repaired copy.
+        match std::str::from_utf8(&raw_record) {
+            Ok(record) => state.push_record(record, &mut commits),
+            Err(_) => state.push_record(&bytes_to_text_preserving_utf8(&raw_record), &mut commits),
+        }
     }
 
     Ok(LogPage {
@@ -1524,7 +1527,7 @@ pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
             target: CommitId(sha.into()),
         });
     }
-    branches.sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
+    branches.sort_unstable_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
     branches
 }
 

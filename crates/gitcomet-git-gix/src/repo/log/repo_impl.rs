@@ -22,11 +22,11 @@ impl GixRepo {
     }
 
     /// Serves a cached page and refreshes its successor's LRU position.
-    pub(super) fn cached_log_page(&self, key: &super::LogPageCacheKey) -> Option<LogPage> {
+    pub(super) fn cached_log_page(&self, key: &super::LogPageCacheKey) -> Option<Arc<LogPage>> {
         let mut cache = self.log_page_cache.lock().expect("log page cache");
         let index = cache.iter().position(|entry| &entry.key == key)?;
         let entry = cache.remove(index);
-        let page = entry.page.clone();
+        let page = Arc::clone(&entry.page);
         let successor_key = page
             .next_cursor
             .as_ref()
@@ -50,12 +50,15 @@ impl GixRepo {
         Some(page)
     }
 
+    /// Shares the page with the cache instead of copying it in and out: the
+    /// state keeps the same `Arc`, so a served page costs no commit clones.
     pub(super) fn finish_log_page(
         &self,
         key: super::LogPageCacheKey,
         page: LogPage,
         cancellation: Option<&CancellationToken>,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
+        let page = Arc::new(page);
         self.store_log_page(key, &page);
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
@@ -63,7 +66,7 @@ impl GixRepo {
         Ok(page)
     }
 
-    pub(super) fn store_log_page(&self, key: super::LogPageCacheKey, page: &LogPage) {
+    pub(super) fn store_log_page(&self, key: super::LogPageCacheKey, page: &Arc<LogPage>) {
         let mut cache = self.log_page_cache.lock().expect("log page cache");
         if let Some(index) = cache.iter().position(|entry| entry.key == key) {
             cache.remove(index);
@@ -73,7 +76,7 @@ impl GixRepo {
         }
         cache.push(super::LogPageCacheEntry {
             key,
-            page: page.clone(),
+            page: Arc::clone(page),
         });
     }
 
@@ -206,14 +209,11 @@ impl GixRepo {
     /// Whether `path` is present in the tree of `commit`. Best-effort: any lookup
     /// failure (bad rev, missing object) is treated as "not present".
     pub(super) fn path_exists_in_commit_tree(&self, commit: &CommitId, path: &Path) -> bool {
-        let repo = self._repo.to_thread_local();
-        let Ok(id) = repo.rev_parse_single(commit.as_ref()) else {
+        let repo = self.repo();
+        let Ok(commit) = find_commit_by_id(&repo, commit) else {
             return false;
         };
-        let Ok(object) = id.object() else {
-            return false;
-        };
-        let Ok(tree) = object.peel_to_tree() else {
+        let Ok(tree) = commit.tree() else {
             return false;
         };
         matches!(tree.lookup_entry_by_path(path), Ok(Some(_)))
@@ -292,9 +292,8 @@ impl GixRepo {
     /// The hex object id of `commit`'s first parent, or `None` for a root commit
     /// (or any lookup failure).
     pub(super) fn first_parent_id(&self, commit: &CommitId) -> Option<String> {
-        let repo = self._repo.to_thread_local();
-        let id = repo.rev_parse_single(commit.as_ref()).ok()?.detach();
-        let commit = repo.find_commit(id).ok()?;
+        let repo = self.repo();
+        let commit = find_commit_by_id(&repo, commit).ok()?;
         commit.parent_ids().next().map(|parent| parent.to_string())
     }
 
@@ -370,7 +369,7 @@ impl GixRepo {
         &self,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         self.log_history_mode_page_impl(HistoryMode::FirstParent, limit, cursor)
     }
 
@@ -379,7 +378,7 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         self.log_history_mode_page_cancellable_impl(
             HistoryMode::FirstParent,
             limit,
@@ -393,7 +392,7 @@ impl GixRepo {
         mode: HistoryMode,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         self.log_history_mode_page_impl_inner(mode, None, limit, cursor, None, None)
     }
 
@@ -403,7 +402,7 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         self.log_history_mode_page_impl_inner(mode, None, limit, cursor, Some(cancellation), None)
     }
 
@@ -419,7 +418,7 @@ impl GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         let mut chunks = ChunkEmitter::new(on_chunk);
         self.log_history_mode_page_impl_inner(
             mode,
@@ -538,12 +537,12 @@ impl GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: Option<&CancellationToken>,
         mut chunks: Option<&mut ChunkEmitter<'_>>,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
         }
         if limit == 0 {
-            return Ok(empty_log_page());
+            return Ok(Arc::new(empty_log_page()));
         }
 
         // Normalized once, here, so the matcher and both caches downstream can
@@ -561,7 +560,7 @@ impl GixRepo {
             );
         }
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let shallow = shallow_snapshot(&repo)?;
         let head_id = gix_head_id_or_none(&repo)?;
         let cache_key = self.log_page_cache_key(
@@ -597,7 +596,7 @@ impl GixRepo {
         &self,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         self.log_all_branches_page_impl_inner(limit, cursor, None, None, None)
     }
 
@@ -606,7 +605,7 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         self.log_all_branches_page_impl_inner(limit, cursor, Some(cancellation), None, None)
     }
 
@@ -615,14 +614,57 @@ impl GixRepo {
         repo: &gix::Repository,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Arc<[gix::ObjectId]>> {
+        use rustc_hash::FxHasher;
+        use std::hash::{Hash as _, Hasher as _};
+
         let refs = repo
             .references()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
 
+        // Fingerprint pass: names, raw targets and followed symbolic chains
+        // only, no object lookups.
+        let head_id = gix_head_id_or_none(repo)?;
+        let mut hasher = FxHasher::default();
+        head_id.hash(&mut hasher);
+        let mut ref_count = 0usize;
+        let iter = refs
+            .all()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references(all): {e}"))))?;
+        for reference in iter {
+            if let Some(cancellation) = cancellation {
+                cancellation.check_cancelled()?;
+            }
+            let mut reference = reference
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            if matches!(
+                reference.name().category(),
+                Some(gix::reference::Category::Tag)
+            ) {
+                continue;
+            }
+            super::super::git_ops::hash_reference_identity(&mut hasher, &mut reference);
+            ref_count += 1;
+        }
+        // Older stash entries are reflog-only and need explicit tips.
+        let stash_tips = stash_reflog_tips(repo, 50).unwrap_or_default();
+        stash_tips.hash(&mut hasher);
+        let fingerprint = hasher.finish();
+
+        if let Some(cached) = self
+            .all_branches_tips
+            .lock()
+            .expect("all branches tips cache")
+            .as_ref()
+            .filter(|cached| cached.fingerprint == fingerprint)
+        {
+            return Ok(Arc::clone(&cached.tips));
+        }
+
         // Include custom ref namespaces while leaving tags out of the graph.
-        let mut tips = Vec::new();
-        let mut seen = FxHashSet::default();
-        if let Some(head_id) = gix_head_id_or_none(repo)? {
+        let capacity = ref_count + stash_tips.len() + 1;
+        let mut tips = Vec::with_capacity(capacity);
+        let mut seen = FxHashSet::with_capacity_and_hasher(capacity, Default::default());
+        if let Some(head_id) = head_id {
             tips.push(head_id);
             seen.insert(head_id);
         }
@@ -650,27 +692,31 @@ impl GixRepo {
             }
         }
 
-        // Older stash entries are reflog-only and need explicit tips.
-        for id in stash_reflog_tips(repo, 50).unwrap_or_default() {
+        for id in stash_tips {
             if seen.insert(id) {
                 tips.push(id);
             }
         }
 
-        tips.sort();
+        tips.sort_unstable();
 
         let mut cached = self
             .all_branches_tips
             .lock()
             .expect("all branches tips cache");
-        match cached.as_ref() {
-            Some(previous) if previous.as_ref() == tips.as_slice() => Ok(Arc::clone(previous)),
-            _ => {
-                let tips: Arc<[gix::ObjectId]> = Arc::from(tips);
-                *cached = Some(Arc::clone(&tips));
-                Ok(tips)
+        // Keep the previous allocation when the tips are unchanged so page
+        // cache keys seeded from it keep comparing equal cheaply.
+        let tips: Arc<[gix::ObjectId]> = match cached.as_ref() {
+            Some(previous) if previous.tips.as_ref() == tips.as_slice() => {
+                Arc::clone(&previous.tips)
             }
-        }
+            _ => Arc::from(tips),
+        };
+        *cached = Some(crate::repo::AllBranchesTipsCacheEntry {
+            fingerprint,
+            tips: Arc::clone(&tips),
+        });
+        Ok(tips)
     }
 
     pub(super) fn log_all_branches_page_impl_inner(
@@ -680,15 +726,15 @@ impl GixRepo {
         cancellation: Option<&CancellationToken>,
         author: Option<&AuthorFilter>,
         chunks: Option<&mut ChunkEmitter<'_>>,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
         }
         if limit == 0 {
-            return Ok(empty_log_page());
+            return Ok(Arc::new(empty_log_page()));
         }
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let shallow = shallow_snapshot(&repo)?;
         let tips = self.all_branches_tips(&repo, cancellation)?;
 
@@ -722,9 +768,9 @@ impl GixRepo {
         path: &Path,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         if limit == 0 {
-            return Ok(empty_log_page());
+            return Ok(Arc::new(empty_log_page()));
         }
 
         // Only the first page is bounded. `git log --follow` does not combine
@@ -734,10 +780,10 @@ impl GixRepo {
             // One past the limit tells the page whether more follow; a limit
             // that cannot grow reads as "every commit" and drops the bound.
             let commits = self.log_follow_commits(path, limit.checked_add(1))?;
-            return paginate_commits(commits.into_iter().map(Ok), limit, cursor);
+            return paginate_commits(commits.into_iter().map(Ok), limit, cursor).map(Arc::new);
         }
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let head_oid = gix_head_id_or_none(&repo)?;
         let cache_key = Self::log_file_follow_cache_key(path, head_oid);
         let commits = if let Some(commits) = self.cached_log_file_follow_commits(&cache_key) {
@@ -747,19 +793,23 @@ impl GixRepo {
             self.store_log_file_follow_commits(cache_key, Arc::clone(&commits));
             commits
         };
-        paginate_commits(commits.iter().cloned().map(Ok), limit, cursor)
+        // Clone only the tail from the cursor on: the follow history can be
+        // tens of thousands of commits, and the cursor gate would discard every
+        // clone before `last_seen` anyway.
+        let start = cursor
+            .and_then(|cursor| {
+                commits
+                    .iter()
+                    .position(|commit| commit.id == cursor.last_seen)
+            })
+            .unwrap_or(0);
+        paginate_commits(commits[start..].iter().cloned().map(Ok), limit, cursor).map(Arc::new)
     }
 
     pub(in super::super) fn commit_details_impl(&self, id: &CommitId) -> Result<CommitDetails> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let spec = id.as_ref();
-        let commit = repo
-            .rev_parse_single(spec)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
-            .object()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}"))))?
-            .peel_to_commit()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}"))))?;
+        let commit = find_commit_by_id(&repo, id)?;
 
         let message = bytes_to_text_preserving_utf8(commit.message_raw_sloppy().as_ref())
             .trim_end()
@@ -807,7 +857,7 @@ impl GixRepo {
     ) -> Result<Vec<CommitFileChange>> {
         match to {
             Some(to) => {
-                let repo = self._repo.to_thread_local();
+                let repo = self.repo();
                 diff_range_files(&repo, from, to)
             }
             // Working-tree tip: the newer side is the live worktree, which has no
@@ -818,23 +868,10 @@ impl GixRepo {
     }
 
     pub(in super::super) fn commit_messages_impl(&self, ids: &[CommitId]) -> Result<Vec<String>> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         ids.iter()
             .map(|id| {
-                let spec = id.as_ref();
-                let commit = repo
-                    .rev_parse_single(spec)
-                    .map_err(|e| {
-                        Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}")))
-                    })?
-                    .object()
-                    .map_err(|e| {
-                        Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
-                    })?
-                    .peel_to_commit()
-                    .map_err(|e| {
-                        Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}")))
-                    })?;
+                let commit = find_commit_by_id(&repo, id)?;
                 Ok(
                     bytes_to_text_preserving_utf8(commit.message_raw_sloppy().as_ref())
                         .trim_end()
@@ -848,24 +885,12 @@ impl GixRepo {
         &self,
         ids: &[CommitId],
     ) -> Result<Vec<CommitId>> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let mut object_ids = Vec::with_capacity(ids.len());
         let mut selected = FxHashMap::with_capacity_and_hasher(ids.len(), Default::default());
         for (ix, id) in ids.iter().enumerate() {
             let spec = id.as_ref();
-            let object_id = repo
-                .rev_parse_single(spec)
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
-                .object()
-                .map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
-                })?
-                .peel_to_commit()
-                .map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}")))
-                })?
-                .id()
-                .detach();
+            let object_id = find_commit_by_id(&repo, id)?.id().detach();
             if selected.insert(object_id, ix).is_some() {
                 return Err(Error::new(ErrorKind::Backend(format!(
                     "duplicate commit in replay order: {spec}"
@@ -941,24 +966,12 @@ impl GixRepo {
         };
 
         let page = self.log_history_mode_page_impl(HistoryMode::FirstParent, scan_limit, None)?;
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let mut seen = FxHashSet::default();
         let mut messages = Vec::with_capacity(limit);
 
-        for commit in page.commits {
-            let spec = commit.id.as_ref();
-            let object = repo.rev_parse_single(spec).map_err(|e| {
-                Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}")))
-            })?;
-            let commit_object = object
-                .object()
-                .map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
-                })?
-                .peel_to_commit()
-                .map_err(|e| {
-                    Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}")))
-                })?;
+        for commit in page.commits.iter() {
+            let commit_object = find_commit_by_id(&repo, &commit.id)?;
             let message =
                 bytes_to_text_preserving_utf8(commit_object.message_raw_sloppy().as_ref())
                     .trim_end()
@@ -968,8 +981,8 @@ impl GixRepo {
             }
 
             messages.push(RecentCommitMessage {
-                id: commit.id,
-                summary: commit.summary,
+                id: commit.id.clone(),
+                summary: commit.summary.clone(),
                 message,
             });
             if messages.len() >= limit {
@@ -985,7 +998,7 @@ impl GixRepo {
             return Ok(Vec::new());
         }
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         if gix_head_id_or_none(&repo)?.is_none() {
             return Err(reflog_unborn_head_error(&repo));
         }
@@ -1009,4 +1022,29 @@ impl GixRepo {
             })
             .collect()
     }
+}
+
+/// Resolves a `CommitId` to its commit. Ids are full hex, so the object is
+/// looked up directly; the revspec parser (and its prefix disambiguation
+/// against every pack) only runs for anything that is not a plain id.
+fn find_commit_by_id<'repo>(
+    repo: &'repo gix::Repository,
+    id: &CommitId,
+) -> Result<gix::Commit<'repo>> {
+    let spec = id.as_ref();
+    let object = match object_id_from_commit_id(id) {
+        Some(oid) => repo.find_object(oid).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
+        })?,
+        None => repo
+            .rev_parse_single(spec)
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+            .object()
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
+            })?,
+    };
+    object
+        .peel_to_commit()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}"))))
 }

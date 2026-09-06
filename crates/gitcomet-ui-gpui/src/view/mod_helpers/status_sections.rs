@@ -230,7 +230,7 @@ pub(crate) fn reconcile_status_multi_selection(
         FxHashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
     let mut unstaged_paths: FxHashSet<&std::path::Path> =
         FxHashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
-    for entry in &status.unstaged {
+    for entry in status.unstaged.iter() {
         unstaged_paths.insert(entry.path.as_path());
         if entry.kind == FileStatusKind::Untracked {
             untracked_paths.insert(entry.path.as_path());
@@ -263,7 +263,7 @@ pub(crate) fn reconcile_status_multi_selection(
 
     let mut staged_paths: FxHashSet<&std::path::Path> =
         FxHashSet::with_capacity_and_hasher(status.staged.len(), Default::default());
-    for entry in &status.staged {
+    for entry in status.staged.iter() {
         staged_paths.insert(entry.path.as_path());
     }
 

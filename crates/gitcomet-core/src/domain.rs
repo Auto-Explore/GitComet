@@ -365,8 +365,10 @@ pub struct SubmoduleDiffSummary {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RepoStatus {
-    pub staged: Vec<FileStatus>,
-    pub unstaged: Vec<FileStatus>,
+    /// Shared: the backend's staged-status cache and the app model both keep
+    /// these lists, and every refresh copied them in and out.
+    pub staged: Arc<Vec<FileStatus>>,
+    pub unstaged: Arc<Vec<FileStatus>>,
 }
 
 #[repr(u8)]
@@ -824,7 +826,7 @@ impl Diff {
             return 0;
         }
 
-        bytes.iter().filter(|&&byte| byte == b'\n').count() + usize::from(!bytes.ends_with(b"\n"))
+        memchr::memchr_iter(b'\n', bytes).count() + usize::from(!bytes.ends_with(b"\n"))
     }
 
     fn classify_unified_line_bytes(raw: &[u8]) -> DiffLineKind {

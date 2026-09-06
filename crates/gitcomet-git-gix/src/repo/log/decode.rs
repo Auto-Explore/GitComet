@@ -3,15 +3,17 @@ use super::*;
 pub(crate) fn reference_commit_id(
     mut reference: gix::Reference<'_>,
 ) -> Result<Option<gix::ObjectId>> {
-    let ref_name = reference.name().as_bstr().to_str_lossy().into_owned();
     match reference.peel_to_commit() {
         Ok(commit) => Ok(Some(commit.id().detach())),
         Err(gix::reference::peel::to_kind::Error::PeelObject(
             gix::object::peel::to_kind::Error::NotFound { .. },
         )) => Ok(None),
-        Err(e) => Err(Error::new(ErrorKind::Backend(format!(
-            "gix peel commit ref {ref_name}: {e}"
-        )))),
+        Err(e) => {
+            let ref_name = reference.name().as_bstr().to_str_lossy();
+            Err(Error::new(ErrorKind::Backend(format!(
+                "gix peel commit ref {ref_name}: {e}"
+            ))))
+        }
     }
 }
 

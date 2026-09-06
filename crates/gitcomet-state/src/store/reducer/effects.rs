@@ -35,7 +35,7 @@ pub(super) fn file_history_loaded(
     repo_id: RepoId,
     path: PathBuf,
     cursor: Option<LogCursor>,
-    result: std::result::Result<LogPage, Error>,
+    result: std::result::Result<Arc<LogPage>, Error>,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -66,6 +66,7 @@ pub(super) fn file_history_loaded(
             let mut commits = current.commits.clone();
             let next_cursor = match result {
                 Ok(rest) => {
+                    let rest = Arc::unwrap_or_clone(rest);
                     commits.extend(rest.commits);
                     rest.next_cursor
                 }
@@ -76,10 +77,10 @@ pub(super) fn file_history_loaded(
                     None
                 }
             };
-            LogPage {
+            Arc::new(LogPage {
                 commits,
                 next_cursor,
-            }
+            })
         }
     };
 
@@ -94,7 +95,7 @@ pub(super) fn file_history_loaded(
         })
         .into_iter()
         .collect();
-    repo_state.history_state.file_history = Loadable::Ready(Arc::new(page));
+    repo_state.history_state.file_history = Loadable::Ready(page);
     effects
 }
 
@@ -762,17 +763,17 @@ fn refresh_worktree_inline_diff_entries(
 pub(super) fn ref_metadata_loaded(
     state: &mut AppState,
     repo_id: RepoId,
-    result: std::result::Result<Vec<(String, RefMetadata)>, Error>,
+    result: std::result::Result<Arc<FxHashMap<String, RefMetadata>>, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let ref_metadata = match result {
-            Ok(entries) => Loadable::Ready(entries.into_iter().collect()),
+            Ok(metadata) => Loadable::Ready(metadata),
             // A backend that does not implement this will never implement it,
             // so latch an empty map rather than `Error` — callers retry on
             // `Error`, which would re-schedule a doomed load on every open.
             Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Unsupported(_)) => {
-                Loadable::Ready(FxHashMap::default())
+                Loadable::Ready(Arc::new(FxHashMap::default()))
             }
             // Deliberately no diagnostic: this data only decorates picker rows,
             // which fall back to name-only. A transient failure must not raise
@@ -1010,12 +1011,26 @@ fn merged_selection_range(
     let Loadable::Ready(page) = &repo_state.history_state.log else {
         return None;
     };
+    // One pass over the page with the selection hashed, instead of a page
+    // scan per selected id: a shift-click over a large selection was
+    // quadratic.
+    let wanted: FxHashSet<&str> = selected.iter().map(|id| id.as_ref()).collect();
     let mut newest_ix: Option<usize> = None;
     let mut oldest_ix: Option<usize> = None;
-    for id in selected {
-        let ix = page.commits.iter().position(|c| &c.id == id)?;
-        newest_ix = Some(newest_ix.map_or(ix, |n: usize| n.min(ix)));
-        oldest_ix = Some(oldest_ix.map_or(ix, |o: usize| o.max(ix)));
+    let mut found = 0usize;
+    for (ix, commit) in page.commits.iter().enumerate() {
+        if !wanted.contains(commit.id.as_ref()) {
+            continue;
+        }
+        newest_ix.get_or_insert(ix);
+        oldest_ix = Some(ix);
+        found += 1;
+        if found == wanted.len() {
+            break;
+        }
+    }
+    if found != wanted.len() {
+        return None;
     }
     let newest = &page.commits[newest_ix?];
     let oldest = &page.commits[oldest_ix?];

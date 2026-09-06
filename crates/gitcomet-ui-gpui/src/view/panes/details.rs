@@ -88,6 +88,10 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_details_delay_seq: u64,
 
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
+    /// `range_comparison_commits` memoized on the revs that feed it; it walked
+    /// the whole log page and cloned every selected commit 2-3 times per frame.
+    pub(in super::super) range_comparison_commits_cache:
+        std::cell::RefCell<Option<(u64, std::rc::Rc<[crate::view::rows::CommitCard]>)>>,
     commit_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
     commit_file_projection: std::cell::RefCell<
@@ -456,6 +460,7 @@ impl DetailsPaneView {
             commit_details_delay: None,
             commit_details_delay_seq: 0,
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
+            range_comparison_commits_cache: std::cell::RefCell::new(None),
             commit_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
@@ -1561,8 +1566,8 @@ mod tests {
             ok,
             command: command.to_string(),
             summary: format!("{command}: test"),
-            stdout: String::new(),
-            stderr: String::new(),
+            stdout: "".into(),
+            stderr: "".into(),
             announce_success: true,
             hook_operation_id: None,
         }

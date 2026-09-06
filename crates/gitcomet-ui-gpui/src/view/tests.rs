@@ -1032,12 +1032,12 @@ fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
     state.repos[0].spec.workdir = workdir.clone();
     state.repos[0].status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: conflicted.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
-            }],
+            }]),
         }
         .into(),
     );
@@ -1350,12 +1350,12 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
     let c = PathBuf::from("c.txt");
 
     let status = RepoStatus {
-        staged: vec![],
-        unstaged: vec![FileStatus {
+        staged: std::sync::Arc::new(vec![]),
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: a.clone(),
             kind: FileStatusKind::Modified,
             conflict: None,
-        }],
+        }]),
     };
 
     let mut selection = StatusMultiSelection {
@@ -4525,8 +4525,8 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
             ok: false,
             command: "git fetch".to_string(),
             summary: error.clone(),
-            stdout: String::new(),
-            stderr: "fatal: test".to_string(),
+            stdout: "".into(),
+            stderr: "fatal: test".into(),
             announce_success: true,
             hook_operation_id: None,
         });

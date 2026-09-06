@@ -1083,7 +1083,7 @@ fn list_ref_metadata_reports_author_date_and_subject_for_local_and_remote_refs()
     let lookup = |name: &str| {
         metadata
             .iter()
-            .find(|(ref_name, _)| ref_name == name)
+            .find(|(ref_name, _)| ref_name.as_str() == name)
             .map(|(_, meta)| meta)
     };
 

@@ -29,7 +29,7 @@ impl GixRepo {
             .map(|submodule| submodule.path)
             .collect();
 
-        for entry in &status.unstaged {
+        for entry in status.unstaged.iter() {
             let path = entry.path.as_path();
             if !selected.contains(path) {
                 continue;
@@ -45,7 +45,7 @@ impl GixRepo {
         }
 
         let mut remove_paths: Vec<&Path> = Vec::with_capacity(paths.len());
-        for entry in &status.staged {
+        for entry in status.staged.iter() {
             let path = entry.path.as_path();
             if !selected.contains(path) {
                 continue;

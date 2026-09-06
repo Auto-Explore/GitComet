@@ -1996,10 +1996,10 @@ impl HistoryLoadMoreAppendFixture {
                 seq: 0,
                 scope: self.scope,
                 cursor: None,
-                result: Ok(LogPage {
+                result: Ok(std::sync::Arc::new(LogPage {
                     commits: self.existing_commits.clone(),
                     next_cursor: self.request_cursor(),
-                }),
+                })),
             }),
         );
 
@@ -2042,7 +2042,7 @@ impl HistoryLoadMoreAppendFixture {
                 seq: 0,
                 scope: self.scope,
                 cursor,
-                result: Ok(page),
+                result: Ok(std::sync::Arc::new(page)),
             }),
         );
 

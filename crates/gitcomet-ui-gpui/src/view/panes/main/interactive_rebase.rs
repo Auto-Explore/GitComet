@@ -354,7 +354,7 @@ fn irebase_list_sig(st: &IRebaseViewState) -> u64 {
     }
     // Folded groups add a header line (taller row); key on survivor + count.
     let mut folded: Vec<(&String, usize)> = st.folded.iter().map(|(k, v)| (k, v.len())).collect();
-    folded.sort();
+    folded.sort_unstable();
     folded.hash(&mut h);
     h.finish()
 }

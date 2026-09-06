@@ -586,14 +586,14 @@ fn load_ref_metadata_emits_effect_and_result_builds_the_lookup_map() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
             repo_id,
-            result: Ok(vec![(
+            result: Ok(std::sync::Arc::new(rustc_hash::FxHashMap::from_iter([(
                 "main".to_string(),
                 gitcomet_core::domain::RefMetadata {
                     author: "Ada".to_string(),
                     committed_at: 1_754_870_400,
                     summary: "first".to_string(),
                 },
-            )]),
+            )]))),
         }),
     );
 
@@ -758,7 +758,7 @@ fn branch_change_during_an_in_flight_metadata_load_schedules_a_refetch() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
             repo_id,
-            result: Ok(vec![]),
+            result: Ok(std::sync::Arc::new(rustc_hash::FxHashMap::default())),
         }),
     );
 

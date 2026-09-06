@@ -210,12 +210,12 @@ fn select_diff_for_untracked_file_skips_patch_diff_and_loads_file_preview() {
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("report.json"),
             kind: FileStatusKind::Untracked,
             conflict: None,
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -273,12 +273,12 @@ fn select_diff_for_deleted_file_replaced_by_directory_loads_deleted_preview() {
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("report.json"),
             kind: FileStatusKind::Deleted,
             conflict: None,
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -342,12 +342,12 @@ fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: submodule_path,
             kind: FileStatusKind::Modified,
             conflict: None,
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -416,12 +416,12 @@ fn staged_deleted_gitlink_fixture() -> (
     };
     repo_state.set_open(Loadable::Ready(()));
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        staged: vec![FileStatus {
+        staged: std::sync::Arc::new(vec![FileStatus {
             path: submodule_path,
             kind: FileStatusKind::Deleted,
             conflict: None,
-        }],
-        unstaged: vec![],
+        }]),
+        unstaged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -714,12 +714,12 @@ fn external_head_moves_reclassify_retained_deletion_in_both_directions() {
     );
     repo_state.set_open(Loadable::Ready(()));
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        staged: vec![FileStatus {
+        staged: std::sync::Arc::new(vec![FileStatus {
             path: path.clone(),
             kind: FileStatusKind::Deleted,
             conflict: None,
-        }],
-        unstaged: vec![],
+        }]),
+        unstaged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -1195,12 +1195,12 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
         },
     );
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: parent_path.clone(),
             kind: FileStatusKind::Modified,
             conflict: None,
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     repo_state.set_submodules(Loadable::Ready(vec![Submodule {
         path: parent_path.clone(),
@@ -1422,12 +1422,12 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("index.html"),
             kind: FileStatusKind::Conflicted,
             conflict: Some(FileConflictKind::BothModified),
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -1483,12 +1483,12 @@ fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects()
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from("icon.svg"),
             kind: FileStatusKind::Conflicted,
             conflict: Some(FileConflictKind::BothModified),
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
@@ -4548,7 +4548,7 @@ fn global_nav_back_to_deleted_gitlink_keeps_submodule_classification() {
     std::fs::write(dir.path().join(&other), "hello\n").expect("write other");
     run_git(dir.path(), &["add", "other.txt"]);
     state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus {
-        staged: vec![
+        staged: std::sync::Arc::new(vec![
             FileStatus {
                 path: submodule_path.clone(),
                 kind: FileStatusKind::Deleted,
@@ -4559,8 +4559,8 @@ fn global_nav_back_to_deleted_gitlink_keeps_submodule_classification() {
                 kind: FileStatusKind::Added,
                 conflict: None,
             },
-        ],
-        unstaged: vec![],
+        ]),
+        unstaged: std::sync::Arc::new(vec![]),
     })));
 
     // 1. Select the staged submodule deletion -> classified, cached.

@@ -79,12 +79,12 @@ fn browse_history_pushes_dedups_and_go_live_clears() {
 
 fn conflicted_status(path: &Path, conflict: FileConflictKind) -> RepoStatus {
     RepoStatus {
-        staged: Vec::new(),
-        unstaged: vec![FileStatus {
+        staged: std::sync::Arc::new(Vec::new()),
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: path.to_path_buf(),
             kind: FileStatusKind::Conflicted,
             conflict: Some(conflict),
-        }],
+        }]),
     }
 }
 
@@ -144,7 +144,7 @@ fn unknown_repo_handlers_are_noops() {
             repo_id,
             path.clone(),
             None,
-            Ok(empty_log_page())
+            Ok(Arc::new(empty_log_page()))
         )
         .is_empty()
     );
@@ -236,7 +236,7 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
         repo_id,
         PathBuf::from("other.txt"),
         None,
-        Ok(empty_log_page()),
+        Ok(Arc::new(empty_log_page())),
     );
     assert!(matches!(
         repo_mut(&mut state, repo_id).history_state.file_history,
@@ -248,7 +248,7 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
         repo_id,
         tracked.clone(),
         None,
-        Ok(empty_log_page()),
+        Ok(Arc::new(empty_log_page())),
     );
     assert!(matches!(
         repo_mut(&mut state, repo_id).history_state.file_history,
@@ -310,7 +310,10 @@ fn file_history_first_page_with_more_requests_the_rest() {
         repo_id,
         tracked.clone(),
         None,
-        Ok(file_history_page(&["a", "b"], Some(cursor.clone()))),
+        Ok(Arc::new(file_history_page(
+            &["a", "b"],
+            Some(cursor.clone()),
+        ))),
     );
     assert!(matches!(
         &effects[..],
@@ -329,7 +332,7 @@ fn file_history_first_page_with_more_requests_the_rest() {
         repo_id,
         tracked,
         None,
-        Ok(file_history_page(&["a", "b"], None)),
+        Ok(Arc::new(file_history_page(&["a", "b"], None))),
     );
     assert!(effects.is_empty());
 }
@@ -354,7 +357,7 @@ fn file_history_remainder_extends_the_page_that_requested_it() {
         repo_id,
         tracked,
         Some(cursor),
-        Ok(file_history_page(&["c", "d"], None)),
+        Ok(Arc::new(file_history_page(&["c", "d"], None))),
     );
     assert!(effects.is_empty());
     assert_eq!(file_history_ids(&mut state, repo_id), ["a", "b", "c", "d"]);
@@ -384,7 +387,7 @@ fn file_history_remainder_for_another_page_is_dropped() {
         repo_id,
         tracked.clone(),
         Some(stale.clone()),
-        Ok(file_history_page(&["x"], None)),
+        Ok(Arc::new(file_history_page(&["x"], None))),
     );
     assert!(effects.is_empty());
     assert!(
@@ -403,7 +406,7 @@ fn file_history_remainder_for_another_page_is_dropped() {
         repo_id,
         tracked,
         Some(stale),
-        Ok(file_history_page(&["x"], None)),
+        Ok(Arc::new(file_history_page(&["x"], None))),
     );
     assert!(effects.is_empty());
     assert_eq!(file_history_ids(&mut state, repo_id), ["a", "b"]);

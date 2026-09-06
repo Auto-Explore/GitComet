@@ -118,19 +118,17 @@ pub(crate) fn log_paged_walk_filter(
 
     let shallow_commits = Arc::clone(&shallow.0);
     let objects = log_paged_walk_handle(repo);
-    let mut grafted_parents_to_skip: Vec<gix::ObjectId> = Vec::new();
+    let mut grafted_parents_to_skip: FxHashSet<gix::ObjectId> = FxHashSet::default();
     let mut buf = Vec::new();
     let filter: super::LogPagedWalkFilter = Box::new(move |id| {
         let id = id.to_owned();
-        if let Ok(index) = grafted_parents_to_skip.binary_search(&id) {
-            grafted_parents_to_skip.remove(index);
+        if grafted_parents_to_skip.remove(&id) {
             return false;
         }
         if shallow_commits.binary_search(&id).is_ok()
             && let Ok(commit) = objects.find_commit_iter(&id, &mut buf)
         {
             grafted_parents_to_skip.extend(commit.parent_ids());
-            grafted_parents_to_skip.sort();
         }
         true
     });

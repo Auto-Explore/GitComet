@@ -36,8 +36,8 @@ pub enum ParsedConflictSegmentRanges {
 /// its corresponding side. This is useful for proving that provisional marker
 /// coordinates still describe the immutable stages loaded later.
 pub fn reconstruct_conflict_marker_sides(text: &str) -> (String, String) {
-    let mut ours = String::new();
-    let mut theirs = String::new();
+    let mut ours = String::with_capacity(text.len());
+    let mut theirs = String::with_capacity(text.len());
     for segment in parse_conflict_marker_ranges(text) {
         match segment {
             ParsedConflictSegmentRanges::Text(range) => {

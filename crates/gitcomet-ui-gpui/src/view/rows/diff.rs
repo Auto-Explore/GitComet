@@ -345,7 +345,7 @@ fn streamed_diff_text_spec_with_syntax(
     query: &SharedString,
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
-    word_ranges: Vec<Range<usize>>,
+    word_ranges: Arc<[Range<usize>]>,
     word_kind: Option<crate::theme::DiffColorKind>,
     syntax: diff_canvas::StreamedDiffTextSyntaxSource,
 ) -> Option<diff_canvas::StreamedDiffTextPaintSpec> {
@@ -356,7 +356,7 @@ fn streamed_diff_text_spec_with_syntax(
             query_options,
             query_matcher,
             query_emphasis: DiffSearchMatchEmphasis::Other,
-            word_ranges: Arc::from(word_ranges),
+            word_ranges,
             word_kind,
             syntax,
         }
@@ -368,7 +368,7 @@ fn heuristic_streamed_diff_text_spec(
     query: &SharedString,
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
-    word_ranges: Vec<Range<usize>>,
+    word_ranges: Arc<[Range<usize>]>,
     word_kind: Option<crate::theme::DiffColorKind>,
     language: Option<rows::DiffSyntaxLanguage>,
     mode: rows::DiffSyntaxMode,
@@ -394,7 +394,7 @@ fn prepared_streamed_diff_text_spec(
     query: &SharedString,
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
-    word_ranges: Vec<Range<usize>>,
+    word_ranges: Arc<[Range<usize>]>,
     word_kind: Option<crate::theme::DiffColorKind>,
     language: Option<rows::DiffSyntaxLanguage>,
     fallback_mode: rows::DiffSyntaxMode,
@@ -520,6 +520,54 @@ fn file_diff_split_side_line(row: &FileDiffRow, is_left: bool) -> Option<u32> {
     if is_left { row.old_line } else { row.new_line }
 }
 
+/// Per-view memo behind [`BlameRenderCtx`]. Relative times are keyed by
+/// timestamp within a ten-second bucket of "now", so a label is formatted once
+/// per bucket rather than once per run-start row per frame.
+#[derive(Default)]
+pub(in crate::view) struct BlameLabelCache {
+    when_bucket: i64,
+    when: FxHashMap<i64, SharedString>,
+    initials: FxHashMap<std::sync::Arc<str>, SharedString>,
+}
+
+impl BlameRenderCtx {
+    fn relative_time_label(&self, author_time_unix: i64) -> SharedString {
+        let now_secs = self
+            .now
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let bucket = now_secs / 10;
+        let mut cache = self.labels.borrow_mut();
+        if cache.when_bucket != bucket {
+            cache.when_bucket = bucket;
+            cache.when.clear();
+        }
+        cache
+            .when
+            .entry(author_time_unix)
+            .or_insert_with(|| {
+                crate::view::date_time::format_relative_time(author_time_unix, self.now).into()
+            })
+            .clone()
+    }
+
+    fn initials_label(&self, author: &std::sync::Arc<str>) -> SharedString {
+        let mut cache = self.labels.borrow_mut();
+        if let Some(label) = cache.initials.get(author) {
+            return label.clone();
+        }
+        if cache.initials.len() >= 4_096 {
+            cache.initials.clear();
+        }
+        let label: SharedString = super::blame::author_initials(author).into();
+        cache
+            .initials
+            .insert(std::sync::Arc::clone(author), label.clone());
+        label
+    }
+}
+
 /// Snapshot of blame data needed to render the annotation column for one diff
 /// render pass. Owns its data (an `Arc` clone of the loaded blame plus the
 /// recency range and a single `now` timestamp) so it does not borrow the view.
@@ -528,6 +576,9 @@ pub(in crate::view) struct BlameRenderCtx {
     lines: std::sync::Arc<Vec<gitcomet_core::services::BlameLine>>,
     range: Option<(i64, i64)>,
     now: std::time::SystemTime,
+    /// Relative-time and initials labels, shared with the view across frames:
+    /// every run-start row formatted both per frame.
+    labels: std::rc::Rc<std::cell::RefCell<BlameLabelCache>>,
     path: std::sync::Arc<std::path::Path>,
     /// The commit currently being viewed (when blaming a specific revision), used
     /// to hide the "view file at this commit" action on lines from that commit.
@@ -711,11 +762,11 @@ fn build_row_blame_paint_inner(
     } else {
         let when = line
             .author_time_unix
-            .map(|ts| crate::view::date_time::format_relative_time(ts, ctx.now))
-            .unwrap_or_else(|| "unknown".to_string());
+            .map(|ts| ctx.relative_time_label(ts))
+            .unwrap_or_else(|| "unknown".into());
         (
-            SharedString::from(when),
-            SharedString::from(super::blame::author_initials(&line.author)),
+            when,
+            ctx.initials_label(&line.author),
             // `Arc<str>` -> `SharedString` is a refcount bump, not a byte copy,
             // so this avoids re-allocating the summary/body every render pass.
             SharedString::from(line.summary.clone()),
@@ -867,6 +918,7 @@ impl MainPaneView {
             _ => None,
         };
         let lines = std::sync::Arc::clone(lines);
+        let labels = std::rc::Rc::clone(&self.blame_label_cache);
         // The time range never changes for a given loaded blame, so memoize it by
         // the blame Arc's identity instead of rescanning every frame. Compare by
         // `ptr_eq` against a held Arc clone: keeping the cached allocation alive
@@ -882,6 +934,7 @@ impl MainPaneView {
         };
         Some(BlameRenderCtx {
             lines,
+            labels,
             range,
             now: std::time::SystemTime::now(),
             path,
@@ -925,7 +978,7 @@ impl MainPaneView {
             let overlaid = build_cached_diff_query_overlay_styled_text(
                 self.theme,
                 &base,
-                self.diff_text_query_cache_matcher.as_ref()?,
+                self.diff_text_query_cache_matcher_shared.as_ref()?,
                 DiffSearchMatchEmphasis::Other,
             );
             self.diff_text_query_segments_cache[key] = Some(VersionedCachedDiffStyledText {
@@ -956,8 +1009,7 @@ impl MainPaneView {
         let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
-        let query_matcher = (!query.as_ref().is_empty())
-            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
+        let query_matcher = this.diff_search_query_matcher_shared();
         let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let annotation_width = if this.annotation_active() {
@@ -1142,7 +1194,7 @@ impl MainPaneView {
                                         build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                             theme,
                                             &row.text,
-                                            row_word_ranges.as_slice(),
+                                            &row_word_ranges,
                                             "",
                                             DiffSyntaxConfig {
                                                 language: line_language,
@@ -1398,7 +1450,7 @@ impl MainPaneView {
                                     build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                         theme,
                                         &row.text,
-                                        row_word_ranges.as_slice(),
+                                        &row_word_ranges,
                                         "",
                                         DiffSyntaxConfig {
                                             language: line_language,
@@ -1452,7 +1504,7 @@ impl MainPaneView {
                                 build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                                     theme,
                                     diff_content_text(&line),
-                                    row_word_ranges.as_slice(),
+                                    &row_word_ranges,
                                     "",
                                     DiffSyntaxConfig {
                                         language: line_language,
@@ -1564,7 +1616,7 @@ impl MainPaneView {
                             &query,
                             query_options,
                             query_matcher.clone(),
-                            word_ranges.to_vec(),
+                            Arc::from(word_ranges.to_vec()),
                             diff_line_word_kind(visual_kind),
                             language,
                             syntax_mode,
@@ -1712,8 +1764,7 @@ impl MainPaneView {
             });
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
-        let query_matcher = (!query.as_ref().is_empty())
-            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
+        let query_matcher = this.diff_search_query_matcher_shared();
         let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
@@ -1883,7 +1934,7 @@ impl MainPaneView {
                                         build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                             theme,
                                             raw_text,
-                                            row_word_ranges.as_slice(),
+                                            &row_word_ranges,
                                             "",
                                             DiffSyntaxConfig {
                                                 language,
@@ -2016,7 +2067,7 @@ impl MainPaneView {
                             let (styled, is_pending) = build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                 theme,
                                 raw_text,
-                                row_word_ranges.as_slice(),
+                                &row_word_ranges,
                                 "",
                                 DiffSyntaxConfig {
                                     language,
@@ -2145,7 +2196,7 @@ impl MainPaneView {
                                         &query,
                                         query_options,
                                         query_matcher.clone(),
-                                        word_ranges.clone(),
+                                        Arc::from(word_ranges.clone()),
                                         word_kind,
                                         language,
                                         syntax_mode,
@@ -3553,6 +3604,7 @@ mod tests {
         area: Option<gitcomet_core::domain::DiffArea>,
     ) -> BlameRenderCtx {
         BlameRenderCtx {
+            labels: std::rc::Rc::new(std::cell::RefCell::new(BlameLabelCache::default())),
             lines: std::sync::Arc::new(lines),
             range: None,
             now: std::time::SystemTime::now(),

@@ -1433,7 +1433,7 @@ fn runtime_themes_dir_signature(dir: &Path) -> u64 {
             (path, len, modified)
         })
         .collect();
-    files.sort();
+    files.sort_unstable();
 
     let mut hasher = FxHasher::default();
     for (path, len, modified) in files {
@@ -1472,7 +1472,7 @@ fn load_runtime_themes_from_dir(
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
         .filter(|path| !is_reserved_runtime_theme_path(path))
         .collect::<Vec<_>>();
-    files.sort();
+    files.sort_unstable();
 
     let mut themes = FxHashMap::default();
     let mut issues = Vec::new();

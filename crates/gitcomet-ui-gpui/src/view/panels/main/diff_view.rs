@@ -1805,8 +1805,12 @@ impl MainPaneView {
                 components::empty_state(theme, "Submodule", error.clone()).into_any_element()
             }
             Loadable::Ready(summary) => {
-                let summary = (**summary).clone();
-                let inline_entries = inline_submodule_entries(&summary);
+                // Share the summary and the entry list: both were cloned per
+                // frame, and the entries once more per change row for the
+                // click handler.
+                let summary = Arc::clone(summary);
+                let inline_entries: Arc<[InlineSubmoduleDiffEntry]> =
+                    inline_submodule_entries(&summary).into();
                 let summary_status = summary.status.or(fallback_status);
                 let initialized = match summary_status {
                     Some(SubmoduleStatus::NotInitialized) => false,
@@ -1936,7 +1940,7 @@ impl MainPaneView {
                                 let repo_path_for_click = submodule_repo_path.clone();
                                 let repo_path_for_menu = submodule_repo_path.clone();
                                 let summary_path_for_inline = summary.path.clone();
-                                let inline_entries_for_click = inline_entries.clone();
+                                let inline_entries_for_click = Arc::clone(&inline_entries);
                                 let context_menu_path = change_path.clone();
 
                                 let mut row = div()
@@ -1995,7 +1999,7 @@ impl MainPaneView {
                                                         .clone(),
                                                     parent_submodule_path: summary_path_for_inline
                                                         .clone(),
-                                                    entries: inline_entries_for_click.clone(),
+                                                    entries: inline_entries_for_click.to_vec(),
                                                     selected_ix,
                                                 });
                                                 cx.notify();

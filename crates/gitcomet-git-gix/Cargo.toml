@@ -16,6 +16,7 @@ benchmarks = ["gitcomet-core/benchmarks"]
 [dependencies]
 gitcomet-core = { workspace = true }
 gix = { workspace = true }
+memchr = { workspace = true }
 rustc-hash = { workspace = true }
 rustix = { workspace = true }
 serde_json = { workspace = true }
