@@ -1,6 +1,6 @@
-use super::GixRepo;
 use super::history::gix_head_id_or_none;
 use super::porcelain::edit_local_config_strict;
+use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, git_command_failed_error, run_git_capture, run_git_raw_output,
     run_git_simple, run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
@@ -436,13 +436,20 @@ fn remote_branch_gone_after_fetch_error(remote: &str, branch: &str) -> Error {
 
 impl GixRepo {
     fn best_effort_delete_reference(&self, ref_name: &str) {
+        self.best_effort_delete_references(std::iter::once(ref_name));
+    }
+
+    /// One open for the whole batch: each open re-parses every config file.
+    fn best_effort_delete_references<'a>(&self, ref_names: impl IntoIterator<Item = &'a str>) {
         let Ok(repo) = self.reopen_repo() else {
             return;
         };
-        let Ok(Some(reference)) = repo.try_find_reference(ref_name) else {
-            return;
-        };
-        let _ = reference.delete();
+        for ref_name in ref_names {
+            let Ok(Some(reference)) = repo.try_find_reference(ref_name) else {
+                continue;
+            };
+            let _ = reference.delete();
+        }
     }
 
     fn reference_exists(&self, ref_name: &str) -> Result<bool> {
@@ -740,9 +747,11 @@ impl GixRepo {
         branches: &[String],
     ) -> Vec<String> {
         if self.remote_fetch_and_push_urls_match(remote) {
-            for branch in branches {
-                self.best_effort_delete_reference(&format!("refs/remotes/{remote}/{branch}"));
-            }
+            let ref_names: Vec<String> = branches
+                .iter()
+                .map(|branch| format!("refs/remotes/{remote}/{branch}"))
+                .collect();
+            self.best_effort_delete_references(ref_names.iter().map(String::as_str));
             return branches.to_vec();
         }
 
@@ -865,7 +874,7 @@ impl GixRepo {
             });
         }
 
-        remotes.sort_by(|a, b| a.name.cmp(&b.name));
+        remotes.sort_unstable_by(|a, b| a.name.cmp(&b.name));
         Ok(remotes)
     }
 
@@ -902,7 +911,7 @@ impl GixRepo {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut tracking_refs = Vec::new();
+        let mut tracking_refs = Vec::with_capacity(iter.size_hint().0);
         for reference in iter {
             cancellation.check_cancelled()?;
             let mut reference = reference
@@ -927,7 +936,7 @@ impl GixRepo {
         // A local ref can legitimately produce more than one row when remote
         // namespaces overlap; the remote and branch boundary remains explicit
         // in every result.
-        let mut branches = Vec::new();
+        let mut branches = Vec::with_capacity(tracking_refs.len());
         for remote in &remotes {
             cancellation.check_cancelled()?;
             let Some(remote_name) = remote.name() else {
@@ -967,11 +976,13 @@ impl GixRepo {
                 branches.push(RemoteBranch {
                     remote: remote_name.as_bstr().to_str_lossy().into_owned(),
                     name: name.into_owned(),
-                    target: CommitId(target.to_string().into()),
+                    target: CommitId(oid_to_arc_str(target)),
                 });
             }
         }
 
+        // Stable sort: dedup keeps the first row, so ties must stay in
+        // remote-iteration order.
         branches.sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
         branches.dedup_by(|a, b| a.remote == b.remote && a.name == b.name);
         cancellation.check_cancelled()?;
@@ -1496,7 +1507,7 @@ impl GixRepo {
 
     pub(super) fn head_commit_id_impl(&self) -> Result<Option<CommitId>> {
         let repo = self.reopen_repo()?;
-        gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(id.to_string().into())))
+        gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(oid_to_arc_str(&id))))
     }
 
     fn validate_push_after_commit_target(&self, target: &SafePushAfterCommitTarget) -> Result<()> {
@@ -2293,21 +2304,25 @@ impl GixRepo {
             return Vec::new();
         };
 
+        let on_remote: FxHashSet<&str> = output
+            .stdout
+            .lines()
+            .filter_map(|line| line.split_once('\t').map(|(_, name)| name.trim()))
+            .collect();
         let mut missing = Vec::new();
         let mut present = Vec::new();
         for branch in branches {
-            let refname = format!("refs/heads/{branch}");
-            let still_on_remote = output.stdout.lines().any(|line| {
-                line.split_once('\t')
-                    .is_some_and(|(_, name)| name.trim() == refname)
-            });
-            if !still_on_remote {
-                self.best_effort_delete_reference(&format!("refs/remotes/{remote}/{branch}"));
-                missing.push(branch.clone());
-            } else {
+            if on_remote.contains(format!("refs/heads/{branch}").as_str()) {
                 present.push(branch);
+            } else {
+                missing.push(branch.clone());
             }
         }
+        let stale_refs: Vec<String> = missing
+            .iter()
+            .map(|branch| format!("refs/remotes/{remote}/{branch}"))
+            .collect();
+        self.best_effort_delete_references(stale_refs.iter().map(String::as_str));
 
         if !present.is_empty() {
             let mut cmd = self.git_workdir_cmd();

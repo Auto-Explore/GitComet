@@ -7,7 +7,6 @@
 
 use crate::services::CancellationToken;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -129,9 +128,9 @@ impl GitOperationContext {
     }
 }
 
-fn operation_tokens() -> &'static Mutex<HashMap<GitOperationId, CancellationToken>> {
-    static TOKENS: LazyLock<Mutex<HashMap<GitOperationId, CancellationToken>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
+fn operation_tokens() -> &'static Mutex<rustc_hash::FxHashMap<GitOperationId, CancellationToken>> {
+    static TOKENS: LazyLock<Mutex<rustc_hash::FxHashMap<GitOperationId, CancellationToken>>> =
+        LazyLock::new(|| Mutex::new(rustc_hash::FxHashMap::default()));
     &TOKENS
 }
 

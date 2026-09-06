@@ -522,8 +522,8 @@ pub(in crate::view) const FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES: usize = 4_
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::view) struct FileDiffSplitWordHighlights {
-    pub(in crate::view) old: Vec<Range<usize>>,
-    pub(in crate::view) new: Vec<Range<usize>>,
+    pub(in crate::view) old: Arc<[Range<usize>]>,
+    pub(in crate::view) new: Arc<[Range<usize>]>,
 }
 
 pub(in crate::view) fn versioned_cached_diff_styled_text_is_current(
@@ -3174,8 +3174,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_text_query_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_cache_query: SharedString,
     pub(in crate::view) diff_text_query_cache_options: super::diff_search::DiffSearchOptions,
-    pub(in crate::view) diff_text_query_cache_matcher:
-        Option<super::diff_search::DiffSearchMatcher>,
+    pub(in crate::view) diff_text_query_cache_matcher_shared:
+        Option<Arc<super::diff_search::DiffSearchMatcher>>,
     pub(in crate::view) diff_text_query_cache_generation: u64,
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
@@ -3305,7 +3305,10 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_inline_row_provider:
         Option<Arc<super::diff_cache::PagedFileDiffInlineRows>>,
     pub(in crate::view) file_diff_inline_text: SharedString,
-    pub(in crate::view) file_diff_inline_word_highlights: rows::LruCache<usize, Vec<Range<usize>>>,
+    pub(in crate::view) blame_label_cache:
+        std::rc::Rc<std::cell::RefCell<crate::view::rows::BlameLabelCache>>,
+    pub(in crate::view) file_diff_inline_word_highlights:
+        rows::LruCache<usize, Arc<[Range<usize>]>>,
     pub(in crate::view) file_diff_split_word_highlights:
         rows::LruCache<usize, FileDiffSplitWordHighlights>,
     pub(in crate::view) file_diff_cache_seq: u64,

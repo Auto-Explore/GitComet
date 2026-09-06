@@ -2234,6 +2234,7 @@ version = "0.2.2"
 dependencies = [
  "gitcomet-core",
  "gix",
+ "memchr",
  "rustc-hash 2.1.3",
  "rustix",
  "serde_json",

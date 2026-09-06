@@ -935,19 +935,23 @@ impl ToastHost {
 
 impl Render for ToastHost {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let hook_progress = self
-            .hook_progress
-            .iter()
-            .filter(|progress| self.hook_activity_dialog_repo != Some(progress.repo_id))
-            .cloned()
-            .collect::<Vec<_>>();
+        let shows_hook_progress =
+            |progress: &HookProgressToast| self.hook_activity_dialog_repo != Some(progress.repo_id);
+        // Decide "nothing to show" before cloning anything: this renders every
+        // frame of the app's life, almost always empty.
         if self.toasts.is_empty()
             && self.clone_progress.is_none()
             && self.submodule_add_progress.is_empty()
-            && hook_progress.is_empty()
+            && !self.hook_progress.iter().any(&shows_hook_progress)
         {
             return div().into_any_element();
         }
+        let hook_progress = self
+            .hook_progress
+            .iter()
+            .filter(|progress| shows_hook_progress(progress))
+            .cloned()
+            .collect::<Vec<_>>();
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
 

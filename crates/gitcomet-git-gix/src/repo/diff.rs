@@ -1,5 +1,5 @@
 use super::{
-    GixRepo,
+    DiskFileStamp, GixRepo, TEMP_FILE_MEMO_LIMIT, VerifiedPreviewBlob, WorktreeSourceMemoEntry,
     conflict_stages::{
         ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_object_id_optional,
     },
@@ -204,7 +204,7 @@ impl GixRepo {
         self.cached_git_normalized_worktree_file_source(repo, path)
     }
 
-    fn cached_git_normalized_worktree_file_source(
+    pub(super) fn cached_git_normalized_worktree_file_source(
         &self,
         repo: &gix::Repository,
         path: &Path,
@@ -213,6 +213,40 @@ impl GixRepo {
             Some(full) => full,
             None => return Ok(None),
         };
+
+        // Memo: the whole filter + copy + hash + compare pass below only ever
+        // rediscovers the same cache file when nothing changed, and a diff
+        // row re-opens on every status refresh. A file modified within the
+        // last two seconds is never memoized (git's racy-file rule): a write
+        // inside mtime granularity would otherwise be missed.
+        let file_stamp = DiskFileStamp::read(&full).filter(|stamp| {
+            stamp.modified.is_some_and(|modified| {
+                std::time::SystemTime::now()
+                    .duration_since(modified)
+                    .is_ok_and(|age| age >= std::time::Duration::from_secs(2))
+            })
+        });
+        let attributes_fingerprint =
+            file_stamp.and_then(|_| worktree_attributes_fingerprint(repo, path));
+        if let (Some(file_stamp), Some(attributes_fingerprint)) =
+            (file_stamp, attributes_fingerprint)
+            && let Some(hit) = self
+                .worktree_source_memo
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(path)
+                .filter(|entry| {
+                    entry.file == file_stamp
+                        && entry.attributes_fingerprint == attributes_fingerprint
+                        && DiskFileStamp::read(&entry.cache_path) == Some(entry.cache_file)
+                })
+                .cloned()
+        {
+            return Ok(Some(FileDiffTextSource::with_identity(
+                hit.cache_path,
+                hit.identity,
+            )));
+        }
 
         let (mut pipeline, index) = repo.filter_pipeline(None).map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
@@ -246,9 +280,33 @@ impl GixRepo {
         let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
         let cache_path = worktree_git_cache_path(path, &identity);
         persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        let identity: Arc<str> = Arc::from(format!("worktree-git:{identity}"));
+
+        if let (Some(file_stamp), Some(attributes_fingerprint), Some(cache_file)) = (
+            file_stamp,
+            attributes_fingerprint,
+            DiskFileStamp::read(&cache_path),
+        ) {
+            let mut memo = self
+                .worktree_source_memo
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if memo.len() >= TEMP_FILE_MEMO_LIMIT {
+                memo.clear();
+            }
+            memo.insert(
+                path.to_path_buf(),
+                WorktreeSourceMemoEntry {
+                    file: file_stamp,
+                    attributes_fingerprint,
+                    cache_file,
+                    cache_path: cache_path.clone(),
+                    identity: Arc::clone(&identity),
+                },
+            );
+        }
         Ok(Some(FileDiffTextSource::with_identity(
-            cache_path,
-            format!("worktree-git:{identity}"),
+            cache_path, identity,
         )))
     }
 
@@ -264,7 +322,7 @@ impl GixRepo {
                     return Ok(None);
                 }
 
-                let repo = self._repo.to_thread_local();
+                let repo = self.repo();
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
@@ -314,7 +372,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self._repo.to_thread_local();
+                let repo = self.repo();
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
@@ -337,7 +395,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self._repo.to_thread_local();
+                let repo = self.repo();
                 let old =
                     self.file_diff_source_from_revision_path(&repo, from_commit_id.as_ref(), path)?;
                 let new = match to_commit_id {
@@ -374,7 +432,7 @@ impl GixRepo {
                     return Ok(None);
                 }
 
-                let repo = self._repo.to_thread_local();
+                let repo = self.repo();
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 match (area, side) {
                     (DiffArea::Unstaged, DiffPreviewTextSide::New) => {
@@ -412,7 +470,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self._repo.to_thread_local();
+                let repo = self.repo();
                 let blob_id = match side {
                     DiffPreviewTextSide::New => {
                         gix_revision_path_blob_object_id_optional(&repo, commit_id.as_ref(), path)?
@@ -440,7 +498,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self._repo.to_thread_local();
+                let repo = self.repo();
                 // Working-tree tip + New side: the preview is the live worktree file.
                 if matches!(side, DiffPreviewTextSide::New) && to_commit_id.is_none() {
                     let repo_path = to_repo_path(path, &self.spec.workdir)?;
@@ -470,18 +528,18 @@ impl GixRepo {
         }
     }
 
-    fn cached_preview_blob_file_path(
+    pub(super) fn cached_preview_blob_file_path(
         &self,
         blob_id: gix::ObjectId,
         logical_path: &Path,
     ) -> Result<Option<std::path::PathBuf>> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         if !gix_object_id_is_blob(&repo, blob_id)? {
             return Ok(None);
         }
 
         let cache_path = preview_blob_cache_path(&self.spec.workdir, logical_path, &blob_id);
-        if cached_preview_blob_matches(&repo, &cache_path, blob_id) {
+        if self.cached_preview_blob_matches(&repo, &cache_path, blob_id) {
             return Ok(Some(cache_path));
         }
 
@@ -509,6 +567,18 @@ impl GixRepo {
         tmp_file.flush().map_err(io_err_to_error)?;
 
         persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        // What now sits at `cache_path` is either the bytes just written or a
+        // byte-identical predecessor, so record it as verified.
+        if let Some(file) = DiskFileStamp::read(&cache_path) {
+            let mut verified = self
+                .preview_blob_verified
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if verified.len() >= TEMP_FILE_MEMO_LIMIT {
+                verified.clear();
+            }
+            verified.insert(cache_path.clone(), VerifiedPreviewBlob { file, blob_id });
+        }
         Ok(Some(cache_path))
     }
 
@@ -527,7 +597,7 @@ impl GixRepo {
                     return Ok(None);
                 }
 
-                let repo = self._repo.to_thread_local();
+                let repo = self.repo();
                 let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
@@ -587,7 +657,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self._repo.to_thread_local();
+                let repo = self.repo();
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
@@ -614,7 +684,7 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let repo = self._repo.to_thread_local();
+                let repo = self.repo();
                 let old = gix_revision_path_image_blob_bytes_optional(
                     &repo,
                     from_commit_id.as_ref(),
@@ -655,7 +725,7 @@ impl GixRepo {
             return Ok(None);
         }
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let repo_path = to_repo_path(path, &self.spec.workdir)?;
         Ok(Some(conflict_file_stages_from_stage_data(
             &repo_path,
@@ -665,7 +735,7 @@ impl GixRepo {
 
     pub(super) fn conflict_session_impl(&self, path: &Path) -> Result<Option<ConflictSession>> {
         let repo_path = to_repo_path(path, &self.spec.workdir)?;
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let stage_data = gix_index_conflict_stage_data(&repo, &repo_path)?;
         let Some(conflict_kind) = stage_data.conflict_kind else {
             return Ok(None);
@@ -721,7 +791,7 @@ impl GixRepo {
     }
 
     fn synthetic_simple_commit_path_diff(&self, target: &DiffTarget) -> Result<Option<Diff>> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let Some((path, old_revision, new_revision)) = commit_path_diff_revisions(target, &repo)?
         else {
             return Ok(None);
@@ -1221,6 +1291,92 @@ fn cached_preview_blob_matches(
         .is_ok_and(|id| id == blob_id)
 }
 
+impl GixRepo {
+    /// [`cached_preview_blob_matches`] with a memo of files this process already
+    /// verified: reading and hashing a large blob on every preview open is the
+    /// whole cost of a cache hit. A replaced or edited file changes its stamp
+    /// (inode/ctime), which forces the full check again.
+    fn cached_preview_blob_matches(
+        &self,
+        repo: &gix::Repository,
+        cache_path: &Path,
+        blob_id: gix::ObjectId,
+    ) -> bool {
+        let stamp = DiskFileStamp::read(cache_path);
+        if let Some(stamp) = stamp
+            && self
+                .preview_blob_verified
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(cache_path)
+                .is_some_and(|verified| verified.file == stamp && verified.blob_id == blob_id)
+        {
+            return true;
+        }
+        let matches = cached_preview_blob_matches(repo, cache_path, blob_id);
+        // Re-read the stamp after hashing so a concurrent rewrite during the
+        // read cannot be memoized under the pre-read stamp.
+        if matches && let Some(file) = DiskFileStamp::read(cache_path).filter(|s| Some(*s) == stamp)
+        {
+            let mut verified = self
+                .preview_blob_verified
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if verified.len() >= TEMP_FILE_MEMO_LIMIT {
+                verified.clear();
+            }
+            verified.insert(
+                cache_path.to_path_buf(),
+                VerifiedPreviewBlob { file, blob_id },
+            );
+        }
+        matches
+    }
+}
+
+/// Resolve attributes with the same source precedence as the filter pipeline.
+/// This includes system/user attributes, info/attributes, and index-backed
+/// .gitattributes when worktree copies are absent. Re-resolving these small
+/// inputs still avoids filtering and copying the potentially large file.
+/// If dependencies cannot be read, bypass the memo and let the pipeline report
+/// any error through its normal path. A `filter=<driver>` attribute also
+/// bypasses it: the driver is an external program whose output can change
+/// without any input we can stamp changing.
+fn worktree_attributes_fingerprint(repo: &gix::Repository, path: &Path) -> Option<u64> {
+    let index = repo.index_or_empty().ok()?;
+    let mut attributes = repo
+        .attributes_only(
+            &index,
+            gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+        )
+        .ok()?;
+    let mut outcome = gix::attrs::search::Outcome::default();
+    attributes
+        .at_path(path, None)
+        .ok()?
+        .matching_attributes(&mut outcome);
+    let mut hasher = FxHasher::default();
+    for matched in outcome.iter() {
+        let assignment = matched.assignment;
+        if assignment.name.as_str() == "filter"
+            && matches!(
+                assignment.state,
+                gix::attrs::StateRef::Set | gix::attrs::StateRef::Value(_)
+            )
+        {
+            return None;
+        }
+        assignment.hash(&mut hasher);
+    }
+    // CRLF conversion can also consult the indexed version of the file itself.
+    let index_path = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(path));
+    index
+        .entry_by_path(index_path.as_ref())
+        .map(|entry| entry.id)
+        .hash(&mut hasher);
+    Some(hasher.finish())
+}
+
 /// Move `tmp_file` to the content-addressed `cache_path`, keeping an existing
 /// regular file only when its bytes are identical. Shared by the worktree and
 /// preview caches, both of which live in the shared temp directory.
@@ -1333,7 +1489,7 @@ fn preview_blob_cache_path(
     let mut hasher = FxHasher::default();
     workdir.hash(&mut hasher);
     logical_path.hash(&mut hasher);
-    blob_id.to_string().hash(&mut hasher);
+    blob_id.as_bytes().hash(&mut hasher);
     let hash = hasher.finish();
     let suffix = logical_path
         .extension()
@@ -1464,20 +1620,13 @@ fn append_prefixed_unified_body(target: &mut String, prefix: UnifiedBlobPrefix, 
 }
 
 fn push_unified_hunk_range(target: &mut String, start: usize, count: usize) {
-    match count {
-        0 => {
-            target.push_str(start.to_string().as_str());
-            target.push_str(",0");
-        }
-        1 => {
-            target.push_str(start.to_string().as_str());
-        }
-        _ => {
-            target.push_str(start.to_string().as_str());
-            target.push(',');
-            target.push_str(count.to_string().as_str());
-        }
-    }
+    use std::fmt::Write as _;
+    // `write!` into a String cannot fail.
+    let _ = match count {
+        0 => write!(target, "{start},0"),
+        1 => write!(target, "{start}"),
+        _ => write!(target, "{start},{count}"),
+    };
 }
 
 fn unified_body_line_count(text: &str) -> usize {

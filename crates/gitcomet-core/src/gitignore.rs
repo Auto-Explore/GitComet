@@ -279,7 +279,7 @@ fn relative_segments(relative_path: &Path) -> Option<Vec<&str>> {
 /// column, so a path starting with `#` or `!` needs no further escaping — those
 /// two are only special at the very start of a pattern.
 fn anchored(segments: &[&str]) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(segments.iter().map(|segment| segment.len() + 1).sum());
     for segment in segments {
         out.push('/');
         out.push_str(&escape_literal(segment));
@@ -288,15 +288,19 @@ fn anchored(segments: &[&str]) -> String {
 }
 
 /// Escape the glob metacharacters so git matches the segment literally.
-fn escape_literal(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
+/// Borrowed when there is nothing to escape, which is nearly every path.
+fn escape_literal(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(['\\', '*', '?', '[', ']']) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 4);
     for ch in text.chars() {
         if matches!(ch, '\\' | '*' | '?' | '[' | ']') {
             out.push('\\');
         }
         out.push(ch);
     }
-    out
+    std::borrow::Cow::Owned(out)
 }
 
 /// Escape trailing spaces, which git strips from a pattern unless quoted.

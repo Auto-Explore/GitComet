@@ -1116,7 +1116,7 @@ pub enum InternalMsg {
         seq: crate::model::LogLoadSeq,
         scope: LogScope,
         cursor: Option<LogCursor>,
-        result: Result<LogPage, Error>,
+        result: Result<Arc<LogPage>, Error>,
     },
     /// A partially built log page, reported while the walk is still running so
     /// an author filter on a large repository shows what it has found instead
@@ -1178,7 +1178,7 @@ pub enum InternalMsg {
     FileHistoryLoaded {
         repo_id: RepoId,
         path: PathBuf,
-        result: Result<LogPage, Error>,
+        result: Result<Arc<LogPage>, Error>,
     },
     BlameLoaded {
         repo_id: RepoId,
@@ -1202,7 +1202,7 @@ pub enum InternalMsg {
     },
     RefMetadataLoaded {
         repo_id: RepoId,
-        result: Result<Vec<(String, RefMetadata)>, Error>,
+        result: Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>, Error>,
     },
     SubmodulesLoaded {
         repo_id: RepoId,

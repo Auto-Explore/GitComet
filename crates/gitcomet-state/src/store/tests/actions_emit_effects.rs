@@ -859,12 +859,12 @@ fn selected_submodule_command_reloads_selected_summary() {
             },
         );
         repo.set_status(Loadable::Ready(Arc::new(RepoStatus {
-            unstaged: vec![FileStatus {
+            unstaged: std::sync::Arc::new(vec![FileStatus {
                 path: command_path.to_path_buf(),
                 kind: FileStatusKind::Modified,
                 conflict: None,
-            }],
-            staged: Vec::new(),
+            }]),
+            staged: std::sync::Arc::new(Vec::new()),
         })));
         repo.set_submodules(Loadable::Ready(vec![Submodule {
             path: command_path.to_path_buf(),

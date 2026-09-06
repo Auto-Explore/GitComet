@@ -1386,6 +1386,18 @@ impl MainPaneView {
         self.diff_search_active && !self.diff_search_query.as_ref().is_empty()
     }
 
+    /// The matcher for the active query, built once per (query, options) and
+    /// shared with every row processor; the diff, split and patch-split
+    /// processors each built (and, in regex mode, compiled) one per frame.
+    pub(in crate::view) fn diff_search_query_matcher_shared(
+        &mut self,
+    ) -> Option<Arc<DiffSearchMatcher>> {
+        let query = self.diff_search_query_or_empty();
+        let options = self.diff_search_options_or_default();
+        self.sync_diff_text_query_overlay_cache(query.as_ref(), options);
+        self.diff_text_query_cache_matcher_shared.clone()
+    }
+
     pub(super) fn diff_search_current_matcher(&mut self) -> DiffSearchMatcher {
         let matcher = DiffSearchMatcher::new(
             self.diff_search_query.as_ref(),

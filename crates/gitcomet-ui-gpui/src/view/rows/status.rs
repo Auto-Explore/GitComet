@@ -394,7 +394,13 @@ fn render_status_rows_for_section(
         return Vec::new();
     };
     let selected = repo.diff_state.diff_target.as_ref();
-    let selected_paths = this.status_selected_paths_for_area(repo.id, section.diff_area());
+    // Hashed once per batch: a scan per visible row made multi-select cost
+    // visible × selected path compares per frame.
+    let selected_paths: FxHashSet<&std::path::Path> = this
+        .status_selected_paths_for_area(repo.id, section.diff_area())
+        .iter()
+        .map(std::path::PathBuf::as_path)
+        .collect();
     let multi_select_active = !selected_paths.is_empty();
     let submodule_statuses = submodule_status_lookup(repo);
     let theme = this.theme;
@@ -408,7 +414,7 @@ fn render_status_rows_for_section(
         .map(|(ix, entry)| {
             let path_display = this.cached_path_display(&entry.path);
             let is_selected = if multi_select_active {
-                selected_paths.iter().any(|p| p == &entry.path)
+                selected_paths.contains(entry.path.as_path())
             } else {
                 selected.is_some_and(|t| match t {
                     DiffTarget::WorkingTree { path, area } => {
@@ -439,6 +445,46 @@ fn render_status_rows_for_section(
             )
         })
         .collect()
+}
+
+fn status_file_menu_invoker(
+    repo_id: RepoId,
+    section: StatusSection,
+    path: &std::path::Path,
+) -> SharedString {
+    format!(
+        "status_file_menu_{}_{}_{}",
+        repo_id.0,
+        section.id_label(),
+        path.display()
+    )
+    .into()
+}
+
+/// `active == status_file_menu_invoker(repo_id, section, path)` without
+/// building the string.
+fn status_file_menu_invoker_matches(
+    active: &str,
+    repo_id: RepoId,
+    section: StatusSection,
+    path: &std::path::Path,
+) -> bool {
+    let Some(rest) = active.strip_prefix("status_file_menu_") else {
+        return false;
+    };
+    let Some((repo, rest)) = rest.split_once('_') else {
+        return false;
+    };
+    if repo.parse::<u64>() != Ok(repo_id.0) {
+        return false;
+    }
+    let Some(rest) = rest.strip_prefix(section.id_label()) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix('_') else {
+        return false;
+    };
+    path.to_str().is_some_and(|path| path == rest) || path.display().to_string() == rest
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -512,27 +558,14 @@ fn status_row(
         "Resolve…" => "Resolve… file".into(),
         _ => format!("{stage_label} file").into(),
     };
-    let context_menu_invoker: SharedString = {
-        format!(
-            "status_file_menu_{}_{}_{}",
-            repo_id.0,
-            section.id_label(),
-            entry.path.display()
-        )
-        .into()
-    };
-    let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
-    let context_menu_invoker_for_stage = context_menu_invoker.clone();
-    let context_menu_invoker_for_row = context_menu_invoker.clone();
+    // The invoker string is only needed when a menu is open (to mark its row)
+    // or when this row opens one; the handlers build it on demand instead of
+    // every row paying for it each frame.
+    let context_menu_active = active_context_menu_invoker.is_some_and(|active| {
+        status_file_menu_invoker_matches(active, repo_id, section, &entry.path)
+    });
     let row_group: SharedString =
         format!("status_row_{}_{}_{}", repo_id.0, section.id_label(), ix).into();
-    let row_debug_selector = format!("status_row_{}_{}_{}", repo_id.0, section.id_label(), ix);
-    let action_debug_selector = format!(
-        "status_row_action_{}_{}_{}",
-        repo_id.0,
-        section.id_label(),
-        ix
-    );
 
     let stage_button = components::Button::new(format!("stage_btn_{ix}"), stage_label)
         .style(components::ButtonStyle::Solid)
@@ -541,7 +574,10 @@ fn status_row(
             this.focus_diff_panel(window, cx);
 
             if is_conflicted {
-                this.activate_context_menu_invoker(context_menu_invoker_for_stage.clone(), cx);
+                this.activate_context_menu_invoker(
+                    status_file_menu_invoker(repo_id, section, &path_for_stage),
+                    cx,
+                );
                 this.open_popover_at(
                     PopoverKind::StatusFileMenu {
                         repo_id,
@@ -600,7 +636,7 @@ fn status_row(
 
     div()
         .id(ix)
-        .debug_selector(move || row_debug_selector.clone())
+        .debug_selector(move || format!("status_row_{}_{}_{}", repo_id.0, section.id_label(), ix))
         .relative()
         .group(row_group.clone())
         .flex()
@@ -640,7 +676,10 @@ fn status_row(
                 // Right-click only opens the menu: it must not open the diff (that is
                 // left-click's job) and must not touch the left-click selection. The
                 // right-clicked row is marked separately via the context menu invoker.
-                this.activate_context_menu_invoker(context_menu_invoker_for_row.clone(), cx);
+                this.activate_context_menu_invoker(
+                    status_file_menu_invoker(repo_id, section, &path_for_menu),
+                    cx,
+                );
                 this.open_popover_at(
                     PopoverKind::StatusFileMenu {
                         repo_id,
@@ -680,7 +719,14 @@ fn status_row(
         )
         .child(
             div()
-                .debug_selector(move || action_debug_selector.clone())
+                .debug_selector(move || {
+                    format!(
+                        "status_row_action_{}_{}_{}",
+                        repo_id.0,
+                        section.id_label(),
+                        ix
+                    )
+                })
                 .absolute()
                 .right_0()
                 .top_0()

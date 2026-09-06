@@ -4,7 +4,6 @@ use crate::merge::{
     MergeOptions, MergePlan, MergeSource, OrderedSelection, render_merge_plan,
     try_build_interactive_merge_plan_with_alignments,
 };
-use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -834,12 +833,17 @@ impl ConflictSession {
                 session.region_plan_blocks.len(),
                 "each unresolved plan block should render as one marker region"
             );
+            let ancestor_ranges = plan.block_ancestor_ranges();
             session.region_source_ranges = session
                 .region_plan_blocks
                 .iter()
-                .filter_map(|block_index| plan.blocks.get(*block_index))
-                .map(|block| ConflictRegionSourceRanges {
-                    base: plan.block_ancestor_range(block),
+                .filter_map(|block_index| {
+                    plan.blocks
+                        .get(*block_index)
+                        .map(|block| (block, ancestor_ranges[*block_index].clone()))
+                })
+                .map(|(block, base)| ConflictRegionSourceRanges {
+                    base,
                     ours: plan.block_source_line_range(block, plan.local_source()),
                     theirs: plan.block_source_line_range(block, plan.remote_source()),
                 })
@@ -1318,22 +1322,31 @@ impl ConflictSession {
 
     /// Synchronize plan decisions after legacy resolution or autosolve paths.
     pub fn sync_merge_plan_from_regions(&mut self) {
-        let decisions: Vec<(usize, ConflictRegionResolution)> = self
-            .region_plan_blocks
-            .iter()
-            .copied()
-            .zip(self.regions.iter().map(|region| region.resolution.clone()))
-            .collect();
         let mut touched = false;
-        for (block_index, resolution) in decisions {
-            let selection = self.ordered_selection_for_resolution(&resolution);
+        // Regions are read by index and the plan borrowed as a separate field,
+        // so no resolution (which may carry the region's full text) is cloned
+        // unless it actually has to be written into the plan.
+        let count = self.region_plan_blocks.len().min(self.regions.len());
+        for region_index in 0..count {
+            let block_index = self.region_plan_blocks[region_index];
+            let selection =
+                self.ordered_selection_for_resolution(&self.regions[region_index].resolution);
             let Some(plan) = self.merge_plan.as_mut() else {
                 break;
             };
-            touched |= match resolution {
+            touched |= match &self.regions[region_index].resolution {
                 ConflictRegionResolution::ManualEdit(content)
                 | ConflictRegionResolution::AutoResolved { content, .. } => {
-                    plan.set_manual_content_deferred(block_index, content)
+                    if plan
+                        .blocks
+                        .get(block_index)
+                        .is_some_and(|block| block.manual_content.as_deref() == Some(content))
+                    {
+                        // Already in place; `set_manual_content` would only
+                        // clear an already-empty selection.
+                        continue;
+                    }
+                    plan.set_manual_content_deferred(block_index, content.clone())
                 }
                 _ => match selection {
                     Some(selection) => plan.replace_selection_deferred(block_index, selection),
@@ -1515,15 +1528,15 @@ impl ConflictSession {
         // A changed sequence invalidates occurrence numbers. Restore only a
         // fingerprint that identifies exactly one mapped conflict in each
         // plan, and explicitly leave every ambiguous duplicate unresolved.
-        let mut previous_counts = BTreeMap::<u64, usize>::new();
-        let mut current_counts = BTreeMap::<u64, usize>::new();
+        let mut previous_counts = rustc_hash::FxHashMap::<u64, usize>::default();
+        let mut current_counts = rustc_hash::FxHashMap::<u64, usize>::default();
         for (fingerprint, _) in &previous_mapped {
             *previous_counts.entry(*fingerprint).or_default() += 1;
         }
         for fingerprint in &current_fingerprints {
             *current_counts.entry(*fingerprint).or_default() += 1;
         }
-        let previous_unique: BTreeMap<_, _> = previous_mapped
+        let previous_unique: rustc_hash::FxHashMap<_, _> = previous_mapped
             .into_iter()
             .filter(|(fingerprint, _)| previous_counts.get(fingerprint) == Some(&1))
             .collect();
@@ -1818,7 +1831,14 @@ impl ConflictSession {
         const PLACEHOLDER: &str = "\u{1f}gitcomet-history-merge-block\u{1f}";
 
         let plan = self.merge_plan.as_ref()?;
-        if plan.original_conflict_block_indices().len() != 1 {
+        if plan
+            .blocks
+            .iter()
+            .filter(|block| block.original_conflict)
+            .take(2)
+            .count()
+            != 1
+        {
             return None;
         }
         let block_index = *self.region_plan_blocks.get(region_index)?;

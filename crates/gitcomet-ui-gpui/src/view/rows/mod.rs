@@ -704,6 +704,39 @@ mod canvas_text;
 mod conflict_canvas;
 mod conflict_resolver;
 mod diff;
+pub(in crate::view) use diff::BlameLabelCache;
+
+/// A comparison/multi-selection card's per-commit strings, prepared once.
+pub(in crate::view) struct CommitCard {
+    pub(in crate::view) short_sha: gpui::SharedString,
+    pub(in crate::view) summary: gpui::SharedString,
+    pub(in crate::view) author: gpui::SharedString,
+    pub(in crate::view) unix_secs: i64,
+}
+
+impl CommitCard {
+    pub(in crate::view) fn new(commit: gitcomet_core::domain::Commit) -> Self {
+        let short_sha: gpui::SharedString = commit
+            .id
+            .as_ref()
+            .get(0..8)
+            .unwrap_or(commit.id.as_ref())
+            .to_string()
+            .into();
+        let unix_secs = commit
+            .time
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        Self {
+            short_sha,
+            summary: gpui::SharedString::from(std::sync::Arc::clone(&commit.summary)),
+            author: gpui::SharedString::from(std::sync::Arc::clone(&commit.author)),
+            unix_secs,
+        }
+    }
+}
+
 mod diff_canvas;
 mod diff_text;
 mod history;

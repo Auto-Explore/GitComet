@@ -1039,7 +1039,11 @@ pub(super) fn set_test_file_status_with_conflict(
         gitcomet_core::domain::DiffArea::Unstaged => (vec![], vec![file_status]),
     };
     repo.status = gitcomet_state::model::Loadable::Ready(
-        gitcomet_core::domain::RepoStatus { staged, unstaged }.into(),
+        gitcomet_core::domain::RepoStatus {
+            staged: std::sync::Arc::new(staged),
+            unstaged: std::sync::Arc::new(unstaged),
+        }
+        .into(),
     );
     repo.status_rev = repo.status_rev.wrapping_add(1);
     repo.has_unstaged_conflicts = matches!(

@@ -2147,9 +2147,10 @@ impl DetailsPaneView {
                         _ => false,
                     });
                 let commit_id_for_click = commit_id.clone();
-                let path_for_click = f.path.clone();
                 let commit_id_for_menu = commit_id.clone();
-                let path_for_menu = f.path.clone();
+                // One owned copy shared by both handlers instead of one each.
+                let path_for_click: Arc<std::path::PathBuf> = Arc::new(f.path.clone());
+                let path_for_menu = Arc::clone(&path_for_click);
                 let tooltip = path_label.clone();
 
                 let mut row = div()
@@ -2211,7 +2212,7 @@ impl DetailsPaneView {
                         }
                         let target = DiffTarget::Commit {
                             commit_id: commit_id_for_click.clone(),
-                            path: Some(path_for_click.clone()),
+                            path: Some((*path_for_click).clone()),
                         };
                         let selected = this.active_repo().is_some_and(|repo| {
                             repo.id == repo_id
@@ -2243,7 +2244,7 @@ impl DetailsPaneView {
                             PopoverKind::CommitFileMenu {
                                 repo_id,
                                 commit_id: commit_id_for_menu.clone(),
-                                path: path_for_menu.clone(),
+                                path: (*path_for_menu).clone(),
                             },
                             e.position,
                             window,
@@ -3824,10 +3825,10 @@ mod tests {
             seq: active_log_seq(&store_for_assert, repo_id),
             scope: initial_scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("feature-tip"), commit("main-tip")],
                 next_cursor: None,
-            }),
+            })),
         }));
         wait_until(cx, "sidebar repo data", |cx| {
             sync_view_for_tests(cx, &view);
@@ -3929,10 +3930,10 @@ mod tests {
             seq: active_log_seq(&store_for_assert, repo_id),
             scope: initial_scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("main-tip")],
                 next_cursor: None,
-            }),
+            })),
         }));
         store_for_assert.dispatch(Msg::SelectDiff {
             repo_id,
@@ -4047,10 +4048,10 @@ mod tests {
             seq: active_log_seq(&store_for_assert, repo_id),
             scope: initial_scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("main-tip")],
                 next_cursor: None,
-            }),
+            })),
         }));
         wait_until(cx, "sidebar repo data", |_cx| {
             let snapshot = store_for_assert.snapshot();

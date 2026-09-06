@@ -1356,6 +1356,7 @@ impl GitCometView {
             splash_backdrop_image: splash::load_splash_backdrop_image(),
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
+            synced_repo_paths: std::sync::Arc::from(Vec::new()),
             ui_settings_persist_seq: 0,
             last_repo_activation_dispatch_at: FxHashMap::default(),
             window_grab_activation_suppressed_at: None,
@@ -1458,11 +1459,7 @@ impl GitCometView {
             cx.weak_entity(),
             view.main_pane.downgrade(),
             view.view_mode,
-            view.state
-                .repos
-                .iter()
-                .map(|repo| repo.spec.workdir.clone())
-                .collect(),
+            view.synced_repo_paths_for_state(),
         );
 
         view

@@ -50,7 +50,11 @@ impl GitRepository for UnconfiguredRepository {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         unsupported()
     }
 

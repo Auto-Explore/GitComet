@@ -363,8 +363,8 @@ mod tests {
     #[test]
     fn split_untracked_navigation_scopes_to_untracked_section() {
         let status = gitcomet_core::domain::RepoStatus {
-            staged: Vec::new(),
-            unstaged: vec![
+            staged: std::sync::Arc::new(Vec::new()),
+            unstaged: std::sync::Arc::new(vec![
                 file_status(
                     "new-a.txt",
                     gitcomet_core::domain::FileStatusKind::Untracked,
@@ -377,7 +377,7 @@ mod tests {
                     "new-b.txt",
                     gitcomet_core::domain::FileStatusKind::Untracked,
                 ),
-            ],
+            ]),
         };
         let target = DiffTarget::WorkingTree {
             path: pb("new-a.txt"),
@@ -404,8 +404,8 @@ mod tests {
     #[test]
     fn split_tracked_navigation_scopes_to_tracked_section() {
         let status = gitcomet_core::domain::RepoStatus {
-            staged: Vec::new(),
-            unstaged: vec![
+            staged: std::sync::Arc::new(Vec::new()),
+            unstaged: std::sync::Arc::new(vec![
                 file_status(
                     "new-a.txt",
                     gitcomet_core::domain::FileStatusKind::Untracked,
@@ -418,7 +418,7 @@ mod tests {
                     "src/main.rs",
                     gitcomet_core::domain::FileStatusKind::Modified,
                 ),
-            ],
+            ]),
         };
         let target = DiffTarget::WorkingTree {
             path: pb("src/lib.rs"),
@@ -446,8 +446,8 @@ mod tests {
     #[test]
     fn combined_navigation_keeps_untracked_and_tracked_together() {
         let status = gitcomet_core::domain::RepoStatus {
-            staged: Vec::new(),
-            unstaged: vec![
+            staged: std::sync::Arc::new(Vec::new()),
+            unstaged: std::sync::Arc::new(vec![
                 file_status(
                     "new-a.txt",
                     gitcomet_core::domain::FileStatusKind::Untracked,
@@ -460,7 +460,7 @@ mod tests {
                     "new-b.txt",
                     gitcomet_core::domain::FileStatusKind::Untracked,
                 ),
-            ],
+            ]),
         };
         let target = DiffTarget::WorkingTree {
             path: pb("src/lib.rs"),

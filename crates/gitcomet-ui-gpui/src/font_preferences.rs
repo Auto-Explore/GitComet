@@ -225,13 +225,6 @@ where
     applied_editor_font_family(&selection)
 }
 
-pub(crate) fn current_font_features<C>(cx: &mut C) -> FontFeatures
-where
-    C: BorrowAppContext,
-{
-    applied_font_features(current(cx).use_font_ligatures)
-}
-
 pub(crate) fn current_or_initialize_from_session<C>(
     window: &Window,
     ui_session: &session::UiSession,

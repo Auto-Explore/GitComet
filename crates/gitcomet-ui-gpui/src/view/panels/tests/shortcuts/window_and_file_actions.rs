@@ -771,12 +771,12 @@ fn ctrl_shortcuts_do_not_crash_without_diff_target(cx: &mut gpui::TestAppContext
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: path.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: None,
-            }],
+            }]),
         }
         .into(),
     );
@@ -903,8 +903,8 @@ fn ctrl_u_unstages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext)
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            unstaged: vec![],
-            staged: vec![
+            unstaged: std::sync::Arc::new(vec![]),
+            staged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: first.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Added,
@@ -915,7 +915,7 @@ fn ctrl_u_unstages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext)
                     kind: gitcomet_core::domain::FileStatusKind::Added,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
