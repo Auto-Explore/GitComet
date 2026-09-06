@@ -433,11 +433,9 @@ impl PopoverHost {
                 area,
                 path,
             } => Some(status_file::model(self, *repo_id, *area, path, cx)),
-            PopoverKind::BranchMenu {
-                repo_id,
-                section,
-                name,
-            } => Some(branch::model(self, *repo_id, *section, name)),
+            PopoverKind::BranchMenu { repo_id, target } => {
+                Some(branch::model(self, *repo_id, target))
+            }
             PopoverKind::BranchRefsMenu {
                 repo_id,
                 display_name,
@@ -1314,7 +1312,11 @@ impl PopoverHost {
                     PushRequest::SetUpstream { remote } => {
                         let anchor = self.popover_anchor_point();
                         self.open_popover_at(
-                            PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
+                            PopoverKind::PushSetUpstreamPrompt {
+                                repo_id,
+                                remote,
+                                configure_only_for: None,
+                            },
                             anchor,
                             window,
                             cx,

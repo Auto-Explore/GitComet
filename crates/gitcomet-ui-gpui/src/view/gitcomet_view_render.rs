@@ -24,7 +24,19 @@ impl Render for GitCometView {
             self.view_mode,
             GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool
         ));
-        self.last_window_size = window.viewport_size();
+        let next_window_size = window.viewport_size();
+        let previous_window_width = self.last_window_size.width;
+        let window_width_changed = previous_window_width != next_window_size.width;
+        self.last_window_size = next_window_size;
+        if window_width_changed
+            && action_bar_density(previous_window_width, self.ui_scale_percent)
+                != action_bar_density(next_window_size.width, self.ui_scale_percent)
+        {
+            // The action bar chooses compact labels at narrow widths. It is
+            // normally mounted through a cached view, so explicitly invalidate
+            // that child when resizing crosses a breakpoint.
+            self.action_bar.update(cx, |_bar, cx| cx.notify());
+        }
         self.clamp_pane_widths_to_window();
         if self.last_window_size != self.ui_window_size_last_seen {
             self.ui_window_size_last_seen = self.last_window_size;

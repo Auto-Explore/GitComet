@@ -2,7 +2,7 @@ use super::*;
 use crate::model::{ConflictFile, RepoState, SidebarDataRequest, SidebarMode};
 use gitcomet_core::domain::{
     DiffArea, DiffTarget, FileConflictKind, FileEntry, FileEntryKind, FileSource, FileStatus,
-    LogScope, RepoSpec,
+    LogScope, RemoteBranch, RepoSpec,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -1198,6 +1198,14 @@ fn loaded_handlers_reschedule_when_pending() {
     ));
     assert!(matches!(
         repo_mut(&mut state, repo_id).remote_branches,
+        Loadable::NotLoaded
+    ));
+    assert!(
+        remote_branches_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty(),
+        "the promoted latest load should finish without another refresh"
+    );
+    assert!(matches!(
+        repo_mut(&mut state, repo_id).remote_branches,
         Loadable::Ready(_)
     ));
 
@@ -1428,6 +1436,80 @@ fn head_branch_loaded_does_not_backfill_detached_head_commit_from_filtered_logs(
             "{scope:?} should not infer detached HEAD from filtered log contents"
         );
     }
+}
+
+#[test]
+fn superseded_remote_branch_load_keeps_the_last_complete_snapshot() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let previous = RemoteBranch {
+        remote: "origin".to_string(),
+        name: "main".to_string(),
+        target: CommitId("1111111".into()),
+    };
+    repo_mut(&mut state, repo_id).set_remote_branches(Loadable::Ready(vec![previous.clone()]));
+    let previous_rev = repo_mut(&mut state, repo_id).remote_branches_rev;
+    mark_pending(&mut state, repo_id, RepoLoadsInFlight::REMOTE_BRANCHES);
+
+    let effects = remote_branches_loaded(&mut state, repo_id, Ok(Vec::new()));
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadRemoteBranches { repo_id: id }] if *id == repo_id
+    ));
+    assert!(matches!(
+        &repo_mut(&mut state, repo_id).remote_branches,
+        Loadable::Ready(branches) if branches.as_slice() == [previous]
+    ));
+    assert_eq!(
+        repo_mut(&mut state, repo_id).remote_branches_rev,
+        previous_rev
+    );
+
+    let replacement = RemoteBranch {
+        remote: "origin".to_string(),
+        name: "release".to_string(),
+        target: CommitId("2222222".into()),
+    };
+    assert!(remote_branches_loaded(&mut state, repo_id, Ok(vec![replacement.clone()])).is_empty());
+    assert!(matches!(
+        &repo_mut(&mut state, repo_id).remote_branches,
+        Loadable::Ready(branches) if branches.as_slice() == [replacement]
+    ));
+    assert_eq!(
+        repo_mut(&mut state, repo_id).remote_branches_rev,
+        previous_rev.wrapping_add(1)
+    );
+}
+
+#[test]
+fn remote_branch_load_during_pull_keeps_the_last_complete_snapshot() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    let previous = RemoteBranch {
+        remote: "origin".to_string(),
+        name: "main".to_string(),
+        target: CommitId("1111111".into()),
+    };
+    let repo = repo_mut(&mut state, repo_id);
+    repo.set_remote_branches(Loadable::Ready(vec![previous.clone()]));
+    repo.pull_in_flight = 1;
+    assert!(
+        repo.loads_in_flight
+            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
+    );
+
+    assert!(remote_branches_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
+    let repo = repo_mut(&mut state, repo_id);
+    assert!(matches!(
+        &repo.remote_branches,
+        Loadable::Ready(branches) if branches.as_slice() == [previous]
+    ));
+    assert!(
+        !repo
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::REMOTE_BRANCHES)
+    );
 }
 
 #[test]

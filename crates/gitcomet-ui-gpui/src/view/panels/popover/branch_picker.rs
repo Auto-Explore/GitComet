@@ -133,6 +133,26 @@ fn branch_row(
     item.secondary_parts(metadata_parts(repo, lookup_name, now))
 }
 
+/// The canonical remote-branch row used by every picker that offers a remote
+/// tracking ref. Keeping this here makes the upstream picker inherit the exact
+/// icon, section header, two-line metadata, truncation and search behaviour of
+/// the Checkout Branch picker.
+pub(super) fn remote_branch_row(
+    repo: &RepoState,
+    display_name: String,
+    lookup_name: &str,
+    now: std::time::SystemTime,
+) -> components::PickerPromptItem {
+    branch_row(
+        repo,
+        display_name,
+        lookup_name,
+        "icons/cloud.svg",
+        REMOTE_SECTION,
+        now,
+    )
+}
+
 /// Rows for the checkout picker: local branches, remote branches, and a create
 /// row. Both the panel and keyboard navigation go through this, so the rendered
 /// list and the list Enter walks can never disagree.
@@ -186,14 +206,7 @@ pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) ->
                 continue;
             }
             let display = format!("{}/{}", remote_branch.remote, remote_branch.name);
-            items.push(branch_row(
-                repo,
-                display.clone(),
-                &display,
-                "icons/cloud.svg",
-                REMOTE_SECTION,
-                now,
-            ));
+            items.push(remote_branch_row(repo, display.clone(), &display, now));
             rows.push(BranchPickerNavTarget::RemoteBranch {
                 remote: remote_branch.remote.clone(),
                 branch: remote_branch.name.clone(),

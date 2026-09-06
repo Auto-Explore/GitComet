@@ -620,6 +620,9 @@ fn worktree_uncommitted_history_row(
     }));
 
     let select_path = summary.path.clone();
+    // These cells share the canvas graph's column offsets. Keep every fixed
+    // column non-shrinking so a long worktree label can only clip its summary,
+    // never move this row's graph lane away from the commit rows below it.
     let mut row = div()
         .id(("history_worktree_uncommitted", list_ix))
         .h(history_row_height(ui_scale))
@@ -643,19 +646,28 @@ fn worktree_uncommitted_history_row(
         .child(
             div()
                 .w(col_branch)
+                .flex_none()
                 .text_xs()
                 .line_clamp(1)
                 .whitespace_nowrap()
                 .child(div()),
         )
         .when(show_graph, |row| {
-            row.child(div().w(col_graph).h_full().overflow_hidden().child(graph))
+            row.child(
+                div()
+                    .w(col_graph)
+                    .flex_none()
+                    .h_full()
+                    .overflow_hidden()
+                    .child(graph),
+            )
         })
         .child({
             let mut summary = div()
                 .relative()
                 .flex_1()
                 .min_w(px(0.0))
+                .overflow_hidden()
                 .flex()
                 .items_center()
                 .gap_2()
@@ -678,11 +690,19 @@ fn worktree_uncommitted_history_row(
             if !parts.is_empty() {
                 summary = summary.child(div().flex().items_center().gap_2().children(parts));
             }
-            summary.child(div().flex_1().min_w(px(0.0))).child(badge)
+            summary.child(div().flex_1().min_w(px(0.0))).child(
+                div()
+                    .min_w(px(0.0))
+                    .max_w(scaled_px(HISTORY_WORKTREE_BADGE_MAX_W_PX))
+                    .overflow_hidden()
+                    .child(badge),
+            )
         })
-        .when(show_author, |row| row.child(div().w(col_author)))
-        .when(show_date, |row| row.child(div().w(col_date)))
-        .when(show_sha, |row| row.child(div().w(col_sha)));
+        .when(show_author, |row| {
+            row.child(div().w(col_author).flex_none())
+        })
+        .when(show_date, |row| row.child(div().w(col_date).flex_none()))
+        .when(show_sha, |row| row.child(div().w(col_sha).flex_none()));
 
     if selected {
         row = row.bg(theme.colors.accent.subtle_background);
@@ -823,6 +843,8 @@ fn working_tree_summary_history_row(
     .h_full()
     .cursor(CursorStyle::PointingHand);
 
+    // Match the same fixed column geometry used by commit and worktree rows;
+    // the flexible summary is the only cell allowed to absorb width pressure.
     let mut row = div()
         .id(("history_worktree_summary", repo_id.0))
         .h(history_row_height(ui_scale))
@@ -836,6 +858,7 @@ fn working_tree_summary_history_row(
         .child(
             div()
                 .w(col_branch)
+                .flex_none()
                 .text_xs()
                 .text_color(theme.colors.foreground.secondary)
                 .line_clamp(1)
@@ -846,6 +869,7 @@ fn working_tree_summary_history_row(
             row.child(
                 div()
                     .w(col_graph)
+                    .flex_none()
                     .h_full()
                     .flex()
                     .justify_center()
@@ -858,6 +882,7 @@ fn working_tree_summary_history_row(
                 .relative()
                 .flex_1()
                 .min_w(px(0.0))
+                .overflow_hidden()
                 .flex()
                 .items_center()
                 .gap_2()
@@ -883,11 +908,14 @@ fn working_tree_summary_history_row(
             }
             summary
         })
-        .when(show_author, |row| row.child(div().w(col_author)))
+        .when(show_author, |row| {
+            row.child(div().w(col_author).flex_none())
+        })
         .when(show_date, |row| {
             row.child(
                 div()
                     .w(col_date)
+                    .flex_none()
                     .flex()
                     .justify_end()
                     .px(cell_pad_x)
@@ -898,7 +926,7 @@ fn working_tree_summary_history_row(
                     .child("Click to review"),
             )
         })
-        .when(show_sha, |row| row.child(div().w(col_sha)))
+        .when(show_sha, |row| row.child(div().w(col_sha).flex_none()))
         .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
             this.store.dispatch(Msg::ClearCommitSelection { repo_id });
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });

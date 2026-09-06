@@ -20,8 +20,7 @@ pub(super) fn toast_total_lifetime(ttl: Duration) -> Duration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct SelectedBranch {
     pub(in crate::view) repo_id: RepoId,
-    pub(in crate::view) section: BranchSection,
-    pub(in crate::view) name: String,
+    pub(in crate::view) target: BranchMenuTarget,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,24 +42,34 @@ pub(in crate::view) fn head_is_detached(repo: &RepoState) -> bool {
     matches!(&repo.head_branch, Loadable::Ready(head) if head.is_empty() || head == "HEAD")
 }
 
-/// Whether the checked-out branch has a live remote-tracking upstream. A
-/// detached HEAD carries no branch to hold one, so this is false there and
-/// callers that can still act on a detached HEAD must check for it themselves.
+/// Whether the checked-out branch has a confirmed live remote-tracking
+/// upstream. This remains false until the remote-branch list is loaded, and a
+/// detached HEAD carries no branch to hold one.
 pub(in crate::view) fn head_branch_has_live_upstream(repo: &RepoState) -> bool {
     let (Loadable::Ready(head), Loadable::Ready(branches)) = (&repo.head_branch, &repo.branches)
     else {
         return false;
     };
-    branches
+    let Some(upstream) = branches
         .iter()
         .find(|branch| branch.name == *head)
-        .is_some_and(|branch| branch.upstream.is_some())
+        .and_then(|branch| branch.upstream.as_ref())
+    else {
+        return false;
+    };
+    let Some(remote_branches) = repo.remote_branches.ready() else {
+        return false;
+    };
+    remote_branches
+        .iter()
+        .any(|candidate| candidate.remote == upstream.remote && candidate.name == upstream.branch)
 }
 
-/// Decide whether Pull can run. It mirrors the backend, which pulls from the
-/// preferred remote and sets the upstream when a branch has none, and falls
-/// back to Git's own diagnostics on a detached HEAD. The only hard blocker is a
-/// repository with no remotes at all.
+/// Decide whether Pull can run. A configured upstream is actionable only when
+/// its exact remote-tracking ref exists; a future upstream configured by
+/// "Create new" must be pushed before Pull is offered. For a branch with no
+/// configured upstream, the backend can still use the preferred remote, while
+/// detached HEAD falls back to Git's own diagnostics.
 pub(in crate::view) fn pull_request(repo: &RepoState) -> PullRequest {
     let Loadable::Ready(head) = &repo.head_branch else {
         return PullRequest::NotReady;
@@ -76,7 +85,11 @@ pub(in crate::view) fn pull_request(repo: &RepoState) -> PullRequest {
         .find(|branch| branch.name == *head)
         .is_some_and(|branch| branch.upstream.is_some())
     {
-        return PullRequest::Pull;
+        return if head_branch_has_live_upstream(repo) {
+            PullRequest::Pull
+        } else {
+            PullRequest::NotReady
+        };
     }
 
     let Loadable::Ready(remotes) = &repo.remotes else {
@@ -89,8 +102,8 @@ pub(in crate::view) fn pull_request(repo: &RepoState) -> PullRequest {
 }
 
 /// Decide whether an interactive Push can run immediately or first needs the
-/// existing set-upstream prompt. `Branch::upstream` contains only live tracking
-/// refs, so a pruned `[gone]` upstream follows the same path as a new branch.
+/// existing set-upstream prompt. A configured upstream can name a branch that
+/// has not been pushed yet; that still gives Push an exact destination.
 pub(in crate::view) fn push_request(repo: &RepoState) -> PushRequest {
     let Loadable::Ready(head) = &repo.head_branch else {
         return PushRequest::NotReady;
@@ -132,24 +145,18 @@ pub(in crate::view) fn selected_remote_branch_is_missing(
     let Some(selected) = selected_branch else {
         return false;
     };
-    if selected.section != BranchSection::Remote {
+    let BranchMenuTarget::Remote { remote, branch } = &selected.target else {
         return false;
-    }
+    };
     let Some(repo) = state.repos.iter().find(|repo| repo.id == selected.repo_id) else {
         return true;
     };
     let Loadable::Ready(branches) = &repo.remote_branches else {
         return false;
     };
-    // A remote name can itself contain '/', so the selected row cannot be split
-    // into (remote, branch); match it against each remote branch's own label.
-    !branches.iter().any(|branch| {
-        selected
-            .name
-            .strip_prefix(branch.remote.as_str())
-            .and_then(|rest| rest.strip_prefix('/'))
-            .is_some_and(|name| name == branch.name)
-    })
+    !branches
+        .iter()
+        .any(|candidate| candidate.remote == *remote && candidate.name == *branch)
 }
 
 pub(in crate::view) fn selected_branch_label_color(theme: AppTheme) -> gpui::Rgba {
@@ -166,8 +173,7 @@ pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
 /// display text silently missed whichever form the row happened to use.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct SelectedHistoryBranch {
-    pub(in crate::view) section: BranchSection,
-    pub(in crate::view) name: SharedString,
+    pub(in crate::view) target: BranchMenuTarget,
 }
 
 pub(in crate::view) fn selected_branch_for_history_row(
@@ -185,8 +191,7 @@ pub(in crate::view) fn selected_branch_for_history_row(
     }
 
     Some(SelectedHistoryBranch {
-        section: selected_branch.section,
-        name: SharedString::from(selected_branch.name.clone()),
+        target: selected_branch.target.clone(),
     })
 }
 

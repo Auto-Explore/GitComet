@@ -6,8 +6,9 @@ use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, LocateFileInExplorer, MainPaneView,
     OpenActiveViewSearch, PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev,
-    SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste, TerminalSelectAll,
-    TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
+    PushUpstreamRemoteClose, PushUpstreamRemoteNext, PushUpstreamRemoteOpenOrSelect,
+    PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste,
+    TerminalSelectAll, TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
     TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
     TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette, is_diff_shortcut_candidate,
 };
@@ -1904,6 +1905,31 @@ pub(crate) fn ensure_graphics_device_available(
 
 fn bind_text_input_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new(
+            "enter",
+            PushUpstreamRemoteOpenOrSelect,
+            Some("PushUpstreamRemoteSelector"),
+        ),
+        KeyBinding::new(
+            "space",
+            PushUpstreamRemoteOpenOrSelect,
+            Some("PushUpstreamRemoteSelector"),
+        ),
+        KeyBinding::new(
+            "up",
+            PushUpstreamRemotePrev,
+            Some("PushUpstreamRemoteSelector"),
+        ),
+        KeyBinding::new(
+            "down",
+            PushUpstreamRemoteNext,
+            Some("PushUpstreamRemoteSelector"),
+        ),
+        KeyBinding::new(
+            "escape",
+            PushUpstreamRemoteClose,
+            Some("PushUpstreamRemoteSelector"),
+        ),
         KeyBinding::new("escape", PopoverPromptDismiss, Some("PopoverPrompt")),
         KeyBinding::new("tab", PopoverPromptTabNext, Some("PopoverPrompt")),
         KeyBinding::new("shift-tab", PopoverPromptTabPrev, Some("PopoverPrompt")),

@@ -244,12 +244,12 @@
         "lifetime": "#005b80ff"
       },
       "radii": {
-        "panel": 12.0,
+        "panel": 8.0,
         "pill": 999.0,
-        "row": 8.0,
-        "control": 8.0,
-        "popover": 10.0,
-        "window": 12.0
+        "row": 4.0,
+        "control": 4.0,
+        "popover": 8.0,
+        "window": 8.0
       }
     },
     {

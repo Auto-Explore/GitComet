@@ -50,6 +50,7 @@ mod submodule_remove_confirm;
 mod submodule_trust_confirm;
 mod terminal_shutdown_confirm;
 mod unsaved_file_edits_confirm;
+mod upstream_picker;
 mod workspace_picker;
 mod worktree_add_prompt;
 mod worktree_picker;
@@ -166,6 +167,7 @@ pub(in super::super) struct PopoverHost {
     _ui_model_subscription: gpui::Subscription,
     _repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
+    _upstream_picker_search_input_subscription: Option<gpui::Subscription>,
     _worktree_picker_search_input_subscription: Option<gpui::Subscription>,
     _workspace_picker_search_input_subscription: Option<gpui::Subscription>,
     _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
@@ -241,6 +243,7 @@ pub(in super::super) struct PopoverHost {
     /// position it was invoked at. The picker stays open underneath it.
     picker_row_menu: Option<picker_row_menu::PickerRowMenu>,
     branch_picker_selected_index: Option<usize>,
+    upstream_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,
     workspace_picker_selected_index: Option<usize>,
     /// Path/reference the workspace badge's create row hands to the Add-worktree
@@ -261,6 +264,7 @@ pub(in super::super) struct PopoverHost {
     /// every frame. See [`rows_cache`] — a hover moving between rows re-renders
     /// this whole view.
     branch_picker_rows_cache: rows_cache::RowsCache<branch_picker::BranchPickerNavTarget>,
+    upstream_picker_rows_cache: rows_cache::RowsCache<upstream_picker::UpstreamTarget>,
     workspace_picker_rows_cache: rows_cache::RowsCache<workspace_picker::WorkspaceRow>,
     repo_picker_rows_cache: rows_cache::RowsCache<repo_picker::RepoPickerEntry>,
     stash_picker_rows_cache: rows_cache::RowsCache<stash_picker_prompt::StashRow>,
@@ -344,6 +348,9 @@ pub(in super::super) struct PopoverHost {
     remote_add_focus: DialogFocus,
     remote_edit_focus: DialogFocus,
     push_upstream_focus: DialogFocus,
+    push_upstream_remote_focus_handle: FocusHandle,
+    push_upstream_remote_menu_open: bool,
+    push_upstream_remote_selected_index: Option<usize>,
     worktree_browse_focus_handle: FocusHandle,
     worktree_focus: DialogFocus,
     submodule_advanced_focus_handle: FocusHandle,
@@ -859,7 +866,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         } => Some(PICKER_WIDTH),
         PopoverKind::BranchPicker {
             purpose: BranchPickerPurpose::Checkout,
-        } => Some(LARGE_PICKER_WIDTH),
+        }
+        | PopoverKind::UpstreamPicker { .. } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::StashPrompt
         | PopoverKind::CommitPrompt { .. }
         | PopoverKind::StashPickerPrompt { .. }

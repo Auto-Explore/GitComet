@@ -17,9 +17,9 @@ pub(super) fn model(
 
     items.extend(targets.iter().map(|target| {
         ContextMenuItem::Entry {
-            label: target.name.clone().into(),
+            label: target.display_name().into(),
             icon: Some(
-                match target.section {
+                match target.section() {
                     BranchSection::Local => "icons/computer.svg",
                     BranchSection::Remote => "icons/cloud.svg",
                 }
@@ -44,14 +44,8 @@ mod tests {
     fn chooser_preserves_full_ref_names_and_routes_each_section() {
         let repo_id = RepoId(7);
         let targets = vec![
-            BranchMenuTarget {
-                section: BranchSection::Local,
-                name: "feature/x".to_string(),
-            },
-            BranchMenuTarget {
-                section: BranchSection::Remote,
-                name: "origin/feature/x".to_string(),
-            },
+            BranchMenuTarget::local("feature/x"),
+            BranchMenuTarget::remote("origin", "feature/x"),
         ];
 
         let model = model(repo_id, "feature/x", &targets);
@@ -79,8 +73,7 @@ mod tests {
             ContextMenuAction::OpenPopover {
                 kind: PopoverKind::BranchMenu {
                     repo_id: routed_repo,
-                    section: BranchSection::Local,
-                    name,
+                    target: BranchMenuTarget::Local { name },
                 }
             } if *routed_repo == repo_id && name == "feature/x"
         ));
@@ -93,10 +86,9 @@ mod tests {
             ContextMenuAction::OpenPopover {
                 kind: PopoverKind::BranchMenu {
                     repo_id: routed_repo,
-                    section: BranchSection::Remote,
-                    name,
+                    target: BranchMenuTarget::Remote { remote, branch },
                 }
-            } if *routed_repo == repo_id && name == "origin/feature/x"
+            } if *routed_repo == repo_id && remote == "origin" && branch == "feature/x"
         ));
     }
 }

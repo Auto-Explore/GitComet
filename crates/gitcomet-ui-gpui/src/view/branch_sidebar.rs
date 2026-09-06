@@ -30,15 +30,44 @@ pub(super) enum BranchSection {
     Remote,
 }
 
-/// Exact branch identity behind a compact history decoration.
-///
-/// History can collapse a local branch and one or more same-named remote
-/// branches into a single chip, but branch actions still need the original
-/// section and the full ref name (`origin/main` for a remote branch).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct BranchMenuTarget {
-    pub(super) section: BranchSection,
-    pub(super) name: String,
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(super) enum BranchMenuTarget {
+    Local { name: String },
+    Remote { remote: String, branch: String },
+}
+
+impl BranchMenuTarget {
+    pub(super) fn local(name: impl Into<String>) -> Self {
+        Self::Local { name: name.into() }
+    }
+
+    pub(super) fn remote(remote: impl Into<String>, branch: impl Into<String>) -> Self {
+        Self::Remote {
+            remote: remote.into(),
+            branch: branch.into(),
+        }
+    }
+
+    pub(super) const fn section(&self) -> BranchSection {
+        match self {
+            Self::Local { .. } => BranchSection::Local,
+            Self::Remote { .. } => BranchSection::Remote,
+        }
+    }
+
+    pub(super) fn display_name(&self) -> String {
+        match self {
+            Self::Local { name } => name.clone(),
+            Self::Remote { remote, branch } => format!("{remote}/{branch}"),
+        }
+    }
+
+    pub(super) fn remote_parts(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Remote { remote, branch } => Some((remote, branch)),
+            Self::Local { .. } => None,
+        }
+    }
 }
 
 type BranchSidebarDepth = u16;
@@ -93,11 +122,10 @@ pub(super) fn pinned_branch_renders(
             let Loadable::Ready(branches) = &repo.remote_branches else {
                 return false;
             };
-            name.split_once('/').is_some_and(|(remote, branch_name)| {
-                branches
-                    .iter()
-                    .any(|branch| branch.remote == remote && branch.name == branch_name)
-            })
+            let mut matching = branches
+                .iter()
+                .filter(|branch| format!("{}/{}", branch.remote, branch.name) == name);
+            matching.next().is_some() && matching.next().is_none()
         }
     }
 }
@@ -203,6 +231,7 @@ pub(super) enum BranchSidebarRow {
     },
     Branch {
         name: SharedString,
+        target: BranchMenuTarget,
         section: BranchSection,
         depth: BranchSidebarDepth,
         muted: bool,
@@ -1637,6 +1666,7 @@ fn push_remote_linear_chain_rows(
             None,
             upstream_full,
             BranchSection::Remote,
+            Some(remote),
             depth,
             true,
         );
@@ -1668,6 +1698,7 @@ fn push_slash_tree_child_rows(
                 local_leaf_meta,
                 upstream_full,
                 section,
+                remote_name,
                 depth,
                 muted,
             );
@@ -1710,6 +1741,7 @@ fn push_slash_tree_child_rows(
             local_leaf_meta,
             upstream_full,
             section,
+            remote_name,
             depth + 1,
             muted,
         );
@@ -1822,6 +1854,7 @@ fn build_pinned_branch_rows(
                 };
                 local_rows.push(BranchSidebarRow::Branch {
                     name: SharedString::new(name),
+                    target: BranchMenuTarget::local(name),
                     section: BranchSection::Local,
                     depth: 0,
                     muted: false,
@@ -1842,16 +1875,21 @@ fn build_pinned_branch_rows(
                 let Loadable::Ready(branches) = &repo.remote_branches else {
                     continue;
                 };
-                let exists = name.split_once('/').is_some_and(|(remote, branch_name)| {
-                    branches
-                        .iter()
-                        .any(|branch| branch.remote == remote && branch.name == branch_name)
-                });
-                if !exists {
+                let mut matching = branches
+                    .iter()
+                    .filter(|branch| format!("{}/{}", branch.remote, branch.name) == name);
+                let Some(branch) = matching.next() else {
+                    continue;
+                };
+                if matching.next().is_some() {
+                    // Legacy pin keys contain only the rendered name. Do not
+                    // attach actions to the wrong ref when that old spelling is
+                    // ambiguous; newly selected rows keep their exact target.
                     continue;
                 }
                 remote_rows.push(BranchSidebarRow::Branch {
                     name: SharedString::new(name),
+                    target: BranchMenuTarget::remote(&branch.remote, &branch.name),
                     section: BranchSection::Remote,
                     depth: 0,
                     muted: false,
@@ -1876,6 +1914,7 @@ fn push_branch_sidebar_branch_row(
     local_leaf_meta: Option<&[SlashTreeLeafMeta]>,
     upstream_full: Option<&str>,
     section: BranchSection,
+    remote: Option<&str>,
     depth: usize,
     muted: bool,
 ) {
@@ -1888,7 +1927,18 @@ fn push_branch_sidebar_branch_row(
         })
         .copied()
         .unwrap_or_default();
-    let name = SharedString::new(name_prefix.as_str());
+    let full_name = name_prefix.as_str();
+    let target = match remote {
+        Some(remote) => BranchMenuTarget::remote(
+            remote,
+            full_name
+                .strip_prefix(remote)
+                .and_then(|name| name.strip_prefix('/'))
+                .unwrap_or(full_name),
+        ),
+        None => BranchMenuTarget::local(full_name),
+    };
+    let name = SharedString::new(full_name);
     name_prefix.truncate(name_prefix.len() - label.len());
     let divergence_ahead = leaf_meta
         .divergence
@@ -1898,6 +1948,7 @@ fn push_branch_sidebar_branch_row(
         .and_then(|d| branch_sidebar_divergence_count(d.behind));
     out.push(BranchSidebarRow::Branch {
         name,
+        target,
         section,
         depth: branch_sidebar_depth(depth),
         muted,
@@ -1985,6 +2036,46 @@ mod tests {
         // An unknown prefix is ignored rather than mis-rendered, so a stale key
         // from an older session cannot claim a section.
         assert_eq!(parse_branch_pin_key("garbage"), None);
+    }
+
+    #[test]
+    fn pinned_remote_branch_resolution_does_not_guess_a_slash_boundary() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        let pin = branch_pin_storage_key(BranchSection::Remote, "team/alice/main");
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+            remote: "team/alice".to_string(),
+            name: "main".to_string(),
+            target: commit_id("aaaaaaaa"),
+        }]));
+
+        assert!(pinned_branch_renders(
+            &repo,
+            &pin,
+            BranchSection::Remote,
+            ""
+        ));
+
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![
+            RemoteBranch {
+                remote: "team/alice".to_string(),
+                name: "main".to_string(),
+                target: commit_id("aaaaaaaa"),
+            },
+            RemoteBranch {
+                remote: "team".to_string(),
+                name: "alice/main".to_string(),
+                target: commit_id("bbbbbbbb"),
+            },
+        ]));
+        assert!(
+            !pinned_branch_renders(&repo, &pin, BranchSection::Remote, ""),
+            "a legacy flat pin must not be attached to either ambiguous identity"
+        );
     }
     use super::*;
     use gitcomet_core::domain::{

@@ -1,5 +1,6 @@
 use crate::msg::{InternalMsg, Msg, RepoCommandKind};
 use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
+use gitcomet_core::domain::Upstream;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
 use gitcomet_core::services::{
@@ -58,7 +59,7 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             format!("Current branch → {remote}/{branch}")
         }
         RepoCommandKind::SetUpstreamBranch { branch, upstream } => {
-            format!("{branch} → {upstream}")
+            format!("{branch} → {}/{}", upstream.remote, upstream.branch)
         }
         RepoCommandKind::UnsetUpstreamBranch { branch } => branch.clone(),
         RepoCommandKind::DeleteRemoteBranch { remote, branch } => {
@@ -1081,7 +1082,7 @@ pub(super) fn schedule_set_upstream_branch(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     branch: String,
-    upstream: String,
+    upstream: Upstream,
 ) {
     let command_branch = branch.clone();
     let command_upstream = upstream.clone();

@@ -928,8 +928,7 @@ fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCon
                     host.context_menu_model(
                         &PopoverKind::BranchMenu {
                             repo_id,
-                            section: BranchSection::Local,
-                            name: branch_name.clone(),
+                            target: BranchMenuTarget::local(branch_name.clone()),
                         },
                         cx,
                     )
@@ -1086,8 +1085,7 @@ fn branch_menu_pin_entry_toggles_and_relabels(cx: &mut gpui::TestAppContext) {
                     host.context_menu_model(
                         &PopoverKind::BranchMenu {
                             repo_id,
-                            section: BranchSection::Local,
-                            name: branch_name.clone(),
+                            target: BranchMenuTarget::local(branch_name.clone()),
                         },
                         cx,
                     )
@@ -1176,8 +1174,7 @@ fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCo
                     host.context_menu_model(
                         &PopoverKind::BranchMenu {
                             repo_id,
-                            section: BranchSection::Remote,
-                            name: branch_name.clone(),
+                            target: BranchMenuTarget::remote("origin", "feature/awesome"),
                         },
                         cx,
                     )
@@ -1282,13 +1279,141 @@ fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
+fn remote_branch_menu_preserves_exact_identity_and_uses_its_loaded_tip(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(2301);
+    let selected_tip = CommitId("2222222222222222222222222222222222222222".into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::path::PathBuf::from("/tmp/exact-remote-menu"),
+                },
+            );
+            repo.head_branch = Loadable::Ready("feature/local".to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+                name: "feature/local".to_string(),
+                target: CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+                upstream: None,
+                divergence: None,
+            }]));
+            // Both exact refs intentionally render as `team/alice/main`.
+            repo.remote_branches = Loadable::Ready(Arc::new(vec![
+                gitcomet_core::domain::RemoteBranch {
+                    remote: "team".to_string(),
+                    name: "alice/main".to_string(),
+                    target: CommitId("1111111111111111111111111111111111111111".into()),
+                },
+                gitcomet_core::domain::RemoteBranch {
+                    remote: "team/alice".to_string(),
+                    name: "main".to_string(),
+                    target: selected_tip.clone(),
+                },
+            ]));
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::BranchMenu {
+                            repo_id,
+                            target: BranchMenuTarget::remote("team/alice", "main"),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("remote branch menu");
+        let action = |label: &str| {
+            model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry {
+                    label: candidate,
+                    action,
+                    ..
+                } if candidate.as_ref() == label => Some((**action).clone()),
+                _ => None,
+            })
+        };
+
+        assert!(matches!(
+            action("Checkout"),
+            Some(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::CheckoutRemoteBranchPrompt { remote, branch, .. }
+            }) if remote == "team/alice" && branch == "main"
+        ));
+        assert!(matches!(
+            action("Pull into current"),
+            Some(ContextMenuAction::PullBranch { remote, branch, .. })
+                if remote == "team/alice" && branch == "main"
+        ));
+        assert!(matches!(
+            action("Delete remote branch…"),
+            Some(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::DeleteBranchConfirm {
+                        remote,
+                        branch,
+                    }),
+                    ..
+                }
+            }) if remote == "team/alice" && branch == "main"
+        ));
+        assert!(matches!(
+            action("Set as tracking upstream"),
+            Some(ContextMenuAction::SetUpstreamBranch {
+                upstream: Upstream { remote, branch },
+                ..
+            }) if remote == "team/alice" && branch == "main"
+        ));
+
+        let selected_tip = selected_tip.as_ref();
+        assert!(matches!(
+            action("Create branch"),
+            Some(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::CreateBranchFromRefPrompt { target, .. }
+            }) if target == selected_tip
+        ));
+        assert!(matches!(
+            action("Merge into current"),
+            Some(ContextMenuAction::MergeRef { reference, .. }) if reference == selected_tip
+        ));
+        assert!(matches!(
+            action("Squash into current"),
+            Some(ContextMenuAction::SquashRef { reference, .. }) if reference == selected_tip
+        ));
+        assert!(matches!(
+            action("Rebase feature/local onto team/alice/main"),
+            Some(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::RebaseOntoConfirm { onto, .. }
+            }) if onto == selected_tip
+        ));
+    });
+}
+
+#[gpui::test]
 fn remote_branch_menu_renders_squash_entry_without_panic(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     let repo_id = RepoId(232);
-    let branch_name = "origin/feature/awesome".to_string();
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_remote_branch_menu_render",
         std::process::id()
@@ -1323,8 +1448,7 @@ fn remote_branch_menu_renders_squash_entry_without_panic(cx: &mut gpui::TestAppC
                 host.open_popover_at(
                     PopoverKind::BranchMenu {
                         repo_id,
-                        section: BranchSection::Remote,
-                        name: branch_name.clone(),
+                        target: BranchMenuTarget::remote("origin", "feature/awesome"),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -1351,8 +1475,6 @@ fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     let repo_id = RepoId(230);
-    let enabled_name = "origin/feature/awesome".to_string();
-    let disabled_name = "origin/main".to_string();
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_remote_branch_menu_unlink",
         std::process::id()
@@ -1396,8 +1518,7 @@ fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
                     host.context_menu_model(
                         &PopoverKind::BranchMenu {
                             repo_id,
-                            section: BranchSection::Remote,
-                            name: enabled_name.clone(),
+                            target: BranchMenuTarget::remote("origin", "feature/awesome"),
                         },
                         cx,
                     )
@@ -1438,8 +1559,7 @@ fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
                     host.context_menu_model(
                         &PopoverKind::BranchMenu {
                             repo_id,
-                            section: BranchSection::Remote,
-                            name: disabled_name.clone(),
+                            target: BranchMenuTarget::remote("origin", "main"),
                         },
                         cx,
                     )
@@ -1485,8 +1605,6 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     let repo_id = RepoId(231);
-    let branch_name = "origin/feature/awesome".to_string();
-    let branch_name_with_upstream = "origin/main".to_string();
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_remote_branch_menu_set_tracking_upstream",
         std::process::id()
@@ -1507,6 +1625,12 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
                 upstream: None,
                 divergence: None,
             }]));
+            repo.remote_branches =
+                Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: "feature/awesome".to_string(),
+                    target: CommitId("cafebabe".into()),
+                }]));
 
             let state = Arc::new(AppState {
                 repos: vec![repo],
@@ -1527,8 +1651,7 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
                     host.context_menu_model(
                         &PopoverKind::BranchMenu {
                             repo_id,
-                            section: BranchSection::Remote,
-                            name: branch_name.clone(),
+                            target: BranchMenuTarget::remote("origin", "feature/awesome"),
                         },
                         cx,
                     )
@@ -1559,7 +1682,8 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
             )) => {
                 assert_eq!(rid, repo_id);
                 assert_eq!(branch, "feature/local");
-                assert_eq!(upstream, "origin/feature/awesome");
+                assert_eq!(upstream.remote, "origin");
+                assert_eq!(upstream.branch, "feature/awesome");
                 assert!(!disabled);
             }
             _ => panic!("expected enabled SetUpstreamBranch entry"),
@@ -1611,8 +1735,7 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
                     host.context_menu_model(
                         &PopoverKind::BranchMenu {
                             repo_id,
-                            section: BranchSection::Remote,
-                            name: branch_name_with_upstream.clone(),
+                            target: BranchMenuTarget::remote("origin", "main"),
                         },
                         cx,
                     )
@@ -1747,8 +1870,7 @@ fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
                     host.context_menu_model(
                         &PopoverKind::BranchMenu {
                             repo_id,
-                            section: BranchSection::Local,
-                            name: branch_name.clone(),
+                            target: BranchMenuTarget::local(branch_name.clone()),
                         },
                         cx,
                     )

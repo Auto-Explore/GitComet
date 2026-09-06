@@ -12,7 +12,7 @@ use crate::model::{
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
-use gitcomet_core::domain::{DiffTarget, FileConflictKind};
+use gitcomet_core::domain::{DiffTarget, FileConflictKind, Upstream};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
     CheckoutRemoteBranchMode, CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode,
@@ -479,7 +479,7 @@ pub(super) fn push_set_upstream(
 pub(super) fn set_upstream_branch(
     repo_id: RepoId,
     branch: String,
-    upstream: String,
+    upstream: Upstream,
 ) -> Vec<Effect> {
     vec![Effect::SetUpstreamBranch {
         repo_id,
@@ -1126,10 +1126,10 @@ pub(super) fn repo_command_finished(
     };
 
     let mut extra_effects = Vec::new();
-    if refresh_remote_branches {
+    if refresh_remote_branches && !matches!(repo_state.remote_branches, Loadable::Ready(_)) {
         // A fetch may have updated or pruned refs even when a later phase failed.
-        // Hide the pre-command snapshot until the coalesced full refresh publishes
-        // a list that was read after the command completed.
+        // Keep a successful pre-command snapshot visible while it is revalidated;
+        // only repositories without usable data need a loading placeholder.
         repo_state.set_remote_branches(Loadable::Loading);
     }
     match &command {

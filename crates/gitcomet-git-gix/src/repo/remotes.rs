@@ -1,5 +1,6 @@
 use super::GixRepo;
 use super::history::gix_head_id_or_none;
+use super::porcelain::edit_local_config_strict;
 use crate::util::{
     bytes_to_text_preserving_utf8, git_command_failed_error, run_git_capture, run_git_raw_output,
     run_git_simple, run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
@@ -16,6 +17,8 @@ use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashSet;
 use std::process::Command;
 use std::str;
+
+const PENDING_UPSTREAM_CONFIG_KEY: &str = "gitcometPendingUpstream";
 
 /// Display label for `git remote add`; the URL is masked because the label
 /// ends up in the command log and error toasts, unlike the argv.
@@ -74,16 +77,102 @@ fn branches_to_prune(
     candidates
 }
 
-fn parse_short_remote_branch_name(short_name: &str) -> Option<(&str, &str)> {
-    let short_name = short_name.trim();
-    if short_name.is_empty() || short_name.ends_with("/HEAD") {
-        return None;
+/// Forward-map an exact remote branch through that remote's fetch refspecs.
+/// This deliberately does not inspect any other remote, even when another
+/// remote maps to the same local tracking ref.
+pub(super) fn tracking_refs_for_remote_branch(
+    repo: &gix::Repository,
+    upstream: &Upstream,
+) -> Result<Vec<String>> {
+    let remote = repo.find_remote(upstream.remote.as_str()).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix find_remote {}: {e}",
+            upstream.remote
+        )))
+    })?;
+    let source_ref = format!("refs/heads/{}", upstream.branch);
+    let null = repo.object_hash().null();
+    let matches = gix::refspec::MatchGroup::from_fetch_specs(
+        remote
+            .refspecs(gix::remote::Direction::Fetch)
+            .iter()
+            .map(|spec| spec.to_ref()),
+    )
+    .match_lhs(
+        Some(gix::refspec::match_group::Item {
+            full_ref_name: source_ref.as_bytes().as_bstr(),
+            target: &null,
+            object: None,
+        })
+        .into_iter(),
+    );
+
+    let mut tracking_refs = matches
+        .mappings
+        .into_iter()
+        .filter_map(|mapping| mapping.rhs)
+        .map(|name| name.to_str_lossy().into_owned())
+        .collect::<Vec<_>>();
+    tracking_refs.sort_unstable();
+    tracking_refs.dedup();
+    Ok(tracking_refs)
+}
+
+pub(super) fn configured_upstream_of(reference: &gix::Reference<'_>) -> Option<Upstream> {
+    let local_branch = reference
+        .name()
+        .as_bstr()
+        .strip_prefix(b"refs/heads/")?
+        .as_bstr();
+    let config = reference.repo.config_snapshot();
+    let mut configured_remote = None;
+    let mut configured_merge = None;
+    for section in config
+        .plumbing()
+        .sections_by_name("branch")?
+        .filter(|section| section.header().subsection_name() == Some(local_branch))
+    {
+        if let Some(value) = section.value("remote") {
+            configured_remote = Some(value);
+        }
+        // Git uses the first merge entry, including across repeated branch
+        // sections, while the single-valued remote remains last-value-wins.
+        if configured_merge.is_none() {
+            configured_merge = section.values("merge").into_iter().next();
+        }
     }
-    let (remote, name) = short_name.split_once('/')?;
-    if remote.is_empty() || name.is_empty() {
-        return None;
-    }
-    Some((remote, name))
+    let remote = configured_remote?.to_str_lossy().into_owned();
+    // A branch remote may also be `.` or a URL. Only a named, configured
+    // remote can own one of the remote-tracking branches this API exposes.
+    reference.repo.find_remote(remote.as_str()).ok()?;
+    let branch = configured_merge?
+        .as_bstr()
+        .strip_prefix(b"refs/heads/")
+        .map(|name| name.to_str_lossy().into_owned())
+        .filter(|name| !name.is_empty())?;
+    Some(Upstream { remote, branch })
+}
+
+/// Whether GitComet intentionally configured this upstream before the remote
+/// branch existed. This distinguishes a future branch from a formerly-live
+/// upstream that disappeared and remains eligible for fetch cleanup.
+pub(super) fn configured_upstream_is_pending(reference: &gix::Reference<'_>) -> bool {
+    let local_branch = match reference.name().as_bstr().strip_prefix(b"refs/heads/") {
+        Some(branch) => branch.as_bstr(),
+        None => return false,
+    };
+    let config = reference.repo.config_snapshot();
+    config
+        .plumbing()
+        .sections_by_name("branch")
+        .into_iter()
+        .flatten()
+        .filter(|section| section.header().subsection_name() == Some(local_branch))
+        .filter_map(|section| section.value(PENDING_UPSTREAM_CONFIG_KEY))
+        .filter_map(|value| gix::config::Boolean::try_from(value).ok())
+        .map(bool::from)
+        .last()
+        .unwrap_or(false)
 }
 
 fn normalize_remote_url(url: &str) -> String {
@@ -204,6 +293,7 @@ struct ConfiguredRemoteUpstream {
     remote: String,
     remote_branch: String,
     tracking_ref: Option<String>,
+    pending: bool,
 }
 
 enum UpstreamCleanupScope<'a> {
@@ -312,28 +402,29 @@ fn configured_remote_upstream_of(
     reference: &gix::Reference<'_>,
 ) -> Option<ConfiguredRemoteUpstream> {
     let local_branch = reference.name().shorten().to_str_lossy().into_owned();
-    let gix::remote::Name::Symbol(remote) = reference.remote_name(gix::remote::Direction::Fetch)?
-    else {
-        return None;
-    };
-    let remote_ref = reference
-        .remote_ref_name(gix::remote::Direction::Fetch)?
-        .ok()?;
-    let remote_branch = remote_ref
-        .as_bstr()
-        .strip_prefix(b"refs/heads/")
-        .map(|name| name.to_str_lossy().into_owned())
-        .filter(|name| !name.is_empty())?;
-    let tracking_ref = reference
-        .remote_tracking_ref_name(gix::remote::Direction::Fetch)
-        .and_then(std::result::Result::ok)
-        .map(|name| name.as_bstr().to_str_lossy().into_owned());
+    let Upstream {
+        remote,
+        branch: remote_branch,
+    } = configured_upstream_of(reference)?;
+    let tracking_ref = tracking_refs_for_remote_branch(
+        reference.repo,
+        &Upstream {
+            remote: remote.clone(),
+            branch: remote_branch.clone(),
+        },
+    )
+    .ok()
+    .and_then(|refs| match refs.as_slice() {
+        [tracking_ref] => Some(tracking_ref.clone()),
+        _ => None,
+    });
 
     Some(ConfiguredRemoteUpstream {
         local_branch,
-        remote: remote.into_owned(),
+        remote,
         remote_branch,
         tracking_ref,
+        pending: configured_upstream_is_pending(reference),
     })
 }
 
@@ -520,7 +611,7 @@ impl GixRepo {
     ) -> Result<Vec<ConfiguredRemoteUpstream>> {
         let repo = self.reopen_repo()?;
         let mut matching = Vec::new();
-        for upstream in upstreams {
+        for mut upstream in upstreams {
             // Without a matching fetch refspec, a fetch was not authoritative
             // for this configured upstream. It is neither present nor missing
             // for automatic cleanup purposes.
@@ -535,6 +626,19 @@ impl GixRepo {
                     )))
                 })?
                 .is_some();
+            if tracking_exists && upstream.pending {
+                self.clear_pending_upstream_if_matches(
+                    &upstream.local_branch,
+                    &Upstream {
+                        remote: upstream.remote.clone(),
+                        branch: upstream.remote_branch.clone(),
+                    },
+                );
+                upstream.pending = false;
+            }
+            if !expected_to_exist && upstream.pending {
+                continue;
+            }
             if tracking_exists == expected_to_exist {
                 matching.push(upstream);
             }
@@ -683,14 +787,16 @@ impl GixRepo {
             return Ok(None);
         };
 
-        let tracking_ref_name =
-            match reference.remote_tracking_ref_name(gix::remote::Direction::Fetch) {
-                Some(Ok(name)) => name,
-                Some(Err(_)) | None => return Ok(None),
-            };
+        let Some(upstream) = configured_upstream_of(&reference) else {
+            return Ok(None);
+        };
+        let tracking_refs = tracking_refs_for_remote_branch(&repo, &upstream)?;
+        let [tracking_ref_name] = tracking_refs.as_slice() else {
+            return Ok(None);
+        };
 
         let Some(mut tracking_ref) = repo
-            .try_find_reference(tracking_ref_name.as_ref())
+            .try_find_reference(tracking_ref_name.as_str())
             .map_err(|e| {
                 Error::new(ErrorKind::Backend(format!(
                     "gix try_find upstream reference: {e}"
@@ -703,16 +809,35 @@ impl GixRepo {
             return Ok(None);
         }
 
-        let upstream_short = tracking_ref_name.shorten().to_str_lossy().into_owned();
-        let Some((remote, upstream_branch)) = parse_short_remote_branch_name(&upstream_short)
-        else {
-            return Ok(None);
-        };
+        Ok(Some(upstream))
+    }
 
-        Ok(Some(Upstream {
-            remote: remote.to_string(),
-            branch: upstream_branch.to_string(),
-        }))
+    /// Clear the future-upstream marker after a successful push to that exact
+    /// destination. Best effort is deliberate: the network operation already
+    /// succeeded, so a transient config-lock failure must not report the push
+    /// itself as failed.
+    fn clear_pending_upstream_if_matches(&self, local_branch: &str, upstream: &Upstream) {
+        let Ok(repo) = self.reopen_repo() else {
+            return;
+        };
+        let _ = edit_local_config_strict(&repo, |config| {
+            let Ok(mut section) =
+                config.section_mut("branch", Some(gix::bstr::BStr::new(local_branch)))
+            else {
+                return Ok(false);
+            };
+            let remote_matches = section
+                .value("remote")
+                .is_some_and(|value| value.as_bstr() == upstream.remote.as_bytes().as_bstr());
+            let merge_ref = format!("refs/heads/{}", upstream.branch);
+            let branch_matches = section
+                .value("merge")
+                .is_some_and(|value| value.as_bstr() == merge_ref.as_bytes().as_bstr());
+            if !remote_matches || !branch_matches {
+                return Ok(false);
+            }
+            Ok(section.remove(PENDING_UPSTREAM_CONFIG_KEY).is_some())
+        });
     }
 
     pub(super) fn list_remotes_impl(&self) -> Result<Vec<Remote>> {
@@ -764,16 +889,24 @@ impl GixRepo {
         let iter = refs
             .remote_branches()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))))?;
+        let remotes = repo
+            .remote_names()
+            .into_iter()
+            .map(|name| {
+                repo.find_remote(&name).map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "gix find_remote {}: {e}",
+                        name.to_str_lossy()
+                    )))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        let mut branches = Vec::new();
+        let mut tracking_refs = Vec::new();
         for reference in iter {
             cancellation.check_cancelled()?;
             let mut reference = reference
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
-            let short_name = reference.name().shorten().to_str_lossy().into_owned();
-            let Some((remote, name)) = parse_short_remote_branch_name(&short_name) else {
-                continue;
-            };
 
             let target = match reference.try_id() {
                 Some(id) => id.detach(),
@@ -787,15 +920,60 @@ impl GixRepo {
             if !repo.has_object(target) {
                 continue;
             }
+            tracking_refs.push((reference.name().to_owned(), target));
+        }
 
-            branches.push(RemoteBranch {
-                remote: remote.to_string(),
-                name: name.to_string(),
-                target: gitcomet_core::domain::CommitId(target.to_string().into()),
-            });
+        // Reverse-map the complete tracking-ref set through each remote once.
+        // A local ref can legitimately produce more than one row when remote
+        // namespaces overlap; the remote and branch boundary remains explicit
+        // in every result.
+        let mut branches = Vec::new();
+        for remote in &remotes {
+            cancellation.check_cancelled()?;
+            let Some(remote_name) = remote.name() else {
+                continue;
+            };
+            let matches = gix::refspec::MatchGroup::from_fetch_specs(
+                remote
+                    .refspecs(gix::remote::Direction::Fetch)
+                    .iter()
+                    .map(|spec| spec.to_ref()),
+            )
+            .match_rhs(tracking_refs.iter().map(|(name, target)| {
+                gix::refspec::match_group::Item {
+                    full_ref_name: name.as_bstr(),
+                    target: target.as_ref(),
+                    object: None,
+                }
+            }));
+
+            for mapping in matches.mappings {
+                let Some(item_index) = mapping.item_index else {
+                    continue;
+                };
+                let gix::refspec::match_group::SourceRef::FullName(source) = mapping.lhs else {
+                    continue;
+                };
+                let Some(name) = source.as_ref().strip_prefix(b"refs/heads/") else {
+                    continue;
+                };
+                let name = name.to_str_lossy();
+                if name.is_empty() || name == "HEAD" {
+                    continue;
+                }
+                let Some((_, target)) = tracking_refs.get(item_index) else {
+                    continue;
+                };
+                branches.push(RemoteBranch {
+                    remote: remote_name.as_bstr().to_str_lossy().into_owned(),
+                    name: name.into_owned(),
+                    target: CommitId(target.to_string().into()),
+                });
+            }
         }
 
         branches.sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
+        branches.dedup_by(|a, b| a.remote == b.remote && a.name == b.name);
         cancellation.check_cancelled()?;
         Ok(branches)
     }
@@ -1227,7 +1405,17 @@ impl GixRepo {
             .arg("--")
             .arg(remote)
             .arg(format!("HEAD:refs/heads/{branch}"));
-        run_git_command_with_optional_output(cmd, &command_label, capture_output)
+        let output = run_git_command_with_optional_output(cmd, &command_label, capture_output)?;
+        if let Ok(Some(local_branch)) = self.current_branch_name() {
+            self.clear_pending_upstream_if_matches(
+                &local_branch,
+                &Upstream {
+                    remote: remote.to_string(),
+                    branch: branch.to_string(),
+                },
+            );
+        }
+        Ok(output)
     }
 
     fn push_head_to_branch_with_optional_output_impl(
@@ -1378,7 +1566,15 @@ impl GixRepo {
             cmd.arg("--set-upstream");
         }
         cmd.arg("--").arg(&target.remote).arg(refspec);
-        run_git_command_with_optional_output(cmd, &command_label, capture_output)
+        let output = run_git_command_with_optional_output(cmd, &command_label, capture_output)?;
+        self.clear_pending_upstream_if_matches(
+            &target.local_branch,
+            &Upstream {
+                remote: target.remote.clone(),
+                branch: target.branch.clone(),
+            },
+        );
+        Ok(output)
     }
 
     pub(super) fn push_after_commit_with_output_impl(
@@ -1613,13 +1809,14 @@ impl GixRepo {
             return Ok(decision);
         }
 
-        if let Some(upstream) = self.branch_upstream(local_branch)? {
+        if let Some(upstream) = self.configured_branch_upstream(local_branch)? {
+            let has_live_upstream = self.branch_upstream(local_branch)?.is_some();
             return self.safe_push_decision_for_target(
                 context,
                 local_branch,
                 upstream.remote,
                 upstream.branch,
-                true,
+                has_live_upstream,
             );
         }
 
@@ -1641,13 +1838,15 @@ impl GixRepo {
 
     fn push_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
         if let Some(branch) = self.current_branch_name()? {
-            if let Some(upstream) = self.branch_upstream(&branch)? {
-                return self.push_head_to_branch_with_optional_output_impl(
+            if let Some(upstream) = self.configured_branch_upstream(&branch)? {
+                let output = self.push_head_to_branch_with_optional_output_impl(
                     &upstream.remote,
                     &upstream.branch,
                     false,
                     capture_output,
-                );
+                )?;
+                self.clear_pending_upstream_if_matches(&branch, &upstream);
+                return Ok(output);
             }
 
             if let Some(remote) = self.preferred_remote_name()? {
@@ -1676,12 +1875,14 @@ impl GixRepo {
         if let Some(branch) = self.current_branch_name()?
             && let Some(upstream) = self.branch_upstream(&branch)?
         {
-            return self.push_head_to_branch_with_optional_output_impl(
+            let output = self.push_head_to_branch_with_optional_output_impl(
                 &upstream.remote,
                 &upstream.branch,
                 true,
                 capture_output,
-            );
+            )?;
+            self.clear_pending_upstream_if_matches(&branch, &upstream);
+            return Ok(output);
         }
 
         let mut cmd = self.git_workdir_cmd();
@@ -1721,7 +1922,10 @@ impl GixRepo {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(branch, "branch name")?;
 
-        if prune {
+        // `.` is Git's special local-repository source, used by the branch
+        // menu to pull another local branch into the current one. It is not a
+        // configured remote, so remote pruning and refspec lookup do not apply.
+        if prune && remote != "." {
             let prune_output =
                 self.prune_remote_tracking_refs_with_optional_output_impl(remote, true)?;
 
@@ -1876,25 +2080,92 @@ impl GixRepo {
     pub(super) fn set_upstream_branch_with_output_impl(
         &self,
         branch: &str,
-        upstream: &str,
+        upstream: &Upstream,
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(branch, "branch name")?;
-        let Some((remote, upstream_branch)) = parse_short_remote_branch_name(upstream) else {
-            return Err(Error::new(ErrorKind::Backend(
-                "invalid upstream: expected remote/branch".to_string(),
-            )));
-        };
-        validate_ref_like_arg(remote, "remote name")?;
-        validate_ref_like_arg(upstream_branch, "branch name")?;
+        validate_ref_like_arg(&upstream.remote, "remote name")?;
+        validate_ref_like_arg(&upstream.branch, "branch name")?;
 
-        let label = format!("git branch --set-upstream-to {upstream} {branch}");
-        let mut cmd = self.git_workdir_cmd();
-        cmd.arg("branch")
-            .arg("--set-upstream-to")
-            .arg(upstream)
-            .arg("--")
-            .arg(branch);
-        run_git_with_output(cmd, &label)
+        let repo = self.reopen_repo()?;
+        let local_ref = format!("refs/heads/{branch}");
+        if repo
+            .try_find_reference(local_ref.as_str())
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+            .is_none()
+        {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "local branch {branch} does not exist"
+            ))));
+        }
+
+        let tracking_refs = tracking_refs_for_remote_branch(&repo, upstream)?;
+        let [tracking_ref] = tracking_refs.as_slice() else {
+            let detail = if tracking_refs.is_empty() {
+                "is not mapped by that remote's fetch refspecs"
+            } else {
+                "maps to multiple local tracking refs"
+            };
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "remote branch {}/{} {detail}",
+                upstream.remote, upstream.branch
+            ))));
+        };
+        let tracking_ref_exists = match repo
+            .try_find_reference(tracking_ref.as_str())
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+        {
+            Some(mut reference) => reference.peel_to_id().map(|_| true).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "resolve remote branch {}/{}: {e}",
+                    upstream.remote, upstream.branch
+                )))
+            })?,
+            None => false,
+        };
+        // The mapping, rather than a local tracking ref's existence, is the
+        // authority here. Git permits branch.<name>.remote/merge to name a
+        // branch that will be created by a later push. Existing-target picker
+        // actions validate liveness against state before reaching this method;
+        // the explicit "Create new" flow intentionally has no tracking ref yet.
+        let merge_ref = format!("refs/heads/{}", upstream.branch);
+        let label = format!(
+            "set upstream {branch} -> {} / {}",
+            upstream.remote, upstream.branch
+        );
+        edit_local_config_strict(&repo, |config| {
+            let mut section = config
+                .section_mut_or_create_new("branch", Some(gix::bstr::BStr::new(branch)))
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "create local config section for branch {branch}: {e}"
+                    )))
+                })?;
+            section
+                .set("remote", upstream.remote.as_str())
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "set local config upstream remote for branch {branch}: {e}"
+                    )))
+                })?;
+            section.set("merge", merge_ref.as_str()).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "set local config upstream merge ref for branch {branch}: {e}"
+                )))
+            })?;
+            while section.remove(PENDING_UPSTREAM_CONFIG_KEY).is_some() {}
+            if !tracking_ref_exists {
+                section
+                    .set(PENDING_UPSTREAM_CONFIG_KEY, "true")
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Backend(format!(
+                            "mark new upstream for branch {branch}: {e}"
+                        )))
+                    })?;
+            }
+            Ok(true)
+        })?;
+
+        Ok(CommandOutput::empty_success(label))
     }
 
     pub(super) fn unset_upstream_branch_with_output_impl(
@@ -1909,7 +2180,18 @@ impl GixRepo {
             .arg("--unset-upstream")
             .arg("--")
             .arg(branch);
-        run_git_with_output(cmd, &label)
+        let output = run_git_with_output(cmd, &label)?;
+        if let Ok(repo) = self.reopen_repo() {
+            let _ = edit_local_config_strict(&repo, |config| {
+                let Ok(mut section) =
+                    config.section_mut("branch", Some(gix::bstr::BStr::new(branch)))
+                else {
+                    return Ok(false);
+                };
+                Ok(section.remove(PENDING_UPSTREAM_CONFIG_KEY).is_some())
+            });
+        }
+        Ok(output)
     }
 
     pub(super) fn delete_remote_branch_with_output_impl(
@@ -2149,10 +2431,7 @@ impl GixRepo {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        branches_to_prune, normalize_remote_url, parse_refname_set, parse_short_remote_branch_name,
-        run_git_command,
-    };
+    use super::{branches_to_prune, normalize_remote_url, parse_refname_set, run_git_command};
     use gitcomet_core::services::CommandOutput;
     use rustc_hash::FxHashSet;
     use std::{cell::Cell, process::Command};
@@ -2190,20 +2469,6 @@ feature/no-upstream\t\n";
             Some("feature/current"),
         );
         assert_eq!(prune, vec!["feature/stale".to_string()]);
-    }
-
-    #[test]
-    fn parse_short_remote_branch_name_skips_head_and_preserves_nested_branch_paths() {
-        assert_eq!(
-            parse_short_remote_branch_name("origin/main"),
-            Some(("origin", "main"))
-        );
-        assert_eq!(
-            parse_short_remote_branch_name("upstream/feature/topic"),
-            Some(("upstream", "feature/topic"))
-        );
-        assert_eq!(parse_short_remote_branch_name("origin/HEAD"), None);
-        assert_eq!(parse_short_remote_branch_name(""), None);
     }
 
     #[test]

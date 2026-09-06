@@ -79,6 +79,10 @@ actions!(
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,
+        PushUpstreamRemoteClose,
+        PushUpstreamRemoteNext,
+        PushUpstreamRemoteOpenOrSelect,
+        PushUpstreamRemotePrev,
         TerminalCopy,
         TerminalPaste,
         TerminalSelectAll,
@@ -265,7 +269,7 @@ pub use mod_helpers::{
 };
 use panels::{
     ActionBarView, BottomStatusBarView, PopoverHost, PopoverHostInit, RepoTabsBarView,
-    action_bar_height,
+    action_bar_density, action_bar_height,
 };
 pub(crate) use panes::MainPaneView;
 use panes::{
