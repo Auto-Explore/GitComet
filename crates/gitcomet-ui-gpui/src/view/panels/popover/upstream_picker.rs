@@ -174,6 +174,19 @@ pub(super) fn nav_targets(
     targets
 }
 
+/// A disappearing branch selection must never clamp onto a fixed action.
+/// Keep explicit action selections so keyboard navigation still works without
+/// matching branches. Apply this before both rendering and keyboard handling.
+pub(super) fn clear_missing_branch_selection(
+    selected: &mut Option<usize>,
+    branch_count: usize,
+    leading_action_count: usize,
+) {
+    if branch_count == 0 && selected.is_some_and(|index| index >= leading_action_count) {
+        *selected = None;
+    }
+}
+
 pub(super) fn leading_action_count(this: &PopoverHost, repo_id: RepoId, branch: &str) -> usize {
     usize::from(
         repo_for(this, repo_id)
@@ -372,6 +385,11 @@ pub(super) fn panel(
     let targets = Rc::clone(&built.payloads);
     let branch_count = built.layout.item_indices.len();
     let nav_count = branch_count + leading_action_count;
+    clear_missing_branch_selection(
+        &mut this.upstream_picker_selected_index,
+        branch_count,
+        leading_action_count,
+    );
     let selected_index = this
         .upstream_picker_selected_index
         .filter(|_| nav_count > 0)

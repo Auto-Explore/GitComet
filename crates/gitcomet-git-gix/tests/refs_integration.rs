@@ -1099,3 +1099,64 @@ fn list_ref_metadata_reports_author_date_and_subject_for_local_and_remote_refs()
     let remote_main = lookup("origin/main").expect("origin/main present");
     assert_eq!(remote_main.summary, "base commit");
 }
+
+#[test]
+fn list_branches_uses_first_merge_entry() {
+    for separate_sections in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        initialize_repo_with_commit(repo);
+        run_git(repo, &["remote", "add", "origin", "."]);
+        run_git(repo, &["update-ref", "refs/remotes/origin/old", "HEAD"]);
+        run_git(repo, &["commit", "--allow-empty", "-m", "ahead"]);
+        run_git(repo, &["update-ref", "refs/remotes/origin/new", "HEAD"]);
+        run_git(repo, &["config", "branch.main.remote", "origin"]);
+        run_git(
+            repo,
+            &["config", "--add", "branch.main.merge", "refs/heads/old"],
+        );
+        if separate_sections {
+            use std::io::Write;
+            let mut config = fs::OpenOptions::new()
+                .append(true)
+                .open(repo.join(".git/config"))
+                .unwrap();
+            writeln!(config, "\n[branch \"main\"]\n merge = refs/heads/new").unwrap();
+        } else {
+            run_git(
+                repo,
+                &["config", "--add", "branch.main.merge", "refs/heads/new"],
+            );
+        }
+        assert_eq!(
+            run_git_capture(
+                repo,
+                &[
+                    "for-each-ref",
+                    "--format=%(upstream:short) %(upstream:track)",
+                    "refs/heads/main"
+                ]
+            )
+            .trim(),
+            "origin/old [ahead 1]"
+        );
+        let opened = GixBackend.open(repo).unwrap();
+        let branches = opened.list_branches().unwrap();
+        let main = branches
+            .iter()
+            .find(|branch| branch.name == "main")
+            .unwrap();
+        assert_eq!(
+            main.upstream,
+            Some(upstream("origin", "old")),
+            "separate sections: {separate_sections}"
+        );
+        assert_eq!(
+            main.divergence,
+            Some(UpstreamDivergence {
+                ahead: 1,
+                behind: 0
+            })
+        );
+    }
+}

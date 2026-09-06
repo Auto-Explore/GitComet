@@ -135,8 +135,10 @@ pub(super) fn configured_upstream_of(reference: &gix::Reference<'_>) -> Option<U
         if let Some(value) = section.value("remote") {
             configured_remote = Some(value);
         }
-        if let Some(value) = section.value("merge") {
-            configured_merge = Some(value);
+        // Git uses the first merge entry, including across repeated branch
+        // sections, while the single-valued remote remains last-value-wins.
+        if configured_merge.is_none() {
+            configured_merge = section.values("merge").into_iter().next();
         }
     }
     let remote = configured_remote?.to_str_lossy().into_owned();

@@ -719,3 +719,67 @@ fn first_push_with_one_remote_keeps_a_static_remote_label(cx: &mut gpui::TestApp
     assert!(cx.debug_bounds("push_upstream_remote_static").is_some());
     assert!(cx.debug_bounds("push_upstream_remote_selector").is_none());
 }
+
+#[gpui::test]
+fn upstream_picker_empty_search_requires_navigation_before_unlink(cx: &mut gpui::TestAppContext) {
+    let repo_id = RepoId(1);
+    let (view, cx) = open_popover(
+        cx,
+        tracked_repo(repo_id),
+        PopoverKind::UpstreamPicker {
+            repo_id,
+            branch: "feature/current".to_string(),
+        },
+    );
+    cx.update(|_window, app| {
+        let input = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .remote_picker_search_input
+            .clone()
+            .unwrap();
+        input.update(app, |input, cx| input.set_text("no-matching-branch", cx));
+    });
+    redraw(cx);
+    simulate_key_press(cx, "enter");
+    redraw(cx);
+    assert!(
+        matches!(
+            cx.update(|_window, app| view
+                .read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()),
+            Some(PopoverKind::UpstreamPicker { .. })
+        ),
+        "Enter after an unsuccessful search must leave the picker open"
+    );
+    assert_eq!(
+        cx.update(|_window, app| view
+            .read(app)
+            .popover_host
+            .read(app)
+            .upstream_picker_selected_index),
+        None
+    );
+    simulate_key_press(cx, "up");
+    assert_eq!(
+        cx.update(|_window, app| view
+            .read(app)
+            .popover_host
+            .read(app)
+            .upstream_picker_selected_index),
+        Some(0)
+    );
+    simulate_key_press(cx, "enter");
+    redraw(cx);
+    assert_eq!(
+        cx.update(|_window, app| view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()),
+        None
+    );
+}

@@ -420,7 +420,14 @@ impl PopoverHost {
                     |this| &mut this.upstream_picker_selected_index,
                     |this, query, _cx| {
                         let (repo_id, branch) = upstream_picker_state(this)?;
-                        Some(upstream_picker::nav_targets(this, repo_id, &branch, query))
+                        let targets = upstream_picker::nav_targets(this, repo_id, &branch, query);
+                        let leading = upstream_picker::leading_action_count(this, repo_id, &branch);
+                        upstream_picker::clear_missing_branch_selection(
+                            &mut this.upstream_picker_selected_index,
+                            targets.len() - leading,
+                            leading,
+                        );
+                        Some(targets)
                     },
                     |this, cx| this.close_popover(cx),
                     |this, sel, cx| {
