@@ -1411,7 +1411,9 @@ mod tests {
             (
                 "recent mtime",
                 DiskFileStamp {
-                    modified: Some(now - Duration::from_secs(2) + Duration::from_nanos(1)),
+                    // Windows SystemTime uses 100 ns ticks; adding 1 ns would
+                    // truncate back onto the two-second boundary.
+                    modified: Some(now - Duration::from_secs(2) + Duration::from_millis(1)),
                     ..stamp
                 },
             ),
