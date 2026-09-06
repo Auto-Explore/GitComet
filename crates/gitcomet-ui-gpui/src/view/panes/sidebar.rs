@@ -597,15 +597,10 @@ impl SidebarPaneView {
     pub(in super::super) fn set_selected_branch(
         &mut self,
         repo_id: RepoId,
-        section: BranchSection,
-        name: &str,
+        target: BranchMenuTarget,
         cx: &mut gpui::Context<Self>,
     ) {
-        let next = Some(SelectedBranch {
-            repo_id,
-            section,
-            name: name.to_string(),
-        });
+        let next = Some(SelectedBranch { repo_id, target });
         if self.selected_branch.as_ref() == next.as_ref() {
             return;
         }
@@ -618,14 +613,13 @@ impl SidebarPaneView {
     pub(in super::super) fn select_branch_and_reveal_tip(
         &mut self,
         repo_id: RepoId,
-        section: BranchSection,
-        name: &str,
+        target: BranchMenuTarget,
         commit_id: CommitId,
         fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.set_selected_branch(repo_id, section, name, cx);
-        self.reveal_branch_commit_in_history(repo_id, section, name, commit_id, fallback_scope, cx);
+        self.set_selected_branch(repo_id, target.clone(), cx);
+        self.reveal_branch_commit_in_history(repo_id, target, commit_id, fallback_scope, cx);
         cx.notify();
     }
 
@@ -1799,8 +1793,7 @@ impl SidebarPaneView {
             .and_then(|presentation| local_branch_home_row_index(&presentation.rows, &branch_name));
         self.select_branch_and_reveal_tip(
             repo_id,
-            BranchSection::Local,
-            &branch_name,
+            BranchMenuTarget::local(branch_name),
             commit_id,
             Some(LogScope::FullReachable),
             cx,
@@ -2859,21 +2852,18 @@ impl SidebarPaneView {
     pub(in super::super) fn reveal_branch_commit_in_history(
         &mut self,
         repo_id: RepoId,
-        section: BranchSection,
-        branch_name: &str,
+        target: BranchMenuTarget,
         commit_id: CommitId,
         fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let branch_name = branch_name.to_string();
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
                 root.main_pane.update(cx, |pane, cx| {
                     pane.reveal_history_branch_commit(
                         repo_id,
-                        section,
-                        &branch_name,
+                        target,
                         commit_id,
                         fallback_scope,
                         cx,

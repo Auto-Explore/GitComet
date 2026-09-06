@@ -1567,6 +1567,36 @@ fn pull_on_detached_head_returns_error() {
 }
 
 #[test]
+fn pull_local_branch_with_pruning_does_not_treat_dot_as_a_named_remote() {
+    let _guard = remote_management_test_lock();
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path();
+    init_repo_with_user(repo);
+    run_git(repo, &["branch", "-m", "main"]);
+
+    fs::write(repo.join("base.txt"), "base\n").expect("write base file");
+    run_git(repo, &["add", "base.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    run_git(repo, &["checkout", "-b", "dev"]);
+    fs::write(repo.join("dev.txt"), "dev\n").expect("write dev file");
+    run_git(repo, &["add", "dev.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "dev"]);
+    run_git(repo, &["checkout", "main"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).expect("open repository");
+    let output = opened
+        .pull_branch_with_output_prune(".", "dev", true)
+        .expect("pull local branch while automatic pruning is enabled");
+
+    assert_eq!(output.exit_code, Some(0));
+    assert!(repo.join("dev.txt").exists(), "expected dev to be merged");
+}
+
+#[test]
 fn pull_branch_with_output_merges_named_remote_branch() {
     let _guard = remote_management_test_lock();
     if !require_git_local_push_for_remote_management_tests() {

@@ -546,6 +546,7 @@ impl HistoryView {
             .child(
                 div()
                     .w(self.history_col_branch)
+                    .flex_none()
                     .flex()
                     .items_center()
                     .gap_1()
@@ -647,6 +648,7 @@ impl HistoryView {
                 header.child(
                     div()
                         .w(self.history_col_graph)
+                        .flex_none()
                         .px(cell_pad)
                         .overflow_hidden(),
                 )
@@ -672,6 +674,7 @@ impl HistoryView {
                 header.child(
                     div()
                         .w(col_author)
+                        .flex_none()
                         .flex()
                         .items_center()
                         // Clear the column resize handle straddling the left
@@ -780,6 +783,7 @@ impl HistoryView {
             header = header.child(
                 div()
                     .w(col_date)
+                    .flex_none()
                     .flex()
                     .items_center()
                     .justify_end()
@@ -794,6 +798,7 @@ impl HistoryView {
             header = header.child(
                 div()
                     .w(col_sha)
+                    .flex_none()
                     .flex()
                     .items_center()
                     .justify_end()

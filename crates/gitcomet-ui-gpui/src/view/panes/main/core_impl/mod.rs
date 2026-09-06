@@ -1,7 +1,6 @@
 use super::helpers::*;
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
-use crate::view::branch_sidebar::BranchSection;
 use gitcomet_core::domain::{Diff, FileDiffImage, FileDiffText, LogScope};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
@@ -336,15 +335,13 @@ impl MainPaneView {
     pub(in crate::view) fn reveal_history_branch_commit(
         &mut self,
         repo_id: RepoId,
-        section: BranchSection,
-        branch_name: &str,
+        target: BranchMenuTarget,
         commit_id: CommitId,
         fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let branch_name = branch_name.to_string();
         self.history_view.update(cx, |view, cx| {
-            view.set_selected_branch(repo_id, section, &branch_name, cx);
+            view.set_selected_branch(repo_id, target, cx);
         });
         self.reveal_history_commit(repo_id, commit_id, fallback_scope, cx);
     }

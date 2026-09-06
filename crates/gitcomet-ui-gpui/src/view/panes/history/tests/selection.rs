@@ -20,15 +20,13 @@ fn graph_branch_heads_are_hidden_for_current_branch_scope() {
 fn selected_branch_for_history_row_carries_branch_identity() {
     let selected_branch = SelectedBranch {
         repo_id: RepoId(7),
-        section: BranchSection::Local,
-        name: "main".into(),
+        target: BranchMenuTarget::local("main"),
     };
 
     assert_eq!(
         selected_branch_for_history_row(Some(&selected_branch), RepoId(7), true),
         Some(SelectedHistoryBranch {
-            section: BranchSection::Local,
-            name: "main".into(),
+            target: BranchMenuTarget::local("main"),
         })
     );
 }
@@ -37,15 +35,13 @@ fn selected_branch_for_history_row_carries_branch_identity() {
 fn selected_branch_for_history_row_keeps_the_remote_section() {
     let selected_branch = SelectedBranch {
         repo_id: RepoId(7),
-        section: BranchSection::Remote,
-        name: "origin/feature/topic".into(),
+        target: BranchMenuTarget::remote("origin", "feature/topic"),
     };
 
     assert_eq!(
         selected_branch_for_history_row(Some(&selected_branch), RepoId(7), true),
         Some(SelectedHistoryBranch {
-            section: BranchSection::Remote,
-            name: "origin/feature/topic".into(),
+            target: BranchMenuTarget::remote("origin", "feature/topic"),
         })
     );
 }
@@ -54,8 +50,7 @@ fn selected_branch_for_history_row_keeps_the_remote_section() {
 fn selected_branch_for_history_row_requires_selected_row_and_matching_repo() {
     let selected_branch = SelectedBranch {
         repo_id: RepoId(7),
-        section: BranchSection::Local,
-        name: "main".into(),
+        target: BranchMenuTarget::local("main"),
     };
 
     assert_eq!(

@@ -2132,6 +2132,23 @@ pub(super) fn remote_branches_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let refresh_pending = repo_state
+            .loads_in_flight
+            .finish(RepoLoadsInFlight::REMOTE_BRANCHES);
+        let remote_mutation_in_flight =
+            repo_state.pull_in_flight > 0 || repo_state.push_in_flight > 0;
+
+        // Fetch/pull/prune watcher events can complete against a transient ref
+        // namespace, and a coalesced request means this reply was superseded.
+        // Keep the last complete snapshot until a post-command/latest load can
+        // replace it atomically instead of flashing an intermediate list.
+        if remote_mutation_in_flight || refresh_pending {
+            if refresh_pending {
+                effects.push(Effect::LoadRemoteBranches { repo_id });
+            }
+            return effects;
+        }
+
         let branches = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
@@ -2140,12 +2157,6 @@ pub(super) fn remote_branches_loaded(
             }
         };
         repo_state.set_remote_branches(branches);
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::REMOTE_BRANCHES)
-        {
-            effects.push(Effect::LoadRemoteBranches { repo_id });
-        }
     }
     effects
 }

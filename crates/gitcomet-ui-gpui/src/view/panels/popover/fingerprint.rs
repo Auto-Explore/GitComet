@@ -160,6 +160,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         // Popovers that carry an explicit repo id.
         PopoverKind::CommitPrompt { repo_id }
         | PopoverKind::StashPickerPrompt { repo_id, .. }
+        | PopoverKind::UpstreamPicker { repo_id, .. }
         | PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
         | PopoverKind::RenameBranchPrompt { repo_id, .. }
         | PopoverKind::ResetPrompt { repo_id, .. }
@@ -219,6 +220,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 
     match popover {
         PopoverKind::BranchPicker { .. }
+        | PopoverKind::UpstreamPicker { .. }
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::BranchMenu { .. }
@@ -233,6 +235,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::PushSetUpstreamPrompt { .. } => {
             repo.head_branch_rev.hash(hasher);
             repo.branches_rev.hash(hasher);
+            repo.remotes_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
             repo.tags_rev.hash(hasher);
             // The checkout picker's rows carry each ref's author, date and
@@ -449,6 +452,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             1u8.hash(hasher);
             (*purpose as u8).hash(hasher);
         }
+        PopoverKind::UpstreamPicker { repo_id, branch } => {
+            107u8.hash(hasher);
+            repo_id.hash(hasher);
+            branch.hash(hasher);
+        }
         PopoverKind::CreateBranchFromRefPrompt {
             repo_id,
             target,
@@ -568,10 +576,15 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             path.hash(hasher);
         }
-        PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
+        PopoverKind::PushSetUpstreamPrompt {
+            repo_id,
+            remote,
+            configure_only_for,
+        } => {
             30u8.hash(hasher);
             repo_id.hash(hasher);
             remote.hash(hasher);
+            configure_only_for.hash(hasher);
         }
         PopoverKind::ForcePushConfirm { repo_id } => {
             31u8.hash(hasher);
@@ -754,15 +767,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             hash_diff_area(*area, hasher);
             path.hash(hasher);
         }
-        PopoverKind::BranchMenu {
-            repo_id,
-            section,
-            name,
-        } => {
+        PopoverKind::BranchMenu { repo_id, target } => {
             44u8.hash(hasher);
             repo_id.hash(hasher);
-            hash_branch_section(*section, hasher);
-            name.hash(hasher);
+            target.hash(hasher);
         }
         PopoverKind::BranchRefsMenu {
             repo_id,
@@ -774,8 +782,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             display_name.hash(hasher);
             targets.len().hash(hasher);
             for target in targets {
-                hash_branch_section(target.section, hasher);
-                target.name.hash(hasher);
+                target.hash(hasher);
             }
         }
         PopoverKind::BranchSectionMenu { repo_id, section } => {

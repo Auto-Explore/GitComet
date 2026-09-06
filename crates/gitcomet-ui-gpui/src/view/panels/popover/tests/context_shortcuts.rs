@@ -106,8 +106,7 @@ fn context_menu_default_actions_do_not_render_enter_shortcuts(cx: &mut gpui::Tes
                     host.context_menu_model(
                         &PopoverKind::BranchMenu {
                             repo_id,
-                            section: BranchSection::Local,
-                            name: "feature".to_string(),
+                            target: BranchMenuTarget::local("feature"),
                         },
                         cx,
                     )

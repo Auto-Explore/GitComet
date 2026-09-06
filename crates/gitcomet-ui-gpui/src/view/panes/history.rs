@@ -1548,15 +1548,10 @@ impl HistoryView {
     pub(in crate::view) fn set_selected_branch(
         &mut self,
         repo_id: RepoId,
-        section: BranchSection,
-        name: &str,
+        target: BranchMenuTarget,
         cx: &mut gpui::Context<Self>,
     ) {
-        let next = Some(SelectedBranch {
-            repo_id,
-            section,
-            name: name.to_string(),
-        });
+        let next = Some(SelectedBranch { repo_id, target });
         if self.selected_branch.as_ref() == next.as_ref() {
             return;
         }
@@ -2906,7 +2901,7 @@ fn history_ref_branch_name(item: &HistoryRefListItem) -> Option<&str> {
     match &item.kind {
         HistoryRefListItemKind::AttachedHead { branch } => Some(branch.as_str()),
         HistoryRefListItemKind::LocalBranch { name } => Some(name.as_str()),
-        HistoryRefListItemKind::RemoteBranch { name } => Some(name.as_str()),
+        HistoryRefListItemKind::RemoteBranch { name, .. } => Some(name.as_str()),
         HistoryRefListItemKind::Tag { .. } | HistoryRefListItemKind::DetachedHead => None,
     }
 }

@@ -86,6 +86,12 @@ pub(crate) enum PopoverKind {
     BranchPicker {
         purpose: BranchPickerPurpose,
     },
+    /// Selects or clears the live remote-tracking branch for the captured
+    /// checked-out local branch.
+    UpstreamPicker {
+        repo_id: RepoId,
+        branch: String,
+    },
     CreateBranchFromRefPrompt {
         repo_id: RepoId,
         target: String,
@@ -158,6 +164,9 @@ pub(crate) enum PopoverKind {
     PushSetUpstreamPrompt {
         repo_id: RepoId,
         remote: String,
+        /// `Some` configures this local branch without pushing. `None` is the
+        /// first-push flow that creates the remote branch immediately.
+        configure_only_for: Option<String>,
     },
     ForcePushConfirm {
         repo_id: RepoId,
@@ -328,8 +337,7 @@ pub(crate) enum PopoverKind {
     },
     BranchMenu {
         repo_id: RepoId,
-        section: BranchSection,
-        name: String,
+        target: BranchMenuTarget,
     },
     /// Disambiguates a compact history chip that represents more than one
     /// exact branch ref before handing off to the ordinary branch menu.
@@ -427,8 +435,7 @@ impl BranchMenuTarget {
     pub(in crate::view) fn popover_kind(&self, repo_id: RepoId) -> PopoverKind {
         PopoverKind::BranchMenu {
             repo_id,
-            section: self.section,
-            name: self.name.clone(),
+            target: self.clone(),
         }
     }
 }

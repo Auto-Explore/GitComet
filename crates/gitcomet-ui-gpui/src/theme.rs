@@ -2934,6 +2934,18 @@ mod tests {
     }
 
     #[test]
+    fn bundled_light_themes_match_the_dark_theme_radii() {
+        let dark_radii = AppTheme::gitcomet_dark().radii;
+
+        for key in [DEFAULT_LIGHT_THEME_KEY, "sunset_veil"] {
+            let theme = AppTheme::from_key(key).expect("light theme should load");
+
+            assert!(!theme.is_dark, "{key}");
+            assert_eq!(theme.radii, dark_radii, "{key}");
+        }
+    }
+
+    #[test]
     fn amber_dark_semantic_foregrounds_have_strong_canvas_contrast() {
         let theme = AppTheme::from_key(AMBER_DARK_THEME_KEY).expect("Amber Dark theme should load");
         let colors = theme.colors;

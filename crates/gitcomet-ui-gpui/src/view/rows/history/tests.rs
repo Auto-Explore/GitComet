@@ -3,13 +3,13 @@ use super::{
     MarkdownPreviewPictureSizes, MarkdownPreviewRow, MarkdownPreviewRowKind,
     MarkdownRemoteImageAccess, build_cached_diff_styled_text, history_message_text_left_px,
     history_scope_shows_graph_color_marker, history_worktree_node_color_ix,
-    markdown_preview_alert_title_label, markdown_preview_expanded_slice_range,
-    markdown_preview_image_source, markdown_preview_inline_highlight,
-    markdown_preview_no_picture_sizes, markdown_preview_picture_skeleton,
-    markdown_preview_row_background, markdown_preview_row_height,
-    markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
-    markdown_preview_row_marker, markdown_preview_row_styled_text, markdown_preview_row_typography,
-    worktree_preview_apply_query_overlay,
+    markdown_preview_alert_title_label, markdown_preview_code_background,
+    markdown_preview_expanded_slice_range, markdown_preview_image_source,
+    markdown_preview_inline_highlight, markdown_preview_no_picture_sizes,
+    markdown_preview_picture_skeleton, markdown_preview_row_background,
+    markdown_preview_row_height, markdown_preview_row_horizontal_padding,
+    markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
+    markdown_preview_row_typography, worktree_preview_apply_query_overlay,
 };
 use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
 use crate::view::markdown_preview::MarkdownInlineSpan;
@@ -21,6 +21,7 @@ use crate::view::{
 };
 use gitcomet_core::domain::LogScope;
 use gpui::{FontWeight, SharedString, px};
+use palette::IntoColor;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -633,6 +634,26 @@ fn markdown_preview_row_styled_text_maps_inline_styles_and_skips_normal_spans() 
     assert_eq!(
         highlights[2].1,
         markdown_preview_inline_highlight(theme, MarkdownInlineStyle::Strikethrough)
+    );
+}
+
+#[test]
+fn amber_inline_code_spans_use_the_neutral_code_surface() {
+    let theme = AppTheme::from_key(crate::theme::AMBER_DARK_THEME_KEY)
+        .expect("Amber Dark theme should load");
+    let highlight = markdown_preview_inline_highlight(theme, MarkdownInlineStyle::Code);
+
+    assert_eq!(
+        highlight.background_color,
+        Some(markdown_preview_code_background(theme).into_color())
+    );
+    assert_ne!(
+        highlight.background_color,
+        Some(
+            crate::theme::with_alpha(theme.colors.interaction.selected_background, 0.75)
+                .into_color()
+        ),
+        "inline backticks must not use Amber's orange selection color"
     );
 }
 

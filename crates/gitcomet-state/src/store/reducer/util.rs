@@ -9,6 +9,8 @@ use gitcomet_core::auth::stage_git_auth;
 use gitcomet_core::auth::{
     GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, clear_staged_git_auth,
 };
+#[cfg(test)]
+use gitcomet_core::domain::Upstream;
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
@@ -1289,7 +1291,10 @@ fn summarize_command(
             format!("Push -u {remote}/{branch}: {base}")
         }
         RepoCommandKind::SetUpstreamBranch { branch, upstream } => {
-            format!("Branch {branch}: Upstream set to {upstream}")
+            format!(
+                "Branch {branch}: Upstream set to {}/{}",
+                upstream.remote, upstream.branch
+            )
         }
         RepoCommandKind::UnsetUpstreamBranch { branch } => {
             format!("Branch {branch}: Upstream unlinked")
@@ -2127,7 +2132,10 @@ mod tests {
             (
                 RepoCommandKind::SetUpstreamBranch {
                     branch: "main".into(),
-                    upstream: "origin/main".into(),
+                    upstream: Upstream {
+                        remote: "origin".into(),
+                        branch: "main".into(),
+                    },
                 },
                 "Set as tracking upstream",
             ),
@@ -2388,7 +2396,10 @@ mod tests {
         let (_, set_upstream_summary) = summarize_command(
             &RepoCommandKind::SetUpstreamBranch {
                 branch: "feature".into(),
-                upstream: "origin/feature".into(),
+                upstream: Upstream {
+                    remote: "origin".into(),
+                    branch: "feature".into(),
+                },
             },
             &command_output(
                 "git branch --set-upstream-to origin/feature feature",

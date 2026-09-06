@@ -73,6 +73,13 @@ const TABLE_CELL_PAD_Y_PX: f32 = 4.0;
 /// Width of the gutter marking a wholly added or removed file.
 const MARKDOWN_DOCUMENT_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
 
+/// Keep flowing fenced blocks on the same neutral surface as fixed-row
+/// markdown previews. Accent-backed selection colors happen to look neutral in
+/// GitComet Dark, but become amber in Amber Dark and are not a code surface.
+fn markdown_document_code_background(theme: AppTheme) -> gpui::Rgba {
+    super::history::markdown_preview_code_background(theme)
+}
+
 /// Blocks the flowing renderer last grouped, and the document they describe.
 ///
 /// Grouping depends only on the document, but this renderer runs on every
@@ -800,10 +807,7 @@ fn render_code(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElemen
             block
                 .debug_selector(move || format!("markdown_preview_code_shell_{first_row_ix}"))
                 .px(scaled(MARKDOWN_PREVIEW_SHELL_PAD_X_PX, context))
-                .bg(with_alpha(
-                    context.theme.colors.interaction.selected_background,
-                    if context.theme.is_dark { 0.55 } else { 0.45 },
-                ))
+                .bg(markdown_document_code_background(context.theme))
                 .border_1()
                 .border_color(with_alpha(
                     context.theme.colors.stroke.default,
@@ -1008,6 +1012,30 @@ fn scrolling_block(
         .child(build(block))
         .child(scrollbar.render(context.theme))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amber_fenced_code_blocks_follow_gitcomet_darks_neutral_surface_rule() {
+        let amber = AppTheme::from_key(crate::theme::AMBER_DARK_THEME_KEY)
+            .expect("Amber Dark theme should load");
+        let gitcomet_dark = AppTheme::gitcomet_dark();
+
+        for theme in [amber, gitcomet_dark] {
+            assert_eq!(
+                markdown_document_code_background(theme),
+                with_alpha(theme.colors.surface.raised, 0.88)
+            );
+        }
+        assert_ne!(
+            markdown_document_code_background(amber),
+            with_alpha(amber.colors.interaction.selected_background, 0.55),
+            "Amber's accent-backed selection color must not tint fenced code blocks"
+        );
+    }
 }
 
 fn render_image(

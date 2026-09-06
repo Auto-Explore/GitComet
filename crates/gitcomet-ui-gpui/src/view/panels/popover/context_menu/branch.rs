@@ -1,11 +1,13 @@
 use super::*;
+use gitcomet_core::domain::Upstream;
 
 pub(super) fn model(
     this: &PopoverHost,
     repo_id: RepoId,
-    section: BranchSection,
-    name: &String,
+    target: &BranchMenuTarget,
 ) -> ContextMenuModel {
+    let section = target.section();
+    let name = target.display_name();
     let header: SharedString = match section {
         BranchSection::Local => "Local branch".into(),
         BranchSection::Remote => "Remote branch".into(),
@@ -26,17 +28,23 @@ pub(super) fn model(
         }
         _ => None,
     });
-    let active_upstream_full = active_branch.and_then(|branch| {
-        branch
-            .upstream
-            .as_ref()
-            .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
-    });
+    let active_upstream = active_branch.and_then(|branch| branch.upstream.as_ref());
     let active_branch_has_no_upstream =
         active_branch.is_some_and(|branch| branch.upstream.is_none());
+    let exact_remote_branch = target.remote_parts().and_then(|(remote, branch)| {
+        repo?
+            .remote_branches
+            .ready()?
+            .iter()
+            .any(|candidate| candidate.remote == remote && candidate.name == branch)
+            .then(|| Upstream {
+                remote: remote.to_string(),
+                branch: branch.to_string(),
+            })
+    });
     let is_current_branch = active_branch_name
         .as_ref()
-        .is_some_and(|branch| branch == name);
+        .is_some_and(|branch| branch == &name);
     // Name the branch being moved rather than the opaque "HEAD".
     let current_branch_label = active_branch_name
         .clone()
@@ -45,6 +53,32 @@ pub(super) fn model(
     // revert, or unconcluded merge is in flight; grey the entry out instead
     // of letting the click surface that refusal.
     let history_rewrite_disabled = repo.is_some_and(|r| r.history_rewrite_busy());
+    let branch_commit_id: Option<CommitId> = match target {
+        BranchMenuTarget::Local { name } => repo.and_then(|repo| {
+            repo.branches
+                .ready()?
+                .iter()
+                .find(|branch| branch.name == *name)
+                .map(|branch| branch.target.clone())
+        }),
+        BranchMenuTarget::Remote { remote, branch } => repo.and_then(|repo| {
+            repo.remote_branches
+                .ready()?
+                .iter()
+                .find(|candidate| candidate.remote == *remote && candidate.name == *branch)
+                .map(|candidate| candidate.target.clone())
+        }),
+    };
+    // Local Git actions operate on the exact loaded tip. This is independent
+    // of the remote-tracking ref's destination, which can be renamed by a
+    // custom fetch refspec.
+    let action_reference = match section {
+        BranchSection::Local => name.clone(),
+        BranchSection::Remote => branch_commit_id
+            .as_ref()
+            .map(|id| id.as_ref().to_string())
+            .unwrap_or_else(|| name.clone()),
+    };
 
     items.push(ContextMenuItem::Entry {
         label: "Checkout".into(),
@@ -57,7 +91,7 @@ pub(super) fn model(
                 name: name.clone(),
             },
             BranchSection::Remote => {
-                if let Some((remote, branch)) = name.split_once('/') {
+                if let Some((remote, branch)) = target.remote_parts() {
                     ContextMenuAction::OpenPopover {
                         kind: PopoverKind::CheckoutRemoteBranchPrompt {
                             repo_id,
@@ -82,7 +116,7 @@ pub(super) fn model(
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::CreateBranchFromRefPrompt {
                 repo_id,
-                target: name.clone(),
+                target: action_reference.clone(),
                 source_selectable: false,
                 name_prefix: String::new(),
             },
@@ -105,22 +139,6 @@ pub(super) fn model(
     }
 
     // Comparison: mark this branch's tip, or compare it against a mark.
-    let branch_commit_id: Option<CommitId> = match section {
-        BranchSection::Local => repo.and_then(|r| match &r.branches {
-            Loadable::Ready(branches) => branches
-                .iter()
-                .find(|b| b.name == *name)
-                .map(|b| b.target.clone()),
-            _ => None,
-        }),
-        BranchSection::Remote => repo.and_then(|r| match &r.remote_branches {
-            Loadable::Ready(branches) => branches
-                .iter()
-                .find(|b| format!("{}/{}", b.remote, b.name) == *name)
-                .map(|b| b.target.clone()),
-            _ => None,
-        }),
-    };
     if let Some(commit_id) = branch_commit_id {
         let comparison_mark = repo.and_then(|r| r.navigation.comparison_mark.clone());
         items.push(ContextMenuItem::Entry {
@@ -173,7 +191,7 @@ pub(super) fn model(
         disabled: false,
         action: Box::new(ContextMenuAction::CopyText { text: name.clone() }),
     });
-    let pinned = this.is_branch_pinned(repo_id, section, name);
+    let pinned = this.is_branch_pinned(repo_id, section, &name);
     items.push(ContextMenuItem::Entry {
         label: if pinned {
             "Unpin branch".into()
@@ -210,7 +228,7 @@ pub(super) fn model(
                 disabled: false,
                 action: Box::new(ContextMenuAction::MergeRef {
                     repo_id,
-                    reference: name.clone(),
+                    reference: action_reference.clone(),
                 }),
             });
             items.push(ContextMenuItem::Entry {
@@ -220,7 +238,7 @@ pub(super) fn model(
                 disabled: false,
                 action: Box::new(ContextMenuAction::SquashRef {
                     repo_id,
-                    reference: name.clone(),
+                    reference: action_reference.clone(),
                 }),
             });
             items.push(ContextMenuItem::Entry {
@@ -231,7 +249,7 @@ pub(super) fn model(
                 action: Box::new(ContextMenuAction::OpenPopover {
                     kind: PopoverKind::RebaseOntoConfirm {
                         repo_id,
-                        onto: name.clone(),
+                        onto: action_reference.clone(),
                     },
                 }),
             });
@@ -250,7 +268,7 @@ pub(super) fn model(
 
     if section == BranchSection::Remote {
         items.push(ContextMenuItem::Separator);
-        if let Some((remote, branch)) = name.split_once('/') {
+        if let Some((remote, branch)) = target.remote_parts() {
             items.push(ContextMenuItem::Entry {
                 label: "Pull into current".into(),
                 icon: Some("icons/arrow_down.svg".into()),
@@ -269,7 +287,7 @@ pub(super) fn model(
                 disabled: false,
                 action: Box::new(ContextMenuAction::MergeRef {
                     repo_id,
-                    reference: name.clone(),
+                    reference: action_reference.clone(),
                 }),
             });
             items.push(ContextMenuItem::Entry {
@@ -279,7 +297,7 @@ pub(super) fn model(
                 disabled: false,
                 action: Box::new(ContextMenuAction::SquashRef {
                     repo_id,
-                    reference: name.clone(),
+                    reference: action_reference.clone(),
                 }),
             });
             items.push(ContextMenuItem::Entry {
@@ -290,7 +308,7 @@ pub(super) fn model(
                 action: Box::new(ContextMenuAction::OpenPopover {
                     kind: PopoverKind::RebaseOntoConfirm {
                         repo_id,
-                        onto: name.clone(),
+                        onto: action_reference.clone(),
                     },
                 }),
             });
@@ -312,7 +330,7 @@ pub(super) fn model(
             });
             if active_branch_has_no_upstream
                 && let Some(active_branch_name) = active_branch_name.clone()
-                && name.split_once('/').is_some()
+                && let Some(upstream) = exact_remote_branch.clone()
             {
                 items.push(ContextMenuItem::Entry {
                     label: "Set as tracking upstream".into(),
@@ -322,16 +340,16 @@ pub(super) fn model(
                     action: Box::new(ContextMenuAction::SetUpstreamBranch {
                         repo_id,
                         branch: active_branch_name,
-                        upstream: name.clone(),
+                        upstream,
                     }),
                 });
             }
-            if active_upstream_full.is_some() {
+            if active_upstream.is_some() {
                 items.push(ContextMenuItem::Entry {
                     label: "Unlink upstream branch".into(),
                     icon: Some("icons/unlink.svg".into()),
                     shortcut: None,
-                    disabled: active_upstream_full.as_deref() != Some(name.as_str()),
+                    disabled: active_upstream != exact_remote_branch.as_ref(),
                     action: Box::new(ContextMenuAction::UnsetUpstreamBranch {
                         repo_id,
                         branch: active_branch_name.unwrap_or_default(),

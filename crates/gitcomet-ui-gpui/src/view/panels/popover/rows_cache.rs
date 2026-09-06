@@ -38,6 +38,7 @@ const DATE_BUCKET_SECS: u64 = 60;
 pub(super) enum RowsCacheOwner {
     BranchCheckout,
     BranchRefs,
+    Upstream,
     Workspace,
     RepoPicker,
     Stash,

@@ -2,7 +2,9 @@ use super::super::workspace_picker::{self, WorkspaceRow};
 use super::*;
 use crate::view::panels::tests::{app_state_with_repo, opening_repo_state};
 use crate::view::test_support::{push_test_state, redraw};
-use gitcomet_core::domain::{CommitId, Worktree};
+use gitcomet_core::domain::{
+    Branch, CommitId, Remote, RemoteBranch, Upstream, UpstreamDivergence, Worktree,
+};
 use gitcomet_state::model::{Loadable, RepoId, RepoState};
 use std::path::PathBuf;
 
@@ -358,6 +360,47 @@ fn workspace_picker_create_row_opens_the_add_dialog_prefilled(cx: &mut gpui::Tes
 mod badges {
     use super::*;
 
+    fn repo_with_upstream(repo_id: RepoId) -> RepoState {
+        let mut repo = repo_with_worktrees(repo_id);
+        let target = CommitId(Arc::from("1111111111111111111111111111111111111111"));
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "main".to_string(),
+            target: target.clone(),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+            divergence: None,
+        }]));
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target,
+        }]));
+        repo
+    }
+
+    fn repo_without_upstream(repo_id: RepoId) -> RepoState {
+        let mut repo = repo_with_worktrees(repo_id);
+        let target = CommitId(Arc::from("1111111111111111111111111111111111111111"));
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "main".to_string(),
+            target: target.clone(),
+            upstream: None,
+            divergence: None,
+        }]));
+        repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: None,
+        }]));
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target,
+        }]));
+        repo
+    }
+
     fn draw_with_repo(
         cx: &mut gpui::TestAppContext,
         repo: RepoState,
@@ -391,6 +434,161 @@ mod badges {
         assert!(
             cx.debug_bounds("branch_badge").is_some(),
             "expected the branch badge on the action bar"
+        );
+    }
+
+    #[gpui::test]
+    fn upstream_badge_arrow_pull_and_push_follow_the_local_branch(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (_view, cx) = draw_with_repo(cx, repo_with_upstream(repo_id), repo_id);
+
+        let branch = cx.debug_bounds("branch_badge").expect("branch badge");
+        let arrow = cx.debug_bounds("upstream_arrow").expect("upstream arrow");
+        let upstream = cx.debug_bounds("upstream_badge").expect("upstream badge");
+        let pull = cx.debug_bounds("pull").expect("pull button");
+        let push = cx.debug_bounds("push").expect("push button");
+
+        assert!(arrow.origin.x >= branch.origin.x + branch.size.width);
+        assert!(upstream.origin.x >= arrow.origin.x + arrow.size.width);
+        assert!(pull.origin.x >= upstream.origin.x + upstream.size.width);
+        assert!(push.origin.x >= pull.origin.x + pull.size.width);
+    }
+
+    #[gpui::test]
+    fn empty_upstream_badge_stays_between_the_branch_and_pull_push(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (_view, cx) = draw_with_repo(cx, repo_without_upstream(repo_id), repo_id);
+
+        let branch = cx.debug_bounds("branch_badge").expect("branch badge");
+        let arrow = cx.debug_bounds("upstream_arrow").expect("upstream arrow");
+        let upstream = cx
+            .debug_bounds("upstream_badge")
+            .expect("empty upstream badge");
+        let pull = cx.debug_bounds("pull").expect("pull button");
+        let push = cx.debug_bounds("push").expect("push button");
+
+        assert!(arrow.origin.x >= branch.origin.x + branch.size.width);
+        assert!(upstream.origin.x >= arrow.origin.x + arrow.size.width);
+        assert!(pull.origin.x >= upstream.origin.x + upstream.size.width);
+        assert!(push.origin.x >= pull.origin.x + pull.size.width);
+    }
+
+    #[gpui::test]
+    fn empty_upstream_badge_still_opens_its_picker(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = draw_with_repo(cx, repo_without_upstream(repo_id), repo_id);
+
+        let center = cx.debug_bounds("upstream_badge").expect("badge").center();
+        cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+        cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+        cx.run_until_parked();
+        redraw(cx);
+
+        let kind = cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()
+        });
+        assert_eq!(
+            kind,
+            Some(PopoverKind::UpstreamPicker {
+                repo_id,
+                branch: "main".to_string(),
+            })
+        );
+    }
+
+    #[gpui::test]
+    fn tracked_branch_actions_stay_reachable_at_supported_narrow_widths(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let repo_id = RepoId(1);
+        let mut repo = repo_with_upstream(repo_id);
+        let branch = "feature/current-with-a-representative-name".to_string();
+        repo.head_branch = Loadable::Ready(branch.clone());
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: branch.clone(),
+            target: CommitId(Arc::from("1111111111111111111111111111111111111111")),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch,
+            }),
+            divergence: None,
+        }]));
+        repo.upstream_divergence = Loadable::Ready(Some(UpstreamDivergence {
+            ahead: 999,
+            behind: 999,
+        }));
+        let (_view, cx) = draw_with_repo(cx, repo, repo_id);
+
+        // Exercise compact mode and one pixel beyond each responsive
+        // breakpoint, where a label expansion is most likely to overflow.
+        for width in [820.0, 961.0, 1121.0, 1401.0] {
+            cx.simulate_resize(gpui::size(gpui::px(width), gpui::px(560.0)));
+            redraw(cx);
+            let viewport = cx.update(|window, _app| window.viewport_size());
+            let left_group = cx.debug_bounds("left_action_group").expect("left group");
+            let right_group = cx.debug_bounds("right_action_group").expect("right group");
+            assert!(
+                left_group.right() <= right_group.left(),
+                "action groups must not overlap at {width}px: {left_group:?}, {right_group:?}"
+            );
+            for selector in [
+                "global_nav",
+                "workspace_badge",
+                "branch_badge",
+                "upstream_badge",
+                "pull",
+                "push",
+                "terminal",
+                "create_branch",
+                "stash",
+            ] {
+                let bounds = cx
+                    .debug_bounds(selector)
+                    .unwrap_or_else(|| panic!("missing {selector} at {width}px window width"));
+                assert!(
+                    bounds.left() >= gpui::px(0.0) && bounds.right() <= viewport.width,
+                    "{selector} must remain inside the {viewport:?} viewport at {width}px, got {bounds:?}"
+                );
+                let containing_group = if matches!(
+                    selector,
+                    "global_nav"
+                        | "workspace_badge"
+                        | "branch_badge"
+                        | "upstream_badge"
+                        | "pull"
+                        | "push"
+                ) {
+                    left_group
+                } else {
+                    right_group
+                };
+                assert!(
+                    bounds.left() >= containing_group.left()
+                        && bounds.right() <= containing_group.right(),
+                    "{selector} must not be clipped by its action group at {width}px: {bounds:?} outside {containing_group:?}"
+                );
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn merge_controls_stay_reachable_at_the_minimum_window_width(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let mut repo = repo_with_upstream(repo_id);
+        repo.merge_commit_message = Loadable::Ready(Some("Merge topic".to_string()));
+        let (_view, cx) = draw_with_repo(cx, repo, repo_id);
+
+        cx.simulate_resize(gpui::size(gpui::px(820.0), gpui::px(560.0)));
+        redraw(cx);
+        let left_group = cx.debug_bounds("left_action_group").expect("left group");
+        let controls = cx.debug_bounds("merge_controls").expect("merge controls");
+        assert!(
+            controls.left() >= left_group.left() && controls.right() <= left_group.right(),
+            "merge controls must not be clipped at minimum width: {controls:?} outside {left_group:?}"
         );
     }
 

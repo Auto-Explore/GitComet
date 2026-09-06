@@ -375,7 +375,11 @@ impl GitCometView {
                     PushRequest::SetUpstream { remote } => {
                         if let Some(window) = window {
                             self.open_popover_centered(
-                                PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
+                                PopoverKind::PushSetUpstreamPrompt {
+                                    repo_id,
+                                    remote,
+                                    configure_only_for: None,
+                                },
                                 window,
                                 cx,
                             );

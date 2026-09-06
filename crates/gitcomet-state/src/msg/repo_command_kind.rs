@@ -1,4 +1,4 @@
-use gitcomet_core::domain::CommitId;
+use gitcomet_core::domain::{CommitId, Upstream};
 use gitcomet_core::services::{
     ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
     SafePushAfterCommitTarget, SubmoduleTrustTarget,
@@ -38,7 +38,7 @@ pub enum RepoCommandKind {
     },
     SetUpstreamBranch {
         branch: String,
-        upstream: String,
+        upstream: Upstream,
     },
     UnsetUpstreamBranch {
         branch: String,

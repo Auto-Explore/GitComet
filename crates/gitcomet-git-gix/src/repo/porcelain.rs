@@ -1,11 +1,12 @@
 use super::GixRepo;
 use super::history::gix_head_id_or_none;
+use super::remotes::tracking_refs_for_remote_branch;
 use crate::util::{
     bytes_to_text_preserving_utf8, git_workdir_cmd_for, path_buf_from_git_bytes,
     run_git_raw_output, run_git_simple, run_git_simple_with_paths, validate_hex_commit_id,
     validate_ref_like_arg,
 };
-use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry};
+use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry, Upstream};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CheckoutRemoteBranchMode, CommitOperationOutcome, Result};
@@ -21,10 +22,6 @@ fn stash_spec(index: usize) -> String {
 
 fn local_branch_ref_name(branch: &str) -> String {
     format!("refs/heads/{branch}")
-}
-
-fn remote_tracking_ref_name(remote: &str, branch: &str) -> String {
-    format!("refs/remotes/{remote}/{branch}")
 }
 
 fn head_targets_branch(repo: &gix::Repository, branch_ref_name: &str) -> Result<bool> {
@@ -154,6 +151,31 @@ fn edit_local_config(
     repo: &gix::Repository,
     edit: impl FnOnce(&mut gix::config::File) -> bool,
 ) -> Result<()> {
+    edit_local_config_with_policy(repo, LocalConfigEditPolicy::BestEffortCleanup, |config| {
+        Ok(edit(config))
+    })
+}
+
+/// Atomically apply a required edit to the repository's local config.
+/// Unlike branch-deletion cleanup, a missing or locked config is an error.
+pub(super) fn edit_local_config_strict(
+    repo: &gix::Repository,
+    edit: impl FnOnce(&mut gix::config::File) -> Result<bool>,
+) -> Result<()> {
+    edit_local_config_with_policy(repo, LocalConfigEditPolicy::Required, edit)
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LocalConfigEditPolicy {
+    BestEffortCleanup,
+    Required,
+}
+
+fn edit_local_config_with_policy(
+    repo: &gix::Repository,
+    policy: LocalConfigEditPolicy,
+    edit: impl FnOnce(&mut gix::config::File) -> Result<bool>,
+) -> Result<()> {
     let config_path = repo.common_dir().join("config");
     let mut config = match gix::config::File::from_path_no_includes(
         config_path.clone(),
@@ -161,7 +183,8 @@ fn edit_local_config(
     ) {
         Ok(config) => config,
         Err(gix::config::file::init::from_paths::Error::Io { source, .. })
-            if source.kind() == std::io::ErrorKind::NotFound =>
+            if source.kind() == std::io::ErrorKind::NotFound
+                && policy == LocalConfigEditPolicy::BestEffortCleanup =>
         {
             return Ok(());
         }
@@ -173,7 +196,7 @@ fn edit_local_config(
         }
     };
 
-    if edit(&mut config) {
+    if edit(&mut config)? {
         let serialized = config.to_bstring();
         let mut lock = match gix::lock::File::acquire_to_update_resource(
             &config_path,
@@ -183,7 +206,11 @@ fn edit_local_config(
             Ok(lock) => lock,
             // Git still deletes the branch ref when branch-config cleanup can't
             // take the config lock; it only warns and leaves the config in place.
-            Err(gix::lock::acquire::Error::PermanentlyLocked { .. }) => return Ok(()),
+            Err(gix::lock::acquire::Error::PermanentlyLocked { .. })
+                if policy == LocalConfigEditPolicy::BestEffortCleanup =>
+            {
+                return Ok(());
+            }
             Err(e) => {
                 return Err(Error::new(ErrorKind::Backend(format!(
                     "lock local config {}: {e}",
@@ -507,15 +534,6 @@ impl GixRepo {
         Self::local_branch_exists_in_repo(&repo, branch)
     }
 
-    fn remote_tracking_branch_exists_in_repo(
-        repo: &gix::Repository,
-        remote: &str,
-        branch: &str,
-    ) -> Result<bool> {
-        let ref_name = remote_tracking_ref_name(remote, branch);
-        Self::ref_exists_in_repo(repo, ref_name.as_str())
-    }
-
     fn create_local_branch_reference(&self, branch: &str, target: &str) -> Result<()> {
         let mut repo = self.reopen_repo()?;
         if Self::local_branch_exists_in_repo(&repo, branch)? {
@@ -744,11 +762,21 @@ impl GixRepo {
         validate_ref_like_arg(local_branch, "branch name")?;
 
         let repo = self.reopen_repo()?;
-        if !Self::remote_tracking_branch_exists_in_repo(&repo, remote, branch)? {
-            return Err(checkout_remote_branch_missing_error(remote, branch));
+        let upstream = Upstream {
+            remote: remote.to_string(),
+            branch: branch.to_string(),
+        };
+        let tracking_refs = tracking_refs_for_remote_branch(&repo, &upstream)?;
+        let mut live_tracking_refs = Vec::new();
+        for tracking_ref in tracking_refs {
+            if Self::ref_exists_in_repo(&repo, tracking_ref.as_str())? {
+                live_tracking_refs.push(tracking_ref);
+            }
         }
+        let [tracking_ref] = live_tracking_refs.as_slice() else {
+            return Err(checkout_remote_branch_missing_error(remote, branch));
+        };
 
-        let upstream = format!("{remote}/{branch}");
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("checkout")
             .arg("--track")
@@ -757,7 +785,7 @@ impl GixRepo {
                 CheckoutRemoteBranchMode::Overwrite => "-B",
             })
             .arg(local_branch)
-            .arg(&upstream);
+            .arg(tracking_ref);
         run_git_simple(cmd, "git checkout --track")
     }
 

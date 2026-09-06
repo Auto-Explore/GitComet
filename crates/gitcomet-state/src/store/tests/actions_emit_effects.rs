@@ -1,4 +1,12 @@
 use super::*;
+use gitcomet_core::domain::Upstream;
+
+fn upstream_target(remote: &str, branch: &str) -> Upstream {
+    Upstream {
+        remote: remote.to_string(),
+        branch: branch.to_string(),
+    }
+}
 
 fn test_force_push_lease() -> gitcomet_core::services::ForcePushLease {
     gitcomet_core::services::ForcePushLease {
@@ -1491,7 +1499,7 @@ fn repo_operations_emit_effects() {
         Msg::SetUpstreamBranch {
             repo_id: RepoId(1),
             branch: "feature/local".to_string(),
-            upstream: "origin/feature/foo".to_string(),
+            upstream: upstream_target("origin", "feature/foo"),
         },
     );
     assert!(matches!(
@@ -1500,7 +1508,7 @@ fn repo_operations_emit_effects() {
             repo_id: RepoId(1),
             branch,
             upstream,
-        }] if branch == "feature/local" && upstream == "origin/feature/foo"
+        }] if branch == "feature/local" && upstream == &upstream_target("origin", "feature/foo")
     ));
 
     let unset_upstream = reduce(
@@ -1667,7 +1675,7 @@ fn pull_branch_and_extended_push_commands_bump_in_flight_and_ops_rev() {
         Msg::SetUpstreamBranch {
             repo_id,
             branch: "feature/test".to_string(),
-            upstream: "origin/feature/test".to_string(),
+            upstream: upstream_target("origin", "feature/test"),
         },
     );
     assert_eq!(state.repos[0].push_in_flight, 2);
@@ -2218,7 +2226,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         Msg::SetUpstreamBranch {
             repo_id,
             branch: "feature/current".to_string(),
-            upstream: "origin/feature/current".to_string(),
+            upstream: upstream_target("origin", "feature/current"),
         },
     );
     assert!(matches!(
@@ -2227,7 +2235,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             repo_id: RepoId(1),
             branch,
             upstream,
-        }] if branch == "feature/current" && upstream == "origin/feature/current"
+        }] if branch == "feature/current" && upstream == &upstream_target("origin", "feature/current")
     ));
 
     let effects = reduce(
@@ -2463,7 +2471,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         Msg::SetUpstreamBranch {
             repo_id,
             branch: "feature/current".to_string(),
-            upstream: "origin/feature/current".to_string(),
+            upstream: upstream_target("origin", "feature/current"),
         },
     );
     assert!(matches!(
@@ -2472,7 +2480,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             repo_id: RepoId(1),
             branch,
             upstream,
-        }] if branch == "feature/current" && upstream == "origin/feature/current"
+        }] if branch == "feature/current" && upstream == &upstream_target("origin", "feature/current")
     ));
 
     let effects = reduce(
@@ -2748,7 +2756,7 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
         (
             RepoCommandKind::SetUpstreamBranch {
                 branch: "feature/current".to_string(),
-                upstream: "origin/feature/current".to_string(),
+                upstream: upstream_target("origin", "feature/current"),
             },
             "Set as tracking upstream",
         ),
@@ -3535,7 +3543,7 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
         Msg::SetUpstreamBranch {
             repo_id,
             branch: "feature/local".to_string(),
-            upstream: "origin/feature/xyz".to_string(),
+            upstream: upstream_target("origin", "feature/xyz"),
         },
     );
     assert!(matches!(
@@ -3544,7 +3552,7 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
             repo_id: RepoId(1),
             branch,
             upstream
-        }] if branch == "feature/local" && upstream == "origin/feature/xyz"
+        }] if branch == "feature/local" && upstream == &upstream_target("origin", "feature/xyz")
     ));
     assert_eq!(state.repos[0].push_in_flight, 2);
 }
@@ -4429,6 +4437,7 @@ fn fetch_completion_reloads_remote_refs_and_loaded_tag_metadata() {
         name: "v1.0.0".to_string(),
         target: CommitId("abc123".into()),
     }]));
+    let remote_branches_rev = repo_state.remote_branches_rev;
     state.repos.push(repo_state);
 
     let effects = reduce(
@@ -4442,7 +4451,14 @@ fn fetch_completion_reloads_remote_refs_and_loaded_tag_metadata() {
         }),
     );
 
-    assert!(matches!(state.repos[0].remote_branches, Loadable::Loading));
+    assert!(matches!(
+        &state.repos[0].remote_branches,
+        Loadable::Ready(branches)
+            if branches.len() == 1
+                && branches[0].remote == "origin"
+                && branches[0].name == "deleted"
+    ));
+    assert_eq!(state.repos[0].remote_branches_rev, remote_branches_rev);
     assert!(matches!(state.repos[0].tags, Loadable::Loading));
     assert!(matches!(state.repos[0].remote_tags, Loadable::Loading));
     assert!(effects.iter().any(

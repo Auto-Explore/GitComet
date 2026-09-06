@@ -993,10 +993,13 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Set an exact upstream target. The remote and remote branch stay
+    /// separate because either name may contain slashes. The target may be a
+    /// new remote branch that has not been fetched or pushed yet.
     fn set_upstream_branch_with_output(
         &self,
         _branch: &str,
-        _upstream: &str,
+        _upstream: &Upstream,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "setting a branch upstream is not implemented for this backend",
@@ -1532,7 +1535,7 @@ mod tests {
     };
     use crate::domain::{
         Branch, CommitDetails, CommitId, DiffArea, DiffTarget, HistoryMode, LogCursor, LogPage,
-        ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
+        ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry, Upstream,
     };
     use crate::error::{Error, ErrorKind};
     use crate::test_support::UnconfiguredRepository;
@@ -1631,7 +1634,13 @@ mod tests {
         assert_unsupported(repo.push_force_with_output());
         assert_unsupported(repo.push_set_upstream("origin", "main"));
         assert_unsupported(repo.push_set_upstream_with_output("origin", "main"));
-        assert_unsupported(repo.set_upstream_branch_with_output("main", "origin/main"));
+        assert_unsupported(repo.set_upstream_branch_with_output(
+            "main",
+            &Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            },
+        ));
         assert_unsupported(repo.unset_upstream_branch_with_output("main"));
         assert_unsupported(repo.delete_remote_branch_with_output("origin", "main"));
         assert_unsupported(repo.commit_amend_with_output("message"));

@@ -56,6 +56,9 @@ impl PopoverHost {
             } => hook_activity::panel(self, repo_id, operation_id, window, cx),
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
             PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
+            PopoverKind::UpstreamPicker { repo_id, branch } => {
+                upstream_picker::panel(self, repo_id, branch, cx)
+            }
             PopoverKind::CreateBranchFromRefPrompt {
                 repo_id,
                 target,
@@ -178,9 +181,11 @@ impl PopoverHost {
             PopoverKind::FileHistory { repo_id, path } => {
                 file_history::panel(self, repo_id, path, cx)
             }
-            PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
-                push_set_upstream_prompt::panel(self, repo_id, remote, cx)
-            }
+            PopoverKind::PushSetUpstreamPrompt {
+                repo_id,
+                remote,
+                configure_only_for,
+            } => push_set_upstream_prompt::panel(self, repo_id, remote, configure_only_for, cx),
             PopoverKind::ForcePushConfirm { repo_id } => {
                 force_push_confirm::panel(self, repo_id, cx)
             }
@@ -412,18 +417,9 @@ impl PopoverHost {
                 },
                 cx,
             ),
-            PopoverKind::BranchMenu {
-                repo_id,
-                section,
-                name,
-            } => self.context_menu_view(
-                PopoverKind::BranchMenu {
-                    repo_id,
-                    section,
-                    name,
-                },
-                cx,
-            ),
+            PopoverKind::BranchMenu { repo_id, target } => {
+                self.context_menu_view(PopoverKind::BranchMenu { repo_id, target }, cx)
+            }
             PopoverKind::BranchRefsMenu {
                 repo_id,
                 display_name,

@@ -2464,8 +2464,7 @@ mod checkout_picker {
                         host.context_menu_model(
                             &PopoverKind::BranchMenu {
                                 repo_id,
-                                section: BranchSection::Local,
-                                name: "feat/badges".to_string(),
+                                target: BranchMenuTarget::local("feat/badges"),
                             },
                             cx,
                         )

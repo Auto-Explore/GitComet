@@ -4,7 +4,8 @@ use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextSide,
     DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage,
     RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
-    RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
+    RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream, UpstreamDivergence,
+    Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -963,7 +964,7 @@ impl GitRepository for GixRepo {
     fn set_upstream_branch_with_output(
         &self,
         branch: &str,
-        upstream: &str,
+        upstream: &Upstream,
     ) -> Result<CommandOutput> {
         self.set_upstream_branch_with_output_impl(branch, upstream)
     }
