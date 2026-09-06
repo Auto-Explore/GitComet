@@ -1680,7 +1680,10 @@ pub(super) fn load_worktrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effec
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return Vec::new();
     }
-    repo_state.set_worktrees(Loadable::Loading);
+    // Keep branch badges visible while refreshing after a checkout.
+    if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
+        repo_state.set_worktrees(Loadable::Loading);
+    }
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::WORKTREES)

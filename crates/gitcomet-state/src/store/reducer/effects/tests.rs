@@ -823,6 +823,51 @@ fn load_requests_set_loading_and_emit_effects() {
 }
 
 #[test]
+fn worktree_refresh_retains_badge_data_until_results_arrive() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+    let old_worktree = Worktree {
+        path: PathBuf::from("/tmp/worktree"),
+        head: None,
+        branch: Some("dev".into()),
+        detached: false,
+    };
+    let repo = repo_mut(&mut state, repo_id);
+    repo.set_worktrees(Loadable::Ready(vec![old_worktree.clone()]));
+    let previous = repo.worktrees.clone();
+    let revision = repo.worktrees_rev;
+
+    assert!(matches!(
+        load_worktrees(&mut state, repo_id).as_slice(),
+        [Effect::LoadWorktrees { repo_id: id }] if *id == repo_id
+    ));
+    assert_eq!(repo_mut(&mut state, repo_id).worktrees, previous);
+    assert_eq!(repo_mut(&mut state, repo_id).worktrees_rev, revision);
+
+    // A second refresh is queued without blanking the badges either.
+    assert!(load_worktrees(&mut state, repo_id).is_empty());
+    assert_eq!(repo_mut(&mut state, repo_id).worktrees, previous);
+    let updated = Worktree {
+        branch: Some("feature".into()),
+        ..old_worktree
+    };
+    assert!(matches!(
+        worktrees_loaded(&mut state, repo_id, Ok(vec![updated.clone()])).as_slice(),
+        [Effect::LoadWorktrees { repo_id: id }] if *id == repo_id
+    ));
+    assert_eq!(
+        repo_mut(&mut state, repo_id).worktrees,
+        Loadable::Ready(Arc::new(vec![updated]))
+    );
+    assert!(worktrees_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
+    assert_eq!(
+        repo_mut(&mut state, repo_id).worktrees,
+        Loadable::Ready(Arc::new(Vec::new()))
+    );
+}
+
+#[test]
 fn pre_open_worktree_and_submodule_loads_are_noops() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
