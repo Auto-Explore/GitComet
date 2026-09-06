@@ -1178,7 +1178,15 @@ impl HistoryView {
                 .and_then(|repo| repo.browsing_commit().cloned());
             if browse_commit != this.last_browse_commit {
                 this.last_browse_commit = browse_commit.clone();
-                if let (Some(repo_id), Some(commit_id)) = (this.active_repo_id(), browse_commit) {
+                // A browse point that follows the selection is already the
+                // visible row; revealing it would only scroll, page, or widen
+                // the scope on every arrow key.
+                let is_selected_row = this
+                    .active_repo()
+                    .is_some_and(|repo| repo.history_state.selected_commit == browse_commit);
+                if !is_selected_row
+                    && let (Some(repo_id), Some(commit_id)) = (this.active_repo_id(), browse_commit)
+                {
                     this.request_reveal_commit(repo_id, commit_id, Some(LogScope::AllBranches), cx);
                 }
             }
@@ -1497,7 +1505,14 @@ impl HistoryView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.store.dispatch(Msg::ClearCommitSelection { repo_id });
-        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+        let keep_file_view = self.state.file_browser_settings.follow_selected_commit
+            && self.state.sidebar_mode == gitcomet_state::model::SidebarMode::Files
+            && self
+                .active_repo()
+                .is_some_and(|repo| repo.file_browser.active && repo.diff_state.content_preview);
+        if !keep_file_view {
+            self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+        }
         self.dismiss_history_refs_hover(cx);
         self.history_scroll
             .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);

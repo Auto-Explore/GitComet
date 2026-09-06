@@ -874,12 +874,12 @@ pub(super) fn history_commit_row_canvas(
             } {
                 row_background = crate::theme::composite_over(row_background, overlay);
             }
-            // Purple highlight on the commit currently being browsed historically.
-            if view
-                .read(cx)
-                .active_repo()
-                .is_some_and(|repo| repo.browsing_commit() == Some(&commit_id))
-            {
+            // Purple highlight on the commit being browsed historically, unless
+            // it is the selected row: its selection highlight already says so.
+            if view.read(cx).active_repo().is_some_and(|repo| {
+                repo.browsing_commit() == Some(&commit_id)
+                    && repo.history_state.selected_commit.as_ref() != Some(&commit_id)
+            }) {
                 let tint =
                     crate::theme::with_alpha(crate::theme::historical_outline(theme.is_dark), 0.22);
                 window.paint_quad(fill(bounds, tint));

@@ -898,6 +898,9 @@ impl GitCometView {
         });
         store.dispatch(Msg::SetDefaultTagType(default_tag_type));
         store.dispatch(Msg::SetRemoteSettings(remote_settings));
+        store.dispatch(Msg::SetFileBrowserSettings(FileBrowserSettings {
+            follow_selected_commit: ui_preferences.history.files_follow_selected_commit,
+        }));
         let saved_open_repos = ui_session.open_repos.clone();
         let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;

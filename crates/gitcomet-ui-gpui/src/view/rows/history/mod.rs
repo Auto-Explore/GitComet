@@ -935,9 +935,7 @@ fn working_tree_summary_history_row(
         })
         .when(show_sha, |row| row.child(div().w(col_sha).flex_none()))
         .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-            this.store.dispatch(Msg::ClearCommitSelection { repo_id });
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            cx.notify();
+            this.select_working_tree_summary_row(repo_id, cx);
         }));
 
     if selected {

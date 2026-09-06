@@ -2836,3 +2836,43 @@ fn persist_repo_history_scope_skips_rewriting_unchanged_value() {
         );
     }
 }
+
+#[test]
+fn persist_ui_settings_round_trips_file_browser_follow_selected_commit() {
+    let dir = unique_session_test_dir("file-browser-follow-selected-commit");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    // Absent from the file means "not chosen yet", which the UI reads as on.
+    assert_eq!(
+        load_from_path(&path).file_browser_follow_selected_commit,
+        None
+    );
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            file_browser_follow_selected_commit: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist ui settings");
+    assert_eq!(
+        load_from_path(&path).file_browser_follow_selected_commit,
+        Some(false)
+    );
+
+    // A later write that says nothing about the toggle must not clear it.
+    persist_ui_settings_to_path(
+        UiSettings {
+            diff_word_wrap: Some(true),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist unrelated ui settings");
+    assert_eq!(
+        load_from_path(&path).file_browser_follow_selected_commit,
+        Some(false)
+    );
+}

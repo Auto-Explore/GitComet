@@ -1,5 +1,7 @@
 use super::*;
-use crate::model::{ConflictFile, RepoState, SidebarDataRequest, SidebarMode};
+use crate::model::{
+    ConflictFile, PendingFileBrowserReopen, RepoState, SidebarDataRequest, SidebarMode,
+};
 use gitcomet_core::domain::{
     DiffArea, DiffTarget, FileConflictKind, FileEntry, FileEntryKind, FileSource, FileStatus,
     LogScope, RemoteBranch, RepoSpec,
@@ -57,17 +59,17 @@ fn browse_history_pushes_dedups_and_go_live_clears() {
     let a = CommitId("aaaaaaaa".into());
     let b = CommitId("bbbbbbbb".into());
 
-    browse_repository_at_commit(&no_repos(), &mut state, RepoId(1), a.clone());
-    browse_repository_at_commit(&no_repos(), &mut state, RepoId(1), b.clone());
+    browse_repository_at_commit(&mut state, RepoId(1), a.clone());
+    browse_repository_at_commit(&mut state, RepoId(1), b.clone());
     // Re-browsing an existing point does not duplicate it, just makes it current.
-    browse_repository_at_commit(&no_repos(), &mut state, RepoId(1), a.clone());
+    browse_repository_at_commit(&mut state, RepoId(1), a.clone());
 
     let repo = &state.repos[0];
     assert_eq!(repo.navigation.browse_history, vec![a.clone(), b.clone()]);
     assert_eq!(repo.browsing_commit(), Some(&a));
     assert_eq!(state.sidebar_mode, SidebarMode::Files);
 
-    reset_browse_to_live(&no_repos(), &mut state, RepoId(1));
+    reset_browse_to_live(&mut state, RepoId(1));
     let repo = &state.repos[0];
     assert!(repo.navigation.browse_history.is_empty());
     assert_eq!(repo.browsing_commit(), None);
@@ -212,6 +214,7 @@ fn unknown_repo_handlers_are_noops() {
     assert!(set_sidebar_mode(&mut state, SidebarMode::Files).is_empty());
     assert!(
         file_browser_loaded(
+            &no_repos(),
             &mut state,
             repo_id,
             FileSource::WorkingDirectory,
@@ -1544,6 +1547,7 @@ fn loaded_handler_error_paths_record_diagnostics() {
     assert!(submodules_loaded(&mut state, repo_id, Err(backend_error("submodules"))).is_empty());
     assert!(
         file_browser_loaded(
+            &no_repos(),
             &mut state,
             repo_id,
             FileSource::WorkingDirectory,
@@ -1781,7 +1785,13 @@ fn file_browser_loaded_updates_state_and_records_errors() {
     }];
     let source = FileSource::WorkingDirectory;
 
-    let effects = file_browser_loaded(&mut state, repo_id, source.clone(), Ok(entries));
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        source.clone(),
+        Ok(entries),
+    );
     assert!(effects.is_empty());
     {
         let repo = repo_mut(&mut state, repo_id);
@@ -1793,6 +1803,7 @@ fn file_browser_loaded_updates_state_and_records_errors() {
     }
 
     file_browser_loaded(
+        &no_repos(),
         &mut state,
         repo_id,
         source,
@@ -1817,7 +1828,7 @@ fn file_browser_loaded_discards_stale_results() {
     }];
     let wrong_source = FileSource::WorkingDirectory;
 
-    let effects = file_browser_loaded(&mut state, repo_id, wrong_source, Ok(entries));
+    let effects = file_browser_loaded(&no_repos(), &mut state, repo_id, wrong_source, Ok(entries));
     assert!(effects.is_empty());
     let repo = repo_mut(&mut state, repo_id);
     assert!(matches!(repo.file_browser.entries, Loadable::NotLoaded));
@@ -1928,11 +1939,33 @@ fn set_file_browser_search_updates_query_and_rev() {
     assert_eq!(repo_mut(&mut state, repo_id).file_browser.search_query, "");
 }
 
+fn tree_file(path: &str) -> FileEntry {
+    let path = PathBuf::from(path);
+    FileEntry {
+        name: path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        depth: path.components().count().saturating_sub(1),
+        path: Arc::new(path),
+        kind: FileEntryKind::File,
+    }
+}
+
 #[test]
-fn set_file_browser_source_resets_and_emits_load() {
+fn set_file_browser_source_keeps_tree_shape_and_emits_load() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
     mark_repo_open_ready(&mut state, repo_id);
+    {
+        let repo = repo_mut(&mut state, repo_id);
+        repo.file_browser.entries = Loadable::Ready(Arc::new(vec![tree_file("src/lib.rs")]));
+        repo.file_browser
+            .expanded_dirs
+            .insert(Arc::new(PathBuf::from("src")));
+        repo.file_browser.search_query = "lib".to_string();
+    }
+    let rev_before = repo_mut(&mut state, repo_id).file_browser.file_browser_rev;
 
     let commit_id = CommitId("abcdefgh".into());
     let source = FileSource::Commit(commit_id);
@@ -1943,13 +1976,40 @@ fn set_file_browser_source_resets_and_emits_load() {
     {
         let repo = repo_mut(&mut state, repo_id);
         assert_eq!(repo.file_browser.source, source);
-        assert!(matches!(repo.file_browser.entries, Loadable::NotLoaded));
-        assert!(repo.file_browser.expanded_dirs.is_empty());
-        assert!(repo.file_browser.search_query.is_empty());
+        // The old rows stay up until the listing replaces them, flagged so
+        // `needs_load()` still asks for the walk.
+        assert!(matches!(repo.file_browser.entries, Loadable::Ready(_)));
+        assert!(repo.file_browser.stale);
+        assert!(repo.file_browser.needs_load());
+        assert!(
+            repo.file_browser
+                .expanded_dirs
+                .contains(&Arc::new(PathBuf::from("src")))
+        );
+        assert_eq!(repo.file_browser.search_query, "lib");
+        assert_ne!(repo.file_browser.file_browser_rev, rev_before);
     }
 
     let effects = set_file_browser_source(&mut state, repo_id, source);
     assert!(effects.is_empty());
+}
+
+#[test]
+fn set_file_browser_source_blanks_a_tree_that_never_loaded() {
+    // Nothing worth keeping: NotLoaded stays NotLoaded and is not flagged stale.
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+
+    let effects = set_file_browser_source(
+        &mut state,
+        repo_id,
+        FileSource::Commit(CommitId("abcdefgh".into())),
+    );
+    assert_eq!(effects.len(), 1);
+    let repo = repo_mut(&mut state, repo_id);
+    assert!(matches!(repo.file_browser.entries, Loadable::NotLoaded));
+    assert!(!repo.file_browser.stale);
 }
 
 #[test]
@@ -1970,6 +2030,7 @@ fn set_sidebar_mode_triggers_file_browser_load_and_retries_on_error() {
     // Each phase has to deliver its reply the way the executor does, or the
     // in-flight lane coalesces the next request away.
     file_browser_loaded(
+        &no_repos(),
         &mut state,
         repo_id,
         FileSource::WorkingDirectory,
@@ -1989,6 +2050,7 @@ fn set_sidebar_mode_triggers_file_browser_load_and_retries_on_error() {
     );
 
     file_browser_loaded(
+        &no_repos(),
         &mut state,
         repo_id,
         FileSource::WorkingDirectory,
@@ -2045,133 +2107,161 @@ fn load_file_browser_noop_when_repo_not_open() {
 }
 
 #[test]
-fn browse_open_content_path_returns_correct_paths() {
+fn browse_open_content_path_captures_previews_only() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
 
     // content_preview is false → None
-    assert!(browse_open_content_path(&state, repo_id).is_none());
+    assert!(browse_open_content_path(repo_mut(&mut state, repo_id)).is_none());
 
-    // Set content_preview = true with Commit target
     let commit_id = CommitId("abc123".into());
     let path = PathBuf::from("src/main.rs");
-    {
-        let repo = repo_mut(&mut state, repo_id);
-        repo.diff_state.content_preview = true;
-        repo.diff_state.diff_target = Some(DiffTarget::Commit {
-            commit_id: commit_id.clone(),
-            path: Some(path.clone()),
-        });
-    }
+    let repo = repo_mut(&mut state, repo_id);
+    repo.diff_state.content_preview = true;
+    repo.set_diff_target(Some(DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(path.clone()),
+    }));
     assert_eq!(
-        browse_open_content_path(&state, repo_id),
-        Some(path.clone())
+        browse_open_content_path(repo),
+        Some(PendingFileBrowserReopen {
+            path: path.clone(),
+            diff_target_rev: repo.diff_state.diff_target_rev,
+        })
     );
 
     // WorkingTree target
-    {
-        let repo = repo_mut(&mut state, repo_id);
-        repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        });
-    }
+    repo.set_diff_target(Some(DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    }));
     assert_eq!(
-        browse_open_content_path(&state, repo_id),
-        Some(path.clone())
+        browse_open_content_path(repo).map(|reopen| reopen.path),
+        Some(path)
     );
+
+    // The editor is never re-targeted.
+    repo.diff_state.edit_mode = true;
+    assert!(browse_open_content_path(repo).is_none());
+    repo.diff_state.edit_mode = false;
 
     // Commit with path: None → None
-    {
-        let repo = repo_mut(&mut state, repo_id);
-        repo.diff_state.diff_target = Some(DiffTarget::Commit {
-            commit_id,
-            path: None,
-        });
-    }
-    assert!(browse_open_content_path(&state, repo_id).is_none());
+    repo.set_diff_target(Some(DiffTarget::Commit {
+        commit_id,
+        path: None,
+    }));
+    assert!(browse_open_content_path(repo).is_none());
 
     // diff_target is None → None
-    {
-        let repo = repo_mut(&mut state, repo_id);
-        repo.diff_state.diff_target = None;
-    }
-    assert!(browse_open_content_path(&state, repo_id).is_none());
+    repo.set_diff_target(None);
+    assert!(browse_open_content_path(repo).is_none());
+}
 
-    // Unknown repo → None
-    assert!(browse_open_content_path(&state, RepoId(999)).is_none());
+/// A file preview open at `commit`, the way a click in the Files tab leaves it.
+fn open_preview_at(state: &mut AppState, repo_id: RepoId, commit: &CommitId, path: &str) {
+    let repo = repo_mut(state, repo_id);
+    repo.diff_state.content_preview = true;
+    repo.diff_state.edit_mode = false;
+    repo.set_diff_target(Some(DiffTarget::Commit {
+        commit_id: commit.clone(),
+        path: Some(PathBuf::from(path)),
+    }));
+}
+
+fn load_selected_diffs(effects: &[Effect]) -> usize {
+    effects
+        .iter()
+        .filter(|e| matches!(e, Effect::LoadSelectedDiff { .. }))
+        .count()
+}
+
+fn pending_reopen_path(state: &mut AppState, repo_id: RepoId) -> Option<PathBuf> {
+    repo_mut(state, repo_id)
+        .file_browser
+        .pending_reopen
+        .as_ref()
+        .map(|reopen| reopen.path.clone())
 }
 
 #[test]
-fn browse_repository_at_commit_reopens_active_file() {
+fn browse_repository_at_commit_reopens_active_file_once_the_listing_lands() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
     state.active_repo = Some(repo_id);
     mark_repo_open_ready(&mut state, repo_id);
 
-    let file_path = PathBuf::from("src/lib.rs");
     let commit_a = CommitId("aaaaaaaa".into());
     let commit_b = CommitId("bbbbbbbb".into());
+    open_preview_at(&mut state, repo_id, &commit_a, "src/lib.rs");
 
-    // Set up a content-preview file open at commit_a
-    {
-        let repo = repo_mut(&mut state, repo_id);
-        repo.diff_state.content_preview = true;
-        repo.diff_state.diff_target = Some(DiffTarget::Commit {
-            commit_id: commit_a.clone(),
-            path: Some(file_path.clone()),
-        });
-    }
-
-    // Browse commit_b — should reopen file at commit_b
-    let effects = browse_repository_at_commit(&no_repos(), &mut state, repo_id, commit_b.clone());
+    // Browsing commit_b only remembers the file: the listing decides whether it
+    // exists there, and the walk may not even have started yet (busy lane).
+    let effects = browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
     assert!(
         effects
             .iter()
             .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
     );
-    assert!(effects.iter().any(|e| matches!(
-        e,
-        Effect::LoadSelectedDiff {
-            repo_id: rid,
-            ..
-        } if *rid == repo_id
-    )));
+    assert_eq!(load_selected_diffs(&effects), 0);
+    assert_eq!(
+        pending_reopen_path(&mut state, repo_id),
+        Some(PathBuf::from("src/lib.rs"))
+    );
+
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        FileSource::Commit(commit_b.clone()),
+        Ok(vec![tree_file("src/lib.rs")]),
+    );
+    assert_eq!(load_selected_diffs(&effects), 1);
+    let repo = repo_mut(&mut state, repo_id);
+    assert_eq!(
+        repo.diff_state.diff_target,
+        Some(DiffTarget::Commit {
+            commit_id: commit_b,
+            path: Some(PathBuf::from("src/lib.rs")),
+        })
+    );
+    assert!(repo.diff_state.content_preview);
+    assert!(repo.file_browser.pending_reopen.is_none());
 }
 
 #[test]
-fn reset_browse_to_live_reopens_active_file() {
+fn reset_browse_to_live_reopens_active_file_once_the_listing_lands() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
     state.active_repo = Some(repo_id);
     mark_repo_open_ready(&mut state, repo_id);
 
-    let file_path = PathBuf::from("README.md");
     let commit_id = CommitId("abcd1234".into());
+    repo_mut(&mut state, repo_id).file_browser.source = FileSource::Commit(commit_id.clone());
+    open_preview_at(&mut state, repo_id, &commit_id, "README.md");
 
-    {
-        let repo = repo_mut(&mut state, repo_id);
-        repo.diff_state.content_preview = true;
-        repo.diff_state.diff_target = Some(DiffTarget::Commit {
-            commit_id: commit_id.clone(),
-            path: Some(file_path.clone()),
-        });
-        repo.file_browser.source = FileSource::Commit(commit_id);
-    }
-
-    let effects = reset_browse_to_live(&no_repos(), &mut state, repo_id);
+    let effects = reset_browse_to_live(&mut state, repo_id);
     assert!(
         effects
             .iter()
             .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
     );
-    assert!(effects.iter().any(|e| matches!(
-        e,
-        Effect::LoadSelectedDiff {
-            repo_id: rid,
-            ..
-        } if *rid == repo_id
-    )));
+    assert_eq!(load_selected_diffs(&effects), 0);
+
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        FileSource::WorkingDirectory,
+        Ok(vec![tree_file("README.md")]),
+    );
+    assert_eq!(load_selected_diffs(&effects), 1);
+    assert_eq!(
+        repo_mut(&mut state, repo_id).diff_state.diff_target,
+        Some(DiffTarget::WorkingTree {
+            path: PathBuf::from("README.md"),
+            area: DiffArea::Unstaged,
+        })
+    );
 }
 
 #[test]
@@ -2183,23 +2273,211 @@ fn browse_repository_at_commit_no_reopen_when_content_preview_is_false() {
 
     let commit_a = CommitId("aaaaaaaa".into());
     let commit_b = CommitId("bbbbbbbb".into());
+    open_preview_at(&mut state, repo_id, &commit_a, "src/lib.rs");
+    repo_mut(&mut state, repo_id).diff_state.content_preview = false;
+
+    browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
+    assert!(pending_reopen_path(&mut state, repo_id).is_none());
+
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        FileSource::Commit(commit_b),
+        Ok(vec![tree_file("src/lib.rs")]),
+    );
+    assert_eq!(load_selected_diffs(&effects), 0);
+    assert!(matches!(
+        repo_mut(&mut state, repo_id).diff_state.diff_target,
+        Some(DiffTarget::Commit { ref commit_id, .. }) if *commit_id == commit_a
+    ));
+}
+
+#[test]
+fn a_file_missing_from_the_new_listing_closes_the_preview() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+
+    let commit_a = CommitId("aaaaaaaa".into());
+    let commit_b = CommitId("bbbbbbbb".into());
+    open_preview_at(&mut state, repo_id, &commit_a, "src/lib.rs");
+    browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
+
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        FileSource::Commit(commit_b),
+        Ok(vec![tree_file("README.md")]),
+    );
+    assert_eq!(load_selected_diffs(&effects), 0);
+    let repo = repo_mut(&mut state, repo_id);
+    assert_eq!(repo.diff_state.diff_target, None);
+    assert!(!repo.diff_state.content_preview);
+    assert!(repo.file_browser.pending_reopen.is_none());
+}
+
+#[test]
+fn a_reopen_is_dropped_when_the_user_navigated_meanwhile() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+
+    let commit_a = CommitId("aaaaaaaa".into());
+    let commit_b = CommitId("bbbbbbbb".into());
+    open_preview_at(&mut state, repo_id, &commit_a, "src/lib.rs");
+    browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
+    // The user opened another file before the listing landed.
+    open_preview_at(&mut state, repo_id, &commit_a, "src/other.rs");
+
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        FileSource::Commit(commit_b),
+        Ok(vec![tree_file("src/lib.rs"), tree_file("src/other.rs")]),
+    );
+    assert_eq!(load_selected_diffs(&effects), 0);
+    assert_eq!(
+        repo_mut(&mut state, repo_id).open_file_path(),
+        Some(Path::new("src/other.rs"))
+    );
+}
+
+#[test]
+fn a_reopen_is_skipped_when_the_file_is_already_shown_at_that_point() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+
+    // Browsing live while the preview shows the file at commit_b, then
+    // browsing commit_b: the preview is already where it should be.
+    let commit_b = CommitId("bbbbbbbb".into());
+    open_preview_at(&mut state, repo_id, &commit_b, "src/lib.rs");
+    let rev_before = repo_mut(&mut state, repo_id).diff_state.diff_target_rev;
+    browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
+
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        FileSource::Commit(commit_b),
+        Ok(vec![tree_file("src/lib.rs")]),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(
+        repo_mut(&mut state, repo_id).diff_state.diff_target_rev,
+        rev_before
+    );
+}
+
+#[test]
+fn the_editor_is_never_retargeted_by_a_browse() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
 
     {
         let repo = repo_mut(&mut state, repo_id);
-        repo.diff_state.content_preview = false;
-        repo.diff_state.diff_target = Some(DiffTarget::Commit {
-            commit_id: commit_a,
-            path: Some(PathBuf::from("src/lib.rs")),
-        });
+        repo.diff_state.content_preview = true;
+        repo.diff_state.edit_mode = true;
+        repo.set_diff_target(Some(DiffTarget::WorkingTree {
+            path: PathBuf::from("src/lib.rs"),
+            area: DiffArea::Unstaged,
+        }));
     }
+    let commit_b = CommitId("bbbbbbbb".into());
+    browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
+    assert!(pending_reopen_path(&mut state, repo_id).is_none());
 
-    let effects = browse_repository_at_commit(&no_repos(), &mut state, repo_id, commit_b);
-    // Should not contain LoadSelectedDiff (no file reopen)
-    assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadSelectedDiff { .. }))
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        FileSource::Commit(commit_b),
+        Ok(vec![tree_file("src/lib.rs")]),
     );
+    assert!(effects.is_empty());
+    assert!(repo_mut(&mut state, repo_id).diff_state.edit_mode);
+}
+
+#[test]
+fn a_failed_listing_drops_the_pending_reopen() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+
+    let commit_a = CommitId("aaaaaaaa".into());
+    let commit_b = CommitId("bbbbbbbb".into());
+    open_preview_at(&mut state, repo_id, &commit_a, "src/lib.rs");
+    browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
+
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        FileSource::Commit(commit_b),
+        Err(backend_error("boom")),
+    );
+    assert_eq!(load_selected_diffs(&effects), 0);
+    let repo = repo_mut(&mut state, repo_id);
+    assert!(repo.file_browser.pending_reopen.is_none());
+    assert!(matches!(
+        repo.diff_state.diff_target,
+        Some(DiffTarget::Commit { ref commit_id, .. }) if *commit_id == commit_a
+    ));
+}
+
+#[test]
+fn a_pending_reopen_survives_a_reply_for_an_abandoned_source() {
+    let repo_id = RepoId(1);
+    let mut state = new_state_with_repo(repo_id);
+    state.active_repo = Some(repo_id);
+    mark_repo_open_ready(&mut state, repo_id);
+
+    let commit_a = CommitId("aaaaaaaa".into());
+    let commit_b = CommitId("bbbbbbbb".into());
+    let commit_c = CommitId("cccccccc".into());
+    open_preview_at(&mut state, repo_id, &commit_a, "src/lib.rs");
+    browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
+    browse_repository_at_commit(&mut state, repo_id, commit_c.clone());
+
+    // The walk for commit_b ends after the user already moved to commit_c.
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        FileSource::Commit(commit_b),
+        Ok(vec![tree_file("src/lib.rs")]),
+    );
+    assert_eq!(load_selected_diffs(&effects), 0);
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadFileBrowser { source: FileSource::Commit(c), .. } if *c == commit_c
+    )));
+    assert_eq!(
+        pending_reopen_path(&mut state, repo_id),
+        Some(PathBuf::from("src/lib.rs"))
+    );
+
+    let effects = file_browser_loaded(
+        &no_repos(),
+        &mut state,
+        repo_id,
+        FileSource::Commit(commit_c.clone()),
+        Ok(vec![tree_file("src/lib.rs")]),
+    );
+    assert_eq!(load_selected_diffs(&effects), 1);
+    assert!(matches!(
+        repo_mut(&mut state, repo_id).diff_state.diff_target,
+        Some(DiffTarget::Commit { ref commit_id, .. }) if *commit_id == commit_c
+    ));
 }
 
 #[test]
@@ -2212,7 +2490,6 @@ fn browse_history_evicts_oldest_when_exceeding_cap() {
     const CAP: usize = 32;
     for i in 0..CAP + 3 {
         browse_repository_at_commit(
-            &no_repos(),
             &mut state,
             repo_id,
             CommitId(format!("commit{i:08}").into()),
@@ -2242,11 +2519,11 @@ fn browse_history_rebrowse_does_not_move_to_mru() {
     let b = CommitId("bbbbbbbb".into());
     let c = CommitId("cccccccc".into());
 
-    browse_repository_at_commit(&no_repos(), &mut state, repo_id, a.clone());
-    browse_repository_at_commit(&no_repos(), &mut state, repo_id, b.clone());
-    browse_repository_at_commit(&no_repos(), &mut state, repo_id, c.clone());
+    browse_repository_at_commit(&mut state, repo_id, a.clone());
+    browse_repository_at_commit(&mut state, repo_id, b.clone());
+    browse_repository_at_commit(&mut state, repo_id, c.clone());
     // Re-browse a — should NOT move to end
-    browse_repository_at_commit(&no_repos(), &mut state, repo_id, a.clone());
+    browse_repository_at_commit(&mut state, repo_id, a.clone());
 
     let repo = repo_mut(&mut state, repo_id);
     assert_eq!(repo.navigation.browse_history.len(), 3);
@@ -2269,20 +2546,18 @@ fn set_sidebar_mode_noop_without_active_repo() {
 }
 
 #[test]
-fn set_sidebar_mode_emits_load_even_when_repo_not_ready() {
+fn set_sidebar_mode_waits_for_the_repo_to_be_ready_before_claiming_the_lane() {
     let repo_id = RepoId(1);
     let mut state = new_state_with_repo(repo_id);
     state.active_repo = Some(repo_id);
     // repo.open is Loading (set by new_opening), not Ready
 
     let effects = set_sidebar_mode(&mut state, SidebarMode::Files);
-    // set_sidebar_mode does NOT check repo.open — it emits LoadFileBrowser,
-    // but load_file_browser will be a no-op when open isn't Ready.
-    // The effect IS emitted (the no-op is downstream in the effect handler).
+    assert!(effects.is_empty());
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        !repo_mut(&mut state, repo_id)
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::FILE_BROWSER)
     );
 }
 
@@ -2307,7 +2582,7 @@ fn browse_repository_at_commit_same_commit_with_file_open_does_not_reopen() {
     }
 
     // Browse the SAME commit — source unchanged, no LoadFileBrowser emitted
-    let effects = browse_repository_at_commit(&no_repos(), &mut state, repo_id, commit_id);
+    let effects = browse_repository_at_commit(&mut state, repo_id, commit_id);
     assert!(
         !effects
             .iter()
@@ -2491,6 +2766,7 @@ fn file_browser_loaded_cancelled_error_records_diagnostic() {
 
     let cancelled = Error::new(ErrorKind::Cancelled);
     let effects = file_browser_loaded(
+        &no_repos(),
         &mut state,
         repo_id,
         FileSource::WorkingDirectory,
