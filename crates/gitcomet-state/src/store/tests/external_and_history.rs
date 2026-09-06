@@ -1,4 +1,5 @@
 use super::*;
+mod refresh;
 
 /// Production always reaches `LogLoaded` through `request_log`, which records the
 /// walk as the active one so replies from a superseded walk can be dropped.
@@ -613,7 +614,8 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
             result: Ok(LogPage {
                 commits: Vec::new(),
                 next_cursor: None,
-            }),
+            }
+            .into()),
         }),
     );
     reduce(
@@ -864,7 +866,8 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
             result: Ok(LogPage {
                 commits: Vec::new(),
                 next_cursor: None,
-            }),
+            }
+            .into()),
         }),
     );
     assert!(matches!(
@@ -1475,31 +1478,40 @@ fn log_effect(effects: &[Effect]) -> (u64, usize, Option<LogCursor>) {
         .expect("a log load was dispatched")
 }
 
-/// Model the backend faithfully: it can only return the requested prefix.
+/// Exercise the same service contract as the effect worker with deterministic
+/// pages, while driving the real reducer and request queue.
 fn answer_log(state: &mut AppState, effects: &[Effect], history: &[Commit]) -> Vec<Effect> {
     let (seq, limit, cursor) = log_effect(effects);
-    let start = cursor.as_ref().map_or(0, |cursor| {
-        history
-            .iter()
-            .position(|c| c.id == cursor.last_seen)
-            .unwrap()
-            + 1
-    });
-    let commits: Vec<_> = history.iter().skip(start).take(limit).cloned().collect();
-    let next_cursor = (start + commits.len() < history.len()).then(|| cursor_after(&commits));
-    reduce(
-        &mut FxHashMap::default(),
-        &AtomicU64::new(1),
+    let read = |limit: usize, cursor: Option<&LogCursor>| {
+        let start = cursor.map_or(0, |cursor| {
+            history
+                .iter()
+                .position(|c| c.id == cursor.last_seen)
+                .unwrap()
+                + 1
+        });
+        let commits: Vec<_> = history.iter().skip(start).take(limit).cloned().collect();
+        let next_cursor = (start + commits.len() < history.len()).then(|| cursor_after(&commits));
+        Ok(LogPage {
+            commits,
+            next_cursor,
+        })
+    };
+    let page = match (&cursor, &state.repos[0].log) {
+        (None, Loadable::Ready(previous)) => {
+            gitcomet_core::services::refresh_history_page(previous, &CancellationToken::new(), read)
+                .unwrap()
+        }
+        _ => read(limit, cursor.as_ref()).unwrap(),
+    };
+    history_message(
         state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             seq,
             scope: LogScope::CurrentBranch,
             cursor,
-            result: Ok(LogPage {
-                commits,
-                next_cursor,
-            }),
+            result: Ok(page.into()),
         }),
     )
 }
@@ -1519,7 +1531,7 @@ fn refresh_history(state: &mut AppState) -> Vec<Effect> {
 }
 
 #[test]
-fn refresh_headroom_preserves_selected_root_after_new_commit() {
+fn refresh_preserves_selected_root_after_new_commit() {
     let old = commits_named("old", 600);
     let mut state = paginated_repo_state(&old);
     state.repos[0].set_log(Loadable::Ready(Arc::new(LogPage {
@@ -1543,42 +1555,49 @@ fn refresh_headroom_preserves_selected_root_after_new_commit() {
 }
 
 #[test]
-fn refresh_headroom_does_not_ratchet_on_repeated_refreshes() {
+fn refresh_does_not_ratchet_on_repeated_refreshes() {
     let history = commits_named("c", 2000);
     let mut state = paginated_repo_state(&history[..600]);
     for _ in 0..3 {
         let effects = refresh_history(&mut state);
-        assert_eq!(log_effect(&effects).1, 800);
+        assert_eq!(log_effect(&effects).1, 600);
         answer_log(&mut state, &effects, &history);
     }
 }
 
 #[test]
-fn refresh_depth_is_bounded_for_direct_and_promoted_loads() {
-    for queued in [false, true] {
-        let history = commits_named("c", 10_200);
-        let mut state = paginated_repo_state(&history[..10_000]);
-        state.repos[0].history_state.history_author_filter = Some("alice".into());
-        let pending = queued
-            .then(|| history_message(&mut state, Msg::LoadMoreHistory { repo_id: RepoId(1) }));
-        let mut effects = refresh_history(&mut state);
-        if let Some(pending) = pending {
-            assert!(!effects.iter().any(|e| matches!(e, Effect::LoadLog { .. })));
-            effects = answer_log(&mut state, &pending, &history);
+fn refresh_depth_preserves_direct_and_promoted_loads() {
+    for count in [4_999, 5_000, 5_001, 10_000, 50_000] {
+        for queued in [false, true] {
+            let history = commits_named("c", count + 200);
+            let mut state = paginated_repo_state(&history[..count]);
+            state.repos[0].history_state.history_author_filter = Some("alice".into());
+            let pending = queued
+                .then(|| history_message(&mut state, Msg::LoadMoreHistory { repo_id: RepoId(1) }));
+            let mut effects = refresh_history(&mut state);
+            if let Some(pending) = pending {
+                assert!(!effects.iter().any(|e| matches!(e, Effect::LoadLog { .. })));
+                effects = answer_log(&mut state, &pending, &history);
+            }
+            let retained = count + if queued { 200 } else { 0 };
+            assert_eq!(log_effect(&effects).1, retained);
+            assert!(effects.iter().any(
+                |e| matches!(e, Effect::LoadLog { author: Some(author), .. } if author == "alice")
+            ));
+            answer_log(&mut state, &effects, &history);
+            assert!(
+                matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history[..retained])
+            );
         }
-        assert_eq!(log_effect(&effects).1, 5000);
-        assert!(effects.iter().any(
-            |e| matches!(e, Effect::LoadLog { author: Some(author), .. } if author == "alice")
-        ));
     }
 }
 
 #[test]
-fn full_refresh_of_ready_log_keeps_depth_with_headroom() {
+fn full_refresh_of_ready_log_keeps_depth() {
     let mut state = paginated_repo_state(&commits_named("c", 600));
     state.active_repo = None;
     let effects = history_message(&mut state, Msg::SetActiveRepo { repo_id: RepoId(1) });
-    assert_eq!(log_effect(&effects).1, 800);
+    assert_eq!(log_effect(&effects).1, 600);
 }
 
 #[test]
@@ -1598,12 +1617,10 @@ fn load_more_during_refresh_does_not_queue_a_stale_cursor_or_drop_later_refresh(
     let pagination = history_message(&mut state, Msg::LoadMoreHistory { repo_id: RepoId(1) });
     assert_eq!(
         log_effect(&pagination).2,
-        Some(cursor_after(&history[..800]))
+        Some(cursor_after(&history[..600]))
     );
     answer_log(&mut state, &pagination, &history);
-    assert!(
-        matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history[..1000])
-    );
+    assert!(matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits == history[..800]));
 }
 
 #[test]
@@ -1652,7 +1669,7 @@ fn cancelled_operation_keeps_ready_history_and_selection() {
         state.repos[0].history_state.selected_commit.as_ref(),
         Some(&selected)
     );
-    assert_eq!(log_effect(&effects).1, 800);
+    assert_eq!(log_effect(&effects).1, 600);
 }
 
 /// Alt-tabbing back to the window refreshes the log through
@@ -1691,7 +1708,7 @@ fn activation_refresh_reloads_the_depth_the_user_paginated_to() {
             Effect::LoadLog {
                 repo_id: RepoId(1),
                 scope: LogScope::CurrentBranch,
-                limit: 800,
+                limit: 600,
                 cursor: None,
                 ..
             }
@@ -1800,7 +1817,8 @@ fn queued_refresh_promoted_after_load_more_covers_the_grown_log() {
             result: Ok(LogPage {
                 commits: third_page.clone(),
                 next_cursor: Some(cursor_after(&third_page)),
-            }),
+            }
+            .into()),
         }),
     );
     assert!(matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits.len() == 600));
@@ -1808,7 +1826,7 @@ fn queued_refresh_promoted_after_load_more_covers_the_grown_log() {
         matches!(
             effects.as_slice(),
             [Effect::LoadLog {
-                limit: 800,
+                limit: 600,
                 cursor: None,
                 ..
             }]
@@ -2045,7 +2063,8 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
             result: Ok(LogPage {
                 commits: vec![],
                 next_cursor: None,
-            }),
+            }
+            .into()),
         }),
     );
 
@@ -2163,7 +2182,8 @@ fn log_loaded_appends_when_loading_more() {
                     time: SystemTime::UNIX_EPOCH,
                 }],
                 next_cursor: None,
-            }),
+            }
+            .into()),
         }),
     );
 
@@ -2224,7 +2244,8 @@ fn log_loaded_reconciles_commit_multi_selection() {
             result: Ok(LogPage {
                 commits: vec![commit("kept"), commit("other")],
                 next_cursor: None,
-            }),
+            }
+            .into()),
         }),
     );
 
@@ -2420,7 +2441,8 @@ fn log_loaded_keeps_a_not_yet_paged_selection_when_loading_more() {
                     resume_from: None,
                     resume_token: None,
                 }),
-            }),
+            }
+            .into()),
         }),
     );
 
@@ -2479,7 +2501,8 @@ fn log_loaded_first_page_keeps_the_commit_a_reveal_is_walking_toward() {
             result: Ok(LogPage {
                 commits: vec![commit("other")],
                 next_cursor: None,
-            }),
+            }
+            .into()),
         }),
     );
 
@@ -2556,7 +2579,8 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
                     resume_from: None,
                     resume_token: None,
                 }),
-            }),
+            }
+            .into()),
         }),
     );
 
@@ -2642,7 +2666,8 @@ fn log_loaded_clears_retained_scope_switch_log() {
                     time: SystemTime::UNIX_EPOCH,
                 }],
                 next_cursor: None,
-            }),
+            }
+            .into()),
         }),
     );
 
@@ -2698,7 +2723,8 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
                     resume_from: None,
                     resume_token: None,
                 }),
-            }),
+            }
+            .into()),
         }),
     );
 
@@ -2747,7 +2773,8 @@ fn log_loaded_bumps_log_rev() {
                     time: SystemTime::UNIX_EPOCH,
                 }],
                 next_cursor: None,
-            }),
+            }
+            .into()),
         }),
     );
 
@@ -2815,7 +2842,8 @@ fn detached_head_target_tracks_current_branch_log_head() {
                     },
                 ],
                 next_cursor: None,
-            }),
+            }
+            .into()),
         }),
     );
 
@@ -2888,7 +2916,8 @@ fn filtered_current_branch_logs_do_not_backfill_detached_head_target() {
                 result: Ok(LogPage {
                     commits,
                     next_cursor: None,
-                }),
+                }
+                .into()),
             }),
         );
 
@@ -3283,7 +3312,8 @@ fn log_chunks_replace_the_page_progressively() {
             result: Ok(LogPage {
                 commits: vec![commit("c1"), commit("c2"), commit("c3")],
                 next_cursor: None,
-            }),
+            }
+            .into()),
         }),
     );
     let Loadable::Ready(page) = &state.repos[0].log else {

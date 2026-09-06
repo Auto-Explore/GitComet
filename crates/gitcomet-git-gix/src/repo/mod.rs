@@ -318,6 +318,17 @@ impl GitRepository for GixRepo {
         &self.spec
     }
 
+    fn read_history(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        request: &gitcomet_core::services::HistoryReadRequest,
+        cancellation: &CancellationToken,
+        on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
+    ) -> Result<gitcomet_core::services::HistoryReadResult> {
+        self.read_history_impl(mode, author, request, cancellation, on_chunk)
+    }
+
     fn log_history_mode_page(
         &self,
         mode: HistoryMode,

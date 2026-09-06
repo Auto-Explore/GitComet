@@ -1985,21 +1985,29 @@ impl HistoryLoadMoreAppendFixture {
         state.repos.push(repo_state);
         state.active_repo = Some(self.repo_id);
 
+        let seq = state.repos[0]
+            .loads_in_flight
+            .request_log(gitcomet_state::model::PendingLogLoad {
+                scope: self.scope,
+                author: None,
+                limit: self.existing_commits.len(),
+                cursor: None,
+            })
+            .expect("initial fixture load");
         // Seed the initial page through the reducer so benchmark setup matches
         // the production initial-load path, including any pagination slack.
         let _ = dispatch_sync(
             &mut state,
             Msg::Internal(InternalMsg::LogLoaded {
                 repo_id: self.repo_id,
-                // Nothing is tracking a walk in the fixture, so any sequence
-                // number is accepted; production carries the request's own.
-                seq: 0,
+                seq,
                 scope: self.scope,
                 cursor: None,
                 result: Ok(LogPage {
                     commits: self.existing_commits.clone(),
                     next_cursor: self.request_cursor(),
-                }),
+                }
+                .into()),
             }),
         );
 
@@ -2033,16 +2041,29 @@ impl HistoryLoadMoreAppendFixture {
             .map(|repo| repo.history_state.log_rev)
             .unwrap_or_default();
 
+        let repo = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == self.repo_id)
+            .unwrap();
+        let seq = repo.loads_in_flight.active_log_seq().unwrap_or_else(|| {
+            repo.loads_in_flight
+                .request_log(gitcomet_state::model::PendingLogLoad {
+                    scope: self.scope,
+                    author: None,
+                    limit: page.commits.len(),
+                    cursor: cursor.clone(),
+                })
+                .expect("fixture load")
+        });
         let effects = dispatch_sync(
             state,
             Msg::Internal(InternalMsg::LogLoaded {
                 repo_id: self.repo_id,
-                // Nothing is tracking a walk in the fixture, so any sequence
-                // number is accepted; production carries the request's own.
-                seq: 0,
+                seq,
                 scope: self.scope,
                 cursor,
-                result: Ok(page),
+                result: Ok(page.into()),
             }),
         );
 

@@ -13,6 +13,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 mod history_panel;
+mod viewport;
 
 pub(in super::super) fn history_scrollbar_gutter() -> Pixels {
     crate::view::components::Scrollbar::gutter(crate::view::components::ScrollbarAxis::Vertical)
@@ -626,7 +627,7 @@ enum HistoryLaneAnchor {
     Worktree { head: CommitId, on_branch: bool },
 }
 
-/// Keyed on the base cache's whole request rather than its `log_fingerprint`:
+/// Keyed on the base cache's whole request rather than its `log_source`:
 /// the answer is read out of `graph_rows`, which is recomputed for every field
 /// of that request. Creating, deleting or checking out a branch changes which
 /// rows `force_branch_head_lane` fires on and so which colour index each lane
@@ -1075,6 +1076,7 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_col_graph_auto: bool,
     pub(in super::super) history_col_resize: Option<HistoryColResizeState>,
     pub(in super::super) history_cache: Option<HistoryCache>,
+    pending_history_cache: Option<HistoryCache>,
     history_selected_list_index_cache: Option<HistorySelectedListIndexCache>,
     selected_branch: Option<SelectedBranch>,
     pending_history_reveal: Option<PendingHistoryReveal>,
@@ -1083,6 +1085,7 @@ pub(in super::super) struct HistoryView {
     last_browse_commit: Option<CommitId>,
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     history_list_plan_cache: Option<HistoryListPlanCache>,
+    presented_history: Option<viewport::PresentedHistory>,
     history_selected_lane_color_cache: Option<HistorySelectedLaneColorCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
@@ -1229,12 +1232,14 @@ impl HistoryView {
             history_col_graph_auto: true,
             history_col_resize: None,
             history_cache: None,
+            pending_history_cache: None,
             history_selected_list_index_cache: None,
             selected_branch: None,
             pending_history_reveal: None,
             last_browse_commit: None,
             history_worktree_summary_cache: None,
             history_list_plan_cache: None,
+            presented_history: None,
             history_selected_lane_color_cache: None,
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
@@ -1285,8 +1290,7 @@ impl HistoryView {
         &self,
         repo_id: RepoId,
     ) -> Option<Vec<CommitId>> {
-        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
-        let page = Self::display_log_page_for_repo(repo)?;
+        self.state.repos.iter().find(|r| r.id == repo_id)?;
         let cache = self
             .history_cache
             .as_ref()
@@ -1296,7 +1300,7 @@ impl HistoryView {
                 .base
                 .visible_indices
                 .iter()
-                .filter_map(|ix| page.commits.get(ix).map(|c| c.id.clone()))
+                .filter_map(|ix| cache.page.commits.get(ix).map(|c| c.id.clone()))
                 .collect(),
         )
     }
@@ -1378,7 +1382,10 @@ impl HistoryView {
         HistoryBaseCacheRequest {
             repo_id: repo.id,
             history_scope: repo.history_state.history_scope,
-            log_fingerprint: Self::log_fingerprint(&page.commits),
+            // The cache owns the Arc, so the source's address cannot be reused
+            // while this key is live. A mutation must copy a shared page first.
+            log_source: std::ptr::from_ref(page) as usize,
+            history_author_filter: repo.history_state.history_author_filter.clone(),
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
             head_branch_target: Self::attached_head_target_for_repo(repo),
@@ -2364,6 +2371,11 @@ impl HistoryView {
             decoration_request: decoration_request.clone(),
         };
 
+        if self.pending_history_cache.as_ref().is_some_and(|cache| {
+            cache.base.request == base_request && cache.decorations.request == decoration_request
+        }) {
+            return;
+        }
         let cache_ok = self.history_cache.as_ref().is_some_and(|cache| {
             cache.base.request == base_request && cache.decorations.request == decoration_request
         });
@@ -2439,7 +2451,11 @@ impl HistoryView {
                         tags.as_ref(),
                     );
 
-                    HistoryCache { base, decorations }
+                    HistoryCache {
+                        page,
+                        base,
+                        decorations,
+                    }
                 };
 
                 let rebuild: HistoryCache =
@@ -2457,6 +2473,24 @@ impl HistoryView {
                         return;
                     }
                     if this.active_repo_id() != Some(request_for_update.base_request.repo_id) {
+                        return;
+                    }
+
+                    let current_matches = this
+                        .active_repo()
+                        .and_then(|repo| {
+                            let page = Self::display_log_page_for_repo(repo)?;
+                            Some(
+                                this.history_base_cache_request_for_repo(repo, &page)
+                                    == request_for_update.base_request
+                                    && this.history_decoration_cache_request_for_repo(repo, &page)
+                                        == request_for_update.decoration_request,
+                            )
+                        })
+                        .unwrap_or(false);
+                    if !current_matches {
+                        this.history_cache_inflight = None;
+                        cx.notify();
                         return;
                     }
 
@@ -2504,72 +2538,30 @@ impl HistoryView {
         .detach();
     }
 
-    /// Keep the commit at the viewport's top in place when a refreshed page
-    /// inserts or removes rows above it. Read the offset when the rebuild lands
-    /// so scrolling during the background build is respected too.
     fn replace_history_cache(&mut self, rebuild: HistoryCache) {
-        let old_plan = self.ensure_history_list_plan();
-        let anchor = (|| {
-            if self.pending_history_reveal.is_some()
-                || !self
-                    .active_repo()
-                    .is_some_and(|repo| matches!(repo.log, Loadable::Ready(_)))
-            {
-                return None;
-            }
-            let old = self.history_cache.as_ref()?;
-            if old.base.request.repo_id != rebuild.base.request.repo_id
-                || old.base.request.history_scope != rebuild.base.request.history_scope
-                || old.base.request.log_fingerprint == rebuild.base.request.log_fingerprint
-            {
-                return None;
-            }
-            let scroll = self.history_scroll.0.borrow();
-            let height = crate::view::rows::history_row_height(self.ui_scale());
-            let offset = scroll.base_handle.offset();
-            // At the top, follow new commits instead of scrolling past them.
-            if height <= px(0.0) || offset.y >= px(0.0) {
-                return None;
-            }
-            let top = (-offset.y / height).floor() as usize;
-            let visible_ix = match old_plan.row_at(top)? {
-                crate::view::caches::HistoryListRow::Commit { visible_ix }
-                | crate::view::caches::HistoryListRow::WorktreeUncommitted { visible_ix, .. } => {
-                    visible_ix
-                }
-                crate::view::caches::HistoryListRow::WorkingTreeSummary => return None,
-            };
-            let (id, _) = old
-                .base
-                .visible_ix_by_commit
-                .iter()
-                .find(|(_, ix)| **ix == visible_ix)?;
-            let next_visible = *rebuild.base.visible_ix_by_commit.get(id)?;
-            let relative_y = offset.y + height * old_plan.list_ix_for_visible(visible_ix) as f32;
-            Some((next_visible, relative_y, height, offset.x))
-        })();
-        self.history_cache = Some(rebuild);
-        if let Some((visible_ix, relative_y, height, x)) = anchor {
-            let plan = self.ensure_history_list_plan();
-            let y = relative_y - height * plan.list_ix_for_visible(visible_ix) as f32;
-            self.history_scroll
-                .0
-                .borrow()
-                .base_handle
-                .set_offset(point(x, y.min(px(0.0))));
-        }
+        // Keep input handlers on the source that was actually displayed until
+        // render can install the page, its row plan, and its viewport together.
+        self.pending_history_cache = Some(rebuild);
     }
 
-    fn log_fingerprint(commits: &[Commit]) -> u64 {
-        let mut hasher = FxHasher::default();
-        commits.len().hash(&mut hasher);
-        for id in commits.iter().take(3).map(|c| c.id.as_ref()) {
-            id.hash(&mut hasher);
+    fn apply_pending_history_cache(&mut self) {
+        let Some(rebuild) = self.pending_history_cache.take() else {
+            return;
+        };
+        let current_matches = self
+            .active_repo()
+            .and_then(|repo| {
+                let page = Self::display_log_page_for_repo(repo)?;
+                Some(
+                    self.history_base_cache_request_for_repo(repo, &page) == rebuild.base.request
+                        && self.history_decoration_cache_request_for_repo(repo, &page)
+                            == rebuild.decorations.request,
+                )
+            })
+            .unwrap_or(false);
+        if current_matches {
+            self.history_cache = Some(rebuild);
         }
-        for id in commits.iter().rev().take(3).map(|c| c.id.as_ref()) {
-            id.hash(&mut hasher);
-        }
-        hasher.finish()
     }
 }
 

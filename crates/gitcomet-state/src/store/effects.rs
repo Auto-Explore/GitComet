@@ -1657,13 +1657,29 @@ pub(super) fn schedule_effect(
             limit,
             cursor,
         } => {
-            let stream = cursor.is_none() && {
+            let request = {
+                use gitcomet_core::services::HistoryReadRequest;
                 let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
-                state
-                    .repos
-                    .iter()
-                    .find(|repo| repo.id == repo_id)
-                    .is_some_and(|repo| repo.log.is_loading())
+                let repo = state.repos.iter().find(|repo| repo.id == repo_id);
+                // Do not let an obsolete effect cancel the replacement walk.
+                if repo
+                    .and_then(|repo| repo.loads_in_flight.active_log_seq())
+                    .is_some_and(|active| active != seq)
+                {
+                    return;
+                }
+                let snapshot = repo.and_then(|repo| repo.history_state.log_snapshot.clone());
+                match (cursor.as_ref(), repo.map(|repo| &repo.log)) {
+                    (None, Some(Loadable::Ready(previous))) => HistoryReadRequest::Refresh {
+                        previous: Arc::clone(previous),
+                        snapshot,
+                    },
+                    _ => HistoryReadRequest::Page {
+                        limit,
+                        cursor: cursor.clone(),
+                        snapshot,
+                    },
+                }
             };
             if let Some((msg_tx, cancellation)) =
                 log_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
@@ -1676,9 +1692,8 @@ pub(super) fn schedule_effect(
                     seq,
                     scope,
                     author,
-                    limit,
                     cursor,
-                    stream,
+                    request,
                     cancellation,
                 );
             }

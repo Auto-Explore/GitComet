@@ -257,14 +257,9 @@ impl RepoLoadsInFlight {
     /// layer cancelled). Superseded replies must be dropped without touching
     /// the in-flight bookkeeping — the walk that replaced them is still going.
     pub fn is_active_log_reply(&self, seq: LogLoadSeq) -> bool {
-        match &self.active_log {
-            Some((active, _)) => *active == seq,
-            // Nothing is being tracked, so no walk's bookkeeping can be cleared
-            // out from under it — `active_log` is set for exactly as long as the
-            // `LOG` flag is, so applying this reply finishes a load that is not
-            // running and promotes a queue that is empty.
-            None => true,
-        }
+        self.active_log
+            .as_ref()
+            .is_some_and(|(active, _)| *active == seq)
     }
 
     /// The sequence number of the walk in flight, if any. Tests that answer a
@@ -925,9 +920,8 @@ pub struct HistoryState {
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
-    /// Depth explicitly loaded or paginated by the user, excluding refresh
-    /// headroom. Keeping it separate prevents each refresh adding another page.
-    pub log_paged_depth: usize,
+    /// Identity of the exact Git inputs behind the loaded page.
+    pub log_snapshot: Option<gitcomet_core::services::HistorySnapshot>,
     /// Commits visited by the streaming initial walk, retained for diagnostics.
     /// `None` once the page is complete. Updating this does not rebuild rows.
     pub log_scan_progress: Option<u64>,
@@ -995,7 +989,7 @@ impl Default for HistoryState {
             retained_log_while_loading: None,
             log_loading_more: false,
             log_scan_progress: None,
-            log_paged_depth: 0,
+            log_snapshot: None,
             log_rev: 0,
             file_history_path: None,
             file_history: Loadable::NotLoaded,
@@ -1948,10 +1942,9 @@ impl RepoState {
         if !matches!(log, Loadable::Loading) {
             self.history_state.retained_log_while_loading = None;
         }
-        self.history_state.log_paged_depth = match &log {
-            Loadable::Ready(page) => page.commits.len(),
-            _ => 0,
-        };
+        // A caller accepting a backend result installs its snapshot after this
+        // write. Reload and filter transitions must never reuse the old token.
+        self.history_state.log_snapshot = None;
         self.history_state.log = log.clone();
         self.log = log;
         self.bump_log_revs();

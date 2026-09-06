@@ -52,7 +52,6 @@ impl HistoryView {
             this.history_relative_dates,
         );
 
-        let page = Self::display_log_page_for_repo(repo);
         let cache = this
             .history_cache
             .as_ref()
@@ -149,8 +148,8 @@ impl HistoryView {
                     return None;
                 };
 
-                let page = page.as_deref()?;
                 let cache = cache?;
+                let page = &cache.page;
 
                 let commit_ix = cache.base.visible_indices.get(visible_ix)?;
                 let commit = page.commits.get(commit_ix)?;

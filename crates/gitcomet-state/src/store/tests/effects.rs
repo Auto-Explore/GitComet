@@ -5034,7 +5034,7 @@ fn load_log_effect_uses_history_mode_api() {
             seq,
             scope,
             cursor: got_cursor,
-            result: Ok(page),
+            result: Ok(gitcomet_core::services::HistoryReadResult::Page { page, .. }),
         }) => {
             assert_eq!(got_repo_id, repo_id);
             assert_eq!(seq, 1, "the reply carries the sequence of its request");
