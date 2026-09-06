@@ -1423,6 +1423,223 @@ fn load_more_history_emits_paginated_load_log_effect() {
     ));
 }
 
+/// `count` commits with distinct ids: the shape of a log grown by "load more".
+fn commits_named(prefix: &str, count: usize) -> Vec<Commit> {
+    (0..count)
+        .map(|ix| Commit {
+            id: CommitId(format!("{prefix}{ix:04}").into()),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: "s".into(),
+            author: "a".into(),
+            time: SystemTime::UNIX_EPOCH,
+        })
+        .collect()
+}
+
+fn cursor_after(commits: &[Commit]) -> LogCursor {
+    LogCursor {
+        last_seen: commits.last().expect("a non-empty page").id.clone(),
+        resume_from: None,
+        resume_token: None,
+    }
+}
+
+fn paginated_repo_state(commits: &[Commit]) -> AppState {
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_open(Loadable::Ready(()));
+    state.active_repo = Some(RepoId(1));
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
+    repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
+        commits: commits.to_vec(),
+        next_cursor: Some(cursor_after(commits)),
+    })));
+    state
+}
+
+/// Alt-tabbing back to the window refreshes the log through
+/// `RepoExternallyChanged`. With three "load more" pages on screen and the
+/// selection on the last of them, a refresh that walked one default page
+/// would replace 600 rows with 200: the selected commit would vanish and the
+/// list, now shorter than its scroll offset, would clamp back toward the top.
+#[test]
+fn activation_refresh_reloads_the_depth_the_user_paginated_to() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let commits = commits_named("c", 600);
+    let selected = commits[450].id.clone();
+    let mut state = paginated_repo_state(&commits);
+    let repo_state = &mut state.repos[0];
+    repo_state.set_selected_commit(Some(selected.clone()));
+    repo_state.set_commit_multi_selection(crate::model::CommitMultiSelection {
+        commits: vec![selected.clone()],
+        anchor: Some(selected.clone()),
+        anchor_index: Some(450),
+        anchor_log_rev: Some(repo_state.history_state.log_rev),
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::all(),
+        },
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadLog {
+                repo_id: RepoId(1),
+                scope: LogScope::CurrentBranch,
+                limit: 600,
+                cursor: None,
+                ..
+            }
+        )),
+        "expected the refresh to walk as deep as the loaded log, got {effects:?}"
+    );
+
+    let seq = active_log_seq(&state.repos[0]);
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: commits.clone(),
+                next_cursor: Some(cursor_after(&commits)),
+            }),
+        }),
+    );
+
+    let repo_state = &state.repos[0];
+    assert!(
+        matches!(&repo_state.log, Loadable::Ready(page) if page.commits.len() == 600),
+        "the reloaded page must hold every row that was on screen"
+    );
+    assert_eq!(
+        repo_state.history_state.selected_commit.as_ref(),
+        Some(&selected),
+        "the selected commit must survive the refresh"
+    );
+    assert_eq!(
+        repo_state.history_state.multi_selection.commits,
+        vec![selected]
+    );
+}
+
+#[test]
+fn refresh_of_a_log_shorter_than_a_page_keeps_the_default_page_size() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = paginated_repo_state(&commits_named("c", 3));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadLog {
+                limit: 200,
+                cursor: None,
+                ..
+            }
+        )),
+        "a short log refreshes with the default page, got {effects:?}"
+    );
+}
+
+/// A refresh that arrives while a "load more" walk is running queues behind
+/// it. By the time it starts the log is a page deeper, so the depth it walks
+/// is settled when it is promoted, not when it was queued.
+#[test]
+fn queued_refresh_promoted_after_load_more_covers_the_grown_log() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let first_pages = commits_named("c", 400);
+    let mut state = paginated_repo_state(&first_pages);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadMoreHistory { repo_id: RepoId(1) },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadLog {
+            limit: 200,
+            cursor: Some(_),
+            ..
+        }]
+    ));
+    let load_more_seq = active_log_seq(&state.repos[0]);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadLog { .. })),
+        "the refresh must queue behind the running load-more, got {effects:?}"
+    );
+
+    let third_page = commits_named("d", 200);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq: load_more_seq,
+            scope: LogScope::CurrentBranch,
+            cursor: Some(cursor_after(&first_pages)),
+            result: Ok(LogPage {
+                commits: third_page.clone(),
+                next_cursor: Some(cursor_after(&third_page)),
+            }),
+        }),
+    );
+    assert!(matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits.len() == 600));
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::LoadLog {
+                limit: 600,
+                cursor: None,
+                ..
+            }]
+        ),
+        "expected the promoted refresh to cover all 600 rows, got {effects:?}"
+    );
+}
+
 #[test]
 fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
     for target_scope in [

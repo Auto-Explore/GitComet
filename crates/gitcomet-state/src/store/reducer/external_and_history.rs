@@ -728,12 +728,19 @@ pub(super) fn log_loaded(
 
         if let Some((seq, next)) = repo_state.loads_in_flight.finish_log() {
             repo_state.set_log_loading_more(next.cursor.is_some());
+            // A queued refresh walks the depth the log has *now*: a "load more"
+            // that landed ahead of it grew the page after the refresh was sized.
+            let limit = if next.cursor.is_none() {
+                next.limit.max(super::util::loaded_log_depth(repo_state))
+            } else {
+                next.limit
+            };
             effects.push(Effect::LoadLog {
                 repo_id,
                 seq,
                 scope: next.scope,
                 author: next.author,
-                limit: next.limit,
+                limit,
                 cursor: next.cursor,
             });
         }

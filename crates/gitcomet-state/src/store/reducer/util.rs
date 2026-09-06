@@ -653,6 +653,27 @@ pub(super) fn first_page_log_request(repo_state: &RepoState) -> crate::model::Pe
     }
 }
 
+/// The request a refresh walks: the first page again, but at least as deep as
+/// the log already on screen. A refresh *replaces* the page, so one that walked
+/// a single default page would discard every "load more" page the user scrolled
+/// through — the selected commit would vanish and the shorter list would clamp
+/// the scroll back toward the top (alt-tab back to the window did exactly that).
+pub(super) fn refresh_log_request(repo_state: &RepoState) -> crate::model::PendingLogLoad {
+    crate::model::PendingLogLoad {
+        limit: DEFAULT_LOG_PAGE_SIZE.max(loaded_log_depth(repo_state)),
+        ..first_page_log_request(repo_state)
+    }
+}
+
+/// Rows the finished log holds. A walk still running counts for nothing: its
+/// retained page may belong to the scope the user just left.
+pub(super) fn loaded_log_depth(repo_state: &RepoState) -> usize {
+    match &repo_state.log {
+        Loadable::Ready(page) => page.commits.len(),
+        Loadable::Loading | Loadable::NotLoaded | Loadable::Error(_) => 0,
+    }
+}
+
 /// Requests `load` and returns the effect that starts it, or `None` when it was
 /// coalesced into a walk already in flight. The effect carries the sequence
 /// number the request was given, which is how its replies are recognised.
@@ -683,7 +704,7 @@ pub(super) fn append_refresh_primary_effects(
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
-    let log_request = first_page_log_request(repo_state);
+    let log_request = refresh_log_request(repo_state);
 
     if let Some(seq) = repo_state
         .loads_in_flight
@@ -766,7 +787,7 @@ pub(super) fn append_refresh_full_effects(
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
     }
     append_requested_status_refresh_effects(repo_state, effects);
-    let log_request = first_page_log_request(repo_state);
+    let log_request = refresh_log_request(repo_state);
     if let Some(effect) = request_log_effect(repo_state, log_request) {
         repo_state.set_log_loading_more(false);
         effects.push_effect(effect);
