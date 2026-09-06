@@ -6,10 +6,22 @@ use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
 const DIFF_DEFAULTS_SESSION_SUBTEST_ENV: &str = "GITCOMET_DIFF_DEFAULTS_SESSION_SUBTEST";
+
+fn wait_for_store_setting(description: &str, ready: impl Fn() -> bool) {
+    // Draining GPUI's executor does not synchronize with AppStore's worker thread.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !ready() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {description}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 
 fn unique_session_file(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -2307,12 +2319,14 @@ fn remote_prune_toggle_reaches_the_global_store_setting(cx: &mut gpui::TestAppCo
     });
     cx.run_until_parked();
 
-    assert!(
-        !store
-            .snapshot()
-            .remote_settings
-            .prune_deleted_remote_branches_on_fetch,
-        "the Remotes setting should update the global store setting"
+    wait_for_store_setting(
+        "the Remotes setting to update the global store setting",
+        || {
+            !store
+                .snapshot()
+                .remote_settings
+                .prune_deleted_remote_branches_on_fetch
+        },
     );
 }
 
@@ -2376,12 +2390,14 @@ fn allowed_remote_protocol_toggle_reaches_the_main_window_and_store(cx: &mut gpu
                 .expect("settings window should remain readable")
         );
     });
-    assert!(
-        observed_store
-            .snapshot()
-            .remote_url_policy
-            .allows(RemoteProtocol::Http),
-        "the command store must receive the new protocol policy"
+    wait_for_store_setting(
+        "the command store to receive the new protocol policy",
+        || {
+            observed_store
+                .snapshot()
+                .remote_url_policy
+                .allows(RemoteProtocol::Http)
+        },
     );
 }
 

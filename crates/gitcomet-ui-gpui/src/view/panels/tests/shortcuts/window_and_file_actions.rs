@@ -179,6 +179,30 @@ fn bottom_status_bar_free_badge_opens_editions_page_and_updates_tooltip_on_hover
 }
 
 #[gpui::test]
+fn bottom_status_bar_pro_link_renders_and_opens_editions_page(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    open_repo_for_bottom_status_bar_test(cx, &view, RepoId(710), "bottom_status_pro_link");
+
+    let link_bounds = cx
+        .debug_bounds("bottom_status_bar_pro_link")
+        .expect("expected the Pro link to render without panicking");
+    cx.simulate_mouse_move(link_bounds.center(), None, Modifiers::default());
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("See GitComet Pro".into())
+    );
+
+    cx.simulate_click(link_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert_eq!(cx.opened_url(), Some(crate::view::EDITIONS_URL.to_string()));
+}
+
+#[gpui::test]
 fn bottom_status_bar_free_badge_scales_with_ui_zoom(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

@@ -6,6 +6,16 @@ use super::*;
 const BOTTOM_STATUS_BAR_HEIGHT_PX: f32 = 26.0;
 const PANE_TOGGLE_ICON_SIZE_PX: f32 = 16.0;
 
+fn pro_launch_label(today: jiff::civil::Date) -> SharedString {
+    let launch_date = jiff::civil::date(2026, 10, 7);
+    let days = today.duration_until(launch_date).as_secs() / 86_400;
+    match days {
+        1 => "Pro launches in 1 day".into(),
+        2..=100 => format!("Pro launches in {days} days").into(),
+        _ => "Get Pro!".into(),
+    }
+}
+
 fn sidebar_toggle_icon_path(collapsed: bool) -> &'static str {
     if collapsed {
         "icons/side_panel_left_expand.svg"
@@ -25,11 +35,11 @@ fn details_toggle_icon_path(collapsed: bool) -> &'static str {
 /// Shared shape for the branding links on the bar's trailing end. No plate and
 /// no outline — beside the wordmark and the version number these read as links,
 /// and a badge each would turn the corner into a row of buttons. Hover is
-/// carried entirely by the accent tint, which the Discord glyph picks up through
+/// carried entirely by the supplied tint, which the Discord glyph picks up through
 /// `group_hover` on this element's group.
 fn status_bar_chip(
     id: &'static str,
-    theme: AppTheme,
+    hover_color: gpui::Rgba,
     ui_scale_percent: u32,
 ) -> gpui::Stateful<gpui::Div> {
     let scaled_px = |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
@@ -44,8 +54,8 @@ fn status_bar_chip(
         .items_center()
         .justify_center()
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.text_color(theme.colors.accent.foreground))
-        .active(move |s| s.text_color(theme.colors.accent.foreground))
+        .hover(move |s| s.text_color(hover_color))
+        .active(move |s| s.text_color(hover_color))
 }
 
 pub(in super::super) struct BottomStatusBarView {
@@ -54,6 +64,7 @@ pub(in super::super) struct BottomStatusBarView {
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     active_context_menu_invoker: Option<SharedString>,
+    pro_launch_label: SharedString,
 }
 
 impl BottomStatusBarView {
@@ -79,6 +90,8 @@ impl BottomStatusBarView {
             _ui_model_subscription: subscription,
             root_view,
             active_context_menu_invoker: None,
+            // Use local calendar days and keep the startup label for this window.
+            pro_launch_label: pro_launch_label(jiff::Zoned::now().date()),
         }
     }
 
@@ -332,42 +345,65 @@ impl Render for BottomStatusBarView {
 
         // Branding strip: the edition badge moved down here from the title bar,
         // where it crowded the repository tabs.
-        let discord_badge = status_bar_chip("bottom_status_bar_discord", theme, ui_scale_percent)
-            .child(
-                gpui::svg()
-                    .path("icons/discord.svg")
-                    .w(scaled_px(12.0))
-                    .h(scaled_px(12.0))
-                    .flex_shrink_0()
-                    .text_color(theme.colors.foreground.secondary)
-                    .group_hover("bottom_status_bar_discord", move |s| {
-                        s.text_color(theme.colors.accent.foreground)
-                    }),
-            )
-            .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(DISCORD_URL);
-            }))
-            .gitcomet_tooltip(theme, "Join the GitComet Discord".into());
+        let discord_badge = status_bar_chip(
+            "bottom_status_bar_discord",
+            theme.colors.accent.foreground,
+            ui_scale_percent,
+        )
+        .child(
+            gpui::svg()
+                .path("icons/discord.svg")
+                .w(scaled_px(12.0))
+                .h(scaled_px(12.0))
+                .flex_shrink_0()
+                .text_color(theme.colors.foreground.secondary)
+                .group_hover("bottom_status_bar_discord", move |s| {
+                    s.text_color(theme.colors.accent.foreground)
+                }),
+        )
+        .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+            cx.stop_propagation();
+            cx.open_url(DISCORD_URL);
+        }))
+        .gitcomet_tooltip(theme, "Join the GitComet Discord".into());
 
-        let free_badge = status_bar_chip("bottom_status_bar_free_badge", theme, ui_scale_percent)
-            .text_size(scaled_px(11.0))
-            .line_height(scaled_px(12.0))
-            .font_weight(FontWeight::NORMAL)
-            .text_color(with_alpha(
-                theme.colors.foreground.primary,
-                if theme.is_dark { 0.72 } else { 0.62 },
-            ))
-            .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(EDITIONS_URL);
-            }))
-            .gitcomet_tooltip(theme, "See GitComet editions".into())
-            .child("FREE");
+        let free_badge = status_bar_chip(
+            "bottom_status_bar_free_badge",
+            theme.colors.accent.foreground,
+            ui_scale_percent,
+        )
+        .text_size(scaled_px(11.0))
+        .line_height(scaled_px(12.0))
+        .font_weight(FontWeight::NORMAL)
+        .text_color(with_alpha(
+            theme.colors.foreground.primary,
+            if theme.is_dark { 0.72 } else { 0.62 },
+        ))
+        .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+            cx.stop_propagation();
+            cx.open_url(EDITIONS_URL);
+        }))
+        .gitcomet_tooltip(theme, "See GitComet editions".into())
+        .child("FREE");
+
+        let pro_link = status_bar_chip(
+            "bottom_status_bar_pro_link",
+            theme.colors.accent.foreground,
+            ui_scale_percent,
+        )
+        .text_size(scaled_px(11.0))
+        .line_height(scaled_px(12.0))
+        .text_color(theme.colors.foreground.secondary)
+        .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+            cx.stop_propagation();
+            cx.open_url(EDITIONS_URL);
+        }))
+        .gitcomet_tooltip(theme, "See GitComet Pro".into())
+        .child(self.pro_launch_label.clone());
 
         // GPUI paints an SVG as a mask tinted by the text color, so the mark's
-        // own brand blue never reaches the screen — an untinted mark renders
-        // invisible. Tint it with the accent so it stays legible in every theme.
+        // own brand blue never reaches the screen. Apply that blue explicitly
+        // so the mark keeps its brand color regardless of the theme.
         //
         // The color lives on the link itself and the wordmark inherits it, so
         // one `.hover()` on this stateful element tints the text. A style on the
@@ -386,7 +422,7 @@ impl Render for BottomStatusBarView {
             .active(move |s| s.text_color(theme.colors.accent.foreground))
             .child(svg_icon(
                 "icons/gitcomet_mark.svg",
-                theme.colors.accent.foreground,
+                gpui::rgb(0x5ac1fe),
                 scaled_px(13.0),
             ))
             .child(
@@ -463,6 +499,7 @@ impl Render for BottomStatusBarView {
                             .pl(scaled_px(6.0))
                             .child(discord_badge)
                             .child(free_badge)
+                            .child(pro_link)
                             .child(brand)
                             .child(version_link),
                     ),
@@ -472,7 +509,25 @@ impl Render for BottomStatusBarView {
 
 #[cfg(test)]
 mod tests {
-    use super::{details_toggle_icon_path, sidebar_toggle_icon_path};
+    use super::{details_toggle_icon_path, pro_launch_label, sidebar_toggle_icon_path};
+
+    #[test]
+    fn pro_countdown_uses_calendar_days_and_falls_back_outside_launch_window() {
+        use jiff::civil::date;
+
+        for (today, expected) in [
+            (date(2026, 9, 7), "Pro launches in 30 days"),
+            (date(2026, 9, 8), "Pro launches in 29 days"),
+            (date(2026, 10, 6), "Pro launches in 1 day"),
+            (date(2026, 10, 7), "Get Pro!"),
+            (date(2026, 10, 8), "Get Pro!"),
+            (date(2026, 6, 29), "Pro launches in 100 days"),
+            (date(2026, 6, 28), "Get Pro!"),
+            (date(2025, 10, 7), "Get Pro!"),
+        ] {
+            assert_eq!(pro_launch_label(today).as_ref(), expected, "{today}");
+        }
+    }
 
     #[test]
     fn pane_toggle_arrows_only_appear_when_the_panel_is_collapsed() {
