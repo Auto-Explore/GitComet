@@ -385,10 +385,40 @@ fn stop_monitor_handle(repo_id: RepoId, handle: RepoMonitorHandle, context: &'st
     spawn_monitor_join(repo_id, handle.join, context);
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct IgnoreCacheKey {
     rel: PathBuf,
     is_dir_hint: Option<bool>,
+}
+
+/// One slot per `is_dir_hint` value, keyed by path alone so a probe borrows
+/// the event's path (`get(&Path)`) instead of allocating a key per event.
+#[derive(Clone, Default)]
+struct IgnoreCacheSlots {
+    by_hint: [Option<CachedIgnoreResult>; 3],
+}
+
+impl IgnoreCacheSlots {
+    fn slot(is_dir_hint: Option<bool>) -> usize {
+        match is_dir_hint {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_hint.iter().all(Option::is_none)
+    }
+
+    fn newest_cached_at(&self) -> Option<Instant> {
+        self.by_hint
+            .iter()
+            .flatten()
+            .map(|entry| entry.cached_at)
+            .max()
+    }
 }
 
 const GITIGNORE_CACHE_MAX_ENTRIES: usize = 4_096;
@@ -413,7 +443,7 @@ struct GitignoreRules {
     /// `reload` is unreachable in production.
     backend: Option<Arc<dyn GitBackend>>,
     matcher: Option<Box<dyn WorktreeIgnoreMatcher>>,
-    cache: FxHashMap<IgnoreCacheKey, CachedIgnoreResult>,
+    cache: FxHashMap<PathBuf, IgnoreCacheSlots>,
     last_prune_at: Option<Instant>,
 }
 
@@ -456,53 +486,103 @@ impl GitignoreRules {
     }
 
     fn prune_cache(&mut self, now: Instant) {
-        self.cache
-            .retain(|_, entry| Self::is_cache_entry_fresh(now, entry));
+        self.cache.retain(|_, slots| {
+            for entry in &mut slots.by_hint {
+                if entry
+                    .as_ref()
+                    .is_some_and(|entry| !Self::is_cache_entry_fresh(now, entry))
+                {
+                    *entry = None;
+                }
+            }
+            !slots.is_empty()
+        });
 
         if self.cache.len() > GITIGNORE_CACHE_MAX_ENTRIES {
-            let mut keys_by_age: Vec<(IgnoreCacheKey, Instant)> = self
+            // Only the overflow's keys are cloned: the oldest `overflow`
+            // entries are selected in place rather than by sorting a copy of
+            // every key.
+            let overflow = self.cache.len() - GITIGNORE_CACHE_MAX_ENTRIES;
+            let mut by_age: Vec<(Instant, &PathBuf)> = self
                 .cache
                 .iter()
-                .map(|(key, entry)| (key.clone(), entry.cached_at))
+                .map(|(path, slots)| (slots.newest_cached_at().unwrap_or(now), path))
                 .collect();
-            keys_by_age.sort_unstable_by_key(|(_, cached_at)| *cached_at);
-
-            let overflow = keys_by_age
-                .len()
-                .saturating_sub(GITIGNORE_CACHE_MAX_ENTRIES);
-            for (key, _) in keys_by_age.into_iter().take(overflow) {
-                self.cache.remove(&key);
+            by_age.select_nth_unstable_by_key(overflow - 1, |(cached_at, _)| *cached_at);
+            let evict: Vec<PathBuf> = by_age[..overflow]
+                .iter()
+                .map(|(_, path)| (*path).clone())
+                .collect();
+            for path in evict {
+                self.cache.remove(&path);
             }
         }
 
         self.last_prune_at = Some(now);
     }
 
-    fn cache_get(&mut self, key: &IgnoreCacheKey, now: Instant) -> Option<bool> {
-        let entry = self.cache.get(key)?;
+    fn cache_get_at(
+        &mut self,
+        rel: &Path,
+        is_dir_hint: Option<bool>,
+        now: Instant,
+    ) -> Option<bool> {
+        let slot = IgnoreCacheSlots::slot(is_dir_hint);
+        let slots = self.cache.get_mut(rel)?;
+        let entry = slots.by_hint[slot].as_ref()?;
         let (ignored, fresh) = (entry.ignored, Self::is_cache_entry_fresh(now, entry));
 
         if !fresh {
-            self.cache.remove(key);
+            slots.by_hint[slot] = None;
+            if slots.is_empty() {
+                self.cache.remove(rel);
+            }
             return None;
         }
 
         Some(ignored)
     }
 
-    fn cache_insert(&mut self, key: IgnoreCacheKey, ignored: bool, now: Instant) {
-        self.cache.insert(
-            key,
-            CachedIgnoreResult {
-                ignored,
-                cached_at: now,
-            },
-        );
+    fn cache_insert_at(
+        &mut self,
+        rel: &Path,
+        is_dir_hint: Option<bool>,
+        ignored: bool,
+        now: Instant,
+    ) {
+        let slot = IgnoreCacheSlots::slot(is_dir_hint);
+        let entry = CachedIgnoreResult {
+            ignored,
+            cached_at: now,
+        };
+        match self.cache.get_mut(rel) {
+            Some(slots) => slots.by_hint[slot] = Some(entry),
+            None => {
+                let mut slots = IgnoreCacheSlots::default();
+                slots.by_hint[slot] = Some(entry);
+                self.cache.insert(rel.to_path_buf(), slots);
+            }
+        }
         self.prune_cache_if_due(now);
     }
 
-    fn cached_ignore_lookup(&mut self, key: &IgnoreCacheKey, now: Instant) -> Option<bool> {
-        let cached = self.cache_get(key, now);
+    #[cfg(test)]
+    fn cache_get(&mut self, key: &IgnoreCacheKey, now: Instant) -> Option<bool> {
+        self.cache_get_at(&key.rel, key.is_dir_hint, now)
+    }
+
+    #[cfg(test)]
+    fn cache_insert(&mut self, key: IgnoreCacheKey, ignored: bool, now: Instant) {
+        self.cache_insert_at(&key.rel, key.is_dir_hint, ignored, now);
+    }
+
+    fn cached_ignore_lookup(
+        &mut self,
+        rel: &Path,
+        is_dir_hint: Option<bool>,
+        now: Instant,
+    ) -> Option<bool> {
+        let cached = self.cache_get_at(rel, is_dir_hint, now);
         record_ignore_lookup_cache_outcome(cached.is_some());
         cached
     }
@@ -536,16 +616,12 @@ impl GitignoreRules {
         let now = Instant::now();
         self.prune_cache_if_due(now);
 
-        let key = IgnoreCacheKey {
-            rel: rel.to_path_buf(),
-            is_dir_hint,
-        };
-        if let Some(ignored) = self.cached_ignore_lookup(&key, now) {
+        if let Some(ignored) = self.cached_ignore_lookup(rel, is_dir_hint, now) {
             return ignored;
         }
 
         let ignored = self.resolve_uncached_ignore(rel, is_dir_hint);
-        self.cache_insert(key, ignored, now);
+        self.cache_insert_at(rel, is_dir_hint, ignored, now);
         ignored
     }
 }
@@ -840,6 +916,11 @@ fn repo_monitor_thread(
     let idle_tick = Duration::from_secs(30);
 
     let mut debouncer = DebouncedChange::new(debounce, max_delay);
+    // A `.gitignore` change rebuilds the whole worktree watcher (a tree walk
+    // plus one inotify watch per directory). Several such edits arrive in one
+    // burst during a checkout, so the rebuild waits for the same quiet window
+    // the refresh does rather than running once per event.
+    let mut gitignore_rebuild_pending = false;
 
     let flush = |change: RepoExternalChange| {
         let active = active_repo_id.load(Ordering::Relaxed);
@@ -882,7 +963,10 @@ fn repo_monitor_thread(
 
     loop {
         let now = Instant::now();
-        let timeout = debouncer.next_timeout(now).unwrap_or(idle_tick);
+        let mut timeout = debouncer.next_timeout(now).unwrap_or(idle_tick);
+        if gitignore_rebuild_pending {
+            timeout = timeout.min(debounce);
+        }
 
         match monitor_rx.recv_timeout(timeout) {
             Ok(MonitorMsg::Stop) => {
@@ -943,30 +1027,9 @@ fn repo_monitor_thread(
                         }
                         if classified.gitignore_changed {
                             // The ignore rules changed (and `classify_repo_event` already reloaded
-                            // them), so re-initiate the worktree watches from scratch by rebuilding
-                            // the watcher. Dropping the old watcher releases all of its inotify
-                            // watches, so directories that just became ignored stop being watched
-                            // (no more churn) and ones that became un-ignored gain watches — keeping
-                            // the watched set minimal. The rebuilt watcher is only swapped in if it
-                            // sets up successfully, so a transient failure never leaves us watcherless.
-                            if let Some((new_watcher, new_outcome)) = build_workdir_watcher(
-                                repo_id,
-                                &workdir,
-                                git_dir.as_deref(),
-                                &mut gitignore,
-                                &mut watched_dirs,
-                                &monitor_tx,
-                                &monitor_enabled,
-                            ) {
-                                watcher = new_watcher;
-                                watch_outcome = new_outcome;
-                                note_watch_outcome(
-                                    &msg_tx,
-                                    repo_id,
-                                    &mut watch_degraded,
-                                    watch_outcome,
-                                );
-                            }
+                            // them). The watches are re-initiated once the burst settles; see
+                            // `gitignore_rebuild_pending`.
+                            gitignore_rebuild_pending = true;
                         }
                     }
                     Err(_) => {
@@ -983,6 +1046,28 @@ fn repo_monitor_thread(
                 }
                 let now = Instant::now();
                 flush_if_active(debouncer.take_if_due(now));
+                if gitignore_rebuild_pending && !debouncer.is_pending() {
+                    gitignore_rebuild_pending = false;
+                    // Re-initiate the worktree watches from scratch by rebuilding the watcher.
+                    // Dropping the old watcher releases all of its inotify watches, so directories
+                    // that just became ignored stop being watched (no more churn) and ones that
+                    // became un-ignored gain watches — keeping the watched set minimal. The rebuilt
+                    // watcher is only swapped in if it sets up successfully, so a transient failure
+                    // never leaves us watcherless.
+                    if let Some((new_watcher, new_outcome)) = build_workdir_watcher(
+                        repo_id,
+                        &workdir,
+                        git_dir.as_deref(),
+                        &mut gitignore,
+                        &mut watched_dirs,
+                        &monitor_tx,
+                        &monitor_enabled,
+                    ) {
+                        watcher = new_watcher;
+                        watch_outcome = new_outcome;
+                        note_watch_outcome(&msg_tx, repo_id, &mut watch_degraded, watch_outcome);
+                    }
+                }
                 // While watching is disabled because the worktree was over budget, an ignore edit in
                 // an unwatched subdirectory (which we cannot observe) may have brought it back under
                 // budget. Re-check on the idle tick — but throttled, since each re-check reloads the
@@ -3002,13 +3087,13 @@ mod tests {
         assert!(
             !rules
                 .cache
-                .contains_key(&cache_key("path-0.tmp", Some(false))),
+                .contains_key(&cache_key("path-0.tmp", Some(false)).rel),
             "oldest entries should be evicted first"
         );
         assert!(
             rules
                 .cache
-                .contains_key(&cache_key(format!("path-{}.tmp", total - 1), Some(false))),
+                .contains_key(&cache_key(format!("path-{}.tmp", total - 1), Some(false)).rel),
             "newest entry should remain in cache"
         );
     }
@@ -3100,7 +3185,7 @@ mod tests {
             "expired cache entry should miss"
         );
         assert!(
-            !rules.cache.contains_key(&key),
+            !rules.cache.contains_key(&key.rel),
             "expired cache entry should be removed"
         );
     }

@@ -162,10 +162,12 @@ impl CommitLinkMenu {
 
 impl Render for CommitLinkMenu {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let debug_selector = self.id.to_string();
         div()
             .id((ElementId::from("commit_link_menu_root"), self.id.clone()))
-            .debug_selector(move || debug_selector.clone())
+            .debug_selector({
+                let id = self.id.clone();
+                move || id.to_string()
+            })
             .relative()
             .w_full()
             .min_w(px(0.0))

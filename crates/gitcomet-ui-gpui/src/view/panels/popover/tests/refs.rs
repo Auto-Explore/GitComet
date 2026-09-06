@@ -1840,6 +1840,129 @@ fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::Test
 }
 
 #[gpui::test]
+fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(402);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_pull_menu_without_live_upstream",
+        std::process::id()
+    ));
+
+    // Returns every (label, disabled) entry of the Pull menu for a branch with
+    // the given upstream. A remote always exists, so `pull_request` alone would
+    // still offer the preferred-remote pull.
+    let pull_entries = |cx: &mut gpui::VisualTestContext,
+                        upstream: Option<gitcomet_core::domain::Upstream>|
+     -> Vec<(String, bool)> {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitcomet_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.head_branch = Loadable::Ready("feature/local".to_string());
+                repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+                    name: "feature/local".to_string(),
+                    target: CommitId("deadbeef".into()),
+                    upstream,
+                    divergence: None,
+                }]));
+                repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
+                    name: "origin".to_string(),
+                    url: None,
+                }]));
+                repo.remote_branches =
+                    Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+                        remote: "origin".to_string(),
+                        name: "feature/local".to_string(),
+                        target: CommitId("deadbeef".into()),
+                    }]));
+
+                let state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+                this.state = Arc::clone(&state);
+                this.ui_model
+                    .update(cx, |model, cx| model.set_state(state, cx));
+                cx.notify();
+            });
+        });
+
+        let model = cx
+            .update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(&PopoverKind::PullPicker, cx)
+                    })
+                })
+            })
+            .expect("expected pull context menu model");
+        model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry {
+                    label, disabled, ..
+                } => Some((label.to_string(), *disabled)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let pull_modes = [
+        "Pull (default)",
+        "Pull (fast-forward if possible)",
+        "Pull (fast-forward only)",
+        "Pull (rebase)",
+    ];
+    let disabled_labels = |entries: &[(String, bool)], disabled: bool| -> Vec<String> {
+        entries
+            .iter()
+            .filter(|(_, is_disabled)| *is_disabled == disabled)
+            .map(|(label, _)| label.clone())
+            .collect()
+    };
+
+    let without_upstream = pull_entries(cx, None);
+    assert_eq!(
+        disabled_labels(&without_upstream, true),
+        pull_modes,
+        "every pull mode is disabled while the branch has no tracking branch"
+    );
+    assert!(
+        disabled_labels(&without_upstream, false)
+            .iter()
+            .any(|label| label == "Fetch all"),
+        "fetching does not need a tracking branch"
+    );
+
+    let with_upstream = pull_entries(
+        cx,
+        Some(gitcomet_core::domain::Upstream {
+            remote: "origin".to_string(),
+            branch: "feature/local".to_string(),
+        }),
+    );
+    assert_eq!(
+        disabled_labels(&with_upstream, true),
+        Vec::<String>::new(),
+        "a live tracking branch enables every pull mode"
+    );
+    assert!(
+        pull_modes
+            .iter()
+            .all(|mode| with_upstream.iter().any(|(label, _)| label == mode))
+    );
+}
+
+#[gpui::test]
 fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
     cx: &mut gpui::TestAppContext,
 ) {

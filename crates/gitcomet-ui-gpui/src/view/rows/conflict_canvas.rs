@@ -95,6 +95,7 @@ pub(super) fn split_conflict_row_canvas(
             }
         },
         move |bounds, prepaint, window, cx| {
+            let gutter_style = canvas_text::diff_text_style(window);
             let line_metrics = line_metrics(window);
             let y = center_text_y(bounds, line_metrics.line_height);
             let pad = px_2(window);
@@ -131,6 +132,7 @@ pub(super) fn split_conflict_row_canvas(
                             y,
                             theme.colors.foreground.secondary,
                             line_metrics,
+                            &gutter_style,
                             window,
                             cx,
                         );
@@ -147,6 +149,7 @@ pub(super) fn split_conflict_row_canvas(
                             y,
                             theme.colors.foreground.secondary,
                             line_metrics,
+                            &gutter_style,
                             window,
                             cx,
                         );
@@ -341,6 +344,7 @@ pub(super) fn single_column_conflict_canvas(
         (id_prefix, visible_row_ix),
         move |bounds, _window, _cx| bounds,
         move |bounds, _prepaint, window, cx| {
+            let gutter_style = canvas_text::diff_text_style(window);
             let line_metrics = line_metrics(window);
             let y = center_text_y(bounds, line_metrics.line_height);
             let pad = px_2(window);
@@ -407,6 +411,7 @@ pub(super) fn single_column_conflict_canvas(
                             y,
                             theme.colors.foreground.secondary,
                             line_metrics,
+                            &gutter_style,
                             window,
                             cx,
                         );
@@ -634,14 +639,20 @@ fn prepare_conflict_text_for_canvas(
     };
 
     if styled.highlights.is_empty() {
-        let display = if reveal_whitespace_chars {
-            whitespace_visible_line_text(text.as_ref())
-        } else {
-            styled.text.clone()
-        };
+        if reveal_whitespace_chars {
+            let display = whitespace_visible_line_text(text.as_ref());
+            return PreparedConflictText {
+                text_hash: hash_text(display.as_ref()),
+                text: display,
+                highlights: empty_highlights(),
+                highlights_hash: 0,
+            };
+        }
+        // The text is the styled text unchanged, whose hash is already known;
+        // re-hashing it here ran per visible row per frame.
         return PreparedConflictText {
-            text_hash: hash_text(display.as_ref()),
-            text: display,
+            text_hash: styled.text_hash,
+            text: styled.text.clone(),
             highlights: empty_highlights(),
             highlights_hash: 0,
         };
@@ -796,12 +807,14 @@ fn split_column_text_bounds(
     Bounds::new(point(left, col.top()), size(width, col.size.height))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_gutter_text(
     text: &SharedString,
     x: Pixels,
     y: Pixels,
     color: gpui::Rgba,
     metrics: LineMetrics,
+    style: &TextStyle,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -809,7 +822,7 @@ fn paint_gutter_text(
         return;
     }
     GUTTER_TEXT_LAYOUT_CACHE.with(|cache| {
-        let shaped = canvas_text::shaped_gutter_line(text, color, metrics, cache, window);
+        let shaped = canvas_text::shaped_gutter_line(text, color, metrics, style, cache, window);
         let _ = shaped.paint(
             point(x, y),
             metrics.line_height,

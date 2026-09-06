@@ -289,12 +289,12 @@ fn seed_untracked(
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path,
                         kind: gitcomet_core::domain::FileStatusKind::Untracked,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );

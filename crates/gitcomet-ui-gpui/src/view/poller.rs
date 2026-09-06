@@ -31,8 +31,12 @@ impl Poller {
                 }
                 while events.try_recv().is_ok() {}
 
-                // Keep the store lock/read work off the UI thread.
-                let snapshot = if runtime.uses_background_compute() {
+                // The read is a lock plus an `Arc` clone; only when the reducer
+                // holds the write lock is it worth a thread hop to keep the UI
+                // thread from waiting on it.
+                let snapshot = if let Some(snapshot) = store.try_snapshot() {
+                    snapshot
+                } else if runtime.uses_background_compute() {
                     smol::unblock({
                         let store = Arc::clone(&store);
                         move || store.snapshot()

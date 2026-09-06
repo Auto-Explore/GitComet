@@ -987,16 +987,16 @@ fn unstaged_modified_gitlink_target_uses_unified_diff_mode(cx: &mut gpui::TestAp
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: file_rel.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Added,
                         conflict: None,
-                    }],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    }]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: file_rel.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );
@@ -1113,8 +1113,8 @@ fn switching_diff_target_clears_stale_worktree_preview_loading(cx: &mut gpui::Te
                 let mut repo = opening_repo_state(repo_id, &workdir);
                 repo.status = gitcomet_state::model::Loadable::Ready(
                     gitcomet_core::domain::RepoStatus {
-                        staged: vec![],
-                        unstaged: vec![
+                        staged: std::sync::Arc::new(vec![]),
+                        unstaged: std::sync::Arc::new(vec![
                             gitcomet_core::domain::FileStatus {
                                 path: file_a.clone(),
                                 kind: gitcomet_core::domain::FileStatusKind::Untracked,
@@ -1125,7 +1125,7 @@ fn switching_diff_target_clears_stale_worktree_preview_loading(cx: &mut gpui::Te
                                 kind: gitcomet_core::domain::FileStatusKind::Untracked,
                                 conflict: None,
                             },
-                        ],
+                        ]),
                     }
                     .into(),
                 );
@@ -2737,12 +2737,12 @@ fn status_file_right_click_opens_menu_without_opening_diff_or_changing_selection
             repo.open = gitcomet_state::model::Loadable::Ready(());
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: staged.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
-                    unstaged: vec![
+                    }]),
+                    unstaged: std::sync::Arc::new(vec![
                         gitcomet_core::domain::FileStatus {
                             path: a.clone(),
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -2758,7 +2758,7 @@ fn status_file_right_click_opens_menu_without_opening_diff_or_changing_selection
                             kind: gitcomet_core::domain::FileStatusKind::Untracked,
                             conflict: None,
                         },
-                    ],
+                    ]),
                 }
                 .into(),
             );
@@ -3350,7 +3350,7 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
                 opening_repo_state(repo_id, Path::new("/tmp/repo-details-path-alignment"));
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![
+                    staged: std::sync::Arc::new(vec![
                         gitcomet_core::domain::FileStatus {
                             path: std::path::PathBuf::from(
                                 "staged/really_long_directory_name/files/staged_alpha.rs",
@@ -3365,8 +3365,8 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
                             conflict: None,
                         },
-                    ],
-                    unstaged: vec![
+                    ]),
+                    unstaged: std::sync::Arc::new(vec![
                         gitcomet_core::domain::FileStatus {
                             path: std::path::PathBuf::from(
                                 "src/components/really_long_directory_name/status/file_name_alpha.rs",
@@ -3381,7 +3381,7 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
                             conflict: None,
                         },
-                    ],
+                    ]),
                 }
                 .into(),
             );
@@ -3793,12 +3793,12 @@ fn commit_message_focus_after_initial_draw_accepts_typed_input(cx: &mut gpui::Te
         let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-message-focus"));
         repo.status = gitcomet_state::model::Loadable::Ready(
             gitcomet_core::domain::RepoStatus {
-                staged: vec![gitcomet_core::domain::FileStatus {
+                staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                     path: std::path::PathBuf::from("staged.txt"),
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
                     conflict: None,
-                }],
-                unstaged: Vec::new(),
+                }]),
+                unstaged: std::sync::Arc::new(Vec::new()),
             }
             .into(),
         );
@@ -3851,14 +3851,16 @@ fn commit_click_dispatches_after_state_update_without_intermediate_redraw(
         let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-click"));
         repo.status = gitcomet_state::model::Loadable::Ready(
             gitcomet_core::domain::RepoStatus {
-                staged: (0..staged_count)
-                    .map(|ix| gitcomet_core::domain::FileStatus {
-                        path: std::path::PathBuf::from(format!("staged-{ix}.txt")),
-                        kind: gitcomet_core::domain::FileStatusKind::Modified,
-                        conflict: None,
-                    })
-                    .collect(),
-                unstaged: Vec::new(),
+                staged: std::sync::Arc::new(
+                    (0..staged_count)
+                        .map(|ix| gitcomet_core::domain::FileStatus {
+                            path: std::path::PathBuf::from(format!("staged-{ix}.txt")),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        })
+                        .collect(),
+                ),
+                unstaged: std::sync::Arc::new(Vec::new()),
             }
             .into(),
         );
@@ -3981,16 +3983,16 @@ fn status_section_drag_updates_saved_height(cx: &mut gpui::TestAppContext) {
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: std::path::PathBuf::from("staged.txt"),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    }]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: std::path::PathBuf::from("unstaged.txt"),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );
@@ -4094,18 +4096,20 @@ fn staged_section_remains_visible_after_window_resize_with_saved_split_height(
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: std::path::PathBuf::from("staged.txt"),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
-                    unstaged: (0..30)
-                        .map(|ix| gitcomet_core::domain::FileStatus {
-                            path: std::path::PathBuf::from(format!("unstaged-{ix}.txt")),
-                            kind: gitcomet_core::domain::FileStatusKind::Modified,
-                            conflict: None,
-                        })
-                        .collect(),
+                    }]),
+                    unstaged: std::sync::Arc::new(
+                        (0..30)
+                            .map(|ix| gitcomet_core::domain::FileStatus {
+                                path: std::path::PathBuf::from(format!("unstaged-{ix}.txt")),
+                                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                                conflict: None,
+                            })
+                            .collect(),
+                    ),
                 }
                 .into(),
             );
@@ -4211,12 +4215,12 @@ fn split_status_section_resize_moves_untracked_section(cx: &mut gpui::TestAppCon
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: std::path::PathBuf::from("staged.txt"),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
-                    unstaged: vec![
+                    }]),
+                    unstaged: std::sync::Arc::new(vec![
                         gitcomet_core::domain::FileStatus {
                             path: std::path::PathBuf::from("new.txt"),
                             kind: gitcomet_core::domain::FileStatusKind::Untracked,
@@ -4227,7 +4231,7 @@ fn split_status_section_resize_moves_untracked_section(cx: &mut gpui::TestAppCon
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
                             conflict: None,
                         },
-                    ],
+                    ]),
                 }
                 .into(),
             );
@@ -4370,18 +4374,20 @@ fn unstaged_scroll_viewport_tracks_resized_section_height(cx: &mut gpui::TestApp
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: std::path::PathBuf::from("staged.txt"),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
-                    unstaged: (0..30)
-                        .map(|ix| gitcomet_core::domain::FileStatus {
-                            path: std::path::PathBuf::from(format!("unstaged-{ix}.txt")),
-                            kind: gitcomet_core::domain::FileStatusKind::Modified,
-                            conflict: None,
-                        })
-                        .collect(),
+                    }]),
+                    unstaged: std::sync::Arc::new(
+                        (0..30)
+                            .map(|ix| gitcomet_core::domain::FileStatus {
+                                path: std::path::PathBuf::from(format!("unstaged-{ix}.txt")),
+                                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                                conflict: None,
+                            })
+                            .collect(),
+                    ),
                 }
                 .into(),
             );
@@ -4467,14 +4473,16 @@ fn split_unstaged_scroll_viewport_tracks_resized_section_height(cx: &mut gpui::T
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: (0..30)
-                        .map(|ix| gitcomet_core::domain::FileStatus {
-                            path: std::path::PathBuf::from(format!("unstaged-{ix}.txt")),
-                            kind: gitcomet_core::domain::FileStatusKind::Modified,
-                            conflict: None,
-                        })
-                        .collect(),
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(
+                        (0..30)
+                            .map(|ix| gitcomet_core::domain::FileStatus {
+                                path: std::path::PathBuf::from(format!("unstaged-{ix}.txt")),
+                                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                                conflict: None,
+                            })
+                            .collect(),
+                    ),
                 }
                 .into(),
             );
@@ -4568,18 +4576,20 @@ fn split_unstaged_scroll_viewport_updates_after_outer_resize_shrink(cx: &mut gpu
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: std::path::PathBuf::from("staged.txt"),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
-                    unstaged: (0..30)
-                        .map(|ix| gitcomet_core::domain::FileStatus {
-                            path: std::path::PathBuf::from(format!("unstaged-{ix}.txt")),
-                            kind: gitcomet_core::domain::FileStatusKind::Modified,
-                            conflict: None,
-                        })
-                        .collect(),
+                    }]),
+                    unstaged: std::sync::Arc::new(
+                        (0..30)
+                            .map(|ix| gitcomet_core::domain::FileStatus {
+                                path: std::path::PathBuf::from(format!("unstaged-{ix}.txt")),
+                                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                                conflict: None,
+                            })
+                            .collect(),
+                    ),
                 }
                 .into(),
             );
@@ -4708,8 +4718,8 @@ fn stage_all_asks_before_staging_unresolved_conflicts(cx: &mut gpui::TestAppCont
             let mut repo = opening_repo_state(repo_id, &workdir);
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![
                         gitcomet_core::domain::FileStatus {
                             path: conflicted.clone(),
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -4720,7 +4730,7 @@ fn stage_all_asks_before_staging_unresolved_conflicts(cx: &mut gpui::TestAppCont
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
                             conflict: None,
                         },
-                    ],
+                    ]),
                 }
                 .into(),
             );
@@ -4822,8 +4832,8 @@ fn stage_selected_label_shrinks_when_the_details_pane_is_narrow(cx: &mut gpui::T
             repo.open = gitcomet_state::model::Loadable::Ready(());
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: Vec::new(),
-                    unstaged: vec![
+                    staged: std::sync::Arc::new(Vec::new()),
+                    unstaged: std::sync::Arc::new(vec![
                         gitcomet_core::domain::FileStatus {
                             path: a.clone(),
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -4834,7 +4844,7 @@ fn stage_selected_label_shrinks_when_the_details_pane_is_narrow(cx: &mut gpui::T
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
                             conflict: None,
                         },
-                    ],
+                    ]),
                 }
                 .into(),
             );

@@ -1235,7 +1235,11 @@ impl GitRepository for SlowSubmoduleRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         Self::unsupported()
     }
 
@@ -1374,7 +1378,11 @@ impl GitRepository for SlowStashRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         Self::unsupported()
     }
 

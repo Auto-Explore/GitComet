@@ -18,7 +18,7 @@ use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions
 use gitcomet_core::domain::{DiffArea, DiffLineKind};
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
-    Styled, TextStyle, TransformationMatrix, TruncateFrom, Window, fill, point, px, size,
+    Styled, TextStyle, TransformationMatrix, Window, fill, point, px, size,
 };
 use palette::IntoColor;
 use rustc_hash::{FxHashMap, FxHasher};
@@ -242,6 +242,11 @@ fn mix_stage_gutter_revision(
 }
 
 /// Paint a single line of text truncated to `max_width` with a trailing "…".
+///
+/// Goes through the shared truncation cache: the blame summary is repainted
+/// every frame, and building a line wrapper, truncating and shaping it per
+/// row per frame was the one uncached text path in this file.
+#[allow(clippy::too_many_arguments)]
 fn paint_truncated_text(
     text: &SharedString,
     x: Pixels,
@@ -249,24 +254,28 @@ fn paint_truncated_text(
     max_width: Pixels,
     color: gpui::Rgba,
     metrics: LineMetrics,
+    style: &TextStyle,
     window: &mut Window,
     cx: &mut App,
 ) {
     if text.is_empty() || max_width <= px(0.0) {
         return;
     }
-    let mut style = diff_text_style(window);
+    let mut style = style.clone();
     style.color = color.into_color();
-    let runs = vec![style.to_run(text.len())];
-    let mut wrapper = window
-        .text_system()
-        .line_wrapper(style.font(), metrics.font_size);
-    let (truncated, runs) =
-        wrapper.truncate_line(text.clone(), max_width, "…", &runs, TruncateFrom::End);
-    let shaped = window
-        .text_system()
-        .shape_line(truncated, metrics.font_size, runs.as_ref(), None);
-    let _ = shaped.paint(
+    style.font_size = metrics.font_size.into();
+    style.line_height = metrics.line_height.into();
+    let layout = crate::kit::text_truncation::shape_truncated_line_cached(
+        window,
+        cx,
+        &style,
+        text,
+        Some(max_width),
+        crate::kit::text_truncation::TextTruncationProfile::End,
+        &[],
+        None,
+    );
+    let _ = layout.shaped_line.paint(
         point(x, y),
         metrics.line_height,
         gpui::TextAlign::Left,
@@ -276,10 +285,6 @@ fn paint_truncated_text(
     );
 }
 
-/// Whether a blame entry points at a real commit. Working-tree blame surfaces
-/// uncommitted lines with an empty or all-zero object id ("Not Committed Yet");
-/// those have no commit to open, so their action icons and click handlers are
-/// suppressed.
 fn blame_commit_is_navigable(commit_id: &gitcomet_core::domain::CommitId) -> bool {
     !commit_id.is_uncommitted()
 }
@@ -301,6 +306,7 @@ fn paint_blame_annotation(
     prior_enabled: bool,
     browse_enabled: bool,
     ui_scale_percent: u32,
+    style: &TextStyle,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -316,6 +322,7 @@ fn paint_blame_annotation(
         y,
         text_color,
         when_metrics,
+        style,
         window,
         cx,
     );
@@ -325,6 +332,7 @@ fn paint_blame_annotation(
         y,
         text_color,
         metrics,
+        style,
         window,
         cx,
     );
@@ -341,6 +349,7 @@ fn paint_blame_annotation(
             layout.message.size.width,
             message_color,
             metrics,
+            style,
             window,
             cx,
         );
@@ -817,6 +826,7 @@ fn render_blame_column(
     visible_ix: usize,
     annot_hitboxes: Option<&AnnotHitboxes>,
     view: &Entity<MainPaneView>,
+    style: &TextStyle,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -870,6 +880,7 @@ fn render_blame_column(
         prior_enabled,
         browse_enabled,
         ui_scale_percent,
+        style,
         window,
         cx,
     );
@@ -1098,6 +1109,16 @@ fn paint_row_bg_with_annotation(
     } else {
         window.paint_quad(fill(row_bg_fill_bounds(bounds), bg));
     }
+}
+
+/// One integer id per (row, revision) instead of a `NamedChild` carrying a
+/// freshly formatted hex `String` (an allocation plus an `Arc` per visible
+/// row per frame). The identity still changes exactly when the revision does.
+fn diff_row_canvas_id(name: &'static str, visible_ix: usize, revision: u64) -> gpui::ElementId {
+    let mut hasher = FxHasher::default();
+    visible_ix.hash(&mut hasher);
+    revision.hash(&mut hasher);
+    (name, hasher.finish()).into()
 }
 
 fn inline_row_canvas_revision_key(
@@ -1886,6 +1907,116 @@ fn build_streamed_diff_slice_styled_text(
     (base, pending, resolved_slice_range)
 }
 
+const DIFF_TEXT_DERIVED_CACHE_MAX_ENTRIES: usize = 8_192;
+
+thread_local! {
+    /// Whitespace-revealed text plus its offset map, keyed by the source
+    /// styled text. Both were rebuilt for every visible row on every frame
+    /// while "reveal whitespace" was on.
+    static WHITESPACE_VISIBLE_TEXT_CACHE: std::cell::RefCell<
+        super::FxLruCache<u64, (CachedDiffStyledText, DiffTextOffsetMap)>,
+    > = std::cell::RefCell::new(super::new_fx_lru_cache(DIFF_TEXT_DERIVED_CACHE_MAX_ENTRIES));
+    /// Word-wrap slices keyed by (source styled text, display range): a
+    /// substring plus clipped highlights per visible wrapped row per frame.
+    static WRAP_SLICE_CACHE: std::cell::RefCell<super::FxLruCache<u64, CachedDiffStyledText>> =
+        std::cell::RefCell::new(super::new_fx_lru_cache(DIFF_TEXT_DERIVED_CACHE_MAX_ENTRIES));
+}
+
+fn whitespace_visible_cached(
+    styled: &CachedDiffStyledText,
+    raw_text: Option<&str>,
+) -> (CachedDiffStyledText, DiffTextOffsetMap) {
+    let key = {
+        let mut hasher = FxHasher::default();
+        0u8.hash(&mut hasher);
+        styled.text_hash.hash(&mut hasher);
+        styled.highlights_hash.hash(&mut hasher);
+        match raw_text {
+            Some(raw_text) => {
+                true.hash(&mut hasher);
+                raw_text.hash(&mut hasher);
+            }
+            None => false.hash(&mut hasher),
+        }
+        hasher.finish()
+    };
+    if let Some(hit) =
+        WHITESPACE_VISIBLE_TEXT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned())
+    {
+        return hit;
+    }
+    let value = match raw_text {
+        Some(raw_text) => (
+            whitespace_visible_line_styled_text_for_raw(styled, raw_text),
+            whitespace_visible_diff_offset_map(raw_text, true),
+        ),
+        None => (
+            whitespace_visible_line_styled_text(styled),
+            whitespace_visible_diff_offset_map(styled.text.as_ref(), true),
+        ),
+    };
+    WHITESPACE_VISIBLE_TEXT_CACHE.with(|cache| {
+        cache.borrow_mut().put(key, value.clone());
+    });
+    value
+}
+
+fn whitespace_visible_raw_cached(raw_text: &str) -> (CachedDiffStyledText, DiffTextOffsetMap) {
+    let key = {
+        let mut hasher = FxHasher::default();
+        1u8.hash(&mut hasher);
+        raw_text.hash(&mut hasher);
+        hasher.finish()
+    };
+    if let Some(hit) =
+        WHITESPACE_VISIBLE_TEXT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned())
+    {
+        return hit;
+    }
+    let offset_map = whitespace_visible_diff_offset_map(raw_text, true);
+    let text = whitespace_visible_line_text(raw_text);
+    let text_hash = {
+        let mut hasher = FxHasher::default();
+        text.as_ref().hash(&mut hasher);
+        hasher.finish()
+    };
+    let value = (
+        CachedDiffStyledText {
+            text,
+            highlights: empty_highlights(),
+            highlights_hash: 0,
+            text_hash,
+        },
+        offset_map,
+    );
+    WHITESPACE_VISIBLE_TEXT_CACHE.with(|cache| {
+        cache.borrow_mut().put(key, value.clone());
+    });
+    value
+}
+
+fn slice_cached_diff_styled_text_cached(
+    styled: &CachedDiffStyledText,
+    range: Range<usize>,
+) -> CachedDiffStyledText {
+    let key = {
+        let mut hasher = FxHasher::default();
+        styled.text_hash.hash(&mut hasher);
+        styled.highlights_hash.hash(&mut hasher);
+        range.start.hash(&mut hasher);
+        range.end.hash(&mut hasher);
+        hasher.finish()
+    };
+    if let Some(hit) = WRAP_SLICE_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned()) {
+        return hit;
+    }
+    let sliced = slice_cached_diff_styled_text(styled, range);
+    WRAP_SLICE_CACHE.with(|cache| {
+        cache.borrow_mut().put(key, sliced.clone());
+    });
+    sliced
+}
+
 fn diff_text_paint_payload(
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<&StreamedDiffTextPaintSpec>,
@@ -1908,32 +2039,13 @@ fn diff_text_paint_payload(
 
         let mut offset_map: Option<DiffTextOffsetMap> = None;
         let styled = if let Some(styled) = styled {
-            let visible = if let Some(raw_text) = raw_text {
-                offset_map = Some(whitespace_visible_diff_offset_map(raw_text, true));
-                whitespace_visible_line_styled_text_for_raw(styled, raw_text)
-            } else {
-                offset_map = Some(whitespace_visible_diff_offset_map(
-                    styled.text.as_ref(),
-                    true,
-                ));
-                whitespace_visible_line_styled_text(styled)
-            };
+            let (visible, map) = whitespace_visible_cached(styled, raw_text);
+            offset_map = Some(map);
             Some(visible)
         } else if let Some(spec) = streamed_spec {
-            let raw_text = spec.raw_text.as_ref();
-            offset_map = Some(whitespace_visible_diff_offset_map(raw_text, true));
-            let text = whitespace_visible_line_text(raw_text);
-            let text_hash = {
-                let mut hasher = FxHasher::default();
-                text.as_ref().hash(&mut hasher);
-                hasher.finish()
-            };
-            Some(CachedDiffStyledText {
-                text,
-                highlights: empty_highlights(),
-                highlights_hash: 0,
-                text_hash,
-            })
+            let (visible, map) = whitespace_visible_raw_cached(spec.raw_text.as_ref());
+            offset_map = Some(map);
+            Some(visible)
         } else {
             None
         };
@@ -1945,7 +2057,7 @@ fn diff_text_paint_payload(
                 .as_ref()
                 .map(|map| display_range_for_source_range(map, &source_range))
                 .unwrap_or_else(|| source_range.clone());
-            wrapped = slice_cached_diff_styled_text(styled, display_range.clone());
+            wrapped = slice_cached_diff_styled_text_cached(styled, display_range.clone());
             offset_map = offset_map
                 .as_ref()
                 .map(|map| slice_diff_text_offset_map(map, display_range, source_range));
@@ -1981,7 +2093,7 @@ fn diff_text_paint_payload(
 
     let wrapped;
     let styled = if let (Some(styled), Some(wrap)) = (styled, wrap) {
-        wrapped = slice_cached_diff_styled_text(styled, wrap.range_for_region(region));
+        wrapped = slice_cached_diff_styled_text_cached(styled, wrap.range_for_region(region));
         Some(&wrapped)
     } else {
         styled
@@ -2051,11 +2163,11 @@ pub(super) fn inline_diff_line_row_canvas(
     let highlights_hash = paint_payload.highlights_hash;
     let text_hash = paint_payload.text_hash;
     let offset_map = paint_payload.offset_map;
-    let canvas_id: gpui::ElementId = ("diff_row_canvas_inline", visible_ix).into();
+    let canvas_id = diff_row_canvas_id("diff_row_canvas_inline", visible_ix, revision);
     let test_row_bg = semantic_diff_row_bg(theme, bg);
 
     keyed_canvas(
-        (canvas_id, format!("{revision:016x}")),
+        canvas_id,
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = if show_line_numbers {
@@ -2091,6 +2203,7 @@ pub(super) fn inline_diff_line_row_canvas(
             }
         },
         move |bounds, prepaint, window, cx| {
+            let gutter_style = diff_text_style(window);
             let line_metrics = line_metrics(window);
             let when_metrics = line_metrics_annot_when(window);
             let y = center_text_y(bounds, line_metrics.line_height);
@@ -2120,6 +2233,7 @@ pub(super) fn inline_diff_line_row_canvas(
                     visible_ix,
                     prepaint.annot_hitboxes.as_ref(),
                     &view,
+                    &gutter_style,
                     window,
                     cx,
                 );
@@ -2133,6 +2247,7 @@ pub(super) fn inline_diff_line_row_canvas(
                     y,
                     gutter_fg,
                     line_metrics,
+                    &gutter_style,
                     window,
                     cx,
                 );
@@ -2143,6 +2258,7 @@ pub(super) fn inline_diff_line_row_canvas(
                     y,
                     gutter_fg,
                     line_metrics,
+                    &gutter_style,
                     window,
                     cx,
                 );
@@ -2306,12 +2422,12 @@ pub(super) fn split_diff_line_row_canvas(
     let right_highlights_hash = right_payload.highlights_hash;
     let right_text_hash = right_payload.text_hash;
     let right_offset_map = right_payload.offset_map;
-    let canvas_id: gpui::ElementId = ("diff_row_canvas_split", visible_ix).into();
+    let canvas_id = diff_row_canvas_id("diff_row_canvas_split", visible_ix, revision);
     let left_test_row_bg = semantic_diff_row_bg(theme, left_bg);
     let right_test_row_bg = semantic_diff_row_bg(theme, right_bg);
 
     keyed_canvas(
-        (canvas_id, format!("{revision:016x}")),
+        canvas_id,
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = if show_line_numbers {
@@ -2363,6 +2479,7 @@ pub(super) fn split_diff_line_row_canvas(
             }
         },
         move |bounds, prepaint, window, cx| {
+            let gutter_style = diff_text_style(window);
             let line_metrics = line_metrics(window);
             let when_metrics = line_metrics_annot_when(window);
             let y = center_text_y(bounds, line_metrics.line_height);
@@ -2400,6 +2517,7 @@ pub(super) fn split_diff_line_row_canvas(
                     visible_ix,
                     prepaint.annot_hitboxes.as_ref(),
                     &view,
+                    &gutter_style,
                     window,
                     cx,
                 );
@@ -2413,6 +2531,7 @@ pub(super) fn split_diff_line_row_canvas(
                     y,
                     left_gutter,
                     line_metrics,
+                    &gutter_style,
                     window,
                     cx,
                 );
@@ -2422,6 +2541,7 @@ pub(super) fn split_diff_line_row_canvas(
                     y,
                     right_gutter,
                     line_metrics,
+                    &gutter_style,
                     window,
                     cx,
                 );
@@ -2597,18 +2717,18 @@ pub(super) fn patch_split_column_row_canvas(
     let row_hover = annot_hover.and_then(|(ix, area)| (ix == visible_ix).then_some(area));
     let revision = mix_blame_revision(revision, annotation_width, row_hover, blame.as_ref());
     let revision = mix_stage_gutter_revision(revision, &[stage], stage_hover, visible_ix);
-    let canvas_id: gpui::ElementId = (
+    let canvas_id = diff_row_canvas_id(
         match column {
             super::diff::PatchSplitColumn::Left => "diff_row_canvas_file_split_left",
             super::diff::PatchSplitColumn::Right => "diff_row_canvas_file_split_right",
         },
         visible_ix,
-    )
-        .into();
+        revision,
+    );
     let test_row_bg = semantic_diff_row_bg(theme, bg);
 
     keyed_canvas(
-        (canvas_id, format!("{revision:016x}")),
+        canvas_id,
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = if show_line_numbers {
@@ -2642,6 +2762,7 @@ pub(super) fn patch_split_column_row_canvas(
             }
         },
         move |bounds, prepaint, window, cx| {
+            let gutter_style = diff_text_style(window);
             let line_metrics = line_metrics(window);
             let when_metrics = line_metrics_annot_when(window);
             let y = center_text_y(bounds, line_metrics.line_height);
@@ -2671,6 +2792,7 @@ pub(super) fn patch_split_column_row_canvas(
                     visible_ix,
                     prepaint.annot_hitboxes.as_ref(),
                     &view,
+                    &gutter_style,
                     window,
                     cx,
                 );
@@ -2684,6 +2806,7 @@ pub(super) fn patch_split_column_row_canvas(
                     y,
                     gutter_fg,
                     line_metrics,
+                    &gutter_style,
                     window,
                     cx,
                 );
@@ -2792,14 +2915,12 @@ pub(in crate::view) fn blame_gutter_row_canvas(
     let row_hover = annot_hover.and_then(|(ix, area)| (ix == visual_ix).then_some(area));
     let revision = mix_blame_revision(0, annotation_width, row_hover, blame.as_ref());
     keyed_canvas(
-        (
-            gpui::ElementId::from(("file_editor_blame_row_canvas", visual_ix)),
-            format!("{revision:016x}"),
-        ),
+        diff_row_canvas_id("file_editor_blame_row_canvas", visual_ix, revision),
         move |bounds, window, _cx| {
             build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent)
         },
         move |bounds, annot_hitboxes, window, cx| {
+            let gutter_style = diff_text_style(window);
             let line_metrics = line_metrics(window);
             let y = center_text_y(bounds, line_metrics.line_height);
 
@@ -2822,6 +2943,7 @@ pub(in crate::view) fn blame_gutter_row_canvas(
                     visual_ix,
                     annot_hitboxes.as_ref(),
                     &view,
+                    &gutter_style,
                     window,
                     cx,
                 );
@@ -2899,6 +3021,7 @@ pub(super) fn worktree_preview_row_canvas(
             }
         },
         move |bounds, prepaint, window, cx| {
+            let gutter_style = diff_text_style(window);
             let line_metrics = line_metrics(window);
             let y = center_text_y(bounds, line_metrics.line_height);
 
@@ -2938,6 +3061,7 @@ pub(super) fn worktree_preview_row_canvas(
                     ix,
                     prepaint.annot_hitboxes.as_ref(),
                     &view,
+                    &gutter_style,
                     window,
                     cx,
                 );
@@ -2952,6 +3076,7 @@ pub(super) fn worktree_preview_row_canvas(
                 y,
                 theme.colors.foreground.secondary,
                 line_metrics,
+                &gutter_style,
                 window,
                 cx,
             );
@@ -3462,13 +3587,14 @@ fn paint_gutter_text_right_aligned(
     y: Pixels,
     color: gpui::Rgba,
     metrics: LineMetrics,
+    style: &TextStyle,
     window: &mut Window,
     cx: &mut App,
 ) {
     if text.is_empty() {
         return;
     }
-    let shaped = shaped_gutter_line(text, color, metrics, window);
+    let shaped = shaped_gutter_line(text, color, metrics, style, window);
     let _ = shaped.paint(
         point(right - shaped.width, y),
         metrics.line_height,
@@ -3485,13 +3611,14 @@ fn paint_gutter_text(
     y: Pixels,
     color: gpui::Rgba,
     metrics: LineMetrics,
+    style: &TextStyle,
     window: &mut Window,
     cx: &mut App,
 ) {
     if text.is_empty() {
         return;
     }
-    let shaped = shaped_gutter_line(text, color, metrics, window);
+    let shaped = shaped_gutter_line(text, color, metrics, style, window);
     let _ = shaped.paint(
         point(x, y),
         metrics.line_height,
@@ -3506,10 +3633,11 @@ fn shaped_gutter_line(
     text: &SharedString,
     color: gpui::Rgba,
     metrics: LineMetrics,
+    style: &TextStyle,
     window: &mut Window,
 ) -> gpui::ShapedLine {
     GUTTER_TEXT_LAYOUT_CACHE
-        .with(|cache| canvas_text::shaped_gutter_line(text, color, metrics, cache, window))
+        .with(|cache| canvas_text::shaped_gutter_line(text, color, metrics, style, cache, window))
 }
 
 #[allow(clippy::too_many_arguments)]

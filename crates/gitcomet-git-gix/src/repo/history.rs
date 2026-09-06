@@ -185,7 +185,7 @@ impl GixRepo {
         validate_hex_commit_id(oldest)?;
         validate_hex_commit_id(head)?;
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let (chain, _oldest_parent) = first_parent_chain_to(&repo, head, oldest)?;
         let mut messages = Vec::with_capacity(chain.len());
         for spec in &chain {
@@ -297,7 +297,7 @@ impl GixRepo {
 
         // Validate mainline selection before invoking git so a stale or
         // malformed UI request cannot leave cherry-pick state behind.
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let parent_ids = peel_commit(&repo, id.as_ref())?
             .parent_ids()
             .map(|parent| parent.detach().to_string())
@@ -404,7 +404,7 @@ impl GixRepo {
 
     pub(super) fn rebase_continue_with_output_impl(&self) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         match persisted_reword_state(repo.path()) {
             PersistedReword::Ready {
                 editor,
@@ -607,7 +607,7 @@ impl GixRepo {
         // external merge pick without that metadata is deliberately not
         // auto-skipped because guessing the mainline could hide a real
         // signing/hook failure.
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let parents = peel_commit(&repo, &stopped_on)?
             .parent_ids()
             .map(|parent| parent.detach().to_string())
@@ -653,7 +653,7 @@ impl GixRepo {
     }
 
     fn persist_cherry_pick_mainline(&self, source: &str, parent: &str) -> Result<()> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let path = repo.path().join(PERSISTED_CHERRY_PICK_MAINLINE);
         let staging = repo.path().join(PERSISTED_CHERRY_PICK_MAINLINE_STAGING);
         fs::write(&staging, format!("{source}\n{parent}\n"))
@@ -667,7 +667,7 @@ impl GixRepo {
     }
 
     fn persisted_cherry_pick_mainline_parent(&self, source: &str) -> Option<String> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let contents = fs::read_to_string(repo.path().join(PERSISTED_CHERRY_PICK_MAINLINE)).ok()?;
         let mut lines = contents.lines();
         let persisted_source = lines.next()?;
@@ -683,7 +683,7 @@ impl GixRepo {
     }
 
     fn clear_persisted_cherry_pick_mainline(&self) {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         for name in [
             PERSISTED_CHERRY_PICK_MAINLINE,
             PERSISTED_CHERRY_PICK_MAINLINE_STAGING,
@@ -701,7 +701,7 @@ impl GixRepo {
     /// `None` when no cherry-pick state exists at all. A single-commit
     /// cherry-pick writes no `sequencer` directory, only `CHERRY_PICK_HEAD`.
     fn cherry_pick_progress_marker(&self) -> Option<CherryPickProgress> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let git_dir = repo.path();
         let remaining_steps = fs::read_to_string(git_dir.join("sequencer").join("todo"))
             .ok()
@@ -727,7 +727,7 @@ impl GixRepo {
     /// Whether the index holds unmerged (conflict) entries — the signature
     /// of a rebase genuinely paused at a conflict.
     fn index_has_conflicts(&self) -> bool {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         repo.index_or_empty()
             .is_ok_and(|index| index.entries().iter().any(|e| e.stage_raw() != 0))
     }
@@ -736,7 +736,7 @@ impl GixRepo {
     /// backend's `done` file or the apply backend's `next` counter. `None`
     /// when no rebase state exists.
     fn rebase_progress_marker(&self) -> Option<usize> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let git_dir = repo.path();
         if let Ok(done) = fs::read_to_string(git_dir.join("rebase-merge").join("done")) {
             return Some(done.lines().count());
@@ -794,7 +794,7 @@ impl GixRepo {
     }
 
     pub(super) fn sequencer_state_impl(&self) -> Result<SequencerState> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let state = match repo.state() {
             Some(
                 gix::state::InProgress::Rebase
@@ -818,7 +818,7 @@ impl GixRepo {
     }
 
     fn cherry_pick_in_progress_impl(&self) -> Result<bool> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         Ok(matches!(
             repo.state(),
             Some(gix::state::InProgress::CherryPick | gix::state::InProgress::CherryPickSequence)
@@ -913,7 +913,7 @@ impl GixRepo {
         if let Some(ref msg_editor) = scripts.msg_editor_path {
             cmd.env("GIT_EDITOR", shell_quote_path(msg_editor));
             cmd.env("GITCOMET_MSGS_DIR", &scripts.msgs_dir);
-            let repo = self._repo.to_thread_local();
+            let repo = self.repo();
             cmd.env("GITCOMET_GIT_DIR", repo.path());
         }
         cmd.env("GITCOMET_TODO_FILE", &scripts.todo_path);
@@ -937,7 +937,7 @@ impl GixRepo {
 
         let mut result = self.run_rebase_step_output(cmd, label);
         if self.rebase_in_progress_impl()? {
-            let repo = self._repo.to_thread_local();
+            let repo = self.repo();
             // The rebase started and git's state is still on disk — whether
             // paused at a conflict (Ok) or stopped by a non-conflict failure
             // (Err, e.g. a broken signer): keep the planned messages with
@@ -998,7 +998,7 @@ impl GixRepo {
         // by then, and that mid-sequence stop leaves sequencer state the UI
         // can neither continue nor abort. GitComet plans no mainline
         // selection, so reject merges before launching any step.
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         for entry in entries {
             let commit = peel_commit(&repo, &entry.commit_id)?;
             if commit.parent_ids().count() > 1 {
@@ -1092,7 +1092,7 @@ impl GixRepo {
     }
 
     pub(super) fn merge_commit_message_impl(&self) -> Result<Option<String>> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         if repo.state() != Some(gix::state::InProgress::Merge) {
             return Ok(None);
         }

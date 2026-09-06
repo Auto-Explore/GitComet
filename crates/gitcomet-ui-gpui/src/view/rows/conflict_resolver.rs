@@ -178,45 +178,78 @@ fn conflict_display_text(
     }
 }
 
+const CONFLICT_ROW_WIDTH_CACHE_MAX_ENTRIES: usize = 16_384;
+
+thread_local! {
+    /// Measured widths keyed by (text, font family, font size). The list
+    /// processors measure every visible row each frame to size the row, and
+    /// shaping a line just to read its width was the one uncached shape on
+    /// that path (the canvas shapes the same line again through
+    /// `CONFLICT_TEXT_LAYOUT_CACHE`).
+    static CONFLICT_ROW_WIDTH_CACHE: std::cell::RefCell<super::FxLruCache<u64, Pixels>> =
+        std::cell::RefCell::new(super::new_fx_lru_cache(CONFLICT_ROW_WIDTH_CACHE_MAX_ENTRIES));
+}
+
 fn conflict_row_text_width(
     window: &mut Window,
     text: &SharedString,
     font_family: Option<&str>,
 ) -> Pixels {
+    use std::hash::{Hash as _, Hasher as _};
+
     if text.is_empty() {
         return px(0.0);
     }
 
     let mut style = window.text_style();
     style.font_weight = FontWeight::NORMAL;
-    if let Some(font_family) = font_family {
+    if let Some(font_family) = font_family
+        && style.font_family.as_ref() != font_family
+    {
         style.font_family = font_family.to_string().into();
     }
 
     let font_size = style.font_size.to_pixels(window.rem_size()) * CONFLICT_ROW_FONT_SCALE;
-    if !text.as_ref().contains(['\n', '\r']) {
-        return window
-            .text_system()
-            .shape_line(text.clone(), font_size, &[style.to_run(text.len())], None)
-            .width;
+    let key = {
+        let mut hasher = FxHasher::default();
+        text.as_ref().hash(&mut hasher);
+        style.font_family.hash(&mut hasher);
+        f32::from(font_size).to_bits().hash(&mut hasher);
+        hasher.finish()
+    };
+    if let Some(width) =
+        CONFLICT_ROW_WIDTH_CACHE.with(|cache| cache.borrow_mut().get(&key).copied())
+    {
+        return width;
     }
 
-    text.as_ref()
-        .split(['\n', '\r'])
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            window
-                .text_system()
-                .shape_line(
-                    line.to_string().into(),
-                    font_size,
-                    &[style.to_run(line.len())],
-                    None,
-                )
-                .width
-        })
-        .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or(px(0.0))
+    let width = if !text.as_ref().contains(['\n', '\r']) {
+        window
+            .text_system()
+            .shape_line(text.clone(), font_size, &[style.to_run(text.len())], None)
+            .width
+    } else {
+        text.as_ref()
+            .split(['\n', '\r'])
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                window
+                    .text_system()
+                    .shape_line(
+                        line.to_string().into(),
+                        font_size,
+                        &[style.to_run(line.len())],
+                        None,
+                    )
+                    .width
+            })
+            .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(px(0.0))
+    };
+    CONFLICT_ROW_WIDTH_CACHE.with(|cache| {
+        cache.borrow_mut().put(key, width);
+    });
+    width
 }
 
 fn conflict_input_row_min_width(

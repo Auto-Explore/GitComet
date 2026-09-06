@@ -11,6 +11,12 @@ static WRITING_CRASH_LOG: AtomicBool = AtomicBool::new(false);
 static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static SESSION_LIFECYCLE: Mutex<()> = Mutex::new(());
 static WRITING_RUNTIME_ERROR_LOG: Mutex<()> = Mutex::new(());
+/// `(location, message)` hashes already written this session. A driver or
+/// GPUI diagnostic that repeats every frame would otherwise capture and
+/// symbolize a backtrace per repetition; one record per distinct error is
+/// what the recovered report needs.
+static RUNTIME_ERRORS_SEEN: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+const MAX_RUNTIME_ERRORS_SEEN: usize = 1_024;
 static CRASH_LOGGER: CrashLogger = CrashLogger;
 const CRASH_ISSUE_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues/new");
 const CRASH_ISSUE_TEMPLATE: &str = "crash_report.md";
@@ -81,7 +87,7 @@ impl log::Log for CrashLogger {
         // them durable enough to survive an event-loop or native process exit.
         let mut stderr = std::io::stderr().lock();
         let _ = writeln!(stderr, "{message}");
-        write_runtime_error_log(record);
+        write_runtime_error_log(record, &message);
     }
 
     fn flush(&self) {}
@@ -219,14 +225,31 @@ fn retire_active_session_in_dir(dir: Option<&Path>) {
     }
 }
 
-fn write_runtime_error_log(record: &log::Record<'_>) {
+/// Whether this `(location, message)` pair is new this session; records it.
+fn first_runtime_error_occurrence(location: &str, message: &str) -> bool {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    location.hash(&mut hasher);
+    message.hash(&mut hasher);
+    let key = hasher.finish();
+    let mut seen = RUNTIME_ERRORS_SEEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if seen.contains(&key) {
+        return false;
+    }
+    if seen.len() >= MAX_RUNTIME_ERRORS_SEEN {
+        seen.clear();
+    }
+    seen.push(key);
+    true
+}
+
+fn write_runtime_error_log(record: &log::Record<'_>, message: &str) {
     if !SESSION_ACTIVE.load(Ordering::SeqCst) {
         return;
     }
     let Ok(_guard) = WRITING_RUNTIME_ERROR_LOG.lock() else {
-        return;
-    };
-    let Some(dir) = crash_dir() else {
         return;
     };
     let location = record
@@ -236,7 +259,13 @@ fn write_runtime_error_log(record: &log::Record<'_>) {
             None => file.to_string(),
         })
         .unwrap_or_else(|| "<unknown log call site>".to_string());
-    let message = single_line_text(&record.args().to_string());
+    let message = single_line_text(message);
+    if !first_runtime_error_occurrence(&location, &message) {
+        return;
+    }
+    let Some(dir) = crash_dir() else {
+        return;
+    };
     let info = if record.target().is_empty() {
         "An error was emitted through the application logging facade.".to_string()
     } else {
@@ -278,8 +307,10 @@ fn write_runtime_error_log_in_dir(
     writeln!(file, "info={}", single_line_text(info))?;
     writeln!(file, "backtrace:")?;
     writeln!(file, "{backtrace}")?;
-    file.flush()?;
-    file.sync_data()
+    // No `sync_data`: the record only has to outlive this process, which the
+    // page cache guarantees, and an fsync per `error!` stalled the frame that
+    // logged it.
+    file.flush()
 }
 
 /// Records entry to the UI event loop. A stale marker lets the next launch

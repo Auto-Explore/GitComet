@@ -1,5 +1,5 @@
-use super::GixRepo;
 use super::history::gix_head_id_or_none;
+use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
     run_git_raw_output, run_git_simple, run_git_with_output, stable_path_bytes,
@@ -25,7 +25,8 @@ use std::thread;
 use std::time::Duration;
 
 type NumstatLineCounts = (Option<u32>, Option<u32>);
-type NumstatCounts = BTreeMap<PathBuf, NumstatLineCounts>;
+/// Lookup only (never iterated in order), so the unseeded hash map suffices.
+type NumstatCounts = rustc_hash::FxHashMap<PathBuf, NumstatLineCounts>;
 
 const SUBMODULE_HISTORY_UNAVAILABLE_REASON: &str = "Submodule history is not available locally.";
 const SUBMODULE_POINTER_SIDE_UNAVAILABLE_REASON: &str =
@@ -66,11 +67,7 @@ impl GixRepo {
     ) -> Result<Vec<Submodule>> {
         cancellation.check_cancelled()?;
         let repo = self.reopen_repo()?;
-        let mut submodules = Vec::new();
-        collect_repo_submodules(&repo, Path::new(""), &mut submodules, cancellation)?;
-        cancellation.check_cancelled()?;
-        submodules.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(submodules)
+        list_submodules_in(&repo, cancellation)
     }
 
     pub(super) fn submodule_diff_summary_impl(
@@ -79,9 +76,11 @@ impl GixRepo {
     ) -> Result<SubmoduleDiffSummary> {
         let repo = self.reopen_repo()?;
         match target {
-            DiffTarget::WorkingTree { path, .. } => {
-                submodule_worktree_diff_summary(&repo, &self.list_submodules_impl()?, path)
-            }
+            DiffTarget::WorkingTree { path, .. } => submodule_worktree_diff_summary(
+                &repo,
+                &list_submodules_in(&repo, &CancellationToken::new())?,
+                path,
+            ),
             DiffTarget::Commit {
                 commit_id,
                 path: Some(path),
@@ -901,8 +900,8 @@ fn submodule_live_inner_changes(
     let staged_counts = git_numstat_counts(nested_workdir, true)?;
     let unstaged_counts = git_numstat_counts(nested_workdir, false)?;
     Ok((
-        submodule_inner_changes_from_status(staged, &staged_counts),
-        submodule_inner_changes_from_status(unstaged, &unstaged_counts),
+        submodule_inner_changes_from_status(&staged, &staged_counts),
+        submodule_inner_changes_from_status(&unstaged, &unstaged_counts),
     ))
 }
 
@@ -1012,15 +1011,15 @@ pub(super) fn diff_commit_to_worktree_files(
 }
 
 fn submodule_inner_changes_from_status(
-    entries: Vec<FileStatus>,
+    entries: &[FileStatus],
     counts: &NumstatCounts,
 ) -> Vec<SubmoduleInnerChange> {
     entries
-        .into_iter()
+        .iter()
         .map(|entry| {
             let (additions, deletions) = counts.get(&entry.path).cloned().unwrap_or((None, None));
             SubmoduleInnerChange {
-                path: entry.path,
+                path: entry.path.clone(),
                 kind: entry.kind,
                 additions,
                 deletions,
@@ -1063,7 +1062,7 @@ fn git_numstat_counts(workdir: &Path, cached: bool) -> Result<NumstatCounts> {
         ))));
     }
 
-    let mut counts = BTreeMap::new();
+    let mut counts = NumstatCounts::default();
     for record in output
         .stdout
         .split(|byte| *byte == 0)
@@ -1198,7 +1197,7 @@ fn git_range_numstat_counts(
         ))));
     }
 
-    let mut counts = BTreeMap::new();
+    let mut counts = NumstatCounts::default();
     let mut fields = output.stdout.split(|byte| *byte == 0);
     while let Some(record) = next_non_empty_nul_field(&mut fields) {
         let mut columns = record.splitn(3, |byte| *byte == b'\t');
@@ -1973,7 +1972,19 @@ fn object_id_from_commit_id(id: &CommitId) -> Option<gix::ObjectId> {
 }
 
 fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
-    CommitId(id.to_string().into())
+    CommitId(oid_to_arc_str(&id))
+}
+
+/// Submodules of an already-open repository, sorted by path.
+fn list_submodules_in(
+    repo: &gix::Repository,
+    cancellation: &CancellationToken,
+) -> Result<Vec<Submodule>> {
+    let mut submodules = Vec::new();
+    collect_repo_submodules(repo, Path::new(""), &mut submodules, cancellation)?;
+    cancellation.check_cancelled()?;
+    submodules.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+    Ok(submodules)
 }
 
 #[cfg(test)]

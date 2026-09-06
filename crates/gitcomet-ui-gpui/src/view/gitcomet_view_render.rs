@@ -209,7 +209,8 @@ impl Render for GitCometView {
             .unwrap_or(CursorStyle::Arrow);
 
         let center_content = self.center_content(window, cx);
-        let font_features = crate::font_preferences::current_font_features(cx);
+        let font_features =
+            crate::font_preferences::applied_font_features(font_preferences.use_font_ligatures);
         let show_custom_window_chrome =
             crate::linux_gui_env::LinuxGuiEnvironment::should_render_custom_window_chrome(
                 decorations,

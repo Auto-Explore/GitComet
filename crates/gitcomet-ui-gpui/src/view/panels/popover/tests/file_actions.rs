@@ -463,12 +463,12 @@ fn status_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );
@@ -581,12 +581,12 @@ fn unopened_submodule_menus_disable_open_in_code_editor(cx: &mut gpui::TestAppCo
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );
@@ -673,12 +673,12 @@ fn status_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );
@@ -932,12 +932,12 @@ fn status_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
             );
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );
@@ -1522,12 +1522,12 @@ fn copy_path_mnemonic_selects_the_relative_entry_in_every_menu(cx: &mut gpui::Te
             repo.spec.workdir = workdir.clone();
             repo.status = Loadable::Ready(
                 gitcomet_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                    staged: std::sync::Arc::new(vec![]),
+                    unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         conflict: None,
-                    }],
+                    }]),
                 }
                 .into(),
             );

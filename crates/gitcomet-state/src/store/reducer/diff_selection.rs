@@ -70,7 +70,14 @@ fn inline_submodule_entries_from_range(
 fn inline_submodule_entries_from_summary(
     summary: &SubmoduleDiffSummary,
 ) -> Vec<InlineSubmoduleDiffEntry> {
-    let mut entries = Vec::new();
+    let capacity = summary
+        .ranges
+        .iter()
+        .map(|range| range.changes.len())
+        .sum::<usize>()
+        + summary.live_staged.len()
+        + summary.live_unstaged.len();
+    let mut entries = Vec::with_capacity(capacity);
     for range in &summary.ranges {
         entries.extend(inline_submodule_entries_from_range(range));
     }

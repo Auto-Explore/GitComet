@@ -1142,7 +1142,7 @@ struct GitCometWindowEntry {
     view: gpui::WeakEntity<GitCometView>,
     main_pane: gpui::WeakEntity<MainPaneView>,
     view_mode: GitCometViewMode,
-    repo_paths: Vec<PathBuf>,
+    repo_paths: std::sync::Arc<[PathBuf]>,
 }
 
 #[derive(Default)]
@@ -1158,7 +1158,7 @@ pub(crate) fn sync_gitcomet_window_state<C>(
     view: gpui::WeakEntity<GitCometView>,
     main_pane: gpui::WeakEntity<MainPaneView>,
     view_mode: GitCometViewMode,
-    repo_paths: Vec<PathBuf>,
+    repo_paths: std::sync::Arc<[PathBuf]>,
 ) where
     C: BorrowAppContext,
 {

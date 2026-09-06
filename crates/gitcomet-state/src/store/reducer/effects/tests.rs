@@ -81,12 +81,12 @@ fn browse_history_pushes_dedups_and_go_live_clears() {
 
 fn conflicted_status(path: &Path, conflict: FileConflictKind) -> RepoStatus {
     RepoStatus {
-        staged: Vec::new(),
-        unstaged: vec![FileStatus {
+        staged: std::sync::Arc::new(Vec::new()),
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: path.to_path_buf(),
             kind: FileStatusKind::Conflicted,
             conflict: Some(conflict),
-        }],
+        }]),
     }
 }
 
@@ -141,7 +141,13 @@ fn unknown_repo_handlers_are_noops() {
     let commit_id = CommitId("abc".into());
 
     assert!(
-        file_history_loaded(&mut state, repo_id, path.clone(), Ok(empty_log_page())).is_empty()
+        file_history_loaded(
+            &mut state,
+            repo_id,
+            path.clone(),
+            Ok(std::sync::Arc::new(empty_log_page()))
+        )
+        .is_empty()
     );
     assert!(
         blame_loaded(
@@ -231,14 +237,19 @@ fn file_history_loaded_updates_only_matching_path_and_reports_errors() {
         &mut state,
         repo_id,
         PathBuf::from("other.txt"),
-        Ok(empty_log_page()),
+        Ok(std::sync::Arc::new(empty_log_page())),
     );
     assert!(matches!(
         repo_mut(&mut state, repo_id).history_state.file_history,
         Loadable::NotLoaded
     ));
 
-    file_history_loaded(&mut state, repo_id, tracked.clone(), Ok(empty_log_page()));
+    file_history_loaded(
+        &mut state,
+        repo_id,
+        tracked.clone(),
+        Ok(std::sync::Arc::new(empty_log_page())),
+    );
     assert!(matches!(
         repo_mut(&mut state, repo_id).history_state.file_history,
         Loadable::Ready(_)

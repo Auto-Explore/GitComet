@@ -634,6 +634,19 @@ impl AppStore {
         Arc::clone(&state)
     }
 
+    /// [`Self::snapshot`] without blocking: `None` while the reducer holds
+    /// the write lock, so a UI thread can take the common uncontended case
+    /// inline and fall back to a background hop only when it would wait.
+    pub fn try_snapshot(&self) -> Option<Arc<AppState>> {
+        match self.state.try_read() {
+            Ok(state) => Some(Arc::clone(&state)),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+                Some(Arc::clone(&poisoned.into_inner()))
+            }
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        }
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn replace_snapshot_for_test(&self, state: Arc<AppState>) {

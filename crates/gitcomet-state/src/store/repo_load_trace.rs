@@ -71,7 +71,11 @@ pub(super) fn record(args: std::fmt::Arguments<'_>) {
 
 macro_rules! trace {
     ($($arg:tt)*) => {
-        $crate::store::repo_load_trace::record(format_args!($($arg)*))
+        // Gate before the arguments are evaluated: call sites format paths
+        // per filesystem event, which must cost nothing while tracing is off.
+        if $crate::store::repo_load_trace::enabled() {
+            $crate::store::repo_load_trace::record(format_args!($($arg)*))
+        }
     };
 }
 
