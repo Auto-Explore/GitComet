@@ -120,6 +120,92 @@ fn refresh_keeps_the_top_visible_commit_at_the_same_pixel(cx: &mut gpui::TestApp
     }
 }
 
+#[gpui::test]
+fn selecting_the_working_tree_preserves_a_file_preview_when_following(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::domain::{DiffTarget, FileSource};
+    use gitcomet_state::model::{FileBrowserSettings, RemoteSettings, SidebarMode};
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    cx.run_until_parked();
+    // Drain the startup settings on the store's own worker before seeding it.
+    store.dispatch(Msg::SetFileBrowserSettings(FileBrowserSettings {
+        follow_selected_commit: false,
+    }));
+    wait_until(cx, "startup settings", |_| {
+        !store
+            .snapshot()
+            .file_browser_settings
+            .follow_selected_commit
+    });
+
+    for (active, follow, sidebar_mode, keep_preview) in [
+        (true, true, SidebarMode::Files, true),
+        (true, false, SidebarMode::Files, false),
+        (true, true, SidebarMode::Branches, false),
+        (false, true, SidebarMode::Files, false),
+    ] {
+        let repo_id = RepoId(1);
+        let commit_id = CommitId("tip".into());
+        let target = DiffTarget::Commit {
+            commit_id: commit_id.clone(),
+            path: Some(PathBuf::from("src/lib.rs")),
+        };
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-follow-preview"),
+            },
+        );
+        repo.open = Loadable::Ready(());
+        repo.history_state.selected_commit = Some(commit_id.clone());
+        repo.file_browser.active = active;
+        repo.file_browser.source = FileSource::Commit(commit_id);
+        repo.diff_state.content_preview = true;
+        repo.diff_state.diff_target = Some(target.clone());
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            sidebar_mode,
+            file_browser_settings: FileBrowserSettings {
+                follow_selected_commit: follow,
+            },
+            ..Default::default()
+        });
+        cx.update(|_window, app| {
+            store.replace_snapshot_for_test(Arc::clone(&state));
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| {
+                history.state = state;
+                history.select_working_tree_summary_row(repo_id, cx);
+            });
+        });
+        // This message is processed after both selection messages, including
+        // any ClearDiffSelection, so observing it makes the assertion stable.
+        store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
+            prune_deleted_remote_branches_on_fetch: false,
+        }));
+        wait_until(cx, "working-tree selection", |_| {
+            !store
+                .snapshot()
+                .remote_settings
+                .prune_deleted_remote_branches_on_fetch
+        });
+        let snapshot = store.snapshot();
+        let repo = &snapshot.repos[0];
+        assert!(repo.history_state.selected_commit.is_none());
+        assert_eq!(repo.diff_state.content_preview, keep_preview);
+        assert_eq!(repo.diff_state.diff_target, keep_preview.then_some(target));
+        if keep_preview {
+            assert_eq!(repo.file_browser.source, FileSource::WorkingDirectory);
+        }
+    }
+}
+
 /// A worktree reveal scrolls to the worktree's own row, which sits one line
 /// *above* the commit that located it. The selected-list-index cache it
 /// writes is keyed on that commit, though, so it has to remember the

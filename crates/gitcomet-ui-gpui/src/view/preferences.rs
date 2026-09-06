@@ -155,6 +155,8 @@ pub(super) struct HistoryPreferences {
     pub(super) show_sha: bool,
     pub(super) relative_dates: bool,
     pub(super) highlight_commit_chain: bool,
+    /// The Files tab browses whichever history row is selected.
+    pub(super) files_follow_selected_commit: bool,
     pub(super) show_tags: bool,
     pub(super) tag_fetch_mode: GitLogTagFetchMode,
     pub(super) default_mode: HistoryMode,
@@ -169,6 +171,7 @@ impl Default for HistoryPreferences {
             show_sha: false,
             relative_dates: true,
             highlight_commit_chain: true,
+            files_follow_selected_commit: true,
             show_tags: true,
             tag_fetch_mode: GitLogTagFetchMode::default(),
             default_mode: HistoryMode::default(),
@@ -313,6 +316,9 @@ impl UiPreferences {
                 show_sha: session.history_show_sha.unwrap_or(false),
                 relative_dates: session.history_relative_dates.unwrap_or(true),
                 highlight_commit_chain: session.history_highlight_commit_chain.unwrap_or(true),
+                files_follow_selected_commit: session
+                    .file_browser_follow_selected_commit
+                    .unwrap_or(true),
                 show_tags: session.history_show_tags.unwrap_or(true),
                 tag_fetch_mode: session.history_tag_fetch_mode.unwrap_or_default(),
                 default_mode: session.default_history_mode.unwrap_or_default(),
@@ -345,6 +351,12 @@ mod tests {
         assert_eq!(preferences.diff.view_mode, DiffViewMode::Split);
         assert!(preferences.diff.show_line_numbers);
         assert!(preferences.history.show_graph);
+        // The store carries its own default for the reducer; the two must agree
+        // or the Files tab would follow the selection until the first sync.
+        assert_eq!(
+            preferences.history.files_follow_selected_commit,
+            gitcomet_state::model::FileBrowserSettings::default().follow_selected_commit
+        );
         assert!(preferences.merge_tool.view_three_way);
         assert!(preferences.remotes.prune_deleted_remote_branches_on_fetch);
         assert_eq!(

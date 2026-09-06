@@ -537,6 +537,20 @@ impl Render for SettingsWindowView {
                             );
                         }));
 
+                    let files_follow_selected_commit_row = self
+                        .toggle_row(
+                            "settings_window_git_log_files_follow_selected_commit",
+                            "Follow selected commit while file browsing",
+                            self.files_follow_selected_commit,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_files_follow_selected_commit(
+                                !this.files_follow_selected_commit,
+                                cx,
+                            );
+                        }));
+
                     let relative_dates_row = self
                         .toggle_row(
                             "settings_window_git_log_relative_dates",
@@ -1705,6 +1719,7 @@ impl Render for SettingsWindowView {
                     }
 
                     git_log_card = git_log_card.child(highlight_commit_chain_row);
+                    git_log_card = git_log_card.child(files_follow_selected_commit_row);
                     git_log_card = git_log_card.child(relative_dates_row);
                     git_log_card = git_log_card.child(show_history_tags_row);
                     if self.history_show_tags {

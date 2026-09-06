@@ -960,11 +960,10 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::WebLinkMenu { .. } | PopoverKind::DiffActionMenu => {
             Some(DIFF_ACTION_MENU_WIDTH)
         }
-        // Shares "Browse repository at this point" with the commit menu, and so
-        // needs the same extra room.
+        // SHA-link and commit menus share their width to keep navigation
+        // and file-browsing actions consistent.
         PopoverKind::CommitShaLinkMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
-        // "Browse repository at this point" needs more room than the default
-        // context-menu width.
+        // Keep room for the longer commit actions.
         PopoverKind::CommitMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
         // Resolver settings have substantially longer labels than diff actions.
         // A dedicated preferred width also feeds the shared anchor-side chooser,

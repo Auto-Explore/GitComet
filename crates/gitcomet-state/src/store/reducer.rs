@@ -681,6 +681,7 @@ pub(crate) fn fill_set_active_repo_inline(
     // and state finalizers the ordinary reducer wrapper applies.
     reconcile_active_nav_history(state, false);
     repo_management::fill_set_active_repo_inline(repos, state, repo_id, effects);
+    effects::follow_history_selection(state, effects);
     finalize_reduced_state(state, Some(false));
 }
 
@@ -836,7 +837,8 @@ pub(super) fn reduce(
         reconcile_active_nav_history(state, false);
     }
 
-    let effects = reduce_inner(repos, id_alloc, state, msg);
+    let mut effects = reduce_inner(repos, id_alloc, state, msg);
+    effects::follow_history_selection(state, &mut effects);
 
     finalize_reduced_state(state, reconcile.then_some(push));
 
@@ -998,6 +1000,9 @@ fn reduce_inner(
         Msg::SetRemoteSettings(settings) => {
             state.remote_settings = settings;
             Vec::new()
+        }
+        Msg::SetFileBrowserSettings(settings) => {
+            effects::set_file_browser_settings(state, settings)
         }
         Msg::SetDefaultTagType(tag_type) => {
             state.default_tag_type = tag_type;
@@ -1320,13 +1325,13 @@ fn reduce_inner(
             path,
         }],
         Msg::BrowseRepositoryAtCommit { repo_id, commit_id } => {
-            effects::browse_repository_at_commit(repos, state, repo_id, commit_id)
+            effects::browse_repository_at_commit(state, repo_id, commit_id)
         }
         Msg::RevealCommit { repo_id, reference } => {
             effects::reveal_commit(state, repo_id, reference)
         }
         Msg::FinishCommitReveal { repo_id } => effects::finish_commit_reveal(state, repo_id),
-        Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(repos, state, repo_id),
+        Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
         Msg::ViewerNavBack { repo_id } => {
             diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
         }
@@ -2329,7 +2334,7 @@ fn reduce_inner(
             repo_id,
             source,
             result,
-        }) => effects::file_browser_loaded(state, repo_id, source, result),
+        }) => effects::file_browser_loaded(repos, state, repo_id, source, result),
         Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
             repo_id,
             url,

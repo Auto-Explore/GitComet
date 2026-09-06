@@ -3869,6 +3869,9 @@ fn commit_browsing_ignores_worktree_changes() {
     let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Files);
     state.repos[0].file_browser.source =
         FileSource::Commit(CommitId("1111111111111111111111111111111111111111".into()));
+    // Browsed by hand, so following the (empty) selection leaves it alone.
+    state.repos[0].file_browser.followed_selection_rev =
+        Some(state.repos[0].history_state.selected_commit_rev);
 
     let effects = reduce(
         &mut repos,
@@ -3978,7 +3981,8 @@ fn a_reply_for_an_abandoned_source_still_releases_the_lane() {
         "the queued commit listing must dispatch once the live walk ends"
     );
     assert!(
-        matches!(state.repos[0].file_browser.entries, Loadable::NotLoaded),
-        "the stale live rows must not be adopted as the commit's tree"
+        matches!(state.repos[0].file_browser.entries, Loadable::Ready(_))
+            && state.repos[0].file_browser.stale,
+        "the live rows stay up, still flagged stale, rather than being adopted as the commit's tree"
     );
 }
