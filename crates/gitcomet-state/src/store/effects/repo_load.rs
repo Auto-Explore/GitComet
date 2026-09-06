@@ -855,14 +855,17 @@ pub(super) fn schedule_load_file_history(
     repo_id: RepoId,
     path: PathBuf,
     limit: usize,
+    cursor: Option<LogCursor>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.log_file_page(&path, limit, cursor.as_ref());
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
                 repo_id,
-                path: path.clone(),
-                result: repo.log_file_page(&path, limit, None),
+                path,
+                cursor,
+                result,
             }),
         );
     });
@@ -1701,6 +1704,7 @@ pub(super) fn schedule_open_file_at_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
     path: std::path::PathBuf,
+    content_preview: bool,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         // Resolve the file's name in the target commit (it may differ from the
@@ -1711,14 +1715,22 @@ pub(super) fn schedule_open_file_at_commit(
             .ok()
             .flatten()
             .unwrap_or(path);
-        send_or_log(
-            &msg_tx,
+        let message = if content_preview {
             Msg::OpenFileContent {
                 repo_id,
                 source: gitcomet_core::domain::FileSource::Commit(commit_id),
                 path: resolved,
-            },
-        );
+            }
+        } else {
+            Msg::SelectDiff {
+                repo_id,
+                target: gitcomet_core::domain::DiffTarget::Commit {
+                    commit_id,
+                    path: Some(resolved),
+                },
+            }
+        };
+        send_or_log(&msg_tx, message);
     });
 }
 

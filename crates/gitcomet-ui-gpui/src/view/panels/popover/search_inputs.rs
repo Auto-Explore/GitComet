@@ -1,4 +1,4 @@
-use super::picker_nav::{PickerNavKeys, PickerNavOutcome, handle_picker_nav};
+use super::picker_nav::{PickerNavKeys, PickerNavOutcome, PickerNavRows, handle_picker_nav};
 use super::*;
 
 impl PopoverHost {
@@ -53,14 +53,12 @@ impl PopoverHost {
     /// `max_height`, since that is the viewport the window was built for.
     fn scroll_picker_prompt_to_row(
         &self,
-        items: &[components::PickerPromptItem],
-        layout: &components::PickerPromptLayout,
+        geometry: &components::PickerPromptGeometry,
         sel: usize,
         viewport_px: f32,
         cx: &mut gpui::Context<Self>,
     ) {
         let ui_scale = super::popover_ui_scale(cx);
-        let geometry = components::PickerPromptGeometry::new(items, layout, ui_scale);
         let viewport = ui_scale.px(viewport_px);
         let current = -self.picker_prompt_scroll.offset().y;
         let offset = geometry.reveal_offset(sel, viewport, current);
@@ -87,8 +85,7 @@ impl PopoverHost {
             .unwrap_or_default();
         let (items, layout) = author_filter::rendered_rows(self, repo_id, &query);
         self.scroll_picker_prompt_to_row(
-            &items,
-            &layout,
+            &components::PickerPromptGeometry::new(&items, &layout, super::popover_ui_scale(cx)),
             sel,
             components::PICKER_LIST_MAX_HEIGHT_PX,
             cx,
@@ -103,16 +100,17 @@ impl PopoverHost {
     /// selected index and the Enter target can't drift apart. `on_enter`
     /// receives the selected payload (if any) plus the raw query.
     #[allow(clippy::too_many_arguments)]
-    fn picker_search_subscription<T: Clone + 'static>(
+    fn picker_search_subscription<R: PickerNavRows>(
         input: &Entity<components::TextInput>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
         is_active: fn(&Self) -> bool,
         selected_index: fn(&mut Self) -> &mut Option<usize>,
-        items: impl Fn(&mut Self, &str, &mut gpui::Context<Self>) -> Option<Vec<T>> + 'static,
+        items: impl Fn(&mut Self, &str, &mut gpui::Context<Self>) -> Option<R> + 'static,
         on_escape: impl Fn(&mut Self, &mut gpui::Context<Self>) + 'static,
         scroll_to: impl Fn(&mut Self, usize, &mut gpui::Context<Self>) + 'static,
-        on_enter: impl Fn(&mut Self, Option<T>, String, &mut Window, &mut gpui::Context<Self>) + 'static,
+        on_enter: impl Fn(&mut Self, Option<R::Item>, String, &mut Window, &mut gpui::Context<Self>)
+        + 'static,
     ) -> gpui::Subscription {
         cx.observe_in(input, window, move |this, input, window, cx| {
             let keys = input.update(cx, |i, _| PickerNavKeys::take(i));
@@ -130,7 +128,21 @@ impl PopoverHost {
                 return;
             };
 
-            match handle_picker_nav(&keys, selected_index(this), list.len()) {
+            let page_rows = if keys.page_up || keys.page_down {
+                let ui_scale = super::popover_ui_scale(cx);
+                let two_line = branch_picker::is_checkout_picker(this)
+                    || workspace_picker_state(this).is_some()
+                    || upstream_picker_state(this).is_some()
+                    || matches!(this.popover, Some(PopoverKind::FileHistory { .. }));
+                let row_height = components::picker_row_height(ui_scale, two_line);
+                let viewport = this.picker_prompt_scroll.bounds().size.height;
+                let viewport: f32 = viewport.into();
+                let row_height: f32 = row_height.into();
+                (viewport / row_height).floor().max(1.0) as usize
+            } else {
+                1
+            };
+            match handle_picker_nav(&keys, selected_index(this), list.len(), page_rows) {
                 PickerNavOutcome::Escape => {
                     on_escape(this, cx);
                     return;
@@ -151,7 +163,7 @@ impl PopoverHost {
                     let payload = (*selected_index(this))
                         .filter(|_| !list.is_empty())
                         .map(|sel| sel.min(list.len() - 1))
-                        .and_then(|sel| list.get(sel).cloned());
+                        .and_then(|sel| list.get(sel));
                     on_enter(this, payload, query, window, cx);
                 }
                 PickerNavOutcome::Idle => {}
@@ -233,8 +245,7 @@ impl PopoverHost {
                     // scrolling to a section's first row shows its header too.
                     let rows = repo_picker::cached(this, &query);
                     this.scroll_picker_prompt_to_row(
-                        &rows.items,
-                        &rows.layout,
+                        &rows.geometry(super::popover_ui_scale(cx)),
                         sel,
                         repo_picker::REPO_PICKER_LIST_MAX_HEIGHT_PX,
                         cx,
@@ -282,7 +293,7 @@ impl PopoverHost {
                         return Some(
                             (0..actions.len())
                                 .map(branch_picker::BranchPickerNavTarget::RowAction)
-                                .collect(),
+                                .collect::<Vec<_>>(),
                         );
                     }
                     // The checkout picker renders sectioned, multi-part rows, so
@@ -299,7 +310,7 @@ impl PopoverHost {
                         branch_picker::ref_nav_targets(this, ref_rows_spec(this), query)
                             .into_iter()
                             .map(branch_picker::BranchPickerNavTarget::Ref)
-                            .collect(),
+                            .collect::<Vec<_>>(),
                     )
                 },
                 |this, cx| {
@@ -326,8 +337,7 @@ impl PopoverHost {
                     if branch_picker::is_checkout_picker(this) {
                         let rows = branch_picker::cached(this, &query);
                         this.scroll_picker_prompt_to_row(
-                            &rows.items,
-                            &rows.layout,
+                            &rows.geometry(super::popover_ui_scale(cx)),
                             sel,
                             components::PICKER_LIST_MAX_HEIGHT_PX,
                             cx,
@@ -336,8 +346,7 @@ impl PopoverHost {
                     }
                     let rows = branch_picker::ref_rows_cached(this, ref_rows_spec(this), &query);
                     this.scroll_picker_prompt_to_row(
-                        &rows.items,
-                        &rows.layout,
+                        &rows.geometry(super::popover_ui_scale(cx)),
                         sel,
                         branch_picker::REF_PICKER_LIST_MAX_HEIGHT_PX,
                         cx,
@@ -453,8 +462,7 @@ impl PopoverHost {
                             return;
                         }
                         this.scroll_picker_prompt_to_row(
-                            &rows.items,
-                            &rows.layout,
+                            &rows.geometry(super::popover_ui_scale(cx)),
                             branch_sel,
                             upstream_picker::UPSTREAM_PICKER_LIST_MAX_HEIGHT_PX,
                             cx,
@@ -511,8 +519,7 @@ impl PopoverHost {
                             .unwrap_or_default();
                         let rows = worktree_picker::cached(this, repo_id, is_remove, &query);
                         this.scroll_picker_prompt_to_row(
-                            &rows.items,
-                            &rows.layout,
+                            &rows.geometry(super::popover_ui_scale(cx)),
                             sel,
                             worktree_picker::WORKTREE_PICKER_LIST_MAX_HEIGHT_PX,
                             cx,
@@ -560,7 +567,7 @@ impl PopoverHost {
                             return Some(
                                 (0..actions.len())
                                     .map(workspace_picker::WorkspaceRow::RowAction)
-                                    .collect(),
+                                    .collect::<Vec<_>>(),
                             );
                         }
                         let repo_id = workspace_picker_state(this)?;
@@ -591,8 +598,7 @@ impl PopoverHost {
                             .unwrap_or_default();
                         let rows = workspace_picker::cached(this, repo_id, &query);
                         this.scroll_picker_prompt_to_row(
-                            &rows.items,
-                            &rows.layout,
+                            &rows.geometry(super::popover_ui_scale(cx)),
                             sel,
                             components::PICKER_LIST_MAX_HEIGHT_PX,
                             cx,
@@ -666,8 +672,7 @@ impl PopoverHost {
                             .unwrap_or_default();
                         let rows = submodule_picker::cached(this, repo_id, &query);
                         this.scroll_picker_prompt_to_row(
-                            &rows.items,
-                            &rows.layout,
+                            &rows.geometry(super::popover_ui_scale(cx)),
                             sel,
                             submodule_picker::SUBMODULE_PICKER_LIST_MAX_HEIGHT_PX,
                             cx,
@@ -718,8 +723,7 @@ impl PopoverHost {
                         .unwrap_or_default();
                     let rows = stash_picker_prompt::cached(this, &query);
                     this.scroll_picker_prompt_to_row(
-                        &rows.items,
-                        &rows.layout,
+                        &rows.geometry(super::popover_ui_scale(cx)),
                         sel,
                         stash_picker_prompt::STASH_PICKER_LIST_MAX_HEIGHT_PX,
                         cx,
@@ -760,9 +764,30 @@ impl PopoverHost {
                 cx,
                 |this| matches!(this.popover, Some(PopoverKind::FileHistory { .. })),
                 |this| &mut this.file_history_selected_index,
-                |this, query, _cx| Some(file_history::nav_targets(this, query)),
-                |this, cx| this.close_popover(cx),
+                |this, query, cx| {
+                    picker_row_menu::close_on_query_change(this, query, cx);
+                    if let Some(actions) = picker_row_menu::nav_actions(this, cx) {
+                        return Some(super::picker_nav::IndexedNavRows {
+                            len: actions.len(),
+                            resolve: Box::new(move |ix| {
+                                (ix < actions.len())
+                                    .then_some(file_history::NavTarget::RowAction(ix))
+                            }),
+                        });
+                    }
+                    Some(file_history::nav_targets(this, query))
+                },
+                |this, cx| {
+                    if this.picker_row_menu.is_some() {
+                        picker_row_menu::close(this, cx);
+                    } else {
+                        this.close_popover(cx);
+                    }
+                },
                 |this, sel, cx| {
+                    if this.picker_row_menu.is_some() {
+                        return;
+                    }
                     let query = this
                         .file_history_search_input
                         .as_ref()
@@ -770,33 +795,25 @@ impl PopoverHost {
                         .unwrap_or_default();
                     let rows = file_history::cached(this, &query);
                     this.scroll_picker_prompt_to_row(
-                        &rows.items,
-                        &rows.layout,
+                        &rows.geometry(super::popover_ui_scale(cx)),
                         sel,
                         file_history::FILE_HISTORY_LIST_MAX_HEIGHT_PX,
                         cx,
                     );
                 },
-                |this, payload, _query, _window, cx| {
-                    let Some(commit_id) = payload else {
+                |this, payload, _query, window, cx| {
+                    if let Some(file_history::NavTarget::RowAction(ix)) = payload {
+                        picker_row_menu::activate_nth(this, ix, window, cx);
+                        return;
+                    }
+                    let Some(file_history::NavTarget::Commit(commit_id)) = payload else {
                         return;
                     };
                     let Some(PopoverKind::FileHistory { repo_id, path }) = this.popover.clone()
                     else {
                         return;
                     };
-                    this.store.dispatch(Msg::SelectCommit {
-                        repo_id,
-                        commit_id: commit_id.clone(),
-                    });
-                    this.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::Commit {
-                            commit_id,
-                            path: Some(path),
-                        },
-                    });
-                    this.close_popover(cx);
+                    file_history::open_at_commit(this, repo_id, commit_id, path, cx);
                 },
             ));
         }

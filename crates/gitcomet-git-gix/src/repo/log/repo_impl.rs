@@ -777,7 +777,9 @@ impl GixRepo {
         // reliably with `--skip` across renames. Cursor pages cache the full
         // follow result so repeated "load more" requests do not rescan history.
         if cursor.is_none() {
-            let commits = self.log_follow_commits(path, Some(limit.saturating_add(1)))?;
+            // One past the limit tells the page whether more follow; a limit
+            // that cannot grow reads as "every commit" and drops the bound.
+            let commits = self.log_follow_commits(path, limit.checked_add(1))?;
             return paginate_commits(commits.into_iter().map(Ok), limit, cursor).map(Arc::new);
         }
 

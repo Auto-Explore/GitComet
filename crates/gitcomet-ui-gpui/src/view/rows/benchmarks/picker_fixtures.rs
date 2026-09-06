@@ -2,9 +2,11 @@ use super::*;
 use crate::kit::{TextInput, TextInputOptions};
 use crate::view::components::{
     PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptGeometry, PickerPromptItem,
-    PickerPromptLayout, picker_prompt_layout,
+    PickerPromptLayout, PickerPromptOrder, picker_prompt_layout, picker_prompt_layout_ordered,
 };
-use crate::view::panels::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
+use crate::view::panels::{
+    benchmark_branch_checkout_rows, benchmark_file_history_rows, benchmark_workspace_rows,
+};
 use gpui::{Entity, IntoElement, Render, ScrollHandle, Window, px};
 use rustc_hash::{FxHashMap, FxHasher};
 
@@ -16,6 +18,7 @@ pub enum PickerPromptKind {
     BranchCheckout,
     /// The workspace badge's picker: one row per worktree plus a create row.
     Workspace,
+    FileHistory,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -53,6 +56,28 @@ pub struct PickerPromptFrameFixture {
     local_branches: usize,
     remote_branches: usize,
     worktrees: usize,
+    prepared: Option<PreparedPickerRows>,
+}
+
+#[derive(Clone)]
+struct PreparedPickerRows {
+    items: Rc<[PickerPromptItem]>,
+    layout: Rc<PickerPromptLayout>,
+    geometry: Rc<PickerPromptGeometry>,
+    hash: u64,
+}
+
+impl PreparedPickerRows {
+    fn new(items: Rc<[PickerPromptItem]>, layout: PickerPromptLayout) -> Self {
+        let hash = hash_picker_rows(&items, &layout);
+        let geometry = Rc::new(PickerPromptGeometry::new(&items, &layout, 100u32));
+        Self {
+            items,
+            layout: Rc::new(layout),
+            geometry,
+            hash,
+        }
+    }
 }
 
 impl PickerPromptFrameFixture {
@@ -61,7 +86,11 @@ impl PickerPromptFrameFixture {
         // branches, many remote-tracking ones.
         let local_branches = (refs / 4).max(1);
         let remote_branches = refs.saturating_sub(local_branches);
-        let commits = build_synthetic_commits(1);
+        let commits = build_synthetic_commits(if kind == PickerPromptKind::FileHistory {
+            refs
+        } else {
+            1
+        });
         let mut repo = build_synthetic_repo_state(
             local_branches,
             remote_branches,
@@ -71,6 +100,13 @@ impl PickerPromptFrameFixture {
             0,
             &commits,
         );
+        if kind == PickerPromptKind::FileHistory {
+            repo.history_state.file_history =
+                Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+                    commits,
+                    next_cursor: None,
+                }));
+        }
         repo.open = Loadable::Ready(());
         repo.ref_metadata = Loadable::Ready(Arc::new(build_synthetic_ref_metadata(&repo)));
 
@@ -86,11 +122,13 @@ impl PickerPromptFrameFixture {
             local_branches,
             remote_branches,
             worktrees,
+            prepared: None,
         }
     }
 
     pub fn with_query(mut self, query: &str) -> Self {
         self.query = query.to_string();
+        self.prepared = None;
         self
     }
 
@@ -134,14 +172,25 @@ impl PickerPromptFrameFixture {
     }
 
     fn draw_frame(&mut self, windowed: bool) -> (u64, PickerPromptFrameMetrics) {
-        let (items, layout) = self.build_rows();
-        let items: Rc<[PickerPromptItem]> = Rc::from(items);
-        let layout = Rc::new(layout);
-        let hash = hash_picker_rows(&items, &layout);
-
-        let geometry = PickerPromptGeometry::new(&items, &layout, 100u32);
+        let prepared = if self.kind == PickerPromptKind::FileHistory {
+            self.prepare_file_history();
+            self.prepared.as_ref().unwrap().clone()
+        } else {
+            let (items, layout) = self.build_rows();
+            PreparedPickerRows::new(Rc::from(items), layout)
+        };
+        let PreparedPickerRows {
+            items,
+            layout,
+            geometry,
+            hash,
+        } = prepared;
         let max_height = if windowed {
-            px(PICKER_LIST_MAX_HEIGHT_PX)
+            px(if self.kind == PickerPromptKind::FileHistory {
+                340.0
+            } else {
+                PICKER_LIST_MAX_HEIGHT_PX
+            })
         } else {
             geometry.total_height()
         };
@@ -158,6 +207,7 @@ impl PickerPromptFrameFixture {
                 view.set_rows(
                     Rc::clone(&items),
                     Rc::clone(&layout),
+                    (self.kind == PickerPromptKind::FileHistory).then(|| Rc::clone(&geometry)),
                     max_height,
                     &query,
                     cx,
@@ -176,6 +226,32 @@ impl PickerPromptFrameFixture {
         (hash, metrics)
     }
 
+    fn prepare_file_history(&mut self) {
+        if self.prepared.is_none() {
+            let (items, layout) = self.build_rows();
+            self.prepared = Some(PreparedPickerRows::new(Rc::from(items), layout));
+        }
+    }
+
+    /// Each iteration changes the query and filters the existing row model.
+    pub fn run_file_history_query_frame(&mut self) -> u64 {
+        self.prepare_file_history();
+        self.query = if self.query.is_empty() {
+            "1".into()
+        } else {
+            String::new()
+        };
+        let items = Rc::clone(&self.prepared.as_ref().unwrap().items);
+        let layout = picker_prompt_layout_ordered(
+            &items,
+            &self.query,
+            &Default::default(),
+            PickerPromptOrder::Source,
+        );
+        self.prepared = Some(PreparedPickerRows::new(items, layout));
+        self.run_frame()
+    }
+
     fn build_rows(&self) -> (Vec<PickerPromptItem>, PickerPromptLayout) {
         // A fixed clock keeps the relative dates on the detail line — and so the
         // shaped text and its cache keys — identical across iterations.
@@ -185,8 +261,21 @@ impl PickerPromptFrameFixture {
                 benchmark_branch_checkout_rows(&self.repo, &self.query, now)
             }
             PickerPromptKind::Workspace => benchmark_workspace_rows(&self.repo, &self.query),
+            PickerPromptKind::FileHistory => benchmark_file_history_rows(
+                self.repo.history_state.file_history.ready().unwrap(),
+                now,
+            ),
         };
-        let layout = picker_prompt_layout(&items, &self.query);
+        let layout = if self.kind == PickerPromptKind::FileHistory {
+            picker_prompt_layout_ordered(
+                &items,
+                &self.query,
+                &Default::default(),
+                PickerPromptOrder::Source,
+            )
+        } else {
+            picker_prompt_layout(&items, &self.query)
+        };
         (items, layout)
     }
 
@@ -275,6 +364,7 @@ pub struct PickerPromptBenchView {
     scroll_handle: ScrollHandle,
     items: Rc<[PickerPromptItem]>,
     layout: Rc<PickerPromptLayout>,
+    geometry: Option<Rc<PickerPromptGeometry>>,
     /// Viewport the list is drawn into. A benchmark measuring an unwindowed
     /// frame makes this as tall as the whole list.
     max_height: Pixels,
@@ -298,6 +388,7 @@ impl PickerPromptBenchView {
             scroll_handle: ScrollHandle::new(),
             items: Rc::from(Vec::new()),
             layout: Rc::new(PickerPromptLayout::default()),
+            geometry: None,
             max_height: px(PICKER_LIST_MAX_HEIGHT_PX),
         }
     }
@@ -306,12 +397,14 @@ impl PickerPromptBenchView {
         &mut self,
         items: Rc<[PickerPromptItem]>,
         layout: Rc<PickerPromptLayout>,
+        geometry: Option<Rc<PickerPromptGeometry>>,
         max_height: Pixels,
         query: &str,
         cx: &mut gpui::Context<Self>,
     ) {
         self.items = items;
         self.layout = layout;
+        self.geometry = geometry;
         self.max_height = max_height;
         let current = self.query_input.read(cx).text().to_string();
         if current != query {
@@ -326,8 +419,14 @@ impl PickerPromptBenchView {
 
 impl Render for PickerPromptBenchView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        PickerPrompt::new(self.query_input.clone(), self.scroll_handle.clone())
-            .prebuilt_items(Rc::clone(&self.items), Rc::clone(&self.layout))
+        let picker = PickerPrompt::new(self.query_input.clone(), self.scroll_handle.clone())
+            .prebuilt_items(Rc::clone(&self.items), Rc::clone(&self.layout));
+        let picker = if let Some(geometry) = self.geometry.as_ref() {
+            picker.prebuilt_geometry(Rc::clone(geometry))
+        } else {
+            picker
+        };
+        picker
             .max_height(self.max_height)
             .render(self.theme, 100u32, cx, |_, _, _, _, _| {})
     }

@@ -49,6 +49,8 @@ actions!(
         SelectWordRight,
         SelectAll,
         Home,
+        DocumentHome,
+        DocumentEnd,
         SelectHome,
         End,
         SelectEnd,

@@ -614,9 +614,30 @@ impl TextInput {
         self.interaction.enter_pressed = false;
         self.interaction.escape_pressed = false;
         self.interaction.arrow_up_pressed = false;
+        self.interaction.document_home_pressed = false;
+        self.interaction.document_end_pressed = false;
+        self.interaction.page_up_pressed = false;
+        self.interaction.page_down_pressed = false;
+
         self.interaction.arrow_down_pressed = false;
         self.interaction.tab_pressed = false;
         self.interaction.shift_tab_pressed = false;
+    }
+
+    pub fn take_document_home_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.document_home_pressed)
+    }
+
+    pub fn take_document_end_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.document_end_pressed)
+    }
+
+    pub fn take_page_up_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.page_up_pressed)
+    }
+
+    pub fn take_page_down_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.page_down_pressed)
     }
 
     pub fn take_arrow_up_pressed(&mut self) -> bool {
@@ -1604,6 +1625,25 @@ impl TextInput {
         )
     }
 
+    pub(super) fn document_home(
+        &mut self,
+        _: &DocumentHome,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.interaction.document_home_pressed = true;
+        self.move_to(0, cx);
+        self.queue_cursor_autoscroll();
+        cx.notify();
+    }
+
+    pub(super) fn document_end(&mut self, _: &DocumentEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.document_end_pressed = true;
+        self.move_to(self.content.len(), cx);
+        self.queue_cursor_autoscroll();
+        cx.notify();
+    }
+
     pub(super) fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
         self.move_to(self.row_start(self.cursor_offset()), cx);
         self.queue_cursor_autoscroll();
@@ -1852,6 +1892,8 @@ impl TextInput {
     }
 
     pub(super) fn page_up(&mut self, _: &PageUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.page_up_pressed = true;
+        cx.notify();
         let Some((target, preferred_x)) = self.page_move_target(
             self.cursor_offset(),
             -1.0,
@@ -1883,6 +1925,8 @@ impl TextInput {
     }
 
     pub(super) fn page_down(&mut self, _: &PageDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.interaction.page_down_pressed = true;
+        cx.notify();
         let Some((target, preferred_x)) = self.page_move_target(
             self.cursor_offset(),
             1.0,

@@ -45,8 +45,8 @@ pub use picker_prompt::PickerPromptHeader;
 pub use picker_prompt::picker_prompt_layout;
 pub use picker_prompt::{
     PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptContextMenuEvent, PickerPromptGeometry,
-    PickerPromptItem, PickerPromptItemPart, PickerPromptLayout,
-    picker_prompt_layout_with_collapsed,
+    PickerPromptItem, PickerPromptItemPart, PickerPromptLayout, PickerPromptOrder,
+    picker_prompt_layout_ordered, row_height as picker_row_height,
 };
 pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,

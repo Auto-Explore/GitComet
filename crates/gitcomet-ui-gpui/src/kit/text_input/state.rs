@@ -777,6 +777,11 @@ pub(super) struct InteractionState {
     pub(super) enter_pressed: bool,
     pub(super) escape_pressed: bool,
     pub(super) arrow_up_pressed: bool,
+    pub(super) document_home_pressed: bool,
+    pub(super) document_end_pressed: bool,
+    pub(super) page_up_pressed: bool,
+    pub(super) page_down_pressed: bool,
+
     pub(super) arrow_down_pressed: bool,
     pub(super) tab_pressed: bool,
     pub(super) shift_tab_pressed: bool,
@@ -802,6 +807,11 @@ impl InteractionState {
             enter_pressed: false,
             escape_pressed: false,
             arrow_up_pressed: false,
+            document_home_pressed: false,
+            document_end_pressed: false,
+            page_up_pressed: false,
+            page_down_pressed: false,
+
             arrow_down_pressed: false,
             tab_pressed: false,
             shift_tab_pressed: false,

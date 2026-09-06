@@ -420,13 +420,17 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::LoadFileHistory { repo_id, path, .. } => {
-            send(Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
-                repo_id,
-                path,
-                result: Err(git_unavailable_error(runtime)),
-            }))
-        }
+        Effect::LoadFileHistory {
+            repo_id,
+            path,
+            cursor,
+            ..
+        } => send(Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
+            repo_id,
+            path,
+            cursor,
+            result: Err(git_unavailable_error(runtime)),
+        })),
         Effect::LoadBlame {
             repo_id,
             path,
@@ -1751,12 +1755,13 @@ pub(super) fn schedule_effect(
             repo_id,
             path,
             limit,
+            cursor,
         } => {
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_file_history(
-                    executor, repos, msg_tx, repo_id, path, limit,
+                    executor, repos, msg_tx, repo_id, path, limit, cursor,
                 );
             }
         }
@@ -1996,12 +2001,19 @@ pub(super) fn schedule_effect(
             repo_id,
             commit_id,
             path,
+            content_preview,
         } => {
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_open_file_at_commit(
-                    executor, repos, msg_tx, repo_id, commit_id, path,
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    commit_id,
+                    path,
+                    content_preview,
                 );
             }
         }

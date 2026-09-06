@@ -473,7 +473,11 @@ pub enum Msg {
         commit_id: CommitId,
         path: PathBuf,
     },
-    /// Start file browsing at this commit until explicitly exited.
+    ShowFileChangesAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
+    },
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -1181,6 +1185,9 @@ pub enum InternalMsg {
     FileHistoryLoaded {
         repo_id: RepoId,
         path: PathBuf,
+        /// The cursor the page was requested with: `None` for the first page,
+        /// `Some` for a continuation to append to it.
+        cursor: Option<LogCursor>,
         result: Result<Arc<LogPage>, Error>,
     },
     BlameLoaded {

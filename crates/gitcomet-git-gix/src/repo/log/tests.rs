@@ -583,6 +583,45 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
     );
 }
 
+/// `usize::MAX` reads as "every commit": both as a first page and as the
+/// continuation the picker asks for after its bounded first page. Neither may
+/// reserve that much up front or hand git a count it cannot parse.
+#[test]
+fn unbounded_file_history_pages_return_every_commit_without_a_cursor() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+
+    commit_file(workdir, "tracked.txt", "one\n", "one");
+    commit_file(workdir, "tracked.txt", "two\n", "two");
+    git_success(workdir, &["mv", "tracked.txt", "renamed.txt"]);
+    git_success(workdir, &["commit", "-m", "rename"]);
+    commit_file(workdir, "renamed.txt", "four\n", "four");
+
+    let repo = open_repo(workdir);
+    let first = repo
+        .log_file_page_impl(Path::new("renamed.txt"), 1, None)
+        .expect("bounded first page");
+    assert_eq!(first.commits.len(), 1);
+
+    let rest = repo
+        .log_file_page_impl(
+            Path::new("renamed.txt"),
+            usize::MAX,
+            first.next_cursor.as_ref(),
+        )
+        .expect("unbounded continuation");
+    let summaries: Vec<&str> = rest.commits.iter().map(|c| &*c.summary).collect();
+    assert_eq!(summaries, ["rename", "two", "one"]);
+    assert!(rest.next_cursor.is_none());
+
+    let all = repo
+        .log_file_page_impl(Path::new("renamed.txt"), usize::MAX, None)
+        .expect("unbounded first page");
+    assert_eq!(all.commits.len(), 4);
+    assert!(all.next_cursor.is_none());
+}
+
 #[test]
 fn reflog_head_entries_carry_the_committer_as_author() {
     let tmp = tempfile::tempdir().expect("tempdir");

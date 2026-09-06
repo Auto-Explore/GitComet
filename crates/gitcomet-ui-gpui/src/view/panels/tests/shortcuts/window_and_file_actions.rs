@@ -752,6 +752,52 @@ fn ctrl_h_opens_file_history_popover(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70604);
+    let commit_id = CommitId("abcdef00112233ff".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_h_history",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+
+    repo.diff_state.diff_target = Some(DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(path.clone()),
+    });
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-h");
+    draw_and_drain_test_window(cx);
+
+    let is_file_history = cx.update(|_window, app| {
+        let host = view.read(app).popover_host.read(app);
+        matches!(
+            host.popover_kind_for_tests(),
+            Some(PopoverKind::FileHistory { .. })
+        )
+    });
+    assert!(
+        is_file_history,
+        "expected Ctrl+H to open the FileHistory popover"
+    );
+}
+
+#[gpui::test]
 fn ctrl_shortcuts_do_not_crash_without_diff_target(cx: &mut gpui::TestAppContext) {
     let _clipboard_guard = crate::test_support::lock_clipboard_test();
 

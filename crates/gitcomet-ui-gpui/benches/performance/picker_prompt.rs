@@ -73,6 +73,33 @@ pub(crate) fn bench_picker_prompt(c: &mut Criterion) {
         },
     );
 
+    for commits in [200, 1_200, 5_000] {
+        group.bench_with_input(
+            BenchmarkId::new("file_history_rows_build", commits),
+            &commits,
+            |b, &commits| {
+                let mut fixture =
+                    PickerPromptFrameFixture::new(PickerPromptKind::FileHistory, commits, 0);
+                b.iter(|| fixture.run_rows_build());
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("file_history_hover_frame", commits),
+            &commits,
+            |b, &commits| {
+                let mut fixture =
+                    PickerPromptFrameFixture::new(PickerPromptKind::FileHistory, commits, 0);
+                fixture.run_frame();
+                b.iter(|| fixture.run_frame());
+            },
+        );
+    }
+    group.bench_function("file_history_query_frame/1200", |b| {
+        let mut fixture = PickerPromptFrameFixture::new(PickerPromptKind::FileHistory, 1_200, 0);
+        fixture.run_frame();
+        b.iter(|| fixture.run_file_history_query_frame());
+    });
+
     group.finish();
 
     // Structural sidecars: element and tooltip counts per frame are what the
@@ -91,4 +118,12 @@ pub(crate) fn bench_picker_prompt(c: &mut Criterion) {
     let mut fixture = PickerPromptFrameFixture::new(PickerPromptKind::Workspace, 32, worktrees);
     let (_hash, metrics) = measure_sidecar_allocations(|| fixture.run_frame_with_metrics());
     emit_picker_prompt_sidecar(&format!("workspace_hover_frame/{worktrees}"), &metrics);
+    for commits in [200, 1_200, 5_000] {
+        let mut fixture = PickerPromptFrameFixture::new(PickerPromptKind::FileHistory, commits, 0);
+        fixture.run_frame();
+        let (_, metrics) = measure_sidecar_allocations(|| fixture.run_frame_with_metrics());
+        emit_picker_prompt_sidecar(&format!("file_history_hover_frame/{commits}"), &metrics);
+        let (_, metrics) = measure_sidecar_allocations(|| fixture.run_rows_build_with_metrics());
+        emit_picker_prompt_sidecar(&format!("file_history_rows_build/{commits}"), &metrics);
+    }
 }

@@ -1685,6 +1685,7 @@ fn set_active_repo_reloads_cancelled_history_panes_but_resets_commit_selection()
             repo_id,
             path,
             limit: 200,
+            cursor: None,
         } if *repo_id == repo1 && path == &history_path
     )));
     assert!(reactivate_effects.iter().any(|effect| matches!(
