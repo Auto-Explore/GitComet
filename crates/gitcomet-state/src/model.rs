@@ -90,6 +90,20 @@ impl Default for RemoteSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileBrowserSettings {
+    /// Active file browsing follows the selected history row.
+    pub follow_selected_commit: bool,
+}
+
+impl Default for FileBrowserSettings {
+    fn default() -> Self {
+        Self {
+            follow_selected_commit: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RepoLoadsInFlight {
     in_flight: u32,
@@ -381,33 +395,61 @@ pub enum ConflictFileLoadMode {
 
 // ── File browser ────────────────────────────────────────────────
 
+/// The file preview that was open when the browse point moved, to re-target
+/// once the new listing says whether the file exists there.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingFileBrowserReopen {
+    pub path: PathBuf,
+    /// `diff_target_rev` at capture time; a later change means the user moved
+    /// on and the re-open is dropped.
+    pub diff_target_rev: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct FileBrowserState {
+    /// Entered by "Start file browsing" and left by "Exit file browsing".
+    /// Selecting the working-tree row changes the source without exiting.
+    pub active: bool,
     pub source: FileSource,
     pub entries: Loadable<Arc<Vec<FileEntry>>>,
     pub expanded_dirs: FxHashSet<Arc<PathBuf>>,
     pub search_query: String,
     pub file_browser_rev: u64,
-    /// The worktree moved under a listing nobody is looking at. Deferring the
-    /// re-walk keeps the rendered rows on screen instead of flashing back to
-    /// "Loading files...".
+    /// The rows on screen are not the current truth: the worktree moved under
+    /// a listing nobody is looking at, or the browse point moved and the new
+    /// listing is still on its way. Either way the rows stay up rather than
+    /// flashing back to "Loading files...".
     pub stale: bool,
+    /// `selected_commit_rev` the browse point was last synced to. `None` forces
+    /// a sync on the next chance.
+    pub followed_selection_rev: Option<u64>,
+    pub pending_reopen: Option<PendingFileBrowserReopen>,
 }
 
 impl Default for FileBrowserState {
     fn default() -> Self {
         Self {
+            active: false,
             source: FileSource::default(),
             entries: Loadable::NotLoaded,
             expanded_dirs: FxHashSet::default(),
             search_query: String::new(),
             file_browser_rev: 0,
             stale: false,
+            followed_selection_rev: None,
+            pending_reopen: None,
         }
     }
 }
 
 impl FileBrowserState {
+    pub(crate) fn set_active(&mut self, active: bool) {
+        if self.active != active {
+            self.active = active;
+            self.bump_rev();
+        }
+    }
+
     pub fn bump_rev(&mut self) {
         self.file_browser_rev = self.file_browser_rev.wrapping_add(1);
     }
@@ -626,6 +668,7 @@ pub struct AppState {
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
     pub remote_settings: RemoteSettings,
+    pub file_browser_settings: FileBrowserSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
 }

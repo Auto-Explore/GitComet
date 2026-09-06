@@ -52,6 +52,7 @@ pub struct UiSettings {
     pub history_show_tags: Option<bool>,
     pub history_relative_dates: Option<bool>,
     pub history_highlight_commit_chain: Option<bool>,
+    pub file_browser_follow_selected_commit: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
@@ -144,6 +145,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, terminal_action_bar_target);
         apply_setting!(settings, file, history_show_tags);
         apply_setting!(settings, file, history_highlight_commit_chain);
+        apply_setting!(settings, file, file_browser_follow_selected_commit);
         apply_setting!(settings, file, history_relative_dates);
         apply_setting!(settings, file, history_tag_fetch_mode);
         if let Some(value) = settings.default_history_mode {

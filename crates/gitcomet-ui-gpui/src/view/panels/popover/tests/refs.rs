@@ -1499,6 +1499,19 @@ fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
                 divergence: None,
             }]));
 
+            repo.remote_branches = Loadable::Ready(Arc::new(vec![
+                gitcomet_core::domain::RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: "feature/awesome".to_string(),
+                    target: CommitId("deadbeef".into()),
+                },
+                gitcomet_core::domain::RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: "main".to_string(),
+                    target: CommitId("cafebabe".into()),
+                },
+            ]));
+
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),

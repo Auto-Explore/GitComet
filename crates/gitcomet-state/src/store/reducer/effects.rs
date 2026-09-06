@@ -4,8 +4,8 @@ use super::util::{
 };
 use crate::model::{
     AppNotificationKind, AppState, CommitMultiSelection, ConflictFileLoadMode, DiagnosticKind,
-    ForeignDiffOrigin, Loadable, RangeSelection, RepoId, RepoLoadsInFlight, RepoState,
-    SidebarDataRequest, SidebarMode,
+    FileBrowserSettings, ForeignDiffOrigin, Loadable, PendingFileBrowserReopen, RangeSelection,
+    RepoId, RepoLoadsInFlight, RepoState, SidebarDataRequest, SidebarMode,
 };
 use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect};
 use gitcomet_core::conflict_session::{
@@ -1729,14 +1729,12 @@ pub(super) fn load_file_browser(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    if !matches!(repo_state.open, Loadable::Ready(())) {
+    if !matches!(repo_state.open, Loadable::Ready(())) || repo_state.file_browser.source != source {
         return Vec::new();
     }
-    let source_changed = repo_state.file_browser.source != source;
-    repo_state.file_browser.source = source;
-    // Blank the tree only when there is nothing worth keeping: rows from another
-    // source would be actively wrong, but a same-source refresh can leave them up.
-    if source_changed || !matches!(repo_state.file_browser.entries, Loadable::Ready(_)) {
+    // A refresh can come from an older sidebar snapshot after browsing has
+    // moved or exited. Only explicit browsing actions may change the source.
+    if !matches!(repo_state.file_browser.entries, Loadable::Ready(_)) {
         repo_state.file_browser.entries = Loadable::Loading;
     }
     repo_state.file_browser.bump_rev();
@@ -1918,6 +1916,11 @@ pub(super) fn set_file_browser_search(
 }
 
 pub(super) fn request_file_browser_load(repo_state: &mut RepoState) -> Option<Effect> {
+    // Opening repos have no backend handle yet. Claiming the lane here would
+    // block the first real load when RepoOpenedOk installs the handle.
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return None;
+    }
     repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::FILE_BROWSER)
@@ -1927,21 +1930,115 @@ pub(super) fn request_file_browser_load(repo_state: &mut RepoState) -> Option<Ef
         })
 }
 
+/// Point the file browser at `source` without touching the tree's shape.
+///
+/// Rows already on screen stay up (marked `stale`, so `needs_load()` still asks
+/// for the walk) and `expanded_dirs`/`search_query` survive: a browse point that
+/// moves with the history selection must not collapse the tree on every step.
+/// The open content preview is remembered for `file_browser_loaded` to
+/// re-target, or close, once the listing says whether the file exists there.
+/// Returns whether the source actually changed.
+pub(super) fn retarget_file_browser(repo_state: &mut RepoState, source: FileSource) -> bool {
+    if repo_state.file_browser.source == source {
+        return false;
+    }
+    repo_state.file_browser.pending_reopen = browse_open_content_path(repo_state);
+    repo_state.file_browser.source = source;
+    if matches!(repo_state.file_browser.entries, Loadable::Ready(_)) {
+        repo_state.file_browser.stale = true;
+    } else {
+        repo_state.file_browser.entries = Loadable::NotLoaded;
+        repo_state.file_browser.stale = false;
+    }
+    repo_state.file_browser.bump_rev();
+    true
+}
+
 pub(super) fn set_file_browser_source(
     state: &mut AppState,
     repo_id: RepoId,
     source: FileSource,
 ) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.file_browser.source != source
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    // An explicit choice of browse point acknowledges the current selection:
+    // following must not undo it until the selection next moves.
+    repo_state
+        .file_browser
+        .set_active(matches!(source, FileSource::Commit(_)));
+    repo_state.file_browser.followed_selection_rev =
+        Some(repo_state.history_state.selected_commit_rev);
+    if !retarget_file_browser(repo_state, source) {
+        return Vec::new();
+    }
+    request_file_browser_load(repo_state).into_iter().collect()
+}
+
+/// Move the browse point to the history selection while the Files tab shows.
+///
+/// Keyed on `selected_commit_rev`, so starting at another commit sticks until
+/// the selection next moves. Exited browsing stays live. A hidden tab records
+/// nothing and catches up when it is shown. Returns whether the source changed.
+pub(super) fn sync_file_browser_to_selection(
+    repo_state: &mut RepoState,
+    follow: bool,
+    sidebar_mode: SidebarMode,
+) -> bool {
+    if !repo_state.file_browser.active || !follow || sidebar_mode != SidebarMode::Files {
+        return false;
+    }
+    let rev = repo_state.history_state.selected_commit_rev;
+    if repo_state.file_browser.followed_selection_rev == Some(rev) {
+        return false;
+    }
+    repo_state.file_browser.followed_selection_rev = Some(rev);
+    let want = repo_state
+        .history_state
+        .selected_commit
+        .clone()
+        .map(FileSource::Commit)
+        .unwrap_or(FileSource::WorkingDirectory);
+    retarget_file_browser(repo_state, want)
+}
+
+/// Runs after every reduced message: keeps the active repo's Files tab on the
+/// selected history row. The lane coalescing in `request_file_browser_load`
+/// turns an arrow-key burst into one walk plus one queued re-walk.
+pub(super) fn follow_history_selection(state: &mut AppState, effects: &mut impl EffectAccumulator) {
+    let follow = state.file_browser_settings.follow_selected_commit;
+    let sidebar_mode = state.sidebar_mode;
+    if !follow || sidebar_mode != SidebarMode::Files {
+        return;
+    }
+    let Some(repo_id) = state.active_repo else {
+        return;
+    };
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return;
+    };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return;
+    }
+    if sync_file_browser_to_selection(repo_state, follow, sidebar_mode)
+        && let Some(effect) = request_file_browser_load(repo_state)
     {
-        repo_state.file_browser.source = source;
-        repo_state.file_browser.entries = Loadable::NotLoaded;
-        repo_state.file_browser.expanded_dirs.clear();
-        repo_state.file_browser.search_query.clear();
-        repo_state.file_browser.stale = false;
-        repo_state.file_browser.bump_rev();
-        return request_file_browser_load(repo_state).into_iter().collect();
+        effects.push_effect(effect);
+    }
+}
+
+pub(super) fn set_file_browser_settings(
+    state: &mut AppState,
+    settings: FileBrowserSettings,
+) -> Vec<Effect> {
+    let turned_on =
+        settings.follow_selected_commit && !state.file_browser_settings.follow_selected_commit;
+    state.file_browser_settings = settings;
+    if turned_on {
+        // Forget what was followed so the post-reduce hook syncs right away.
+        for repo in &mut state.repos {
+            repo.file_browser.followed_selection_rev = None;
+        }
     }
     Vec::new()
 }
@@ -1949,27 +2046,29 @@ pub(super) fn set_file_browser_source(
 pub(super) fn set_sidebar_mode(state: &mut AppState, mode: SidebarMode) -> Vec<Effect> {
     if state.sidebar_mode != mode {
         state.sidebar_mode = mode;
+        let follow = state.file_browser_settings.follow_selected_commit;
 
         if mode == SidebarMode::Files
             && let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
-            && repo.file_browser.needs_load()
         {
-            return request_file_browser_load(repo).into_iter().collect();
+            // Retarget first, so the one load below carries the selection's
+            // source instead of walking the old one and then walking again.
+            sync_file_browser_to_selection(repo, follow, mode);
+            if repo.file_browser.needs_load() {
+                return request_file_browser_load(repo).into_iter().collect();
+            }
         }
     }
     Vec::new()
 }
 
 pub(super) fn browse_repository_at_commit(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     commit_id: CommitId,
 ) -> Vec<Effect> {
     const BROWSE_HISTORY_CAP: usize = 32;
-    // Capture the open file (if any) before re-targeting it to the new point.
-    let reopen_path = browse_open_content_path(state, repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && !repo_state.navigation.browse_history.contains(&commit_id)
     {
@@ -1979,100 +2078,138 @@ pub(super) fn browse_repository_at_commit(
         }
     }
     state.sidebar_mode = SidebarMode::Files;
-    let mut effects =
-        set_file_browser_source(state, repo_id, FileSource::Commit(commit_id.clone()));
-    if let Some(path) = reopen_path
-        && effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
-    {
-        effects.extend(super::diff_selection::open_file_content(
-            repos,
-            state,
-            repo_id,
-            FileSource::Commit(commit_id),
-            path,
-        ));
-    }
-    effects
+    set_file_browser_source(state, repo_id, FileSource::Commit(commit_id))
 }
 
-pub(super) fn reset_browse_to_live(
-    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
-    state: &mut AppState,
-    repo_id: RepoId,
-) -> Vec<Effect> {
-    let reopen_path = browse_open_content_path(state, repo_id);
+pub(super) fn reset_browse_to_live(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.navigation.browse_history.clear();
     }
-    let mut effects = set_file_browser_source(state, repo_id, FileSource::WorkingDirectory);
-    if let Some(path) = reopen_path
-        && effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
-    {
-        effects.extend(super::diff_selection::open_file_content(
-            repos,
-            state,
-            repo_id,
-            FileSource::WorkingDirectory,
-            path,
-        ));
-    }
-    effects
+    set_file_browser_source(state, repo_id, FileSource::WorkingDirectory)
 }
 
-/// Path of the file currently shown as full content (if any), so a browse-point
-/// change can re-open the same file at the new point.
-fn browse_open_content_path(state: &AppState, repo_id: RepoId) -> Option<std::path::PathBuf> {
-    let repo = state.repos.iter().find(|r| r.id == repo_id)?;
-    if !repo.diff_state.content_preview {
+/// The file shown as full content (if any), so a browse-point change can show
+/// the same file at the new point. Never the editor: yanking an edit buffer
+/// out from under the user is worse than a preview that lags the tree.
+fn browse_open_content_path(repo: &RepoState) -> Option<PendingFileBrowserReopen> {
+    if !repo.diff_state.content_preview || repo.diff_state.edit_mode {
         return None;
     }
-    match &repo.diff_state.diff_target {
-        Some(gitcomet_core::domain::DiffTarget::Commit { path: Some(p), .. }) => Some(p.clone()),
-        Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, .. }) => Some(path.clone()),
-        _ => None,
+    let path = match &repo.diff_state.diff_target {
+        Some(gitcomet_core::domain::DiffTarget::Commit { path: Some(p), .. }) => p.clone(),
+        Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, .. }) => path.clone(),
+        _ => return None,
+    };
+    Some(PendingFileBrowserReopen {
+        path,
+        diff_target_rev: repo.diff_state.diff_target_rev,
+    })
+}
+
+enum ReopenDecision {
+    Skip,
+    Open,
+    Close,
+}
+
+/// Settle the preview captured at retarget time now that the listing for
+/// `source` is in: show the same file there, or close the view when the file
+/// does not exist at that point.
+fn reopen_after_retarget(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    source: FileSource,
+    entries: &[FileEntry],
+    reopen: PendingFileBrowserReopen,
+) -> Vec<Effect> {
+    let decision = {
+        let Some(repo) = state.repos.iter().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        // The user moved on meanwhile: opened something else, closed the
+        // view, or entered the editor.
+        if repo.diff_state.diff_target_rev != reopen.diff_target_rev
+            || repo.diff_state.edit_mode
+            || !repo.diff_state.content_preview
+        {
+            ReopenDecision::Skip
+        } else if !entries.iter().any(|entry| {
+            entry.kind == gitcomet_core::domain::FileEntryKind::File
+                && entry.path.as_path() == reopen.path.as_path()
+        }) {
+            ReopenDecision::Close
+        } else if super::diff_selection::content_view_target(source.clone(), reopen.path.clone())
+            == repo.diff_state.diff_target
+        {
+            // Already showing this file at this point (retarget bounced back).
+            ReopenDecision::Skip
+        } else {
+            ReopenDecision::Open
+        }
+    };
+    match decision {
+        ReopenDecision::Skip => Vec::new(),
+        ReopenDecision::Close => super::diff_selection::clear_diff_selection(state, repo_id),
+        ReopenDecision::Open => {
+            super::diff_selection::open_file_content(repos, state, repo_id, source, reopen.path)
+        }
     }
 }
 
 pub(super) fn file_browser_loaded(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     source: FileSource,
     result: std::result::Result<Vec<FileEntry>, gitcomet_core::error::Error>,
 ) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
+    let (has_pending, reopen) = {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+
+        // Release the lane before the stale-source guard: a reply for a source the
+        // user has already navigated away from still ends the walk that was running,
+        // and the request queued behind it is the one that matters now.
+        let has_pending = repo_state
+            .loads_in_flight
+            .finish(RepoLoadsInFlight::FILE_BROWSER);
+
+        let mut reopen = None;
+        if repo_state.file_browser.source == source {
+            let pending = repo_state.file_browser.pending_reopen.take();
+            repo_state.file_browser.entries = match result {
+                Ok(v) => {
+                    let entries = Arc::new(v);
+                    reopen = pending.map(|pending| (Arc::clone(&entries), pending));
+                    Loadable::Ready(entries)
+                }
+                Err(e) => {
+                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.file_browser.stale = false;
+            repo_state.file_browser.bump_rev();
+        }
+        (has_pending, reopen)
     };
 
-    // Release the lane before the stale-source guard: a reply for a source the
-    // user has already navigated away from still ends the walk that was running,
-    // and the request queued behind it is the one that matters now.
-    let has_pending = repo_state
-        .loads_in_flight
-        .finish(RepoLoadsInFlight::FILE_BROWSER);
-
-    if repo_state.file_browser.source == source {
-        repo_state.file_browser.entries = match result {
-            Ok(v) => Loadable::Ready(Arc::new(v)),
-            Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
-        };
-        repo_state.file_browser.stale = false;
-        repo_state.file_browser.bump_rev();
+    let mut effects = Vec::new();
+    if let Some((entries, pending)) = reopen {
+        effects.extend(reopen_after_retarget(
+            repos, state, repo_id, source, &entries, pending,
+        ));
     }
 
-    if has_pending {
-        return vec![Effect::LoadFileBrowser {
+    if has_pending && let Some(repo_state) = state.repos.iter().find(|r| r.id == repo_id) {
+        effects.push(Effect::LoadFileBrowser {
             repo_id,
             source: repo_state.file_browser.source.clone(),
-        }];
+        });
     }
-    Vec::new()
+    effects
 }
 
 pub(super) fn branches_loaded(

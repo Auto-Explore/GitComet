@@ -241,6 +241,8 @@ impl GitCometView {
                             history_show_sha: Some(history_show_sha),
                             history_relative_dates: Some(history_relative_dates),
                             history_highlight_commit_chain: Some(history_highlight_commit_chain),
+                            // Owned by the settings window, which persists it itself.
+                            file_browser_follow_selected_commit: None,
                             terminal_external_mode: None,
                             terminal_external_program: None,
                             terminal_external_args: None,

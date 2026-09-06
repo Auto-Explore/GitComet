@@ -1,7 +1,7 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{
-    BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, GitOperationOuterOutcome,
-    RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
+    BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, FileBrowserSettings,
+    GitOperationOuterOutcome, RemoteSettings, RepoId, SidebarDataRequest, SidebarMode,
 };
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
@@ -221,6 +221,7 @@ pub enum Msg {
         tag_fetch_mode: GitLogTagFetchMode,
     },
     SetRemoteSettings(RemoteSettings),
+    SetFileBrowserSettings(FileBrowserSettings),
     SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,
@@ -472,6 +473,7 @@ pub enum Msg {
         commit_id: CommitId,
         path: PathBuf,
     },
+    /// Start file browsing at this commit until explicitly exited.
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -490,6 +492,7 @@ pub enum Msg {
     FinishCommitReveal {
         repo_id: RepoId,
     },
+    /// Exit file browsing and keep the explorer on the working tree.
     ResetBrowseToLive {
         repo_id: RepoId,
     },

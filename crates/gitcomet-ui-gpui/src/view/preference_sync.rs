@@ -705,6 +705,20 @@ impl GitCometView {
         }));
     }
 
+    pub(in crate::view) fn set_files_follow_selected_commit_preference(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.files_follow_selected_commit = enabled;
+        });
+        self.store
+            .dispatch(Msg::SetFileBrowserSettings(FileBrowserSettings {
+                follow_selected_commit: enabled,
+            }));
+    }
+
     pub(in crate::view) fn set_default_history_mode_preference(
         &mut self,
         mode: gitcomet_core::domain::HistoryMode,

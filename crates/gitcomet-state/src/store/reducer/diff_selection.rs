@@ -355,7 +355,7 @@ pub(super) fn exit_diff_edit_mode(
 
 /// Map a `(source, path)` content view to its `DiffTarget`. Returns `None` for
 /// the unwired `Branch` source.
-fn content_view_target(
+pub(super) fn content_view_target(
     source: gitcomet_core::domain::FileSource,
     path: std::path::PathBuf,
 ) -> Option<DiffTarget> {
