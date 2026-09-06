@@ -481,8 +481,8 @@ pub(super) fn schedule_load_log(
     seq: crate::model::LogLoadSeq,
     scope: LogScope,
     author: Option<String>,
-    limit: usize,
     cursor: Option<LogCursor>,
+    request: gitcomet_core::services::HistoryReadRequest,
     cancellation: CancellationToken,
 ) {
     let cursor_on_missing = cursor.clone();
@@ -493,32 +493,24 @@ pub(super) fn schedule_load_log(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let result = {
-                let cursor_ref = cursor.as_ref();
-                // Report the page as it fills in. Finding one page of a rare
-                // author means walking the whole history — over ten seconds on
-                // a repository with a million commits — and the user should not
-                // be looking at the previous filter's rows for all of it.
-                let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
-                    send_or_log(
-                        &msg_tx,
-                        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
-                            repo_id,
-                            seq,
-                            commits: chunk.commits,
-                            scanned: chunk.scanned,
-                        }),
-                    );
-                };
-                repo.log_history_mode_page_streaming(
-                    scope,
-                    author.as_deref(),
-                    limit,
-                    cursor_ref,
-                    &cancellation,
-                    &mut on_chunk,
-                )
+            let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+                        repo_id,
+                        seq,
+                        commits: chunk.commits,
+                        scanned: chunk.scanned,
+                    }),
+                );
             };
+            let result = repo.read_history(
+                scope,
+                author.as_deref(),
+                &request,
+                &cancellation,
+                &mut on_chunk,
+            );
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {

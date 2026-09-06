@@ -1123,7 +1123,7 @@ pub enum InternalMsg {
         seq: crate::model::LogLoadSeq,
         scope: LogScope,
         cursor: Option<LogCursor>,
-        result: Result<Arc<LogPage>, Error>,
+        result: Result<gitcomet_core::services::HistoryReadResult, Error>,
     },
     /// A partially built log page, reported while the walk is still running so
     /// an author filter on a large repository shows what it has found instead

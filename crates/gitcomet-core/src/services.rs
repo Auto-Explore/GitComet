@@ -47,6 +47,94 @@ pub struct LogChunk {
     pub scanned: u64,
 }
 
+/// Opaque identity of the exact inputs used to traverse history. It is scoped to
+/// a repository and query, shared by all its pages, and never persisted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistorySnapshot(pub Arc<str>);
+
+#[derive(Clone, Debug)]
+pub enum HistoryReadRequest {
+    Page {
+        limit: usize,
+        cursor: Option<LogCursor>,
+        snapshot: Option<HistorySnapshot>,
+    },
+    Refresh {
+        previous: Arc<LogPage>,
+        snapshot: Option<HistorySnapshot>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HistoryReadResult {
+    Page {
+        page: Arc<LogPage>,
+        snapshot: Option<HistorySnapshot>,
+    },
+    Unchanged,
+    /// The continuation belongs to a different history. Refresh the retained
+    /// page before allowing another append.
+    Invalidated,
+}
+
+impl From<LogPage> for HistoryReadResult {
+    fn from(page: LogPage) -> Self {
+        Arc::new(page).into()
+    }
+}
+
+impl From<Arc<LogPage>> for HistoryReadResult {
+    fn from(page: Arc<LogPage>) -> Self {
+        Self::Page {
+            page,
+            snapshot: None,
+        }
+    }
+}
+
+/// Rebuild a loaded extent without losing commits merely because new commits
+/// pushed them beyond a numeric page limit. A removed commit requires walking
+/// to EOF to establish its absence. Partial results stay private to the caller.
+pub fn refresh_history_page(
+    previous: &LogPage,
+    cancellation: &CancellationToken,
+    mut read: impl FnMut(usize, Option<&LogCursor>) -> Result<Arc<LogPage>>,
+) -> Result<Arc<LogPage>> {
+    let complete = previous.next_cursor.is_none();
+    let mut remaining: rustc_hash::FxHashSet<_> =
+        previous.commits.iter().map(|commit| &commit.id).collect();
+    cancellation.check_cancelled()?;
+    let mut page = read(previous.commits.len().max(200), None)?;
+    for commit in &page.commits {
+        remaining.remove(&commit.id);
+    }
+    loop {
+        cancellation.check_cancelled()?;
+        if page.next_cursor.is_none() || (!complete && remaining.is_empty()) {
+            return Ok(page);
+        }
+        let cursor = page.next_cursor.as_ref().expect("checked continuation");
+        let next = read(200, Some(cursor))?;
+        if next
+            .next_cursor
+            .as_ref()
+            .is_some_and(|next| next.last_seen == cursor.last_seen)
+        {
+            return Err(Error::new(ErrorKind::Backend(
+                "history cursor did not advance".into(),
+            )));
+        }
+        // Only inspect the newly read commits on subsequent iterations.
+        for commit in &next.commits {
+            remaining.remove(&commit.id);
+        }
+        let mut next = Arc::unwrap_or_clone(next);
+        let page = Arc::make_mut(&mut page);
+        page.commits.append(&mut next.commits);
+        page.next_cursor = next.next_cursor;
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommandOutput {
     pub command: String,
@@ -307,6 +395,56 @@ pub enum SafePushAfterCommitDecision {
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
+    /// Read or refresh a history snapshot. Backends without snapshot support
+    /// conservatively rebuild and never claim an unchanged result.
+    fn read_history(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        request: &HistoryReadRequest,
+        cancellation: &CancellationToken,
+        on_chunk: &mut dyn FnMut(LogChunk),
+    ) -> Result<HistoryReadResult> {
+        let page = match request {
+            HistoryReadRequest::Page {
+                limit,
+                cursor: None,
+                ..
+            } => self.log_history_mode_page_streaming(
+                mode,
+                author,
+                *limit,
+                None,
+                cancellation,
+                on_chunk,
+            )?,
+            HistoryReadRequest::Page { limit, cursor, .. } => self
+                .log_history_mode_page_filtered_cancellable(
+                    mode,
+                    author,
+                    *limit,
+                    cursor.as_ref(),
+                    cancellation,
+                )?,
+            HistoryReadRequest::Refresh { previous, .. } => {
+                refresh_history_page(previous, cancellation, |limit, cursor| {
+                    self.log_history_mode_page_filtered_cancellable(
+                        mode,
+                        author,
+                        limit,
+                        cursor,
+                        cancellation,
+                    )
+                })?
+            }
+        };
+        cancellation.check_cancelled()?;
+        Ok(HistoryReadResult::Page {
+            page,
+            snapshot: None,
+        })
+    }
+
     fn log_history_mode_page(
         &self,
         mode: HistoryMode,
@@ -366,6 +504,19 @@ pub trait GitRepository: Send + Sync {
         Ok(page)
     }
 
+    /// A filtered, cancellable page without progress snapshots. Backends can
+    /// override this to avoid constructing chunks that the caller will discard.
+    fn log_history_mode_page_filtered_cancellable(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        self.log_history_mode_page_streaming(mode, author, limit, cursor, cancellation, &mut |_| {})
+    }
+
     /// [`Self::log_history_mode_page_streaming`] for callers with nothing to
     /// cancel and no use for the intermediate pages.
     fn log_history_mode_page_filtered(
@@ -375,13 +526,12 @@ pub trait GitRepository: Send + Sync {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<std::sync::Arc<LogPage>> {
-        self.log_history_mode_page_streaming(
+        self.log_history_mode_page_filtered_cancellable(
             mode,
             author,
             limit,
             cursor,
             &CancellationToken::new(),
-            &mut |_| {},
         )
     }
 

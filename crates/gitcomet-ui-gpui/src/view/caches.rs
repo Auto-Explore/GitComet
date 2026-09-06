@@ -3,7 +3,7 @@ use super::branch_sidebar::{
     branch_sidebar_source_matches_cached,
 };
 use super::*;
-use gitcomet_core::domain::{Branch, LogScope, RemoteBranch, StashEntry, Tag};
+use gitcomet_core::domain::{Branch, LogPage, LogScope, RemoteBranch, StashEntry, Tag};
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 use std::cell::RefCell;
@@ -15,6 +15,8 @@ use std::time::SystemTime;
 
 #[derive(Clone, Debug)]
 pub(super) struct HistoryCache {
+    /// Immutable source used by both the rows and their graph/decoration caches.
+    pub(super) page: Arc<LogPage>,
     pub(super) base: HistoryBaseCache,
     pub(super) decorations: HistoryDecorationCache,
 }
@@ -47,7 +49,8 @@ pub(super) struct HistoryDecorationCache {
 pub(super) struct HistoryBaseCacheRequest {
     pub(super) repo_id: RepoId,
     pub(super) history_scope: LogScope,
-    pub(super) log_fingerprint: u64,
+    pub(super) log_source: usize,
+    pub(super) history_author_filter: Option<String>,
     pub(super) head_branch_rev: u64,
     pub(super) detached_head_commit: Option<CommitId>,
     pub(super) head_branch_target: Option<CommitId>,
@@ -1587,7 +1590,7 @@ fn index_of<'a>(
 /// whenever the base cache, the dirty-worktree scan, or the working-tree row's
 /// visibility changes.
 ///
-/// The key is the base cache's whole request, not just its `log_fingerprint`:
+/// The key is the base cache's whole request, not just its `log_source`:
 /// the anchors are `visible_ix_by_commit` lookups, and that map is rebuilt for
 /// every field of the request. Filtering stash helper commits out renumbers the
 /// page without touching the fingerprint, so a fingerprint-only key hands back

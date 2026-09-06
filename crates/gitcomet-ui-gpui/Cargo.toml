@@ -151,6 +151,8 @@ gitcomet-win32-window-utils = { path = "../win32-window-utils" }
 raw-window-handle = { workspace = true }
 
 [dev-dependencies]
+# Activate the optional backend for history activation tests with real Git data.
+gitcomet-git-gix = { workspace = true }
 # Only entries that add features over `[dependencies]` belong here — a plain
 # restatement is dead weight, since tests already see every regular dependency.
 gitcomet-core = { workspace = true, features = ["test-support"] }

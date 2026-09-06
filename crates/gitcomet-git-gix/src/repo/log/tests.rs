@@ -712,6 +712,42 @@ fn finishing_a_page_reports_a_request_that_was_superseded_while_it_was_built() {
 }
 
 #[test]
+fn deep_log_pages_share_a_total_cache_row_budget() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_repo(tmp.path());
+    commit_file(tmp.path(), "a.txt", "one\n", "first");
+    let repo = open_repo(tmp.path());
+    let shallow = shallow_snapshot(&repo._repo.to_thread_local()).expect("shallow snapshot");
+    let commit = repo.log_head_page_impl(1, None).unwrap().commits[0].clone();
+    for limit in [4000, 4001, 4002, 20_000] {
+        let key = repo.log_page_cache_key(
+            HistoryMode::AllBranches,
+            super::super::LogPageSeed::Tips(Arc::from(Vec::new())),
+            &shallow,
+            limit,
+            None,
+            None,
+        );
+        repo.store_log_page(
+            key.clone(),
+            &Arc::new(LogPage {
+                commits: vec![commit.clone(); limit],
+                next_cursor: None,
+            }),
+        );
+        let rows: usize = repo
+            .log_page_cache
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.page.commits.len())
+            .sum();
+        assert!(rows <= 10_000, "cached {rows} rows");
+        assert_eq!(repo.cached_log_page(&key).is_some(), limit <= 10_000);
+    }
+}
+
+#[test]
 fn a_cached_page_keeps_the_page_that_follows_it_from_being_evicted() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let workdir = tmp.path();

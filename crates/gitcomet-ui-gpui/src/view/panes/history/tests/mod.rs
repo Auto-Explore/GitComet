@@ -84,6 +84,10 @@ fn set_history_view_state_for_tests(
     state: Arc<AppState>,
 ) {
     cx.update(|window, app| {
+        // Cache replacements become visible during render. Mount the fixture
+        // in the application too, so drawing the window actually draws history.
+        let ui_model = view.read(app).ui_model.clone();
+        ui_model.update(app, |model, cx| model.set_state(Arc::clone(&state), cx));
         let history_view = view.read(app).main_pane.read(app).history_view.clone();
         history_view.update(app, |history, cx| {
             history.notify_fingerprint =
@@ -208,7 +212,8 @@ fn lane_branch_labels(
     let base_request = HistoryBaseCacheRequest {
         repo_id: RepoId(1),
         history_scope: LogScope::AllBranches,
-        log_fingerprint: 0,
+        log_source: 0,
+        history_author_filter: None,
         head_branch_rev: 0,
         detached_head_commit: None,
         head_branch_target: None,
@@ -257,6 +262,7 @@ mod base_cache;
 mod columns;
 mod interaction;
 mod lane_attribution;
+mod refresh;
 mod reveal;
 mod selection;
 mod worktree_anchors;

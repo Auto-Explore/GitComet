@@ -27,10 +27,12 @@ impl HistoryView {
     fn history_view_inner(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let scrollbar_gutter = super::history_scrollbar_gutter();
+        self.apply_pending_history_cache();
         self.ensure_history_cache(cx);
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
         let plan = self.ensure_history_list_plan();
+        self.sync_history_viewport(&plan);
         let repo = self.active_repo();
         let commits_count = self
             .history_cache
@@ -38,7 +40,6 @@ impl HistoryView {
             .map(|cache| cache.base.visible_indices.len())
             .unwrap_or(0);
         let count = plan.list_len(commits_count);
-        let scan_progress = repo.and_then(|r| r.history_state.log_scan_progress);
 
         let bg = theme.colors.surface.canvas;
 
@@ -76,12 +77,16 @@ impl HistoryView {
             let should_load_more = {
                 let state = self.history_scroll.0.borrow();
                 let scroll_handle = state.base_handle.clone();
-                let max_offset = scroll_handle.max_offset().y.max(px(0.0));
-                let should_load_by_scroll = if max_offset > px(0.0) {
-                    scroll_is_near_bottom(&scroll_handle, px(240.0))
-                } else {
-                    true
-                };
+                // The scroll handle still describes the previous layout here.
+                // Use the rows this frame will lay out, and do not paginate a
+                // newer source while its graph is still being built.
+                let viewport = state
+                    .last_item_size
+                    .map(|size| size.item.height)
+                    .unwrap_or(px(0.0));
+                let content = crate::view::rows::history_row_height(self.ui_scale()) * count as f32;
+                let max_offset = (content - viewport).max(px(0.0));
+                let should_load_by_scroll = -scroll_handle.offset().y + px(240.0) >= max_offset;
 
                 state.last_item_size.is_some()
                     && repo.is_some_and(|repo| {
@@ -89,6 +94,7 @@ impl HistoryView {
                             && matches!(
                                 &repo.log,
                                 Loadable::Ready(page) if page.next_cursor.is_some()
+                                    && self.history_cache.as_ref().is_some_and(|cache| Arc::ptr_eq(&cache.page, page))
                             )
                     })
                     && should_load_by_scroll
@@ -167,30 +173,6 @@ impl HistoryView {
                             .child(self.history_column_headers(cx)),
                     ),
             )
-            .when_some(scan_progress, |panel, scanned| {
-                // A filtered walk has to scan history until it has a full
-                // page of matches, which on a large repository takes
-                // seconds. Say so, with a count that keeps moving, rather
-                // than leaving the previous rows looking frozen.
-                panel.child(
-                    div()
-                        .w_full()
-                        .px(ui_scale::design_px_from_percent(8.0, self.ui_scale_percent))
-                        .py(ui_scale::design_px_from_percent(2.0, self.ui_scale_percent))
-                        .bg(bg)
-                        .border_b_1()
-                        .border_color(theme.colors.stroke.subtle)
-                        .text_xs()
-                        .text_color(theme.colors.foreground.secondary)
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .debug_selector(|| "history_scan_progress".to_string())
-                        .child(format!(
-                            "Scanning history… {} commits",
-                            separated_thousands(scanned)
-                        )),
-                )
-            })
             .child(
                 div()
                     .flex()
@@ -234,16 +216,20 @@ impl HistoryView {
         let (primary_selection, page, log_rev, stashes_rev, history_scope) =
             match self.active_repo() {
                 Some(repo) => {
-                    let page = match Self::display_log_page_for_repo(repo) {
-                        Some(page) => page,
-                        None => return false,
+                    let Some(cache) = self
+                        .history_cache
+                        .as_ref()
+                        .filter(|cache| cache.base.request.repo_id == repo.id)
+                    else {
+                        return false;
                     };
+                    let page = Arc::clone(&cache.page);
                     (
                         super::history_primary_selection(repo, show_working_tree_summary_row),
                         page,
-                        repo.log_rev,
-                        repo.stashes_rev,
-                        repo.history_state.history_scope,
+                        cache.base.request.log_source as u64,
+                        cache.base.request.stashes_rev,
+                        cache.base.request.history_scope,
                     )
                 }
                 None => return false,
@@ -878,32 +864,5 @@ impl HistoryView {
         }
 
         header_with_handles
-    }
-}
-
-/// `1778198` → `1 778 198`. Groups with a narrow no-break space, which reads as
-/// a separator in every locale rather than as a decimal point in some.
-fn separated_thousands(value: u64) -> String {
-    let digits = value.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (ix, ch) in digits.chars().enumerate() {
-        if ix > 0 && (digits.len() - ix).is_multiple_of(3) {
-            out.push('\u{202f}');
-        }
-        out.push(ch);
-    }
-    out
-}
-
-#[cfg(test)]
-mod scan_progress_tests {
-    use super::separated_thousands;
-
-    #[test]
-    fn groups_digits_in_threes() {
-        assert_eq!(separated_thousands(0), "0");
-        assert_eq!(separated_thousands(999), "999");
-        assert_eq!(separated_thousands(1_000), "1\u{202f}000");
-        assert_eq!(separated_thousands(1_778_198), "1\u{202f}778\u{202f}198");
     }
 }

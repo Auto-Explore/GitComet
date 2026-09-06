@@ -27,6 +27,7 @@ mod commit_stats;
 mod decode;
 mod reflog;
 mod repo_impl;
+mod snapshot;
 mod walk;
 
 pub(super) use commit_stats::*;

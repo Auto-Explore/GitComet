@@ -67,12 +67,22 @@ impl GixRepo {
     }
 
     pub(super) fn store_log_page(&self, key: super::LogPageCacheKey, page: &Arc<LogPage>) {
+        let row_limit = super::super::LOG_PAGE_CACHE_ROW_LIMIT;
+        if page.commits.len() > row_limit {
+            return;
+        }
         let mut cache = self.log_page_cache.lock().expect("log page cache");
         if let Some(index) = cache.iter().position(|entry| entry.key == key) {
             cache.remove(index);
         }
-        if cache.len() >= super::LOG_PAGE_CACHE_LIMIT {
-            cache.remove(0);
+        let mut rows = cache
+            .iter()
+            .map(|entry| entry.page.commits.len())
+            .sum::<usize>();
+        while !cache.is_empty()
+            && (cache.len() >= super::LOG_PAGE_CACHE_LIMIT || rows + page.commits.len() > row_limit)
+        {
+            rows -= cache.remove(0).page.commits.len();
         }
         cache.push(super::LogPageCacheEntry {
             key,
@@ -404,6 +414,17 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Arc<LogPage>> {
         self.log_history_mode_page_impl_inner(mode, None, limit, cursor, Some(cancellation), None)
+    }
+
+    pub(in super::super) fn log_history_mode_page_filtered_cancellable_impl(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        self.log_history_mode_page_impl_inner(mode, author, limit, cursor, Some(cancellation), None)
     }
 
     /// Filtered, cancellable, streaming variant: `on_chunk` sees the page as it

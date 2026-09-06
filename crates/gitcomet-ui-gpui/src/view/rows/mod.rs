@@ -740,6 +740,7 @@ impl CommitCard {
 mod diff_canvas;
 mod diff_text;
 mod history;
+pub(in crate::view) use history::history_row_height;
 mod history_canvas;
 pub(in crate::view) mod history_graph_paint;
 mod markdown_document;

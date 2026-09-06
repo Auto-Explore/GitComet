@@ -52,7 +52,6 @@ impl HistoryView {
             this.history_relative_dates,
         );
 
-        let page = Self::display_log_page_for_repo(repo);
         let cache = this
             .history_cache
             .as_ref()
@@ -149,8 +148,8 @@ impl HistoryView {
                     return None;
                 };
 
-                let page = page.as_deref()?;
                 let cache = cache?;
+                let page = &cache.page;
 
                 let commit_ix = cache.base.visible_indices.get(visible_ix)?;
                 let commit = page.commits.get(commit_ix)?;
@@ -270,7 +269,7 @@ fn history_message_border(ui_scale: ui_scale::UiScale, color: gpui::Rgba) -> imp
         .bg(color)
 }
 
-fn history_row_height(ui_scale: ui_scale::UiScale) -> Pixels {
+pub(in crate::view) fn history_row_height(ui_scale: ui_scale::UiScale) -> Pixels {
     ui_scale.px(HISTORY_ROW_HEIGHT_PX)
 }
 
