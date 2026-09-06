@@ -144,6 +144,8 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::select_word_right))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::home))
+            .on_action(cx.listener(Self::document_home))
+            .on_action(cx.listener(Self::document_end))
             .on_action(cx.listener(Self::select_home))
             .on_action(cx.listener(Self::end))
             .on_action(cx.listener(Self::select_end))

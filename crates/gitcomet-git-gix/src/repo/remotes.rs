@@ -125,27 +125,25 @@ pub(super) fn configured_upstream_of(reference: &gix::Reference<'_>) -> Option<U
         .strip_prefix(b"refs/heads/")?
         .as_bstr();
     let config = reference.repo.config_snapshot();
-    let mut configured_remote = None;
-    let mut configured_merge = None;
-    for section in config
+    // Subsection-indexed lookups avoid scanning every branch section for
+    // each local branch during refresh. Merge is multi-valued: Git uses its
+    // first entry, while remote uses the last value across matching sections.
+    let remote = config
         .plumbing()
-        .sections_by_name("branch")?
-        .filter(|section| section.header().subsection_name() == Some(local_branch))
-    {
-        if let Some(value) = section.value("remote") {
-            configured_remote = Some(value);
-        }
-        // Git uses the first merge entry, including across repeated branch
-        // sections, while the single-valued remote remains last-value-wins.
-        if configured_merge.is_none() {
-            configured_merge = section.values("merge").into_iter().next();
-        }
-    }
-    let remote = configured_remote?.to_str_lossy().into_owned();
+        .raw_value_by("branch", Some(local_branch), "remote")
+        .ok()?
+        .to_str_lossy()
+        .into_owned();
+    let configured_merge = config
+        .plumbing()
+        .raw_values_by("branch", Some(local_branch), "merge")
+        .ok()?
+        .into_iter()
+        .next()?;
     // A branch remote may also be `.` or a URL. Only a named, configured
     // remote can own one of the remote-tracking branches this API exposes.
     reference.repo.find_remote(remote.as_str()).ok()?;
-    let branch = configured_merge?
+    let branch = configured_merge
         .as_bstr()
         .strip_prefix(b"refs/heads/")
         .map(|name| name.to_str_lossy().into_owned())
@@ -164,14 +162,12 @@ pub(super) fn configured_upstream_is_pending(reference: &gix::Reference<'_>) -> 
     let config = reference.repo.config_snapshot();
     config
         .plumbing()
-        .sections_by_name("branch")
+        .raw_values_with_sections_by("branch", Some(local_branch), PENDING_UPSTREAM_CONFIG_KEY)
+        .unwrap_or_default()
         .into_iter()
-        .flatten()
-        .filter(|section| section.header().subsection_name() == Some(local_branch))
-        .filter_map(|section| section.value(PENDING_UPSTREAM_CONFIG_KEY))
-        .filter_map(|value| gix::config::Boolean::try_from(value).ok())
-        .map(bool::from)
-        .last()
+        .rev()
+        .filter_map(|(_, section)| section.value(PENDING_UPSTREAM_CONFIG_KEY))
+        .find_map(|value| gix::config::Boolean::try_from(value).ok().map(bool::from))
         .unwrap_or(false)
 }
 
@@ -2133,6 +2129,15 @@ impl GixRepo {
             upstream.remote, upstream.branch
         );
         edit_local_config_strict(&repo, |config| {
+            // `section.set()` only replaces the last value in one section.
+            // Remove all merge values across repeated sections so Git's first
+            // merge entry becomes the newly selected target.
+            if let Ok(mut merges) =
+                config.raw_values_mut_by("branch", Some(gix::bstr::BStr::new(branch)), "merge")
+            {
+                merges.delete_all();
+            }
+
             let mut section = config
                 .section_mut_or_create_new("branch", Some(gix::bstr::BStr::new(branch)))
                 .map_err(|e| {

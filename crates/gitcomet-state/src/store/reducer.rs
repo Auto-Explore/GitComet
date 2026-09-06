@@ -212,6 +212,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::OpenFileEditor { .. }
             | Msg::OpenFileAtCommitParent { .. }
             | Msg::OpenFileAtCommit { .. }
+            | Msg::ShowFileChangesAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             | Msg::RevealCommit { .. }
             | Msg::ResetBrowseToLive { .. }
@@ -880,6 +881,7 @@ fn is_view_navigation(msg: &Msg) -> bool {
             // the editor rather than skipping past it to whatever preceded it.
             | Msg::ExitDiffEditMode { .. }
             | Msg::OpenFileAtCommit { .. }
+            | Msg::ShowFileChangesAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             // A reveal moves the main view when its reference resolves, not
             // when it is asked for.
@@ -1311,6 +1313,17 @@ fn reduce_inner(
             repo_id,
             commit_id,
             path,
+            content_preview: true,
+        }],
+        Msg::ShowFileChangesAtCommit {
+            repo_id,
+            commit_id,
+            path,
+        } => vec![Effect::OpenFileAtCommit {
+            repo_id,
+            commit_id,
+            path,
+            content_preview: false,
         }],
         Msg::BrowseRepositoryAtCommit { repo_id, commit_id } => {
             effects::browse_repository_at_commit(repos, state, repo_id, commit_id)
@@ -2292,8 +2305,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
             repo_id,
             path,
+            cursor,
             result,
-        }) => effects::file_history_loaded(state, repo_id, path, result),
+        }) => effects::file_history_loaded(state, repo_id, path, cursor, result),
         Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
             repo_id,
             path,

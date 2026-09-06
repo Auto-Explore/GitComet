@@ -156,6 +156,7 @@ pub(in super::super) struct PopoverHost {
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
+    history_relative_dates: bool,
     change_tracking_view: ChangeTrackingView,
     commit_amend_enabled: bool,
     commit_push_after_enabled: bool,
@@ -1112,3 +1113,11 @@ mod prompt_actions;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) fn benchmark_file_history_rows(
+    page: &gitcomet_core::domain::LogPage,
+    now: std::time::SystemTime,
+) -> Vec<components::PickerPromptItem> {
+    file_history::benchmark_rows(page, now)
+}

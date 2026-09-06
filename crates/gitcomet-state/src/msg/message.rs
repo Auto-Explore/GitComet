@@ -472,6 +472,12 @@ pub enum Msg {
         commit_id: CommitId,
         path: PathBuf,
     },
+    /// Show this file's diff using its name at the selected commit.
+    ShowFileChangesAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
+    },
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -1178,6 +1184,9 @@ pub enum InternalMsg {
     FileHistoryLoaded {
         repo_id: RepoId,
         path: PathBuf,
+        /// The cursor the page was requested with: `None` for the first page,
+        /// `Some` for a continuation to append to it.
+        cursor: Option<LogCursor>,
         result: Result<LogPage, Error>,
     },
     BlameLoaded {

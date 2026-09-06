@@ -4631,3 +4631,43 @@ fn global_nav_back_to_deleted_gitlink_keeps_submodule_classification() {
         "nav-back to the staged submodule deletion must plan a submodule summary: {effects:?}"
     );
 }
+
+#[test]
+fn file_history_actions_resolve_paths_before_opening_content_or_changes() {
+    let mut repos = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/file-history-actions"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    let commit_id = CommitId("abcdef".into());
+    let path = PathBuf::from("src/main.rs");
+    for content_preview in [true, false] {
+        let msg = if content_preview {
+            Msg::OpenFileAtCommit {
+                repo_id,
+                commit_id: commit_id.clone(),
+                path: path.clone(),
+            }
+        } else {
+            Msg::ShowFileChangesAtCommit {
+                repo_id,
+                commit_id: commit_id.clone(),
+                path: path.clone(),
+            }
+        };
+        let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
+        assert!(
+            matches!(effects.as_slice(), [Effect::OpenFileAtCommit { repo_id: id, commit_id: commit, path: file, content_preview: mode }] if *id == repo_id && commit == &commit_id && file == &path && *mode == content_preview)
+        );
+        assert!(
+            state.repos[0].diff_state.diff_target.is_none(),
+            "navigation waits for path resolution"
+        );
+    }
+}

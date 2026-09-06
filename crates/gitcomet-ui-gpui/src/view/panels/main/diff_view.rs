@@ -729,23 +729,6 @@ impl MainPaneView {
                     );
                     handled = true;
                 }
-                "h" if !mods.shift => {
-                    let bounds = window.window_bounds().get_bounds();
-                    let anchor = point(
-                        (bounds.size.width * 0.5).max(px(64.0)),
-                        (bounds.size.height * 0.25).max(px(24.0)),
-                    );
-                    self.open_popover_at(
-                        PopoverKind::FileHistory {
-                            repo_id,
-                            path: path.clone(),
-                        },
-                        anchor,
-                        window,
-                        cx,
-                    );
-                    handled = true;
-                }
                 "e" if !mods.shift && crate::external_editor::configured_setting().is_some() => {
                     let full_path = repo.spec.workdir.join(&path);
                     let root_view = self.root_view.clone();
@@ -786,7 +769,7 @@ impl MainPaneView {
                 .read(cx)
                 .focus_handle()
                 .is_focused(window)
-            && let Some(_repo_id) = self.active_repo_id()
+            && let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
             && let Some(diff_target) = repo.diff_state.diff_target.clone()
         {
@@ -797,6 +780,24 @@ impl MainPaneView {
             };
             if let Some(path) = path {
                 match key {
+                    "h" if !mods.shift => {
+                        let bounds = window.window_bounds().get_bounds();
+                        let anchor = point(
+                            (bounds.size.width * 0.5).max(px(64.0)),
+                            (bounds.size.height * 0.25).max(px(24.0)),
+                        );
+                        self.open_popover_at(
+                            PopoverKind::FileHistory {
+                                repo_id,
+                                path: path.clone(),
+                            },
+                            anchor,
+                            window,
+                            cx,
+                        );
+                        handled = true;
+                    }
+
                     "e" if !mods.shift
                         && crate::external_editor::configured_setting().is_some() =>
                     {

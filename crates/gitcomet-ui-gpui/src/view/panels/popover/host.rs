@@ -178,6 +178,7 @@ impl PopoverHost {
         let date_time_format = preferences.appearance.date_time_format;
         let timezone = preferences.appearance.timezone;
         let show_timezone = preferences.appearance.show_timezone;
+        let history_relative_dates = preferences.history.relative_dates;
         let change_tracking_view = preferences.change_tracking.view;
         let commit_push_after_enabled = preferences.repository.commit_push_after_enabled;
         let diff_content_mode = preferences.diff.content_mode;
@@ -770,6 +771,7 @@ impl PopoverHost {
             date_time_format,
             timezone,
             show_timezone,
+            history_relative_dates,
             change_tracking_view,
             commit_amend_enabled: false,
             commit_push_after_enabled,
@@ -3029,6 +3031,7 @@ impl PopoverHost {
         self.main_pane
             .update(cx, |pane, cx| pane.set_date_time_format(next, cx));
         self.sync_pane_date_settings(cx);
+        cx.notify();
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -3040,6 +3043,7 @@ impl PopoverHost {
         self.main_pane
             .update(cx, |pane, cx| pane.set_timezone(next, cx));
         self.sync_pane_date_settings(cx);
+        cx.notify();
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -3055,7 +3059,19 @@ impl PopoverHost {
         self.main_pane
             .update(cx, |pane, cx| pane.set_show_timezone(enabled, cx));
         self.sync_pane_date_settings(cx);
+        cx.notify();
         self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_history_relative_dates(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_relative_dates != enabled {
+            self.history_relative_dates = enabled;
+            cx.notify();
+        }
     }
 
     pub(super) fn sync_pane_date_settings(&mut self, cx: &mut gpui::Context<Self>) {
@@ -3241,6 +3257,7 @@ impl PopoverHost {
     pub(super) fn open_picker_search_input(&self) -> Option<&Entity<components::TextInput>> {
         match &self.popover {
             Some(PopoverKind::RepoPicker) => self.repo_picker_search_input.as_ref(),
+            Some(PopoverKind::FileHistory { .. }) => self.file_history_search_input.as_ref(),
             Some(PopoverKind::BranchPicker { .. }) => self.branch_picker_search_input.as_ref(),
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
@@ -3258,6 +3275,7 @@ impl PopoverHost {
     pub(super) fn open_picker_selected_index(&mut self) -> Option<&mut Option<usize>> {
         match &self.popover {
             Some(PopoverKind::RepoPicker) => Some(&mut self.repo_picker_selected_index),
+            Some(PopoverKind::FileHistory { .. }) => Some(&mut self.file_history_selected_index),
             Some(PopoverKind::BranchPicker { .. }) => Some(&mut self.branch_picker_selected_index),
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
@@ -3270,6 +3288,7 @@ impl PopoverHost {
     pub(super) fn open_picker_selected_index_value(&self) -> Option<usize> {
         match &self.popover {
             Some(PopoverKind::RepoPicker) => self.repo_picker_selected_index,
+            Some(PopoverKind::FileHistory { .. }) => self.file_history_selected_index,
             Some(PopoverKind::BranchPicker { .. }) => self.branch_picker_selected_index,
             Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),

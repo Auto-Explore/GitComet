@@ -291,6 +291,11 @@ pub(crate) fn reflog_unborn_head_error(repo: &gix::Repository) -> Error {
     )))
 }
 
+/// Upper bound on how much of a caller-supplied page limit is pre-reserved.
+/// The limit is still enforced while iterating; a huge one (`usize::MAX` reads
+/// as "every commit after the cursor") must not reserve that much up front.
+pub(crate) const LOG_PAGE_RESERVE_MAX: usize = 512;
+
 pub(crate) fn paginate_commits(
     commits: impl Iterator<Item = Result<Commit>>,
     limit: usize,
@@ -301,7 +306,7 @@ pub(crate) fn paginate_commits(
     }
 
     let mut cursor_gate = CursorGate::new(cursor);
-    let mut result: Vec<Commit> = Vec::with_capacity(limit);
+    let mut result: Vec<Commit> = Vec::with_capacity(limit.min(LOG_PAGE_RESERVE_MAX));
     let mut next_cursor: Option<LogCursor> = None;
 
     for commit in commits {

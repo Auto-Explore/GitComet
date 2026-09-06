@@ -63,6 +63,7 @@ pub struct TruncatedText {
     text_color: Option<Rgba>,
     text_size: Option<AbsoluteLength>,
     font_weight: Option<FontWeight>,
+    font_family: Option<SharedString>,
     flex: TruncatedTextFlex,
 }
 
@@ -80,6 +81,7 @@ impl TruncatedText {
             text_color: None,
             text_size: None,
             font_weight: None,
+            font_family: None,
             flex: TruncatedTextFlex::default(),
         }
     }
@@ -129,6 +131,11 @@ impl TruncatedText {
 
     pub fn text_sm(mut self) -> Self {
         self.text_size = Some(rems(0.875).into());
+        self
+    }
+
+    pub fn font_family(mut self, font_family: impl Into<SharedString>) -> Self {
+        self.font_family = Some(font_family.into());
         self
     }
 
@@ -185,6 +192,7 @@ impl TruncatedText {
             text_color: self.text_color,
             text_size: self.text_size,
             font_weight: self.font_weight,
+            font_family: self.font_family,
         };
 
         let mut root = div().min_w(px(0.0)).overflow_hidden().whitespace_nowrap();
@@ -250,6 +258,7 @@ struct TruncatedTextElement {
     text_color: Option<Rgba>,
     text_size: Option<AbsoluteLength>,
     font_weight: Option<FontWeight>,
+    font_family: Option<SharedString>,
 }
 
 impl Element for TruncatedTextElement {
@@ -282,6 +291,7 @@ impl Element for TruncatedTextElement {
         let text_color = self.text_color;
         let text_size = self.text_size;
         let font_weight = self.font_weight;
+        let font_family = self.font_family.clone();
 
         let layout_id = window.request_measured_layout(
             Default::default(),
@@ -299,6 +309,9 @@ impl Element for TruncatedTextElement {
                 }
                 if let Some(font_weight) = font_weight {
                     base_style.font_weight = font_weight;
+                }
+                if let Some(font_family) = font_family.as_ref() {
+                    base_style.font_family = font_family.clone();
                 }
                 let alignment_style_key = (profile == TextTruncationProfile::Path)
                     .then(|| path_alignment_style_key(&base_style, window.rem_size()));

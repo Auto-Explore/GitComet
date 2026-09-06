@@ -5398,6 +5398,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 path: PathBuf::from("tracked.txt"),
                 limit: 10,
+                cursor: None,
             },
             1,
         ),

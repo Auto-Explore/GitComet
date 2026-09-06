@@ -20,6 +20,7 @@ mod diff_editor;
 mod diff_hunk;
 mod file_browser_file;
 mod file_browser_folder;
+pub(super) mod file_history_commit;
 mod history_branch_filter;
 mod mergetool_settings;
 mod pinned_section;
@@ -649,6 +650,39 @@ impl PopoverHost {
             ContextMenuAction::AddRepoMenu(action) => {
                 add_repo_menu::activate(self, action, window, cx);
                 return;
+            }
+            ContextMenuAction::ShowFileChangesAtCommit {
+                repo_id,
+                commit_id,
+                path,
+            } => {
+                self.store.dispatch(Msg::ShowFileChangesAtCommit {
+                    repo_id,
+                    commit_id,
+                    path,
+                });
+            }
+            ContextMenuAction::OpenFileAtCommit {
+                repo_id,
+                commit_id,
+                path,
+            } => {
+                self.store.dispatch(Msg::OpenFileAtCommit {
+                    repo_id,
+                    commit_id,
+                    path,
+                });
+            }
+            ContextMenuAction::OpenFileAtCommitParent {
+                repo_id,
+                commit_id,
+                path,
+            } => {
+                self.store.dispatch(Msg::OpenFileAtCommitParent {
+                    repo_id,
+                    commit_id,
+                    path,
+                });
             }
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });

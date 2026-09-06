@@ -7,7 +7,10 @@ use std::hash::{Hash, Hasher};
 pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64 {
     let mut hasher = FxHasher::default();
     hash_popover_kind(popover, &mut hasher);
-    if matches!(popover, PopoverKind::CommitMenu { .. }) {
+    if matches!(
+        popover,
+        PopoverKind::CommitMenu { .. } | PopoverKind::FileHistory { .. }
+    ) {
         state.git_log_settings.show_history_tags.hash(&mut hasher);
     }
 
@@ -296,6 +299,21 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         }
 
         PopoverKind::FileHistory { .. } => {
+            // The row menu reuses commit actions whose availability changes as
+            // refs and repository operations change.
+            repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
+            repo.remotes_rev.hash(hasher);
+            repo.history_state.log_rev.hash(hasher);
+            repo.history_rewrite_busy().hash(hasher);
+            if let Some(mark) = &repo.navigation.comparison_mark {
+                mark.commit_id.hash(hasher);
+                mark.label.hash(hasher);
+            }
+            if let Some(target) = repo.diff_state.diff_target.as_ref() {
+                view_fingerprint::hash_diff_target(target, hasher);
+            }
+            super::rows_cache::date_bucket(std::time::SystemTime::now()).hash(hasher);
             repo.history_state.file_history_path.hash(hasher);
             view_fingerprint::hash_loadable_arc(&repo.history_state.file_history, hasher);
         }

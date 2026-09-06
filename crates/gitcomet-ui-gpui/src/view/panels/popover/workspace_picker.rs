@@ -204,7 +204,8 @@ pub(super) fn cached(
         super::rows_cache::RowsCacheOwner::Workspace,
         rows_signature(repo),
         query,
-    );
+    )
+    .with_query_dependent_model();
     super::rows_cache::get_or_build(&this.workspace_picker_rows_cache, key, |_now| {
         let built = rows(repo, query);
         (built.items, built.rows, built.marked_index)

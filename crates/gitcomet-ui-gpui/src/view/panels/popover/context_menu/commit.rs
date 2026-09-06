@@ -132,6 +132,23 @@ fn repo_commit_is_ancestor_of_head(repo: &RepoState, commit_id: &CommitId) -> bo
 }
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
+    model_with_header(this, repo_id, commit_id, true)
+}
+
+pub(super) fn action_items(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+) -> ContextMenuModel {
+    model_with_header(this, repo_id, commit_id, false)
+}
+
+fn model_with_header(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+    include_header: bool,
+) -> ContextMenuModel {
     let sha = commit_id.as_ref().to_string();
     let short: SharedString = sha.get(0..8).unwrap_or(&sha).to_string().into();
 
@@ -166,16 +183,21 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         [name] => name.clone().into(),
         names => names.join(", ").into(),
     };
-    let mut items = vec![ContextMenuItem::Header(
-        components::ContextMenuText::new(header_text).max_lines(2),
-    )];
+    let mut items = Vec::new();
+    if include_header {
+        items.push(ContextMenuItem::Header(
+            components::ContextMenuText::new(header_text).max_lines(2),
+        ));
+    }
     let mut entry_tooltips = FxHashMap::default();
-    if !commit_summary.is_empty() {
+    if include_header && !commit_summary.is_empty() {
         items.push(ContextMenuItem::Label(
             components::ContextMenuText::new(commit_summary).max_lines(4),
         ));
     }
-    items.push(ContextMenuItem::Separator);
+    if include_header {
+        items.push(ContextMenuItem::Separator);
+    }
     let multi_cherry_pick_plan = multi_cherry_pick_plan(this, repo_id, commit_id);
     let has_multi_cherry_pick = multi_cherry_pick_plan.is_some();
     let is_head_commit = this

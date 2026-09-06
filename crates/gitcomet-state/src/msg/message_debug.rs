@@ -226,11 +226,13 @@ impl std::fmt::Debug for InternalMsg {
             InternalMsg::FileHistoryLoaded {
                 repo_id,
                 path,
+                cursor,
                 result,
             } => f
                 .debug_struct("FileHistoryLoaded")
                 .field("repo_id", repo_id)
                 .field("path", path)
+                .field("cursor", cursor)
                 .field("result", result)
                 .finish(),
             InternalMsg::BlameLoaded {
