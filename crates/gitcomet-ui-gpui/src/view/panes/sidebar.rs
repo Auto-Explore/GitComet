@@ -1886,6 +1886,10 @@ impl SidebarPaneView {
         if !repo.file_browser.search_query.is_empty() {
             return;
         }
+        // Rows for a browse point that has moved on are about to be replaced.
+        if repo.file_browser.stale {
+            return;
+        }
         let Loadable::Ready(entries) = &repo.file_browser.entries else {
             return;
         };

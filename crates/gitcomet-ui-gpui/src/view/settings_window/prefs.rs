@@ -64,6 +64,7 @@ impl SettingsWindowView {
             history_show_sha: Some(self.history_show_sha),
             history_relative_dates: Some(self.history_relative_dates),
             history_highlight_commit_chain: Some(self.history_highlight_commit_chain),
+            file_browser_follow_selected_commit: Some(self.files_follow_selected_commit),
             history_show_tags: Some(self.history_show_tags),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
             default_history_mode: Some(self.default_history_mode),
@@ -867,6 +868,22 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_history_highlight_commit_chain(enabled, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_files_follow_selected_commit(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.files_follow_selected_commit == enabled {
+            return;
+        }
+        self.files_follow_selected_commit = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_files_follow_selected_commit_preference(enabled, cx);
         });
         cx.notify();
     }

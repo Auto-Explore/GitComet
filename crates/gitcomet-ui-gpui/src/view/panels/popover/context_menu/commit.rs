@@ -249,7 +249,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         }),
     });
     items.push(ContextMenuItem::Entry {
-        label: "Browse repository at this point".into(),
+        label: "Start file browsing".into(),
         icon: Some("icons/history.svg".into()),
         shortcut: None,
         disabled: false,

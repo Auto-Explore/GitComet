@@ -82,6 +82,26 @@ fn truncate_badge_label(label: &str) -> SharedString {
     truncate_badge_label_to(label, BADGE_LABEL_MAX_CHARS)
 }
 
+fn file_browsing_badge(repo: &RepoState) -> Option<(SharedString, SharedString)> {
+    if !repo.file_browser.active {
+        return None;
+    }
+    let (label, location) = match repo.browsing_commit() {
+        Some(commit_id) => {
+            let sha = commit_id.as_ref();
+            (
+                sha.get(0..8).unwrap_or(sha).to_string(),
+                format!("commit {sha}"),
+            )
+        }
+        None => ("Working tree".to_string(), "the working tree".to_string()),
+    };
+    Some((
+        label.into(),
+        format!("Browsing {location}. Click for history or Exit file browsing.").into(),
+    ))
+}
+
 fn head_branch_tracking_upstream_name(
     head_branch: &Loadable<String>,
     branches: &Loadable<Arc<Vec<Branch>>>,
@@ -362,26 +382,20 @@ impl Render for ActionBarView {
         );
         let active_invoker = self.active_context_menu_invoker.clone();
 
-        // Badge shown next to the selectors when the file directory is pinned to
-        // a historical commit (not the live state). Click → back to live. Same
-        // geometry and behaviour as the workspace/branch badges, in the fixed
-        // "off-live" purple rather than the theme accent.
+        // Keep the exit control visible throughout file browsing, including
+        // while its selection is on the working-tree row.
         let historical_badge = self
             .active_repo()
             .and_then(|repo| {
-                repo.browsing_commit().map(|commit_id| {
-                    let sha = commit_id.as_ref().to_string();
-                    let short: SharedString = sha.get(0..8).unwrap_or(&sha).to_string().into();
-                    (repo.id, sha, short)
-                })
+                file_browsing_badge(repo).map(|(label, tooltip)| (repo.id, label, tooltip))
             })
-            .map(|(repo_id, sha, short)| {
+            .map(|(repo_id, label, tooltip)| {
                 let purple = crate::theme::historical_outline(theme.is_dark);
                 let invoker: SharedString = "historical_browse_badge".into();
                 let is_active = active_invoker
                     .as_ref()
                     .is_some_and(|id| id.as_ref() == invoker.as_ref());
-                components::Button::new("historical_browse_badge", short)
+                components::Button::new("historical_browse_badge", label)
                     .start_slot(icon("icons/history.svg", purple))
                     .style(components::ButtonStyle::Subtle)
                     .text_color(purple)
@@ -399,10 +413,7 @@ impl Render for ActionBarView {
                         );
                     })
                     .debug_selector(|| "historical_browse_badge".to_string())
-                    .gitcomet_tooltip(
-                        theme,
-                        format!("Browsing commit {sha} — click for history / go live").into(),
-                    )
+                    .gitcomet_tooltip(theme, tooltip)
             });
 
         let is_merging = self
@@ -1102,6 +1113,28 @@ mod tests {
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_core::domain::Upstream;
     use std::path::PathBuf;
+
+    #[test]
+    fn file_browsing_badge_stays_available_on_the_working_tree_until_exit() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        assert!(file_browsing_badge(&repo).is_none());
+        repo.file_browser.active = true;
+        repo.file_browser.source =
+            gitcomet_core::domain::FileSource::Commit(CommitId("deadbeef1234".into()));
+        assert_eq!(file_browsing_badge(&repo).unwrap().0, "deadbeef");
+        repo.file_browser.source = gitcomet_core::domain::FileSource::WorkingDirectory;
+        let (label, tooltip) =
+            file_browsing_badge(&repo).expect("browsing still has an exit control");
+        assert_eq!(label, "Working tree");
+        assert!(tooltip.contains("Exit file browsing"));
+        repo.file_browser.active = false;
+        assert!(file_browsing_badge(&repo).is_none());
+    }
 
     fn test_branch(name: &str, upstream: Option<Upstream>) -> Branch {
         Branch {

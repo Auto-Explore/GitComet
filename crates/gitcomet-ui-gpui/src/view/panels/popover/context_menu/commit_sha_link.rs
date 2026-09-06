@@ -35,7 +35,7 @@ fn model_for_commit_sha_link(
     }
 
     items.push(ContextMenuItem::Entry {
-        label: "Browse repository at this point".into(),
+        label: "Start file browsing".into(),
         icon: Some("icons/history.svg".into()),
         shortcut: None,
         disabled: false,
@@ -70,7 +70,7 @@ mod tests {
 
         assert_eq!(
             entry_labels(&model),
-            vec!["Navigate", "Browse repository at this point"]
+            vec!["Navigate", "Start file browsing"]
         );
         // The id is shown so a reference in prose can be checked before acting.
         assert!(model.items.iter().any(|item| matches!(
@@ -84,10 +84,7 @@ mod tests {
         let commit_id = CommitId("deadbeef".into());
         let model = model_for_commit_sha_link(RepoId(3), &commit_id, false);
 
-        assert_eq!(
-            entry_labels(&model),
-            vec!["Browse repository at this point"]
-        );
+        assert_eq!(entry_labels(&model), vec!["Start file browsing"]);
     }
 
     #[test]

@@ -348,8 +348,7 @@ impl HistoryView {
             return true;
         }
         if show_working_tree_summary_row && next_list_ix == 0 {
-            self.store.dispatch(Msg::ClearCommitSelection { repo_id });
-            self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            self.select_working_tree_summary_row(repo_id, _cx);
             super::set_history_selected_list_index_cache(
                 &mut self.history_selected_list_index_cache,
                 repo_id,
@@ -360,9 +359,6 @@ impl HistoryView {
                 None,
                 0,
             );
-            self.dismiss_history_refs_hover(_cx);
-            self.history_scroll
-                .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
             return true;
         }
 

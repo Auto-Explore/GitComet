@@ -21,8 +21,8 @@ use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind,
 use gitcomet_state::model::{
     AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptOperation,
     BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind,
-    GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable, RemoteSettings, RepoId,
-    RepoState, SubmoduleTrustPromptOperation,
+    FileBrowserSettings, GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable,
+    RemoteSettings, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{BranchExistsChoice, Msg, StoreEvent};
 use gitcomet_state::session;
