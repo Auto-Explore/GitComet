@@ -268,7 +268,7 @@ tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
 tree-sitter-zig = "1.1.2"
 unicode-segmentation = "1.13.3"
-ureq = { version = "3.4.0", default-features = false, features = ["rustls", "gzip"] }
+ureq = { version = "3.4.1", default-features = false, features = ["rustls", "gzip"] }
 url = "2.5.8"
 wayland-client = "0.31.15"
 x11-clipboard = "0.9.3"

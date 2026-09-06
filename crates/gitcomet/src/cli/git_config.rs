@@ -42,17 +42,34 @@ fn decode_git_path_stdout(bytes: &[u8]) -> Option<PathBuf> {
     }
 }
 
-/// Read a single git config value from an explicit repository root.
-/// Returns `None` if the key is not set or git is not available.
-fn read_git_config_at_repo(repo_root: &Path, key: &str) -> Option<String> {
+/// Read several git config keys from an explicit repository root with one
+/// `git config --get-regexp` spawn. Later lines win, matching `--get`. Empty
+/// when none of the keys is set or git is not available.
+fn read_git_config_values_at_repo(repo_root: &Path, keys: &[&str]) -> Vec<(String, String)> {
+    let pattern = format!(
+        "^({})$",
+        keys.iter()
+            .map(|key| key.replace('.', "\\."))
+            .collect::<Vec<_>>()
+            .join("|")
+    );
     git_command()
         .arg("-C")
         .arg(repo_root)
-        .args(["config", "--get", key])
+        .args(["config", "--get-regexp", &pattern])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| decode_git_text_stdout(&o.stdout))
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| {
+                    let (key, value) = line.split_once(' ')?;
+                    Some((key.to_string(), value.trim().to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn git_repo_toplevel_from_probe_dir(probe_dir: &Path) -> Option<PathBuf> {
@@ -141,10 +158,18 @@ pub(super) fn resolve_mergetool_with_config(
 
     let mut config = resolve_mergetool_with_env(args, env)?;
     let repo_root = resolve_mergetool_repo_root(&config);
+    let repo_values = repo_root
+        .as_deref()
+        .map(|repo| {
+            read_git_config_values_at_repo(repo, &["merge.conflictstyle", "diff.algorithm"])
+        })
+        .unwrap_or_default();
     let repo_scoped_git_config = |key: &str| {
-        repo_root
-            .as_deref()
-            .and_then(|repo| read_git_config_at_repo(repo, key))
+        repo_values
+            .iter()
+            .rev()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value.clone())
             .or_else(|| git_config(key))
     };
     apply_git_config_fallback(

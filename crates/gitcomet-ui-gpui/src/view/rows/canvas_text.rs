@@ -55,16 +55,17 @@ pub(super) fn center_text_y(bounds: Bounds<Pixels>, line_height: Pixels) -> Pixe
 /// Shapes gutter text, keyed on text, metrics, family/weight, and color.
 ///
 /// The caller supplies its own cache so each canvas keeps its cache keys and
-/// capacities separate.
+/// capacities separate, and the resolved text style (`diff_text_style`),
+/// computed once per paint closure: `window.text_style()` re-merges the style
+/// stack on every call, which added up across the gutter cells of a frame.
 pub(super) fn shaped_gutter_line(
     text: &SharedString,
     color: gpui::Rgba,
     metrics: LineMetrics,
+    style: &TextStyle,
     cache: &RefCell<FxLruCache<u64, gpui::ShapedLine>>,
     window: &mut Window,
 ) -> gpui::ShapedLine {
-    let mut style = diff_text_style(window);
-    style.color = color.into_color();
     let key = {
         let mut hasher = FxHasher::default();
         text.as_ref().hash(&mut hasher);
@@ -80,7 +81,8 @@ pub(super) fn shaped_gutter_line(
 
     let shaped = cache.borrow_mut().get(&key).cloned();
     shaped.unwrap_or_else(|| {
-        let run = style.to_run(text.len());
+        let mut run = style.to_run(text.len());
+        run.color = color.into_color();
         let shaped = window
             .text_system()
             .shape_line(text.clone(), metrics.font_size, &[run], None);

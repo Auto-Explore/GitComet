@@ -312,7 +312,7 @@ pub trait GitRepository: Send + Sync {
         mode: HistoryMode,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         match mode {
             HistoryMode::AllBranches => self.log_all_branches_page(limit, cursor),
             HistoryMode::FullReachable
@@ -327,7 +327,7 @@ pub trait GitRepository: Send + Sync {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         cancellation.check_cancelled()?;
         let page = self.log_history_mode_page(mode, limit, cursor)?;
         cancellation.check_cancelled()?;
@@ -358,7 +358,7 @@ pub trait GitRepository: Send + Sync {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(LogChunk),
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         let _ = (author, on_chunk);
         cancellation.check_cancelled()?;
         let page = self.log_history_mode_page(mode, limit, cursor)?;
@@ -374,7 +374,7 @@ pub trait GitRepository: Send + Sync {
         author: Option<&str>,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         self.log_history_mode_page_streaming(
             mode,
             author,
@@ -385,19 +385,27 @@ pub trait GitRepository: Send + Sync {
         )
     }
 
-    fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
+    fn log_head_page(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>>;
     fn log_head_page_cancellable(
         &self,
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         cancellation.check_cancelled()?;
         let page = self.log_head_page(limit, cursor)?;
         cancellation.check_cancelled()?;
         Ok(page)
     }
-    fn log_all_branches_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_all_branches_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "all-branches history is not implemented for this backend",
         )))
@@ -407,7 +415,7 @@ pub trait GitRepository: Send + Sync {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         cancellation.check_cancelled()?;
         let page = self.log_all_branches_page(limit, cursor)?;
         cancellation.check_cancelled()?;
@@ -418,7 +426,7 @@ pub trait GitRepository: Send + Sync {
         _path: &Path,
         _limit: usize,
         _cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "file history is not implemented for this backend",
         )))
@@ -523,7 +531,8 @@ pub trait GitRepository: Send + Sync {
         Ok(branches)
     }
     fn worktree_status(&self) -> Result<Vec<FileStatus>> {
-        self.status().map(|status| status.unstaged)
+        self.status()
+            .map(|status| std::sync::Arc::unwrap_or_clone(status.unstaged))
     }
     fn worktree_status_cancellable(
         &self,
@@ -535,7 +544,8 @@ pub trait GitRepository: Send + Sync {
         Ok(status)
     }
     fn staged_status(&self) -> Result<Vec<FileStatus>> {
-        self.status().map(|status| status.staged)
+        self.status()
+            .map(|status| std::sync::Arc::unwrap_or_clone(status.staged))
     }
     fn staged_status_cancellable(
         &self,
@@ -1225,7 +1235,7 @@ pub trait GitRepository: Send + Sync {
     /// as `(short refname, metadata)` pairs. Purely decorative — callers render
     /// name-only rows when this is unavailable, so backends may leave it
     /// unimplemented.
-    fn list_ref_metadata(&self) -> Result<Vec<(String, RefMetadata)>> {
+    fn list_ref_metadata(&self) -> Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>> {
         Err(Error::new(ErrorKind::Unsupported(
             "ref metadata listing is not implemented for this backend",
         )))
@@ -1233,7 +1243,7 @@ pub trait GitRepository: Send + Sync {
     fn list_ref_metadata_cancellable(
         &self,
         cancellation: &CancellationToken,
-    ) -> Result<Vec<(String, RefMetadata)>> {
+    ) -> Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>> {
         cancellation.check_cancelled()?;
         let metadata = self.list_ref_metadata()?;
         cancellation.check_cancelled()?;
@@ -1728,24 +1738,24 @@ mod tests {
             &self,
             limit: usize,
             cursor: Option<&LogCursor>,
-        ) -> super::Result<LogPage> {
+        ) -> super::Result<std::sync::Arc<LogPage>> {
             self.record("head", limit, cursor);
-            Ok(LogPage {
+            Ok(std::sync::Arc::new(LogPage {
                 commits: Vec::new(),
                 next_cursor: None,
-            })
+            }))
         }
 
         fn log_all_branches_page(
             &self,
             limit: usize,
             cursor: Option<&LogCursor>,
-        ) -> super::Result<LogPage> {
+        ) -> super::Result<std::sync::Arc<LogPage>> {
             self.record("all", limit, cursor);
-            Ok(LogPage {
+            Ok(std::sync::Arc::new(LogPage {
                 commits: Vec::new(),
                 next_cursor: None,
-            })
+            }))
         }
 
         fn commit_details(&self, _id: &CommitId) -> super::Result<CommitDetails> {

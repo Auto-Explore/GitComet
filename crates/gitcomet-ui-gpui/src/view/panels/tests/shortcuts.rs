@@ -808,16 +808,18 @@ fn simple_worktree_repo(
     let mut repo = shortcut_fixture_repo(repo_id, workdir, commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: paths
-                .iter()
-                .cloned()
-                .map(|path| gitcomet_core::domain::FileStatus {
-                    path,
-                    kind: gitcomet_core::domain::FileStatusKind::Modified,
-                    conflict: None,
-                })
-                .collect(),
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(
+                paths
+                    .iter()
+                    .cloned()
+                    .map(|path| gitcomet_core::domain::FileStatus {
+                        path,
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    })
+                    .collect(),
+            ),
         }
         .into(),
     );
@@ -1586,12 +1588,12 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: staged_path.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Added,
                 conflict: None,
-            }],
-            unstaged: vec![
+            }]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: unstaged_path.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -1607,7 +1609,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
                     kind: gitcomet_core::domain::FileStatusKind::Conflicted,
                     conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -2160,8 +2162,8 @@ fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui:
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: untracked_a.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Untracked,
@@ -2177,7 +2179,7 @@ fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui:
                     kind: gitcomet_core::domain::FileStatusKind::Untracked,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -2223,8 +2225,8 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: untracked.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Untracked,
@@ -2240,7 +2242,7 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -2564,12 +2566,12 @@ fn commit_message_text_input_f3_prefers_diff_search_matches(cx: &mut gpui::TestA
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: hunk_path.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: None,
-            }],
+            }]),
         }
         .into(),
     );
@@ -2706,12 +2708,12 @@ fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpu
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: staged_path,
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: None,
-            }],
-            unstaged: vec![],
+            }]),
+            unstaged: std::sync::Arc::new(vec![]),
         }
         .into(),
     );
@@ -2983,8 +2985,8 @@ fn create_branch_popover_text_input_f4_navigates_diff_without_closing_popover(
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: first.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -2995,7 +2997,7 @@ fn create_branch_popover_text_input_f4_navigates_diff_without_closing_popover(
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -5360,12 +5362,12 @@ fn space_asks_before_staging_a_file_with_conflict_markers(cx: &mut gpui::TestApp
     );
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: conflicted.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
-            }],
+            }]),
         }
         .into(),
     );
@@ -5429,12 +5431,12 @@ fn space_stages_a_resolved_conflict_without_asking(cx: &mut gpui::TestAppContext
     );
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: resolved.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
-            }],
+            }]),
         }
         .into(),
     );
@@ -5566,8 +5568,8 @@ fn ctrl_s_confirms_for_the_whole_ctrl_selected_set(cx: &mut gpui::TestAppContext
     );
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: conflicted.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
@@ -5583,7 +5585,7 @@ fn ctrl_s_confirms_for_the_whole_ctrl_selected_set(cx: &mut gpui::TestAppContext
                     kind: gitcomet_core::domain::FileStatusKind::Modified,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -5918,8 +5920,8 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![
                 gitcomet_core::domain::FileStatus {
                     path: untracked_a.clone(),
                     kind: gitcomet_core::domain::FileStatusKind::Untracked,
@@ -5935,7 +5937,7 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
                     kind: gitcomet_core::domain::FileStatusKind::Untracked,
                     conflict: None,
                 },
-            ],
+            ]),
         }
         .into(),
     );
@@ -6017,12 +6019,12 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     repo.status = Loadable::Ready(
         gitcomet_core::domain::RepoStatus {
-            staged: vec![],
-            unstaged: vec![gitcomet_core::domain::FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![gitcomet_core::domain::FileStatus {
                 path: path.clone(),
                 kind: gitcomet_core::domain::FileStatusKind::Modified,
                 conflict: None,
-            }],
+            }]),
         }
         .into(),
     );

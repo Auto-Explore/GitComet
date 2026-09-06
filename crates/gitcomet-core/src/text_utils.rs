@@ -122,6 +122,21 @@ where
     if saw_cr { "\r" } else { "\n" }
 }
 
+/// `(CRLF count, total LF count)` of `text` in one scan; every LF is found
+/// with `memchr` and the byte before it decides whether it was a CRLF.
+pub fn count_line_feeds(text: &str) -> (usize, usize) {
+    let bytes = text.as_bytes();
+    let mut crlf = 0usize;
+    let mut lf = 0usize;
+    for position in memchr::memchr_iter(b'\n', bytes) {
+        lf += 1;
+        if position > 0 && bytes[position - 1] == b'\r' {
+            crlf += 1;
+        }
+    }
+    (crlf, lf)
+}
+
 fn detect_by_dominant_counts<'a, I>(texts: I) -> &'static str
 where
     I: IntoIterator<Item = &'a str>,
@@ -129,9 +144,9 @@ where
     let mut crlf_count = 0usize;
     let mut lf_only_count = 0usize;
     for text in texts {
-        let crlf = text.matches("\r\n").count();
+        let (crlf, lf) = count_line_feeds(text);
         crlf_count += crlf;
-        lf_only_count += text.matches('\n').count().saturating_sub(crlf);
+        lf_only_count += lf.saturating_sub(crlf);
     }
     if crlf_count > lf_only_count {
         "\r\n"
@@ -146,9 +161,11 @@ where
 /// ending for every line, so a mixed document cannot survive that round trip.
 /// Callers use this to keep the original bytes instead of normalizing them.
 pub fn text_has_mixed_line_endings(text: &str) -> bool {
-    let crlf = text.matches("\r\n").count();
-    let bare_lf = text.matches('\n').count().saturating_sub(crlf);
-    let bare_cr = text.matches('\r').count().saturating_sub(crlf);
+    let (crlf, lf) = count_line_feeds(text);
+    let bare_lf = lf.saturating_sub(crlf);
+    let bare_cr = memchr::memchr_iter(b'\r', text.as_bytes())
+        .count()
+        .saturating_sub(crlf);
     [crlf, bare_lf, bare_cr]
         .into_iter()
         .filter(|count| *count > 0)

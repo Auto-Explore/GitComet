@@ -377,7 +377,10 @@ impl MainPaneView {
             diff_text_query_segments_cache: Vec::new(),
             diff_text_query_cache_query: SharedString::default(),
             diff_text_query_cache_options: Default::default(),
-            diff_text_query_cache_matcher: None,
+            diff_text_query_cache_matcher_shared: None,
+            blame_label_cache: std::rc::Rc::new(std::cell::RefCell::new(
+                crate::view::rows::BlameLabelCache::default(),
+            )),
             diff_text_query_cache_generation: 0,
             diff_selection_anchor: None,
             diff_selection_range: None,

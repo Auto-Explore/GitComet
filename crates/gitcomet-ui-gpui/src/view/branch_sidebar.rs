@@ -2386,12 +2386,12 @@ mod tests {
         let (before_fingerprint, before_parts) = branch_sidebar_source_fingerprint(&repo, None);
 
         repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            staged: vec![],
-            unstaged: vec![FileStatus {
+            staged: std::sync::Arc::new(vec![]),
+            unstaged: std::sync::Arc::new(vec![FileStatus {
                 path: PathBuf::from("src/lib.rs"),
                 kind: FileStatusKind::Modified,
                 conflict: None,
-            }],
+            }]),
         }));
 
         let (after_fingerprint, after_parts) =

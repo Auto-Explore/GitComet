@@ -6,7 +6,8 @@
 
 use super::{DiffAlgorithm, MergeOptions};
 use crate::file_diff::{Edit, EditKind, histogram_edits, myers_edits, split_lines};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use rustc_hash::FxHashMap;
+use std::collections::{BTreeSet, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -596,9 +597,52 @@ impl MergePlan {
                 .iter()
                 .find(|row| row.equal_ab && row.equal_ac)
                 .and_then(|row| row.a)
-                .unwrap_or_else(|| self.source_lines(MergeSource::A).len());
+                .unwrap_or_else(|| self.base.as_deref().map_or(0, line_count));
             start.min(end)..end
         })
+    }
+
+    /// [`Self::block_ancestor_range`] for every block at once: one forward
+    /// pass over the rows instead of a backward and a forward scan per block.
+    pub fn block_ancestor_ranges(&self) -> Vec<Option<Range<usize>>> {
+        if !self.has_base() {
+            return vec![None; self.blocks.len()];
+        }
+        let base_len = self.base.as_deref().map_or(0, line_count);
+        // `before[i]`: one past the base line of the last three-way anchor
+        // strictly before row `i`, or 0. `after[i]`: the base line of the
+        // first anchor at or after row `i`, or the base length.
+        let mut before = Vec::with_capacity(self.rows.len() + 1);
+        let mut last = 0usize;
+        for row in &self.rows {
+            before.push(last);
+            if row.equal_ab
+                && row.equal_ac
+                && let Some(a) = row.a
+            {
+                last = a + 1;
+            }
+        }
+        before.push(last);
+        let mut after = vec![base_len; self.rows.len() + 1];
+        let mut next = base_len;
+        for (ix, row) in self.rows.iter().enumerate().rev() {
+            if row.equal_ab
+                && row.equal_ac
+                && let Some(a) = row.a
+            {
+                next = a;
+            }
+            after[ix] = next;
+        }
+        self.blocks
+            .iter()
+            .map(|block| {
+                let start = before[block.rows.start];
+                let end = after[block.rows.end];
+                Some(start.min(end)..end)
+            })
+            .collect()
     }
 
     pub fn block_ancestor_lines<'a>(&'a self, block: &MergeBlock) -> Vec<&'a str> {
@@ -725,7 +769,7 @@ impl MergePlan {
         let a_lines = split_lines(a_text);
         let b_lines = split_lines(b_text);
         let c_lines = split_lines(c_text);
-        let mut occurrences = BTreeMap::<u64, u32>::new();
+        let mut occurrences = FxHashMap::<u64, u32>::default();
 
         for block in &mut self.blocks {
             let fingerprint = block_fingerprint(
@@ -875,15 +919,15 @@ impl MergePlan {
             return;
         }
 
-        let mut previous_counts = BTreeMap::<u64, usize>::new();
-        let mut current_counts = BTreeMap::<u64, usize>::new();
+        let mut previous_counts = FxHashMap::<u64, usize>::default();
+        let mut current_counts = FxHashMap::<u64, usize>::default();
         for block in &previous.blocks {
             *previous_counts.entry(block.id.fingerprint).or_default() += 1;
         }
         for block in &self.blocks {
             *current_counts.entry(block.id.fingerprint).or_default() += 1;
         }
-        let decisions: BTreeMap<u64, (&OrderedSelection, Option<&String>)> = previous
+        let decisions: FxHashMap<u64, (&OrderedSelection, Option<&String>)> = previous
             .blocks
             .iter()
             .filter(|block| previous_counts.get(&block.id.fingerprint) == Some(&1))
@@ -1470,6 +1514,33 @@ pub(crate) fn normalized_without_whitespace(text: &str) -> String {
         .collect()
 }
 
+/// `normalized_without_whitespace(left) == normalized_without_whitespace(right)`
+/// without materializing either side. This runs three times per aligned row
+/// and the rows are recomputed up to six times per plan build, so the two
+/// `String`s it replaced dominated the allocation count of a merge.
+pub(crate) fn equal_ignoring_whitespace(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    let mut left = left.chars().filter(|character| !character.is_whitespace());
+    let mut right = right.chars().filter(|character| !character.is_whitespace());
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => return true,
+            (Some(l), Some(r)) if l == r => {}
+            _ => return false,
+        }
+    }
+}
+
+/// Number of lines `split_lines` would produce, without producing them.
+pub(crate) fn line_count(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    memchr::memchr_iter(b'\n', text.as_bytes()).count() + usize::from(!text.ends_with('\n'))
+}
+
 fn pair_metadata(
     left: Option<usize>,
     right: Option<usize>,
@@ -1485,10 +1556,8 @@ fn pair_metadata(
     let Some(right) = right_lines.get(right) else {
         return (false, false);
     };
-    (
-        left == right,
-        normalized_without_whitespace(left) == normalized_without_whitespace(right),
-    )
+    let equal = left == right;
+    (equal, equal || equal_ignoring_whitespace(left, right))
 }
 
 fn recompute_row_metadata(
@@ -1954,7 +2023,7 @@ fn build_blocks(
     }
     raw.push((start..rows.len(), decisions[start].clone()));
 
-    let mut occurrences = BTreeMap::<u64, u32>::new();
+    let mut occurrences = FxHashMap::<u64, u32>::default();
     raw.into_iter()
         .map(|(range, decision)| {
             let fingerprint = block_fingerprint(
@@ -1992,14 +2061,20 @@ fn build_blocks(
 }
 
 fn detect_line_ending(base: Option<&str>, local: &str, remote: &str) -> &'static str {
-    let base = base.unwrap_or_default();
-    let crlf = base.matches("\r\n").count()
-        + local.matches("\r\n").count()
-        + remote.matches("\r\n").count();
-    let lf =
-        base.matches('\n').count() + local.matches('\n').count() + remote.matches('\n').count()
-            - crlf;
+    // One pass per text: `matches("\r\n")` plus `matches('\n')` scanned each
+    // input twice, on files that can be megabytes.
+    let (mut crlf, mut lf) = (0usize, 0usize);
+    for text in [base.unwrap_or_default(), local, remote] {
+        let (text_crlf, text_lf) = gitcomet_text_utils_count_line_feeds(text);
+        crlf += text_crlf;
+        lf += text_lf - text_crlf;
+    }
     if crlf > lf { "\r\n" } else { "\n" }
+}
+
+/// `(CRLF count, total LF count)` in one scan.
+fn gitcomet_text_utils_count_line_feeds(text: &str) -> (usize, usize) {
+    crate::text_utils::count_line_feeds(text)
 }
 
 fn source_indices_are_complete_and_ordered(
@@ -2015,19 +2090,56 @@ fn source_indices_are_complete_and_ordered(
 fn exact_base_anchor_pairs(
     rows: &[AlignedRow],
     contributor: MergeSource,
-) -> BTreeSet<(usize, usize)> {
-    rows.iter()
-        .filter_map(|row| {
-            let base = row.a?;
-            let contributor_line = row.line(contributor)?;
-            let equal = match contributor {
-                MergeSource::B => row.equal_ab,
-                MergeSource::C => row.equal_ac,
-                MergeSource::A => true,
-            };
-            equal.then_some((base, contributor_line))
-        })
-        .collect()
+) -> impl Iterator<Item = (usize, usize)> + '_ {
+    rows.iter().filter_map(move |row| {
+        let base = row.a?;
+        let contributor_line = row.line(contributor)?;
+        let equal = match contributor {
+            MergeSource::B => row.equal_ab,
+            MergeSource::C => row.equal_ac,
+            MergeSource::A => true,
+        };
+        equal.then_some((base, contributor_line))
+    })
+}
+
+/// Whether every exact base anchor of `baseline` survives in `candidate`.
+///
+/// Both row lists come out of base-anchored passes, so their base lines are
+/// ascending and the pairs can be merged in one walk; that replaced four
+/// `BTreeSet`s (a node allocation per equal row) per plan build. Falls back
+/// to the set comparison if either sequence is ever not ascending.
+fn base_anchor_pairs_subset(
+    baseline: &[AlignedRow],
+    candidate: &[AlignedRow],
+    contributor: MergeSource,
+) -> bool {
+    let ascending = |rows: &[AlignedRow]| {
+        exact_base_anchor_pairs(rows, contributor)
+            .map(|(base, _)| base)
+            .is_sorted_by(|left, right| left < right)
+    };
+    if !ascending(baseline) || !ascending(candidate) {
+        let candidate: BTreeSet<(usize, usize)> =
+            exact_base_anchor_pairs(candidate, contributor).collect();
+        return exact_base_anchor_pairs(baseline, contributor)
+            .all(|pair| candidate.contains(&pair));
+    }
+    let mut candidate = exact_base_anchor_pairs(candidate, contributor).peekable();
+    'outer: for wanted in exact_base_anchor_pairs(baseline, contributor) {
+        while let Some(&have) = candidate.peek() {
+            if have.0 < wanted.0 {
+                candidate.next();
+                continue;
+            }
+            if have == wanted {
+                continue 'outer;
+            }
+            return false;
+        }
+        return false;
+    }
+    true
 }
 
 fn contributor_alignment_preserves_base_anchors(
@@ -2040,10 +2152,8 @@ fn contributor_alignment_preserves_base_anchors(
     source_indices_are_complete_and_ordered(candidate, MergeSource::A, a_len)
         && source_indices_are_complete_and_ordered(candidate, MergeSource::B, b_len)
         && source_indices_are_complete_and_ordered(candidate, MergeSource::C, c_len)
-        && exact_base_anchor_pairs(baseline, MergeSource::B)
-            .is_subset(&exact_base_anchor_pairs(candidate, MergeSource::B))
-        && exact_base_anchor_pairs(baseline, MergeSource::C)
-            .is_subset(&exact_base_anchor_pairs(candidate, MergeSource::C))
+        && base_anchor_pairs_subset(baseline, candidate, MergeSource::B)
+        && base_anchor_pairs_subset(baseline, candidate, MergeSource::C)
 }
 
 /// Whether every manual pin still holds: the first line each entry pins shares
@@ -2811,5 +2921,174 @@ mod tests {
         plan.replace_selection(conflict, MergeSource::B.into());
         assert_eq!(plan.original_conflict_block_indices(), original);
         assert!(plan.unresolved_block_indices().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod perf_regression_tests {
+    use super::*;
+    use crate::merge::{MergeOptions, render_merge_plan};
+
+    fn three_way_fixture(lines: usize) -> (String, String, String) {
+        let mut base = String::with_capacity(lines * 24);
+        let mut local = String::with_capacity(lines * 24);
+        let mut remote = String::with_capacity(lines * 24);
+        for ix in 0..lines {
+            let line = format!("    fn item_{ix}() -> u32 {{ {ix} }}\n");
+            base.push_str(&line);
+            match ix % 350 {
+                // Both sides change the same line differently: a conflict.
+                0 => {
+                    local.push_str(&format!("    fn item_{ix}() -> u32 {{ {ix} + 1 }}\n"));
+                    remote.push_str(&format!("    fn item_{ix}() -> u32 {{ {ix} + 2 }}\n"));
+                }
+                // Local-only edit, plus an insertion.
+                50 | 100 => {
+                    local.push_str(&format!("    fn item_{ix}() -> u32 {{ {ix} * 2 }}\n"));
+                    local.push_str("    // local note\n");
+                    remote.push_str(&line);
+                }
+                // Remote-only edit with whitespace-only change elsewhere.
+                70 | 140 => {
+                    local.push_str(&line);
+                    remote.push_str(&format!("    fn item_{ix}() -> u32 {{ {ix} * 3 }}\n"));
+                }
+                7 => {
+                    local.push_str(&line);
+                    remote.push_str(&format!("  fn item_{ix}()  ->  u32 {{ {ix} }}\n"));
+                }
+                _ => {
+                    local.push_str(&line);
+                    remote.push_str(&line);
+                }
+            }
+        }
+        (base, local, remote)
+    }
+
+    #[test]
+    fn equal_ignoring_whitespace_matches_the_normalized_comparison() {
+        let cases = [
+            ("", ""),
+            ("a", "a"),
+            ("a b", "ab"),
+            (" a\tb ", "a b"),
+            ("ab", "a c"),
+            ("a", ""),
+            ("", " "),
+            ("é ü", "éü"),
+            ("x  y  z", "xyz"),
+            ("xyz", "xy"),
+        ];
+        for (left, right) in cases {
+            assert_eq!(
+                equal_ignoring_whitespace(left, right),
+                normalized_without_whitespace(left) == normalized_without_whitespace(right),
+                "{left:?} vs {right:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn line_count_matches_split_lines() {
+        for text in [
+            "",
+            "a",
+            "a\n",
+            "a\nb",
+            "a\nb\n",
+            "\n",
+            "\n\n",
+            "a\r\nb\r\n",
+            "a\r\nb",
+        ] {
+            assert_eq!(line_count(text), split_lines(text).len(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn block_ancestor_ranges_match_per_block_lookup() {
+        let (base, local, remote) = three_way_fixture(2_000);
+        let plan = build_merge_plan(&base, &local, &remote, &MergeOptions::default());
+        let all = plan.block_ancestor_ranges();
+        assert_eq!(all.len(), plan.blocks.len());
+        for (block, range) in plan.blocks.iter().zip(&all) {
+            assert_eq!(range, &plan.block_ancestor_range(block));
+        }
+        let two_way =
+            build_merge_plan_with_optional_base(None, &local, &remote, &MergeOptions::default());
+        assert!(two_way.block_ancestor_ranges().iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn base_anchor_subset_walk_matches_set_comparison() {
+        let (base, local, remote) = three_way_fixture(1_000);
+        let plan = build_merge_plan(&base, &local, &remote, &MergeOptions::default());
+        let mut fewer = plan.rows.clone();
+        // Drop every third anchor row from the "candidate": the baseline is
+        // then not a subset of it, while the reverse still holds.
+        let mut seen = 0usize;
+        fewer.retain(|row| {
+            if row.equal_ab && row.equal_ac && row.a.is_some() {
+                seen += 1;
+                !seen.is_multiple_of(3)
+            } else {
+                true
+            }
+        });
+        for contributor in [MergeSource::B, MergeSource::C] {
+            let set_subset = |left: &[AlignedRow], right: &[AlignedRow]| {
+                let right: BTreeSet<(usize, usize)> =
+                    exact_base_anchor_pairs(right, contributor).collect();
+                exact_base_anchor_pairs(left, contributor).all(|pair| right.contains(&pair))
+            };
+            assert_eq!(
+                base_anchor_pairs_subset(&plan.rows, &plan.rows, contributor),
+                set_subset(&plan.rows, &plan.rows)
+            );
+            assert_eq!(
+                base_anchor_pairs_subset(&plan.rows, &fewer, contributor),
+                set_subset(&plan.rows, &fewer)
+            );
+            assert_eq!(
+                base_anchor_pairs_subset(&fewer, &plan.rows, contributor),
+                set_subset(&fewer, &plan.rows)
+            );
+            assert!(base_anchor_pairs_subset(&fewer, &plan.rows, contributor));
+            assert!(!base_anchor_pairs_subset(&plan.rows, &fewer, contributor));
+        }
+    }
+
+    #[test]
+    fn count_line_feeds_matches_str_matches() {
+        for text in ["", "a\n", "a\r\nb\n", "\r\n\r\n", "a\rb\n", "no newline"] {
+            assert_eq!(
+                crate::text_utils::count_line_feeds(text),
+                (text.matches("\r\n").count(), text.matches('\n').count()),
+                "{text:?}"
+            );
+        }
+    }
+
+    // Timing probe: `cargo test -p gitcomet-core --lib -- --ignored --nocapture timing_`
+    #[test]
+    #[ignore = "timing probe"]
+    fn timing_build_and_render_three_way_plan() {
+        let (base, local, remote) = three_way_fixture(10_000);
+        let options = MergeOptions::default();
+        for round in 1..=3 {
+            let started = std::time::Instant::now();
+            let plan = build_merge_plan(&base, &local, &remote, &options);
+            let built = started.elapsed();
+            let started = std::time::Instant::now();
+            let result = render_merge_plan(&plan, &options);
+            let rendered = started.elapsed();
+            println!(
+                "timing merge_plan round {round}: build {built:?} render {rendered:?} ({} rows, {} blocks, {} conflicts)",
+                plan.rows.len(),
+                plan.blocks.len(),
+                result.conflict_count
+            );
+        }
     }
 }

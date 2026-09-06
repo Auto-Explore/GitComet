@@ -797,8 +797,11 @@ pub struct CommandLogEntry {
     pub ok: bool,
     pub command: String,
     pub summary: String,
-    pub stdout: String,
-    pub stderr: String,
+    /// Shared and capped: the log is deep-copied on every store dispatch
+    /// (copy-on-write state), so owned per-entry output turned every message
+    /// into a memcpy of up to 200 command transcripts.
+    pub stdout: Arc<str>,
+    pub stderr: Arc<str>,
     /// Whether finishing this command is worth telling the user about. Routine,
     /// user-initiated edits announce themselves through the change they make —
     /// a toast per staged line is noise — but they still belong in the log.
@@ -1679,9 +1682,8 @@ impl RepoState {
 
     pub(crate) fn set_ref_metadata(
         &mut self,
-        ref_metadata: Loadable<FxHashMap<String, RefMetadata>>,
+        ref_metadata: Loadable<Arc<FxHashMap<String, RefMetadata>>>,
     ) {
-        let ref_metadata = loadable_into_arc(ref_metadata);
         if self.ref_metadata == ref_metadata {
             return;
         }
@@ -1776,13 +1778,13 @@ impl RepoState {
             Loadable::NotLoaded => Loadable::NotLoaded,
             Loadable::Loading => Loadable::Loading,
             Loadable::Error(err) => Loadable::Error(err.clone()),
-            Loadable::Ready(status) => Loadable::Ready(Arc::new(status.unstaged.clone())),
+            Loadable::Ready(status) => Loadable::Ready(Arc::clone(&status.unstaged)),
         };
         let next_staged = match &status {
             Loadable::NotLoaded => Loadable::NotLoaded,
             Loadable::Loading => Loadable::Loading,
             Loadable::Error(err) => Loadable::Error(err.clone()),
-            Loadable::Ready(status) => Loadable::Ready(Arc::new(status.staged.clone())),
+            Loadable::Ready(status) => Loadable::Ready(Arc::clone(&status.staged)),
         };
         if self.worktree_status != next_worktree {
             self.worktree_status = next_worktree;
@@ -3003,8 +3005,11 @@ mod tests {
     fn status_entry_for_path_prefers_split_lane_entries() {
         let mut repo = new_repo();
         repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            unstaged: vec![file_status("legacy.rs", FileStatusKind::Modified)],
-            staged: vec![file_status("legacy-stage.rs", FileStatusKind::Added)],
+            unstaged: std::sync::Arc::new(vec![file_status("legacy.rs", FileStatusKind::Modified)]),
+            staged: std::sync::Arc::new(vec![file_status(
+                "legacy-stage.rs",
+                FileStatusKind::Added,
+            )]),
         }));
         repo.status_rev = 1;
         repo.set_worktree_status(Loadable::Ready(vec![file_status(
@@ -3449,21 +3454,21 @@ mod tests {
             before + 1,
             "rev should not bump for an unchanged value"
         );
-        repo.set_ref_metadata(Loadable::Ready(FxHashMap::default()));
+        repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::default())));
         assert_eq!(repo.ref_metadata_rev, before + 2);
     }
 
     #[test]
     fn set_branches_invalidates_cached_ref_metadata() {
         let mut repo = new_repo();
-        repo.set_ref_metadata(Loadable::Ready(FxHashMap::from_iter([(
+        repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::from_iter([(
             "main".to_string(),
             RefMetadata {
                 author: "Ada".to_string(),
                 committed_at: 1,
                 summary: "first".to_string(),
             },
-        )])));
+        )]))));
         assert!(matches!(repo.ref_metadata, Loadable::Ready(_)));
 
         repo.set_branches(Loadable::Ready(vec![]));
@@ -3477,7 +3482,7 @@ mod tests {
     #[test]
     fn set_remote_branches_invalidates_cached_ref_metadata() {
         let mut repo = new_repo();
-        repo.set_ref_metadata(Loadable::Ready(FxHashMap::default()));
+        repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::default())));
 
         repo.set_remote_branches(Loadable::Ready(vec![]));
 
@@ -3490,7 +3495,7 @@ mod tests {
         // refresh that finds the same refs must leave the cache alone.
         let mut repo = new_repo();
         repo.set_branches(Loadable::Ready(vec![]));
-        repo.set_ref_metadata(Loadable::Ready(FxHashMap::default()));
+        repo.set_ref_metadata(Loadable::Ready(Arc::new(FxHashMap::default())));
         let rev = repo.ref_metadata_rev;
 
         repo.set_branches(Loadable::Ready(vec![]));

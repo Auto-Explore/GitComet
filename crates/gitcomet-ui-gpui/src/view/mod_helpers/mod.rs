@@ -930,6 +930,9 @@ pub struct GitCometView {
 
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,
+    /// Workdirs last published to the window registry; rebuilt only when the
+    /// repo list changes rather than collected on every store snapshot.
+    pub(super) synced_repo_paths: std::sync::Arc<[std::path::PathBuf]>,
     pub(super) ui_settings_persist_seq: u64,
     pub(super) last_repo_activation_dispatch_at: FxHashMap<RepoId, Instant>,
     /// Set when a deactivation was caused by a move/resize grab we requested, so

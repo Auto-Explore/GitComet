@@ -53,14 +53,18 @@ impl GitRepository for RepoActivationRecordingRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         self.calls
             .log
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(LogPage {
+        Ok(std::sync::Arc::new(LogPage {
             commits: Vec::new(),
             next_cursor: None,
-        })
+        }))
     }
 
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -98,8 +102,8 @@ impl GitRepository for RepoActivationRecordingRepo {
             .status
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(RepoStatus {
-            staged: Vec::new(),
-            unstaged: Vec::new(),
+            staged: std::sync::Arc::new(Vec::new()),
+            unstaged: std::sync::Arc::new(Vec::new()),
         })
     }
 
