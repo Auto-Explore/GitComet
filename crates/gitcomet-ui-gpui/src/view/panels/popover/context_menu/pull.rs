@@ -3,9 +3,11 @@ use super::*;
 pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let active_repo_id = this.active_repo_id();
     let repo_disabled = active_repo_id.is_none();
+    // Every pull mode needs a live remote-tracking upstream, like the main
+    // Pull button; the preferred-remote fallback is not offered from here.
     let pull_disabled = this
         .active_repo()
-        .is_none_or(|repo| !matches!(pull_request(repo), PullRequest::Pull));
+        .is_none_or(|repo| !head_branch_has_live_upstream(repo));
     let repo_id = active_repo_id.unwrap_or(RepoId(0));
     let tracking_branch_name = super::active_branch_tracking_upstream_name(this);
 

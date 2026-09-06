@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::rows::CommitCard;
 use gpui::{AnyElement, Div, Stateful};
 use rustc_hash::FxHashSet;
 
@@ -981,13 +982,46 @@ impl DetailsPaneView {
         commits
     }
 
+    /// [`Self::range_comparison_commits`] memoized on everything it reads:
+    /// the log page, the selection and the range, with each card's static
+    /// strings prepared once (they were re-formatted per card per frame).
+    fn range_comparison_commits_shared(&self, repo: &RepoState) -> std::rc::Rc<[CommitCard]> {
+        use std::hash::{Hash as _, Hasher as _};
+        let key = {
+            let mut hasher = rustc_hash::FxHasher::default();
+            repo.id.hash(&mut hasher);
+            repo.log_rev.hash(&mut hasher);
+            repo.history_state.selected_commit_rev.hash(&mut hasher);
+            match repo.history_state.range_selection.as_ref() {
+                Some(range) => {
+                    range.from.as_ref().hash(&mut hasher);
+                    range.to.as_ref().map(|id| id.as_ref()).hash(&mut hasher);
+                }
+                None => 0u8.hash(&mut hasher),
+            }
+            hasher.finish()
+        };
+        if let Some((cached_key, commits)) = self.range_comparison_commits_cache.borrow().as_ref()
+            && *cached_key == key
+        {
+            return std::rc::Rc::clone(commits);
+        }
+        let commits: std::rc::Rc<[CommitCard]> = Self::range_comparison_commits(repo)
+            .into_iter()
+            .map(CommitCard::new)
+            .collect();
+        *self.range_comparison_commits_cache.borrow_mut() =
+            Some((key, std::rc::Rc::clone(&commits)));
+        commits
+    }
+
     /// One selected/compared-commit preview card: avatar, summary, an author +
     /// relative-time line, and the short SHA. Shared by the multi-selection and
     /// range-comparison lists so both read identically.
     fn commit_card_element(
         &self,
         ix: usize,
-        commit: &Commit,
+        card: &CommitCard,
         now: std::time::SystemTime,
         show_border: bool,
     ) -> AnyElement {
@@ -996,24 +1030,13 @@ impl DetailsPaneView {
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, self.ui_scale_percent);
 
-        let short_sha: SharedString = commit
-            .id
-            .as_ref()
-            .get(0..8)
-            .unwrap_or(commit.id.as_ref())
-            .to_string()
-            .into();
-        let summary: SharedString = commit.summary.to_string().into();
-        let author = commit.author.to_string();
-        let unix_secs = commit
-            .time
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        let short_sha = card.short_sha.clone();
+        let summary = card.summary.clone();
+        let author = card.author.clone();
         let when: SharedString = format!(
             "{} · {}",
             author,
-            crate::view::date_time::format_relative_time(unix_secs, now)
+            crate::view::date_time::format_relative_time(card.unix_secs, now)
         )
         .into();
 
@@ -1031,7 +1054,7 @@ impl DetailsPaneView {
             .when(show_border, |row| {
                 row.border_b_1().border_color(theme.colors.stroke.default)
             })
-            .child(components::author_avatar(theme, ui_scale, &author))
+            .child(components::author_avatar(theme, ui_scale, author.as_ref()))
             .child(
                 div()
                     .flex_1()
@@ -1073,12 +1096,12 @@ impl DetailsPaneView {
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
-        let commits = Self::range_comparison_commits(repo);
-        let last_ix = commits.len().saturating_sub(1);
+        let cards = this.range_comparison_commits_shared(repo);
+        let last_ix = cards.len().saturating_sub(1);
         let now = std::time::SystemTime::now();
         range
-            .filter_map(|ix| commits.get(ix).map(|commit| (ix, commit.clone())))
-            .map(|(ix, commit)| this.commit_card_element(ix, &commit, now, ix != last_ix))
+            .filter_map(|ix| cards.get(ix).map(|card| (ix, card)))
+            .map(|(ix, card)| this.commit_card_element(ix, card, now, ix != last_ix))
             .collect()
     }
 
@@ -1420,7 +1443,7 @@ impl DetailsPaneView {
             let Some(range) = repo.history_state.range_selection.clone() else {
                 return div().into_any_element();
             };
-            let card_count = Self::range_comparison_commits(repo).len();
+            let card_count = self.range_comparison_commits_shared(repo).len();
             // Only a genuine multi-selection is a "merged diff of N commits";
             // every other flow compares two named points, however many of them
             // happen to resolve to a card.
@@ -3815,9 +3838,9 @@ mod tests {
 
     fn repo_with_status(status: RepoStatus) -> RepoState {
         let mut repo = test_repo();
-        repo.worktree_status = Loadable::Ready(Arc::new(status.unstaged.clone()));
+        repo.worktree_status = Loadable::Ready(Arc::clone(&status.unstaged));
         repo.worktree_status_rev = 1;
-        repo.staged_status = Loadable::Ready(Arc::new(status.staged.clone()));
+        repo.staged_status = Loadable::Ready(Arc::clone(&status.staged));
         repo.staged_status_rev = 1;
         repo.status = Loadable::Ready(status.into());
         repo.status_rev = 1;
@@ -3962,8 +3985,11 @@ mod tests {
     #[test]
     fn status_section_action_selection_falls_back_to_active_combined_unstaged_row() {
         let repo = repo_with_status(RepoStatus {
-            unstaged: vec![file_status("src/lib.rs", FileStatusKind::Modified)],
-            staged: Vec::new(),
+            unstaged: std::sync::Arc::new(vec![file_status(
+                "src/lib.rs",
+                FileStatusKind::Modified,
+            )]),
+            staged: std::sync::Arc::new(Vec::new()),
         });
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("src/lib.rs"),
@@ -3990,11 +4016,11 @@ mod tests {
     #[test]
     fn status_section_action_selection_limits_active_row_to_matching_split_section() {
         let repo = repo_with_status(RepoStatus {
-            unstaged: vec![
+            unstaged: std::sync::Arc::new(vec![
                 file_status("new.txt", FileStatusKind::Untracked),
                 file_status("src/lib.rs", FileStatusKind::Modified),
-            ],
-            staged: Vec::new(),
+            ]),
+            staged: std::sync::Arc::new(Vec::new()),
         });
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("new.txt"),
@@ -4029,7 +4055,7 @@ mod tests {
         let selected_a = PathBuf::from("src/lib.rs");
         let selected_b = PathBuf::from("src/main.rs");
         let repo = repo_with_status(RepoStatus {
-            unstaged: vec![
+            unstaged: std::sync::Arc::new(vec![
                 file_status(
                     selected_a.to_string_lossy().as_ref(),
                     FileStatusKind::Modified,
@@ -4038,8 +4064,8 @@ mod tests {
                     selected_b.to_string_lossy().as_ref(),
                     FileStatusKind::Modified,
                 ),
-            ],
-            staged: Vec::new(),
+            ]),
+            staged: std::sync::Arc::new(Vec::new()),
         });
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("src/other.rs"),

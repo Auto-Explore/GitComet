@@ -31,15 +31,19 @@ pub(super) fn model(
     let active_upstream = active_branch.and_then(|branch| branch.upstream.as_ref());
     let active_branch_has_no_upstream =
         active_branch.is_some_and(|branch| branch.upstream.is_none());
-    let exact_remote_branch = target.remote_parts().and_then(|(remote, branch)| {
-        repo?
-            .remote_branches
-            .ready()?
-            .iter()
-            .any(|candidate| candidate.remote == remote && candidate.name == branch)
-            .then(|| Upstream {
-                remote: remote.to_string(),
-                branch: branch.to_string(),
+    // The target's own parts: exact even when `remote/branch` is ambiguous.
+    let target_upstream = target.remote_parts().map(|(remote, branch)| Upstream {
+        remote: remote.to_string(),
+        branch: branch.to_string(),
+    });
+    // Setting an upstream needs the remote-tracking ref to exist; unlinking
+    // only needs the target to be the configured upstream.
+    let exact_remote_branch = target_upstream.clone().filter(|upstream| {
+        repo.and_then(|repo| repo.remote_branches.ready())
+            .is_some_and(|branches| {
+                branches.iter().any(|candidate| {
+                    candidate.remote == upstream.remote && candidate.name == upstream.branch
+                })
             })
     });
     let is_current_branch = active_branch_name
@@ -349,7 +353,7 @@ pub(super) fn model(
                     label: "Unlink upstream branch".into(),
                     icon: Some("icons/unlink.svg".into()),
                     shortcut: None,
-                    disabled: active_upstream != exact_remote_branch.as_ref(),
+                    disabled: active_upstream != target_upstream.as_ref(),
                     action: Box::new(ContextMenuAction::UnsetUpstreamBranch {
                         repo_id,
                         branch: active_branch_name.unwrap_or_default(),

@@ -362,9 +362,7 @@ impl Button {
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.34 } else { 0.26 },
         );
-        let label = label.to_string();
-        let separator_debug_selector = format!("{}_end_slot_separator", id.as_ref());
-        let icon_only = looks_like_icon_button(&label);
+        let icon_only = looks_like_icon_button(label.as_ref());
         let selected_bg_override = selected_bg;
         let suppress_hover_border = suppress_hover_border || borderless;
         let control_height = control_height(ui_scale);
@@ -390,8 +388,8 @@ impl Button {
                 .child(
                     div()
                         .debug_selector({
-                            let separator_debug_selector = separator_debug_selector.clone();
-                            move || separator_debug_selector.clone()
+                            let id = id.clone();
+                            move || format!("{}_end_slot_separator", id.as_ref())
                         })
                         .flex()
                         .items_center()

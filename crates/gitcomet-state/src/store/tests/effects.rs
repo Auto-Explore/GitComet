@@ -532,7 +532,11 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn spec(&self) -> &RepoSpec {
             &self.spec
         }
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -719,7 +723,11 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         fn spec(&self) -> &RepoSpec {
             &self.spec
         }
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -933,7 +941,11 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         fn spec(&self) -> &RepoSpec {
             &self.spec
         }
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1159,7 +1171,11 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn spec(&self) -> &RepoSpec {
             &self.spec
         }
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1380,7 +1396,11 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         fn spec(&self) -> &RepoSpec {
             &self.spec
         }
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1648,7 +1668,11 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn spec(&self) -> &RepoSpec {
             &self.spec
         }
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -1887,7 +1911,11 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn spec(&self) -> &RepoSpec {
             &self.spec
         }
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -2084,7 +2112,11 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn spec(&self) -> &RepoSpec {
             &self.spec
         }
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -2246,7 +2278,11 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
         fn spec(&self) -> &RepoSpec {
             &self.spec
         }
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -2411,7 +2447,11 @@ fn load_stashes_effect_truncates_results_to_limit() {
         fn spec(&self) -> &RepoSpec {
             &self.spec
         }
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -2576,7 +2616,11 @@ fn stash_effect_requests_stash_reload_on_success() {
             &self.spec
         }
 
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -2746,7 +2790,11 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
             &self.spec
         }
 
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -2914,7 +2962,11 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
             &self.spec
         }
 
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -3081,7 +3133,11 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
             &self.spec
         }
 
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -3245,7 +3301,11 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
             &self.spec
         }
 
-        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        fn log_head_page(
+            &self,
+            _limit: usize,
+            _cursor: Option<&LogCursor>,
+        ) -> Result<std::sync::Arc<LogPage>> {
             unimplemented!()
         }
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -3425,7 +3485,11 @@ impl GitRepository for UnsupportedRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         unsupported_repo_result()
     }
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -3699,7 +3763,11 @@ impl GitRepository for MetadataSchedulingRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         unsupported_repo_result()
     }
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -3816,7 +3884,11 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         &self.spec
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         unsupported_repo_result()
     }
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -3938,7 +4010,7 @@ impl GitRepository for RecordingLogRepo {
         cursor: Option<&LogCursor>,
         _cancellation: &gitcomet_core::services::CancellationToken,
         on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         self.calls
             .lock()
             .unwrap()
@@ -3957,7 +4029,7 @@ impl GitRepository for RecordingLogRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &gitcomet_core::services::CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         cancellation.check_cancelled()?;
         self.calls
             .lock()
@@ -3971,7 +4043,7 @@ impl GitRepository for RecordingLogRepo {
         mode: LogScope,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         self.calls
             .lock()
             .expect("log recording mutex")
@@ -3981,13 +4053,17 @@ impl GitRepository for RecordingLogRepo {
                     .map(|cursor| cursor.last_seen.as_ref())
                     .unwrap_or("none")
             ));
-        Ok(LogPage {
+        Ok(std::sync::Arc::new(LogPage {
             commits: Vec::new(),
             next_cursor: None,
-        })
+        }))
     }
 
-    fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         self.calls
             .lock()
             .expect("log recording mutex")
@@ -3997,10 +4073,10 @@ impl GitRepository for RecordingLogRepo {
                     .map(|cursor| cursor.last_seen.as_ref())
                     .unwrap_or("none")
             ));
-        Ok(LogPage {
+        Ok(std::sync::Arc::new(LogPage {
             commits: Vec::new(),
             next_cursor: None,
-        })
+        }))
     }
 
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
@@ -4142,7 +4218,11 @@ impl GitRepository for RecordingCheckoutRepo {
         Ok(())
     }
 
-    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        _limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         unsupported_repo_result()
     }
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {

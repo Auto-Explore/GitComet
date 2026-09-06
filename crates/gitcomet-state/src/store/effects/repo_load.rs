@@ -1250,7 +1250,10 @@ fn worktree_dirty_summary(
     let (added, modified, deleted) = count_file_statuses(&status.unstaged);
     let (staged_added, staged_modified, staged_deleted) = count_file_statuses(&status.staged);
     let (staged, unstaged) = if keep_files {
-        (status.staged, status.unstaged)
+        (
+            Arc::unwrap_or_clone(status.staged),
+            Arc::unwrap_or_clone(status.unstaged),
+        )
     } else {
         (Vec::new(), Vec::new())
     };
@@ -2242,11 +2245,11 @@ mod worktree_dirty_tests {
     #[test]
     fn a_summary_sums_staged_and_unstaged_into_the_three_buckets() {
         let repo_status = RepoStatus {
-            staged: vec![status("gone.txt", FileStatusKind::Deleted)],
-            unstaged: vec![
+            staged: std::sync::Arc::new(vec![status("gone.txt", FileStatusKind::Deleted)]),
+            unstaged: std::sync::Arc::new(vec![
                 status("edited.txt", FileStatusKind::Modified),
                 status("new.txt", FileStatusKind::Untracked),
-            ],
+            ]),
         };
 
         let summary = worktree_dirty_summary(worktree(), repo_status, true);
@@ -2576,15 +2579,17 @@ mod worktree_dirty_files_tests {
 
     fn status(paths: &[&str]) -> RepoStatus {
         RepoStatus {
-            staged: Vec::new(),
-            unstaged: paths
-                .iter()
-                .map(|path| FileStatus {
-                    path: PathBuf::from(path),
-                    kind: FileStatusKind::Modified,
-                    conflict: None,
-                })
-                .collect(),
+            staged: std::sync::Arc::new(Vec::new()),
+            unstaged: std::sync::Arc::new(
+                paths
+                    .iter()
+                    .map(|path| FileStatus {
+                        path: PathBuf::from(path),
+                        kind: FileStatusKind::Modified,
+                        conflict: None,
+                    })
+                    .collect(),
+            ),
         }
     }
 

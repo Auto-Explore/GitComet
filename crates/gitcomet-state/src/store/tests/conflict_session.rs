@@ -35,12 +35,12 @@ fn setup_repo_with_conflict(
     // Inject a status with the conflict entry.
     let repo_state = state.repos.iter_mut().find(|r| r.id == repo_id).unwrap();
     repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
-        unstaged: vec![FileStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
             path: PathBuf::from(path),
             kind: FileStatusKind::Conflicted,
             conflict: Some(conflict_kind),
-        }],
-        staged: vec![],
+        }]),
+        staged: std::sync::Arc::new(vec![]),
     })));
     // Set the conflict file path (simulates LoadConflictFile dispatch).
     repo_state.set_conflict_file_path(Some(PathBuf::from(path)));
@@ -752,8 +752,8 @@ fn status_loaded_clears_conflict_context_when_path_is_resolved() {
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
             repo_id,
             result: Ok(RepoStatus {
-                unstaged: vec![],
-                staged: vec![],
+                unstaged: std::sync::Arc::new(vec![]),
+                staged: std::sync::Arc::new(vec![]),
             }),
         }),
     );
@@ -810,12 +810,12 @@ fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
             repo_id,
             result: Ok(RepoStatus {
-                unstaged: vec![FileStatus {
+                unstaged: std::sync::Arc::new(vec![FileStatus {
                     path: PathBuf::from("file.txt"),
                     kind: FileStatusKind::Conflicted,
                     conflict: Some(FileConflictKind::BothModified),
-                }],
-                staged: vec![],
+                }]),
+                staged: std::sync::Arc::new(vec![]),
             }),
         }),
     );

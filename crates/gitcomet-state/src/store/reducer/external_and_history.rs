@@ -652,6 +652,9 @@ pub(super) fn log_loaded(
                     // deep-cloning the entire commit list.
                     repo_state.history_state.log = Loadable::NotLoaded;
                     let existing = Arc::make_mut(existing);
+                    // A page the backend still holds in its cache is copied
+                    // once here; a freshly walked page is moved.
+                    let mut page = Arc::unwrap_or_clone(page);
                     reserve_log_append_capacity(&mut existing.commits, page.commits.len());
                     existing.commits.append(&mut page.commits);
                     existing.next_cursor = page.next_cursor;
@@ -659,10 +662,14 @@ pub(super) fn log_loaded(
                     repo_state.history_state.log = repo_state.log.clone();
                     repo_state.bump_log_revs();
                 } else if !is_load_more {
-                    if page.next_cursor.is_some() {
+                    // Slack for later appends only when the page is ours alone;
+                    // a cache-shared page would have to be copied to get it.
+                    if page.next_cursor.is_some()
+                        && let Some(page) = Arc::get_mut(&mut page)
+                    {
                         reserve_initial_paginated_log_append_slack(&mut page.commits);
                     }
-                    repo_state.set_log(Loadable::Ready(Arc::new(page)));
+                    repo_state.set_log(Loadable::Ready(page));
                 }
                 repo_state.history_state.log_snapshot = snapshot;
             }
@@ -690,9 +697,13 @@ pub(super) fn log_loaded(
             && !repo_state.history_state.multi_selection.commits.is_empty()
             && let Loadable::Ready(page) = &repo_state.log
         {
+            // One set over the page: the selection can hold thousands of ids
+            // and the page tens of thousands of commits, so a scan per id was
+            // quadratic on every reload, and reloads arrive in bursts.
+            let page_ids: FxHashSet<&str> = page.commits.iter().map(|c| c.id.as_ref()).collect();
             let reveal_target = repo_state.history_state.reveal_target.clone();
             let survives = |id: &gitcomet_core::domain::CommitId| {
-                reveal_target.as_ref() == Some(id) || page.commits.iter().any(|c| c.id == *id)
+                reveal_target.as_ref() == Some(id) || page_ids.contains(id.as_ref())
             };
 
             let mut next = repo_state.history_state.multi_selection.clone();

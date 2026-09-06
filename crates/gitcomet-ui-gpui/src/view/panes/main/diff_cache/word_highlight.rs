@@ -1,21 +1,23 @@
 use super::*;
+use std::sync::Arc;
 
 impl MainPaneView {
     pub(in crate::view) fn file_diff_inline_word_ranges(
         &mut self,
         inline_ix: usize,
-    ) -> Vec<Range<usize>> {
+    ) -> Arc<[Range<usize>]> {
         if let Some(ranges) = self.file_diff_inline_word_highlights.get(&inline_ix) {
-            return ranges.clone();
+            return Arc::clone(ranges);
         }
 
         if !matches!(
             self.file_diff_inline_visual_kind(inline_ix),
             gitcomet_core::domain::DiffLineKind::Add | gitcomet_core::domain::DiffLineKind::Remove
         ) {
+            let empty: Arc<[Range<usize>]> = Arc::from(Vec::new());
             self.file_diff_inline_word_highlights
-                .put(inline_ix, Vec::new());
-            return Vec::new();
+                .put(inline_ix, Arc::clone(&empty));
+            return empty;
         }
 
         let ranges = self
@@ -32,8 +34,9 @@ impl MainPaneView {
                 }
             })
             .unwrap_or_default();
+        let ranges: Arc<[Range<usize>]> = ranges.into();
         self.file_diff_inline_word_highlights
-            .put(inline_ix, ranges.clone());
+            .put(inline_ix, Arc::clone(&ranges));
         ranges
     }
 
@@ -41,18 +44,18 @@ impl MainPaneView {
         &mut self,
         row_ix: usize,
         region: DiffTextRegion,
-    ) -> Vec<Range<usize>> {
+    ) -> Arc<[Range<usize>]> {
         let is_left = match region {
             DiffTextRegion::SplitLeft => true,
             DiffTextRegion::SplitRight => false,
-            DiffTextRegion::Inline => return Vec::new(),
+            DiffTextRegion::Inline => return Arc::from(Vec::new()),
         };
 
         if let Some(ranges) = self.file_diff_split_word_highlights.get(&row_ix) {
             return if is_left {
-                ranges.old.clone()
+                Arc::clone(&ranges.old)
             } else {
-                ranges.new.clone()
+                Arc::clone(&ranges.new)
             };
         }
 
@@ -61,11 +64,12 @@ impl MainPaneView {
             gitcomet_core::file_diff::FileDiffRowKind::Modify
         ) {
             let ranges = FileDiffSplitWordHighlights {
-                old: Vec::new(),
-                new: Vec::new(),
+                old: Arc::from(Vec::new()),
+                new: Arc::from(Vec::new()),
             };
+            let empty = Arc::clone(&ranges.old);
             self.file_diff_split_word_highlights.put(row_ix, ranges);
-            return Vec::new();
+            return empty;
         }
 
         let pair = self.file_diff_split_modify_pair_texts(row_ix).or_else(|| {
@@ -80,13 +84,13 @@ impl MainPaneView {
             .unwrap_or_default();
 
         let ranges = FileDiffSplitWordHighlights {
-            old: old_ranges,
-            new: new_ranges,
+            old: old_ranges.into(),
+            new: new_ranges.into(),
         };
         let selected = if is_left {
-            ranges.old.clone()
+            Arc::clone(&ranges.old)
         } else {
-            ranges.new.clone()
+            Arc::clone(&ranges.new)
         };
         self.file_diff_split_word_highlights.put(row_ix, ranges);
         selected

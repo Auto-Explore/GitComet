@@ -56,6 +56,22 @@ fn outer_failure_after_hooks(operation: &GitHookOperation) -> bool {
 }
 
 impl GitCometView {
+    /// The workdir list the window registry keys on, shared and rebuilt only
+    /// when a repo was opened, closed or reordered.
+    pub(super) fn synced_repo_paths_for_state(&mut self) -> std::sync::Arc<[std::path::PathBuf]> {
+        let repos = &self.state.repos;
+        let unchanged = self.synced_repo_paths.len() == repos.len()
+            && self
+                .synced_repo_paths
+                .iter()
+                .zip(repos)
+                .all(|(path, repo)| *path == repo.spec.workdir);
+        if !unchanged {
+            self.synced_repo_paths = repos.iter().map(|repo| repo.spec.workdir.clone()).collect();
+        }
+        std::sync::Arc::clone(&self.synced_repo_paths)
+    }
+
     pub(super) fn apply_state_snapshot(
         &mut self,
         next: Arc<AppState>,
@@ -233,7 +249,7 @@ impl GitCometView {
                         return false;
                     }
 
-                    let stderr = entry.stderr.as_str();
+                    let stderr: &str = &entry.stderr;
                     stderr.contains("Need to specify how to reconcile divergent branches")
                         || stderr.contains(
                             "divergent branches and need to specify how to reconcile them",
@@ -397,11 +413,7 @@ impl GitCometView {
             cx.weak_entity(),
             self.main_pane.downgrade(),
             self.view_mode,
-            self.state
-                .repos
-                .iter()
-                .map(|repo| repo.spec.workdir.clone())
-                .collect(),
+            self.synced_repo_paths_for_state(),
         );
 
         git_runtime_changed

@@ -57,7 +57,7 @@ mod submodules;
 mod tags;
 mod worktrees;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 struct RepoFileStamp {
     exists: bool,
     len: u64,
@@ -156,7 +156,7 @@ enum LogPageSeed {
 /// history walk. Keeping those ids directly avoids the same-length/same-mtime
 /// collisions a stat-only stamp permits, and lets walk construction use the
 /// exact same boundary that keyed its caches.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
 struct ShallowSnapshot(Arc<[gix::ObjectId]>);
 
 impl ShallowSnapshot {
@@ -188,7 +188,7 @@ struct LogPageCacheKey {
 #[derive(Clone, Debug)]
 struct LogPageCacheEntry {
     key: LogPageCacheKey,
-    page: LogPage,
+    page: Arc<LogPage>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -264,6 +264,125 @@ struct LogPagedWalkCache {
     entries: Vec<LogPagedWalkCacheEntry>,
 }
 
+/// Decoded-object cache for handles that re-read objects; see [`with_object_cache`].
+const OBJECT_CACHE_BYTES: usize = 8 * 1024 * 1024;
+
+/// A clone of `repo` with gix's decoded-object cache enabled, for an operation
+/// that reads the same objects more than once (the ahead/behind divergence
+/// walks cover the same commits twice). Cloning a handle is cheap; the cache
+/// allocates lazily.
+pub(super) fn with_object_cache(repo: &gix::Repository) -> gix::Repository {
+    let mut cached = repo.clone();
+    cached.object_cache_size_if_unset(OBJECT_CACHE_BYTES);
+    cached
+}
+
+/// Ahead/behind counts memoized by tips and shallow boundary. Deepening can
+/// change reachability without moving either tip. Cleared wholesale past the limit.
+type DivergenceCache = std::sync::Mutex<
+    rustc_hash::FxHashMap<(gix::ObjectId, gix::ObjectId, ShallowSnapshot), UpstreamDivergence>,
+>;
+const DIVERGENCE_CACHE_LIMIT: usize = 512;
+
+type RefMetadataCache =
+    std::sync::Mutex<Option<(u64, Arc<rustc_hash::FxHashMap<String, RefMetadata>>)>>;
+
+/// The All Branches walk seeds, keyed by a fingerprint of the ref namespace
+/// (names + raw targets, no object lookups). Peeling every ref to its commit is
+/// an object read per ref, so a page request whose fingerprint matches skips
+/// that entirely.
+/// Identity of a file as it sat on disk when we last read it. Inode and ctime
+/// (Unix only) detect replacements and edits that keep length and mtime, but
+/// rapid writes can share even the same ctime. Verification memos must exclude
+/// racy stamps before recording them. `None` where those fields are unavailable,
+/// which disables the memo rather than weakening it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiskFileStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    inode: u64,
+    ctime_nanos: i128,
+}
+
+impl DiskFileStamp {
+    #[cfg(unix)]
+    fn from_metadata(metadata: &std::fs::Metadata) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt as _;
+        metadata.is_file().then(|| Self {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+            inode: metadata.ino(),
+            ctime_nanos: i128::from(metadata.ctime()) * 1_000_000_000
+                + i128::from(metadata.ctime_nsec()),
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn from_metadata(_metadata: &std::fs::Metadata) -> Option<Self> {
+        None
+    }
+
+    /// Stamp of the regular file at `path`; `None` for symlinks, non-files and
+    /// platforms without the fields above.
+    fn read(path: &Path) -> Option<Self> {
+        let metadata = std::fs::symlink_metadata(path).ok()?;
+        Self::from_metadata(&metadata)
+    }
+
+    /// A stamp is unsafe to memoize while a subsequent write could still get
+    /// the same timestamps. Check ctime too: mtime can be preserved or backdated.
+    fn is_racy_at(&self, now: std::time::SystemTime) -> bool {
+        const RACY_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+        let mtime_is_old = self.modified.is_some_and(|modified| {
+            now.duration_since(modified)
+                .is_ok_and(|age| age >= RACY_WINDOW)
+        });
+        let ctime_is_old = now
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .is_ok_and(|elapsed| {
+                (elapsed.as_nanos() as i128).saturating_sub(self.ctime_nanos)
+                    >= RACY_WINDOW.as_nanos() as i128
+            });
+        !mtime_is_old || !ctime_is_old
+    }
+
+    fn read_for_verification_memo(path: &Path) -> Option<Self> {
+        // Capture the time first: a pause after stat must not make a snapshot
+        // taken inside the racy window eligible for memoization.
+        let now = std::time::SystemTime::now();
+        Self::read(path).filter(|stamp| !stamp.is_racy_at(now))
+    }
+}
+
+/// A temp-dir preview blob whose bytes were hashed and found to match
+/// `blob_id` outside its timestamp race window; a later open with the same stamp
+/// skips re-reading and re-hashing.
+#[derive(Clone, Copy, Debug)]
+struct VerifiedPreviewBlob {
+    file: DiskFileStamp,
+    blob_id: gix::ObjectId,
+}
+
+/// The normalized-worktree cache file produced for a logical path, valid while
+/// the worktree file, its resolved attributes and index blob, and the cache
+/// file itself are all unchanged. Paths with an external filter driver are
+/// never entered: the driver's output cannot be validated from the inputs.
+#[derive(Clone, Debug)]
+struct WorktreeSourceMemoEntry {
+    file: DiskFileStamp,
+    attributes_fingerprint: u64,
+    cache_file: DiskFileStamp,
+    cache_path: PathBuf,
+    identity: Arc<str>,
+}
+
+const TEMP_FILE_MEMO_LIMIT: usize = 256;
+
+#[derive(Clone, Debug)]
+struct AllBranchesTipsCacheEntry {
+    fingerprint: u64,
+    tips: Arc<[gix::ObjectId]>,
+}
 const LOG_PAGE_CACHE_LIMIT: usize = 32;
 const LOG_PAGE_CACHE_ROW_LIMIT: usize = 10_000;
 const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
@@ -278,7 +397,13 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_page_cache: std::sync::Mutex<Vec<LogPageCacheEntry>>,
-    all_branches_tips: std::sync::Mutex<Option<Arc<[gix::ObjectId]>>>,
+    all_branches_tips: std::sync::Mutex<Option<AllBranchesTipsCacheEntry>>,
+    divergence_cache: DivergenceCache,
+    /// `list_ref_metadata` output keyed by the ref namespace fingerprint; the
+    /// `git for-each-ref` spawn and parse only rerun when a ref moved.
+    ref_metadata_cache: RefMetadataCache,
+    preview_blob_verified: std::sync::Mutex<rustc_hash::FxHashMap<PathBuf, VerifiedPreviewBlob>>,
+    worktree_source_memo: std::sync::Mutex<rustc_hash::FxHashMap<PathBuf, WorktreeSourceMemoEntry>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
 }
@@ -293,6 +418,10 @@ impl GixRepo {
             tree_index_cache: std::sync::Mutex::new(None),
             log_page_cache: std::sync::Mutex::new(Vec::new()),
             all_branches_tips: std::sync::Mutex::new(None),
+            divergence_cache: DivergenceCache::default(),
+            ref_metadata_cache: std::sync::Mutex::new(None),
+            preview_blob_verified: std::sync::Mutex::default(),
+            worktree_source_memo: std::sync::Mutex::default(),
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
         }
@@ -303,6 +432,20 @@ impl GixRepo {
         util_git_workdir_cmd_for(&self.spec.workdir)
     }
 
+    /// A thread-local handle for one operation.
+    ///
+    /// Deliberately without gix's decoded-object cache: that cache copies every
+    /// decoded object into its LRU, which measured as a 5-23% slowdown on
+    /// one-shot readers (blame, rename detection, status tree walks, peeling
+    /// thousands of refs). Only an operation that re-reads objects benefits;
+    /// see [`with_object_cache`].
+    pub(super) fn repo(&self) -> gix::Repository {
+        self._repo.to_thread_local()
+    }
+
+    /// A fresh open, for operations that must see config/ref changes made after
+    /// this repository was opened (e.g. upstream tracking written by the CLI).
+    /// Prefer [`Self::repo`]: an open re-parses every config file.
     pub(super) fn reopen_repo(&self) -> Result<gix::Repository> {
         crate::open::open_worktree_repo(&self.spec.workdir)
             .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo"))
@@ -334,7 +477,7 @@ impl GitRepository for GixRepo {
         mode: HistoryMode,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_history_mode_page_impl(mode, limit, cursor)
     }
@@ -345,7 +488,7 @@ impl GitRepository for GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_history_mode_page_cancellable_impl(mode, limit, cursor, cancellation)
     }
@@ -358,7 +501,7 @@ impl GitRepository for GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_history_mode_page_streaming_impl(
             mode,
@@ -377,7 +520,7 @@ impl GitRepository for GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<Arc<LogPage>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_history_mode_page_filtered_cancellable_impl(
             mode,
@@ -388,7 +531,11 @@ impl GitRepository for GixRepo {
         )
     }
 
-    fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_head_page(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_head_page_impl(limit, cursor)
     }
@@ -398,12 +545,16 @@ impl GitRepository for GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_head_page_cancellable_impl(limit, cursor, cancellation)
     }
 
-    fn log_all_branches_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_all_branches_page(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<std::sync::Arc<LogPage>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_all_branches_page_impl(limit, cursor)
     }
@@ -413,7 +564,7 @@ impl GitRepository for GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_all_branches_page_cancellable_impl(limit, cursor, cancellation)
     }
@@ -423,7 +574,7 @@ impl GitRepository for GixRepo {
         path: &Path,
         limit: usize,
         cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    ) -> Result<std::sync::Arc<LogPage>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_file_page_impl(path, limit, cursor)
     }
@@ -1091,14 +1242,14 @@ impl GitRepository for GixRepo {
         Ok(worktrees)
     }
 
-    fn list_ref_metadata(&self) -> Result<Vec<(String, RefMetadata)>> {
+    fn list_ref_metadata(&self) -> Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>> {
         self.list_ref_metadata_impl()
     }
 
     fn list_ref_metadata_cancellable(
         &self,
         cancellation: &CancellationToken,
-    ) -> Result<Vec<(String, RefMetadata)>> {
+    ) -> Result<Arc<rustc_hash::FxHashMap<String, RefMetadata>>> {
         cancellation.check_cancelled()?;
         let metadata = self.list_ref_metadata_impl()?;
         cancellation.check_cancelled()?;
@@ -1273,6 +1424,64 @@ impl GitRepository for GixRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disk_file_stamp_requires_both_timestamps_outside_the_racy_window() {
+        use std::time::{Duration, SystemTime};
+
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let stamp = DiskFileStamp {
+            len: 15,
+            modified: Some(now - Duration::from_secs(2)),
+            inode: 1,
+            ctime_nanos: 98_000_000_000,
+        };
+        assert!(!stamp.is_racy_at(now), "an aged stamp permits memoization");
+        for (description, candidate) in [
+            (
+                "recent mtime",
+                DiskFileStamp {
+                    // Windows SystemTime uses 100 ns ticks; adding 1 ns would
+                    // truncate back onto the two-second boundary.
+                    modified: Some(now - Duration::from_secs(2) + Duration::from_millis(1)),
+                    ..stamp
+                },
+            ),
+            (
+                "recent ctime even with backdated mtime",
+                DiskFileStamp {
+                    ctime_nanos: stamp.ctime_nanos + 1,
+                    ..stamp
+                },
+            ),
+            (
+                "future mtime",
+                DiskFileStamp {
+                    modified: Some(now + Duration::from_secs(1)),
+                    ..stamp
+                },
+            ),
+            (
+                "future ctime",
+                DiskFileStamp {
+                    ctime_nanos: 101_000_000_000,
+                    ..stamp
+                },
+            ),
+            (
+                "missing mtime",
+                DiskFileStamp {
+                    modified: None,
+                    ..stamp
+                },
+            ),
+        ] {
+            assert!(
+                candidate.is_racy_at(now),
+                "{description} must bypass the memo"
+            );
+        }
+    }
 
     #[test]
     fn oid_to_arc_str_round_trips_hex_object_id() {

@@ -394,7 +394,6 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
     else {
         panic!("initial page")
     };
-    let page = Arc::new(page);
     let (view, cx, mut state, store) = mount(cx, Arc::clone(&page));
     state.repos[0].spec = repo.spec().clone();
     state.repos[0].history_state.log_snapshot = snapshot;

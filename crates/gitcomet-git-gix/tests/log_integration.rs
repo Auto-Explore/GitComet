@@ -535,7 +535,7 @@ fn every_history_mode_paginates_through_a_resumable_walk() {
                 .log_history_mode_page(mode, 1, cursor.as_ref())
                 .unwrap();
             paged.extend(page.commits.iter().map(|c| c.id.as_ref().to_string()));
-            let Some(next) = page.next_cursor else {
+            let Some(next) = page.next_cursor.clone() else {
                 break;
             };
             assert!(
@@ -574,7 +574,7 @@ fn all_branches_author_filter_resumes_instead_of_re_walking() {
     let first = opened
         .log_history_mode_page_filtered(HistoryMode::AllBranches, Some("You"), 1, None)
         .unwrap();
-    let cursor = first.next_cursor.expect("more to page through");
+    let cursor = first.next_cursor.clone().expect("more to page through");
     assert!(
         cursor.resume_token.is_some(),
         "a filtered all-branches page must resume its walk rather than rebuild it"

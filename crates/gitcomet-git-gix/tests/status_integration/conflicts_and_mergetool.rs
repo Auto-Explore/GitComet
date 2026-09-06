@@ -891,9 +891,8 @@ fn checkout_conflict_side_resolves_modify_delete_using_theirs() {
         "expected theirs resolution to restore file contents"
     );
     let status = opened.status().unwrap();
-    assert_eq!(
-        status.unstaged,
-        Vec::new(),
+    assert!(
+        status.unstaged.is_empty(),
         "expected theirs resolution to clear unstaged entries"
     );
     assert!(

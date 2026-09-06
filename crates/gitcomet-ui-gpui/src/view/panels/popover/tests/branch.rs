@@ -87,11 +87,11 @@ impl GitRepository for TrackingRepo {
         &self,
         _limit: usize,
         _cursor: Option<&gitcomet_core::domain::LogCursor>,
-    ) -> Result<LogPage> {
-        Ok(LogPage {
+    ) -> Result<std::sync::Arc<LogPage>> {
+        Ok(std::sync::Arc::new(LogPage {
             commits: Vec::new(),
             next_cursor: None,
-        })
+        }))
     }
 
     fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {

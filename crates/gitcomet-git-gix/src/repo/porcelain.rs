@@ -1,6 +1,6 @@
-use super::GixRepo;
 use super::history::gix_head_id_or_none;
 use super::remotes::tracking_refs_for_remote_branch;
+use super::{GixRepo, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, git_workdir_cmd_for, path_buf_from_git_bytes,
     run_git_raw_output, run_git_simple, run_git_simple_with_paths, validate_hex_commit_id,
@@ -507,7 +507,7 @@ fn stash_tracked_change_paths(
 impl GixRepo {
     fn head_commit_id_for_outcome(&self) -> Result<Option<CommitId>> {
         let repo = self.reopen_repo()?;
-        gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(id.to_string().into())))
+        gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(oid_to_arc_str(&id))))
     }
 
     fn ref_exists_in_repo(repo: &gix::Repository, ref_name: &str) -> Result<bool> {
@@ -829,7 +829,7 @@ impl GixRepo {
     }
 
     pub(super) fn stash_list_impl(&self) -> Result<Vec<StashEntry>> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         super::log::stash_reflog_entries(&repo)
     }
 
@@ -996,7 +996,7 @@ impl GixRepo {
         let status = self.status_impl()?;
         Ok(status
             .unstaged
-            .into_iter()
+            .iter()
             .filter(|entry| {
                 matches!(
                     entry.kind,
@@ -1009,7 +1009,7 @@ impl GixRepo {
                         | FileStatusKind::Untracked
                 )
             })
-            .map(|entry| entry.path)
+            .map(|entry| entry.path.clone())
             .collect())
     }
 
@@ -1040,7 +1040,7 @@ impl GixRepo {
     }
 
     pub(super) fn unstage_impl(&self, paths: &[&Path]) -> Result<()> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         let has_commits = super::history::gix_head_id_or_none(&repo)?.is_some();
 
         // Unstaging changes what is staged. It must never touch a merge in
@@ -1142,7 +1142,7 @@ impl GixRepo {
     }
 
     fn merge_in_progress_for_commit(&self) -> Result<bool> {
-        let repo = self._repo.to_thread_local();
+        let repo = self.repo();
         Ok(repo.state() == Some(gix::state::InProgress::Merge))
     }
 

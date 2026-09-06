@@ -865,7 +865,7 @@ impl MainPaneView {
         self.diff_text_query_segments_cache.clear();
         self.diff_text_query_cache_query = SharedString::default();
         self.diff_text_query_cache_options = Default::default();
-        self.diff_text_query_cache_matcher = None;
+        self.diff_text_query_cache_matcher_shared = None;
         self.diff_text_query_cache_generation =
             self.diff_text_query_cache_generation.wrapping_add(1);
     }
@@ -880,8 +880,8 @@ impl MainPaneView {
         {
             self.diff_text_query_cache_query = query.to_string().into();
             self.diff_text_query_cache_options = options;
-            self.diff_text_query_cache_matcher = (!query.is_empty())
-                .then(|| super::diff_search::DiffSearchMatcher::new(query, options));
+            self.diff_text_query_cache_matcher_shared = (!query.is_empty())
+                .then(|| Arc::new(super::diff_search::DiffSearchMatcher::new(query, options)));
             self.diff_text_query_cache_generation =
                 self.diff_text_query_cache_generation.wrapping_add(1);
         }

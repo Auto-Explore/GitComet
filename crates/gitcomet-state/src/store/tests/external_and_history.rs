@@ -611,10 +611,10 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
             seq,
             scope: history_scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: Vec::new(),
                 next_cursor: None,
-            }
+            })
             .into()),
         }),
     );
@@ -863,10 +863,10 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
             seq,
             scope: history_scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: Vec::new(),
                 next_cursor: None,
-            }
+            })
             .into()),
         }),
     );
@@ -1492,10 +1492,10 @@ fn answer_log(state: &mut AppState, effects: &[Effect], history: &[Commit]) -> V
         });
         let commits: Vec<_> = history.iter().skip(start).take(limit).cloned().collect();
         let next_cursor = (start + commits.len() < history.len()).then(|| cursor_after(&commits));
-        Ok(LogPage {
+        Ok(Arc::new(LogPage {
             commits,
             next_cursor,
-        })
+        }))
     };
     let page = match (&cursor, &state.repos[0].log) {
         (None, Loadable::Ready(previous)) => {
@@ -2060,10 +2060,10 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
             seq,
             scope: LogScope::FullReachable,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![],
                 next_cursor: None,
-            }
+            })
             .into()),
         }),
     );
@@ -2173,7 +2173,7 @@ fn log_loaded_appends_when_loading_more() {
                 resume_from: None,
                 resume_token: None,
             }),
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![Commit {
                     id: CommitId("c2".into()),
                     parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -2182,7 +2182,7 @@ fn log_loaded_appends_when_loading_more() {
                     time: SystemTime::UNIX_EPOCH,
                 }],
                 next_cursor: None,
-            }
+            })
             .into()),
         }),
     );
@@ -2241,10 +2241,10 @@ fn log_loaded_reconciles_commit_multi_selection() {
             seq,
             scope: LogScope::CurrentBranch,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("kept"), commit("other")],
                 next_cursor: None,
-            }
+            })
             .into()),
         }),
     );
@@ -2434,14 +2434,14 @@ fn log_loaded_keeps_a_not_yet_paged_selection_when_loading_more() {
                 resume_from: None,
                 resume_token: None,
             }),
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("c2")],
                 next_cursor: Some(LogCursor {
                     last_seen: CommitId("c2".into()),
                     resume_from: None,
                     resume_token: None,
                 }),
-            }
+            })
             .into()),
         }),
     );
@@ -2498,10 +2498,10 @@ fn log_loaded_first_page_keeps_the_commit_a_reveal_is_walking_toward() {
             seq,
             scope: LogScope::CurrentBranch,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("other")],
                 next_cursor: None,
-            }
+            })
             .into()),
         }),
     );
@@ -2566,7 +2566,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
                 resume_from: None,
                 resume_token: None,
             }),
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![Commit {
                     id: CommitId("c2".into()),
                     parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -2579,7 +2579,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
                     resume_from: None,
                     resume_token: None,
                 }),
-            }
+            })
             .into()),
         }),
     );
@@ -2657,7 +2657,7 @@ fn log_loaded_clears_retained_scope_switch_log() {
             seq,
             scope: LogScope::AllBranches,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![Commit {
                     id: CommitId("new".into()),
                     parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -2666,7 +2666,7 @@ fn log_loaded_clears_retained_scope_switch_log() {
                     time: SystemTime::UNIX_EPOCH,
                 }],
                 next_cursor: None,
-            }
+            })
             .into()),
         }),
     );
@@ -2716,14 +2716,14 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
             seq,
             scope: history_scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits,
                 next_cursor: Some(LogCursor {
                     last_seen,
                     resume_from: None,
                     resume_token: None,
                 }),
-            }
+            })
             .into()),
         }),
     );
@@ -2764,7 +2764,7 @@ fn log_loaded_bumps_log_rev() {
             seq,
             scope: history_scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![Commit {
                     id: CommitId("c1".into()),
                     parent_ids: gitcomet_core::domain::CommitParentIds::new(),
@@ -2773,7 +2773,7 @@ fn log_loaded_bumps_log_rev() {
                     time: SystemTime::UNIX_EPOCH,
                 }],
                 next_cursor: None,
-            }
+            })
             .into()),
         }),
     );
@@ -2824,7 +2824,7 @@ fn detached_head_target_tracks_current_branch_log_head() {
             seq,
             scope: LogScope::CurrentBranch,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![
                     Commit {
                         id: CommitId("c1".into()),
@@ -2842,7 +2842,7 @@ fn detached_head_target_tracks_current_branch_log_head() {
                     },
                 ],
                 next_cursor: None,
-            }
+            })
             .into()),
         }),
     );
@@ -2913,10 +2913,10 @@ fn filtered_current_branch_logs_do_not_backfill_detached_head_target() {
                 seq,
                 scope,
                 cursor: None,
-                result: Ok(LogPage {
+                result: Ok(std::sync::Arc::new(LogPage {
                     commits,
                     next_cursor: None,
-                }
+                })
                 .into()),
             }),
         );
@@ -3309,10 +3309,10 @@ fn log_chunks_replace_the_page_progressively() {
             seq,
             scope,
             cursor: None,
-            result: Ok(LogPage {
+            result: Ok(std::sync::Arc::new(LogPage {
                 commits: vec![commit("c1"), commit("c2"), commit("c3")],
                 next_cursor: None,
-            }
+            })
             .into()),
         }),
     );

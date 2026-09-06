@@ -317,9 +317,16 @@ fn history_table_row(
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
-    let context_menu_invoker: SharedString =
-        format!("history_commit_menu_{}_{}", repo_id.0, commit.id.as_ref()).into();
-    let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
+    // Compared without formatting: this ran once per visible commit per frame
+    // just to find the one row whose menu is open.
+    let context_menu_active = active_context_menu_invoker.is_some_and(|active| {
+        active
+            .strip_prefix("history_commit_menu_")
+            .and_then(|rest| rest.split_once('_'))
+            .is_some_and(|(repo, commit_id)| {
+                repo.parse::<u64>() == Ok(repo_id.0) && commit_id == commit.id.as_ref()
+            })
+    });
     // The row's background as one value rather than three `.bg()` calls that
     // overwrite each other, because the graph canvas needs to know it: its icon
     // nodes knock their glyphs out in the colour the row is actually painted,

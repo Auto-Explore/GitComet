@@ -29,7 +29,7 @@ fn read(
 
 fn page(result: HistoryReadResult) -> (Arc<LogPage>, Option<HistorySnapshot>) {
     match result {
-        HistoryReadResult::Page { page, snapshot } => (Arc::new(page), snapshot),
+        HistoryReadResult::Page { page, snapshot } => (page, snapshot),
         other => panic!("expected a page, got {other:?}"),
     }
 }
@@ -78,6 +78,32 @@ fn assert_unchanged(
         0,
         "refocusing unchanged history must not enter a history walk"
     );
+}
+
+#[test]
+fn snapshot_reads_and_rebuilt_refreshes_share_cached_pages() {
+    let dir = fixture(20);
+    let repo = GixBackend.open(dir.path()).unwrap();
+    for mode in [HistoryMode::FullReachable, HistoryMode::FirstParent] {
+        let (original, snapshot) = first(repo.as_ref(), mode, None, 200);
+        let (cached, cached_snapshot) = first(repo.as_ref(), mode, None, 200);
+        assert!(Arc::ptr_eq(&original, &cached));
+        assert_eq!(snapshot, cached_snapshot);
+
+        // Without a known snapshot the refresh reads a page, but a complete
+        // cached result can still be shared without copying its commits.
+        let (refreshed, refreshed_snapshot) = page(read(
+            repo.as_ref(),
+            mode,
+            None,
+            HistoryReadRequest::Refresh {
+                previous: Arc::clone(&original),
+                snapshot: None,
+            },
+        ));
+        assert!(Arc::ptr_eq(&original, &refreshed));
+        assert_eq!(snapshot, refreshed_snapshot);
+    }
 }
 
 #[test]

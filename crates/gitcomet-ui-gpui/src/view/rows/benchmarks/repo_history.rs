@@ -2003,10 +2003,10 @@ impl HistoryLoadMoreAppendFixture {
                 seq,
                 scope: self.scope,
                 cursor: None,
-                result: Ok(LogPage {
+                result: Ok(std::sync::Arc::new(LogPage {
                     commits: self.existing_commits.clone(),
                     next_cursor: self.request_cursor(),
-                }
+                })
                 .into()),
             }),
         );

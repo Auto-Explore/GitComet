@@ -18,6 +18,7 @@ use rustc_hash::FxHashSet;
 use smallvec::{Array, SmallVec};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// Default page size for log fetches.
@@ -369,8 +370,9 @@ fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool
                 return repo_state.head_gitlink_paths.contains(path);
             }
 
-            let dot_git = repo_state.spec.workdir.join(path).join(".git");
-            dot_git.is_file() || dot_git.is_dir()
+            let mut dot_git = repo_state.spec.workdir.join(path);
+            dot_git.push(".git");
+            std::fs::metadata(&dot_git).is_ok_and(|meta| meta.is_file() || meta.is_dir())
         }
         DiffTarget::Commit {
             commit_id,
@@ -965,11 +967,13 @@ pub(super) fn push_command_log(
         ok,
         command: command_text,
         summary,
-        stdout: output.stdout.clone(),
+        stdout: command_log_text(&output.stdout),
         stderr: if output.stderr.is_empty() {
-            error.map(format_error_for_user).unwrap_or_default()
+            error
+                .map(format_error_for_user)
+                .map_or_else(|| Arc::from(""), |text| command_log_text(&text))
         } else {
-            output.stderr.clone()
+            command_log_text(&output.stderr)
         },
         announce_success: command_success_is_worth_announcing(command),
         hook_operation_id: repo_state.feedback.command_log_operation_id,
@@ -994,14 +998,32 @@ pub(super) fn push_action_log(
         ok,
         command,
         summary,
-        stdout: String::new(),
-        stderr: error.map(format_error_for_user).unwrap_or_default(),
+        stdout: Arc::from(""),
+        stderr: error
+            .map(format_error_for_user)
+            .map_or_else(|| Arc::from(""), |text| command_log_text(&text)),
         announce_success: true,
         hook_operation_id: repo_state.feedback.command_log_operation_id,
     });
     if repo_state.feedback.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.feedback.command_log.len() - MAX_COMMAND_LOG;
         repo_state.feedback.command_log.drain(0..extra);
+    }
+}
+
+/// Per-stream cap for command output kept in the log; the tail is what a
+/// user reads when a command fails, and the hook-activity log uses the same
+/// bound.
+const MAX_COMMAND_LOG_OUTPUT_BYTES: usize = 256 * 1024;
+
+fn command_log_text(text: &str) -> Arc<str> {
+    if text.len() <= MAX_COMMAND_LOG_OUTPUT_BYTES {
+        Arc::from(text)
+    } else {
+        Arc::from(super::git_hook_activity::utf8_tail(
+            text,
+            MAX_COMMAND_LOG_OUTPUT_BYTES,
+        ))
     }
 }
 
@@ -1724,8 +1746,8 @@ mod tests {
             ok: true,
             command: format!("cmd-{ix}"),
             summary: String::new(),
-            stdout: String::new(),
-            stderr: String::new(),
+            stdout: Arc::from(""),
+            stderr: Arc::from(""),
             announce_success: true,
             hook_operation_id: None,
         }
@@ -1830,7 +1852,7 @@ mod tests {
         let svg_path = PathBuf::from("assets/diagram.svg");
         let png_path = PathBuf::from("assets/logo.png");
         repo.status = Loadable::Ready(Shared::new(RepoStatus {
-            unstaged: vec![
+            unstaged: std::sync::Arc::new(vec![
                 FileStatus {
                     path: svg_path.clone(),
                     kind: FileStatusKind::Untracked,
@@ -1841,8 +1863,8 @@ mod tests {
                     kind: FileStatusKind::Untracked,
                     conflict: None,
                 },
-            ],
-            staged: vec![],
+            ]),
+            staged: std::sync::Arc::new(vec![]),
         }));
 
         // An untracked SVG has no patch, but its source still has to load: the
@@ -2034,7 +2056,7 @@ mod tests {
                 .last()
                 .expect("last command log entry")
                 .stderr,
-            "stderr from git"
+            "stderr from git".into()
         );
 
         repo.feedback.command_log = (0..200).map(dummy_log_entry).collect();
