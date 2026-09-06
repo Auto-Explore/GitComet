@@ -679,7 +679,7 @@ fn deep_log_pages_share_a_total_cache_row_budget() {
     commit_file(tmp.path(), "a.txt", "one\n", "first");
     let repo = open_repo(tmp.path());
     let shallow = shallow_snapshot(&repo._repo.to_thread_local()).expect("shallow snapshot");
-    let commit = repo.log_head_page_impl(1, None).unwrap().commits.remove(0);
+    let commit = repo.log_head_page_impl(1, None).unwrap().commits[0].clone();
     for limit in [4000, 4001, 4002, 20_000] {
         let key = repo.log_page_cache_key(
             HistoryMode::AllBranches,
@@ -691,10 +691,10 @@ fn deep_log_pages_share_a_total_cache_row_budget() {
         );
         repo.store_log_page(
             key.clone(),
-            &LogPage {
+            &Arc::new(LogPage {
                 commits: vec![commit.clone(); limit],
                 next_cursor: None,
-            },
+            }),
         );
         let rows: usize = repo
             .log_page_cache
