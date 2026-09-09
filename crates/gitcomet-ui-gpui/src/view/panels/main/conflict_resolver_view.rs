@@ -920,6 +920,7 @@ impl MainPaneView {
                                             MouseButton::Left,
                                             cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                                                 cx.stop_propagation();
+                                                crate::text_selection_owner::preserve(cx);
                                                 this.conflict_hsplit_resize =
                                                     Some(ConflictHSplitResizeState {
                                                         handle: which,
@@ -1042,6 +1043,7 @@ impl MainPaneView {
                                         MouseButton::Left,
                                         cx.listener(|this, e: &MouseDownEvent, _w, cx| {
                                             cx.stop_propagation();
+                                            crate::text_selection_owner::preserve(cx);
                                             this.conflict_diff_split_resize =
                                                 Some(ConflictDiffSplitResizeState {
                                                     start_x: e.position.x,
@@ -1809,6 +1811,7 @@ impl MainPaneView {
                                     MouseButton::Left,
                                     cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                                         cx.stop_propagation();
+                                        crate::text_selection_owner::preserve(cx);
                                         this.conflict_resolver_vsplit_resize =
                                             Some(ConflictVSplitResizeState {
                                                 start_y: e.position.y,

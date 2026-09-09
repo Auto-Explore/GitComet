@@ -429,6 +429,9 @@ fn set_diff_text_selection_on_row(
                 });
                 pane.diff_selection_anchor = Some(visible_ix);
                 pane.diff_selection_range = None;
+                // Match production: a real selection owns the window's, so a
+                // seeded one must too or the next press collapses it.
+                pane.diff_text_selection_owner.adopt(window, cx);
                 cx.notify();
             });
         });
@@ -2344,6 +2347,54 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
     );
 }
 
+/// The diff pane is a selection owner like any other: once another surface
+/// takes the window's selection, its highlight must go too.
+#[gpui::test]
+fn another_surface_taking_the_selection_clears_the_diff_text_selection(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70512);
+    let commit_id = CommitId("fedcba0987654323".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_selection_ownership",
+        std::process::id()
+    ));
+    let target = DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(std::path::PathBuf::from("src/only.rs")),
+    };
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
+    repo.diff_state.diff_rev = 1;
+    repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_panel(cx, &view);
+    set_diff_text_selection_on_row(cx, &view, 4);
+    assert!(
+        diff_text_has_selection(cx, &view),
+        "precondition: the diff pane holds a text selection"
+    );
+
+    cx.update(|window, app| {
+        let mut elsewhere = crate::text_selection_owner::SelectionOwnerToken::default();
+        elsewhere.adopt(window, app);
+    });
+    cx.run_until_parked();
+
+    assert!(
+        !diff_text_has_selection(cx, &view),
+        "the diff pane must drop its highlight once another surface owns the selection"
+    );
+}
+
 #[gpui::test]
 fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selection(
     cx: &mut gpui::TestAppContext,
@@ -2440,7 +2491,7 @@ fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selecti
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.select_all_diff_text();
+                pane.select_all_diff_text(window, cx);
                 cx.notify();
             });
         });

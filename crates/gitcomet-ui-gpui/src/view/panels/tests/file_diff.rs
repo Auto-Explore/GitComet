@@ -1968,7 +1968,7 @@ index 1111111..2222222 100644
                 )
         });
 
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
@@ -1981,6 +1981,7 @@ index 1111111..2222222 100644
                 region: DiffTextRegion::Inline,
                 offset: continuation_start + continuation_text.len(),
             });
+            pane.diff_text_selection_owner.adopt(window, cx);
             pane.copy_selected_diff_text_to_clipboard(cx);
         });
     });
@@ -2005,7 +2006,7 @@ index 1111111..2222222 100644
         );
         full
     });
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
@@ -2018,6 +2019,7 @@ index 1111111..2222222 100644
                 region: DiffTextRegion::Inline,
                 offset: full_wrapped_line.len(),
             });
+            pane.diff_text_selection_owner.adopt(window, cx);
             pane.copy_selected_diff_text_to_clipboard(cx);
         });
     });
@@ -2294,7 +2296,7 @@ fn split_diff_word_wrap_copy_omits_soft_wrap_newlines(cx: &mut gpui::TestAppCont
             )
         });
 
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
@@ -2307,6 +2309,7 @@ fn split_diff_word_wrap_copy_omits_soft_wrap_newlines(cx: &mut gpui::TestAppCont
                 region: DiffTextRegion::SplitRight,
                 offset: full_wrapped_line.len(),
             });
+            pane.diff_text_selection_owner.adopt(window, cx);
             pane.copy_selected_diff_text_to_clipboard(cx);
         });
     });
@@ -2317,7 +2320,7 @@ fn split_diff_word_wrap_copy_omits_soft_wrap_newlines(cx: &mut gpui::TestAppCont
     );
     assert!(!full_wrapped_line.contains('\n'));
 
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
@@ -2330,6 +2333,7 @@ fn split_diff_word_wrap_copy_omits_soft_wrap_newlines(cx: &mut gpui::TestAppCont
                 region: DiffTextRegion::SplitRight,
                 offset: next_source_line.len(),
             });
+            pane.diff_text_selection_owner.adopt(window, cx);
             pane.copy_selected_diff_text_to_clipboard(cx);
         });
     });
@@ -2509,6 +2513,7 @@ fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppC
                 region: DiffTextRegion::Inline,
                 offset: selection_start + expected_text.len(),
             });
+            pane.diff_text_selection_owner.adopt(window, cx);
             pane.sync_diff_focus_to_text_selection();
             cx.notify();
         });
@@ -2540,7 +2545,7 @@ fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppC
         );
         full
     });
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, cx| {
             pane.diff_text_anchor = Some(DiffTextPos {
@@ -2553,6 +2558,7 @@ fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppC
                 region: DiffTextRegion::Inline,
                 offset: full_wrapped_line.len(),
             });
+            pane.diff_text_selection_owner.adopt(window, cx);
             pane.copy_selected_diff_text_to_clipboard(cx);
         });
     });
@@ -2634,6 +2640,7 @@ fn collapsed_diff_word_wrap_selection_survives_resize(cx: &mut gpui::TestAppCont
                 region: DiffTextRegion::Inline,
                 offset: marker_start + marker.len(),
             });
+            pane.diff_text_selection_owner.adopt(window, cx);
             pane.sync_diff_focus_to_text_selection();
             cx.notify();
         });
@@ -3390,6 +3397,10 @@ fn set_diff_text_selection_for_test(
                 });
                 pane.diff_selection_anchor = Some(end_visible_ix);
                 pane.diff_selection_range = None;
+                // Seeded selections must own the window like real ones, or the
+                // arbitration reaps them on the next global write. Adopted last,
+                // once the state it describes is fully seeded.
+                pane.diff_text_selection_owner.adopt(window, cx);
                 cx.notify();
             });
         });

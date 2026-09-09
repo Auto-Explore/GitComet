@@ -4838,3 +4838,87 @@ fn a_button_less_pointer_move_clears_a_stranded_claim(cx: &mut gpui::TestAppCont
         );
     });
 }
+
+/// The menu's rows clear `interaction.context_menu` and stop propagation in the
+/// bubble phase, so a guard that re-reads it after the press sees `None` and
+/// blurs the input it was meant to protect.
+#[gpui::test]
+fn text_input_context_menu_copy_keeps_focus_and_selection(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (view, cx) = cx.add_window_view(SmokeView::new);
+
+    cx.update(|window, app| {
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus, app);
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("hello world", cx));
+        });
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.select_all_text(window, cx));
+        });
+    });
+    cx.run_until_parked();
+
+    let click = cx
+        .debug_bounds("smoke_input")
+        .expect("expected smoke input bounds")
+        .center();
+    cx.simulate_mouse_move(click, None, Modifiers::default());
+    cx.simulate_event(MouseDownEvent {
+        position: click,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Right,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position: click,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Right,
+        click_count: 1,
+    });
+    cx.run_until_parked();
+
+    let copy_click = cx
+        .debug_bounds("text_input_context_copy")
+        .expect("expected the copy row")
+        .center();
+    cx.simulate_mouse_move(copy_click, None, Modifiers::default());
+    cx.simulate_event(MouseDownEvent {
+        position: copy_click,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position: copy_click,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 1,
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("hello world".into()),
+        "precondition: the menu's Copy row ran"
+    );
+    cx.update(|window, app| {
+        let input = view.read(app).input.clone();
+        assert!(
+            input.read(app).focus_handle().is_focused(window),
+            "using the input's own menu must not blur it"
+        );
+        assert_eq!(
+            input.read(app).selected_text(),
+            Some("hello world".to_string()),
+            "the selection the menu just copied must survive"
+        );
+    });
+}

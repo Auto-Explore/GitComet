@@ -505,6 +505,7 @@ impl Scrollbar {
                         }
 
                         crate::press_gesture::claim_press(cx);
+                        crate::text_selection_owner::preserve(cx);
 
                         if thumb_hit_bounds.contains(&event.position) {
                             driver.drag_started(axis);

@@ -52,8 +52,14 @@ pub(super) fn test_terminal_instance(
 ) -> TerminalInstance {
     let focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
     let viewport_focus = focus_handle.clone();
-    let viewport = cx.new(move |_cx| {
-        TerminalViewportView::with_backend(AppTheme::gitcomet_dark(), viewport_focus, None, None)
+    let viewport = cx.new(move |cx| {
+        TerminalViewportView::with_backend(
+            AppTheme::gitcomet_dark(),
+            viewport_focus,
+            None,
+            None,
+            cx,
+        )
     });
     TerminalInstance {
         focus_handle,

@@ -1954,6 +1954,7 @@ impl GitCometView {
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                     cx.stop_propagation();
                     crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
                     match handle {
                         PaneResizeHandle::Sidebar => {
                             this.sidebar_width_anim_seq =

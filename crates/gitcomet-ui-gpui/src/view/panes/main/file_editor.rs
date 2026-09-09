@@ -1541,6 +1541,7 @@ impl MainPaneView {
     pub(in crate::view) fn render_file_editor(
         &mut self,
         theme: AppTheme,
+        window: &gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         if let Some(message) = self.file_editor_error.clone() {
@@ -1562,8 +1563,9 @@ impl MainPaneView {
             if let Some(range) = self.file_editor_search_current_range() {
                 // Its autoscroll is also what covers a reveal computed before the
                 // scroll handle had been laid out and had bounds to centre against.
-                self.file_editor_input
-                    .update(cx, |input, cx| input.set_selected_range(range, true, cx));
+                self.file_editor_input.update(cx, |input, cx| {
+                    input.set_selected_range(range, true, window, cx)
+                });
                 // The caret has moved but not been laid out at its new place yet,
                 // so the sideways half waits for the frame that paints it. The
                 // input's own caret autoscroll only handles the vertical axis.
