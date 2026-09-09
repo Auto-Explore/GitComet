@@ -1823,9 +1823,9 @@ fn minified_json_file_diff_partial_copy_uses_streamed_inline_row_source(
         },
     );
 
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.main_pane.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.diff_text_anchor = Some(DiffTextPos {
                     source_visible_ix: 0,
@@ -1837,6 +1837,7 @@ fn minified_json_file_diff_partial_copy_uses_streamed_inline_row_source(
                     region: DiffTextRegion::Inline,
                     offset: end,
                 });
+                pane.diff_text_selection_owner.adopt(window, cx);
             });
         });
     });
@@ -2010,9 +2011,9 @@ fn minified_json_file_diff_split_partial_copy_uses_streamed_row_source(
         },
     );
 
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, _cx| {
+            this.main_pane.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 pane.diff_text_anchor = Some(DiffTextPos {
@@ -2025,6 +2026,7 @@ fn minified_json_file_diff_split_partial_copy_uses_streamed_row_source(
                     region: DiffTextRegion::SplitLeft,
                     offset: end,
                 });
+                pane.diff_text_selection_owner.adopt(window, cx);
             });
         });
     });

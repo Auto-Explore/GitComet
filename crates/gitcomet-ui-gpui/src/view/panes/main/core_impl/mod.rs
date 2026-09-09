@@ -830,7 +830,7 @@ impl MainPaneView {
             input.set_theme(theme, cx);
             input.set_line_ending(line_ending);
             input.set_text(text, cx);
-            input.set_selected_range(0..0, false, cx);
+            input.set_caret(0, cx);
         });
     }
 
@@ -2510,7 +2510,11 @@ impl MainPaneView {
 }
 
 impl MainPaneView {
-    pub(in crate::view) fn select_all_diff_text(&mut self) {
+    pub(in crate::view) fn select_all_diff_text(
+        &mut self,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         // Markdown preview (both file preview and diff preview) uses
         // markdown preview row counts instead of source-text line counts.
         if self.is_markdown_preview_active() {
@@ -2549,6 +2553,9 @@ impl MainPaneView {
                 region,
                 offset: end_offset,
             });
+            if self.diff_text_has_selection() {
+                self.diff_text_selection_owner.adopt(window, cx);
+            }
             self.sync_diff_focus_to_text_selection();
             return;
         }
@@ -2575,6 +2582,9 @@ impl MainPaneView {
                 region: DiffTextRegion::Inline,
                 offset: end_offset,
             });
+            if self.diff_text_has_selection() {
+                self.diff_text_selection_owner.adopt(window, cx);
+            }
             self.sync_diff_focus_to_text_selection();
             return;
         }
@@ -2610,6 +2620,9 @@ impl MainPaneView {
             region: end_region,
             offset: end_offset,
         });
+        if self.diff_text_has_selection() {
+            self.diff_text_selection_owner.adopt(window, cx);
+        }
         self.sync_diff_focus_to_text_selection();
     }
 

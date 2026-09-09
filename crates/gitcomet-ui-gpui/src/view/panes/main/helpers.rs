@@ -3060,6 +3060,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) theme: AppTheme,
     pub(in crate::view) date_time_format: DateTimeFormat,
     pub(super) _ui_model_subscription: gpui::Subscription,
+    pub(super) _text_selection_owner_subscription: gpui::Subscription,
     pub(in crate::view) root_view: WeakEntity<GitCometView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     pub(super) notify_fingerprint: u64,
@@ -3182,6 +3183,9 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_text_selecting: bool,
     pub(in crate::view) diff_text_anchor: Option<DiffTextPos>,
     pub(in crate::view) diff_text_head: Option<DiffTextPos>,
+    /// Which window's text selection the diff/preview character selection owns.
+    /// See [`crate::text_selection_owner`].
+    pub(in crate::view) diff_text_selection_owner: crate::text_selection_owner::SelectionOwnerToken,
     pub(super) diff_text_autoscroll_seq: u64,
     pub(super) diff_text_autoscroll_target: Option<DiffTextAutoscrollTarget>,
     pub(super) diff_text_last_mouse_pos: Point<Pixels>,

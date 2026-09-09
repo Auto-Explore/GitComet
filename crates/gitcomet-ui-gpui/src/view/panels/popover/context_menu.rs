@@ -2059,6 +2059,9 @@ impl PopoverHost {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                    // Entries activate on mouse-*up*, so without this the press
+                    // would collapse the very selection a Copy entry reads.
+                    crate::text_selection_owner::preserve(cx);
                     window.focus(&this.context_menu_focus_handle, cx);
                 }),
             )

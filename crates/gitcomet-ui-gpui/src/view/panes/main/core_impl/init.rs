@@ -52,6 +52,15 @@ impl MainPaneView {
         );
         let state = Arc::clone(&ui_model.read(cx).state);
         let initial_fingerprint = Self::notify_fingerprint_for(&state);
+        let text_selection_owner_subscription =
+            crate::text_selection_owner::observe(cx, |this, cx| {
+                // Guarded on a real span: a collapsed anchor left by a plain
+                // click is not a highlight and costs nothing to keep.
+                if this.diff_text_selection_owner.is_stale(cx) && this.diff_text_has_selection() {
+                    this.clear_diff_text_selection_span();
+                    cx.notify();
+                }
+            });
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
             let next_fingerprint = Self::notify_fingerprint_for(&next);
@@ -294,6 +303,7 @@ impl MainPaneView {
             theme,
             date_time_format,
             _ui_model_subscription: subscription,
+            _text_selection_owner_subscription: text_selection_owner_subscription,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
@@ -385,6 +395,7 @@ impl MainPaneView {
             diff_selection_anchor: None,
             diff_selection_range: None,
             diff_text_selecting: false,
+            diff_text_selection_owner: Default::default(),
             diff_text_anchor: None,
             diff_text_head: None,
             diff_text_autoscroll_seq: 0,

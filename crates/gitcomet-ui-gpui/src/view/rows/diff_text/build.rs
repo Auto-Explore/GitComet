@@ -210,7 +210,14 @@ pub(in super::super) fn selectable_cached_diff_text(
                 if e.click_count >= 2 {
                     cx.stop_propagation();
                 }
-                this.handle_diff_text_mouse_down(visible_ix, region, e.position, e.click_count, cx);
+                this.handle_diff_text_mouse_down(
+                    visible_ix,
+                    region,
+                    e.position,
+                    e.click_count,
+                    window,
+                    cx,
+                );
                 cx.notify();
             }),
         )
