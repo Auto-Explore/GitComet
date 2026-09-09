@@ -1486,8 +1486,17 @@ fn deleted_file_preview_ctrl_a_ctrl_c_copies_all_content(cx: &mut gpui::TestAppC
     );
 }
 
-#[gpui::test]
-fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) {
+/// A window showing one commit's details, with the sha/date/parent fields
+/// populated. Returns the fields' expected text.
+fn commit_details_metadata_fixture(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    gpui::Entity<crate::view::GitCometView>,
+    &mut gpui::VisualTestContext,
+    String,
+    String,
+    String,
+) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -1538,32 +1547,278 @@ fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) 
         );
     });
 
-    cx.update(|_window, app| {
+    (view, cx, commit_sha, commit_date, parent_sha)
+}
+
+#[gpui::test]
+fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) {
+    let (view, cx, commit_sha, commit_date, parent_sha) = commit_details_metadata_fixture(cx);
+
+    // One field at a time: only one surface may hold a selection, so selecting
+    // all three at once would leave just the last one highlighted.
+    for (label, expected) in [
+        ("sha", commit_sha),
+        ("date", commit_date),
+        ("parent", parent_sha),
+    ] {
+        cx.update(|window, app| {
+            let details_pane = view.read(app).details_pane.clone();
+            details_pane.update(app, |pane, cx| {
+                let input = match label {
+                    "sha" => pane.commit_details_sha_input.clone(),
+                    "date" => pane.commit_details_date_input.clone(),
+                    _ => pane.commit_details_parent_input.clone(),
+                };
+                input.update(cx, |input, cx| input.select_all_text(window, cx));
+            });
+        });
+
+        cx.update(|_window, app| {
+            let details_pane = view.read(app).details_pane.clone();
+            let pane = details_pane.read(app);
+            let actual = match label {
+                "sha" => pane.commit_details_sha_input.read(app).selected_text(),
+                "date" => pane.commit_details_date_input.read(app).selected_text(),
+                _ => pane.commit_details_parent_input.read(app).selected_text(),
+            };
+            assert_eq!(actual, Some(expected), "{label} field must be selectable");
+        });
+    }
+}
+
+/// Any other surface taking the window's selection clears a text input's
+/// highlight, not just another input. Stands in for the diff pane, the
+/// terminal, and any future selectable surface.
+#[gpui::test]
+fn another_surface_taking_the_selection_clears_a_text_input(cx: &mut gpui::TestAppContext) {
+    let (view, cx, commit_sha, _date, _parent) = commit_details_metadata_fixture(cx);
+
+    cx.update(|window, app| {
         let details_pane = view.read(app).details_pane.clone();
         details_pane.update(app, |pane, cx| {
             pane.commit_details_sha_input
-                .update(cx, |input, cx| input.select_all_text(cx));
-            pane.commit_details_date_input
-                .update(cx, |input, cx| input.select_all_text(cx));
-            pane.commit_details_parent_input
-                .update(cx, |input, cx| input.select_all_text(cx));
+                .update(cx, |input, cx| input.select_all_text(window, cx));
         });
     });
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        assert_eq!(
+            details_pane
+                .read(app)
+                .commit_details_sha_input
+                .read(app)
+                .selected_text(),
+            Some(commit_sha)
+        );
+    });
+
+    cx.update(|window, app| {
+        let mut elsewhere = crate::text_selection_owner::SelectionOwnerToken::default();
+        elsewhere.adopt(window, app);
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        assert_eq!(
+            details_pane
+                .read(app)
+                .commit_details_sha_input
+                .read(app)
+                .selected_text(),
+            None,
+            "the input must drop its highlight once another surface owns the selection"
+        );
+    });
+}
+
+/// The browser rule end to end: a real press on a surface that does not own the
+/// selection collapses it. This is the counterpart to
+/// `a_preserved_press_leaves_a_text_input_selection_alone` -- together they show
+/// the capture-phase invalidator actually fires.
+#[gpui::test]
+fn an_ordinary_press_elsewhere_clears_a_text_input_selection(cx: &mut gpui::TestAppContext) {
+    let (view, cx, commit_sha, _date, _parent) = commit_details_metadata_fixture(cx);
+
+    cx.update(|window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        details_pane.update(app, |pane, cx| {
+            pane.commit_details_sha_input
+                .update(cx, |input, cx| input.select_all_text(window, cx));
+        });
+    });
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        assert_eq!(
+            details_pane
+                .read(app)
+                .commit_details_sha_input
+                .read(app)
+                .selected_text(),
+            Some(commit_sha),
+            "precondition: the input holds a selection"
+        );
+    });
+
+    // Mid-window, clear of the titlebar and of any selectable text surface.
+    let size = cx.update(|window, _app| window.viewport_size());
+    let elsewhere = gpui::point(size.width * 0.5, size.height * 0.25);
+    cx.simulate_mouse_move(elsewhere, None, gpui::Modifiers::default());
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: elsewhere,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        assert_eq!(
+            details_pane
+                .read(app)
+                .commit_details_sha_input
+                .read(app)
+                .selected_text(),
+            None,
+            "a press outside the owning surface must collapse the selection"
+        );
+    });
+}
+
+/// The overlay flag must fall back to closed on every dismiss path: one that
+/// forgot would latch it on and disable click-away blur for the session.
+#[gpui::test]
+fn blur_still_works_after_a_stale_overlay_flag(cx: &mut gpui::TestAppContext) {
+    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+
+    let input = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .commit_details_sha_input
+            .clone()
+    });
+
+    // Stand in for a dismiss path that forgot to clear the flag: no popover is
+    // open, but the flag says one is. The next render must correct it.
+    cx.update(|window, app| crate::text_selection_owner::set_overlay_open(window, true, app));
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+
+    cx.update(|window, app| {
+        let handle = input.read(app).focus_handle();
+        handle.focus(window, app);
+    });
+    cx.run_until_parked();
+
+    let size = cx.update(|window, _app| window.viewport_size());
+    let sidebar = gpui::point(size.width * 0.05, size.height * 0.5);
+    cx.simulate_mouse_move(sidebar, None, gpui::Modifiers::default());
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: sidebar,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.run_until_parked();
+
+    assert!(
+        cx.update(|window, app| !input.read(app).focus_handle().is_focused(window)),
+        "a stale overlay flag must be corrected by render, so blur still works"
+    );
+}
+
+/// A selection-neutral gesture -- a scrollbar drag, a splitter -- must leave the
+/// highlight alone even though it is a press outside the owning surface.
+#[gpui::test]
+fn a_preserved_press_leaves_a_text_input_selection_alone(cx: &mut gpui::TestAppContext) {
+    let (view, cx, commit_sha, _date, _parent) = commit_details_metadata_fixture(cx);
+
+    cx.update(|window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        details_pane.update(app, |pane, cx| {
+            pane.commit_details_sha_input
+                .update(cx, |input, cx| input.select_all_text(window, cx));
+        });
+    });
+
+    // The titlebar, a real `preserve` site -- dragging the window is chrome,
+    // not content. Pressed for real so the whole capture/bubble/resolve chain
+    // runs, exactly as in the clearing test above.
+    let titlebar = gpui::point(gpui::px(2.0), gpui::px(2.0));
+    cx.simulate_mouse_move(titlebar, None, gpui::Modifiers::default());
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: titlebar,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        assert_eq!(
+            details_pane
+                .read(app)
+                .commit_details_sha_input
+                .read(app)
+                .selected_text(),
+            Some(commit_sha),
+            "a preserved press must not collapse the selection"
+        );
+    });
+}
+
+/// Selecting one commit-details field must drop the highlight on the previous
+/// one, the way a browser only ever shows one selection.
+#[gpui::test]
+fn selecting_a_second_commit_details_field_clears_the_first(cx: &mut gpui::TestAppContext) {
+    let (view, cx, commit_sha, commit_date, _parent_sha) = commit_details_metadata_fixture(cx);
+
+    cx.update(|window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        details_pane.update(app, |pane, cx| {
+            pane.commit_details_sha_input
+                .update(cx, |input, cx| input.select_all_text(window, cx));
+        });
+    });
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        assert_eq!(
+            details_pane
+                .read(app)
+                .commit_details_sha_input
+                .read(app)
+                .selected_text(),
+            Some(commit_sha)
+        );
+    });
+
+    cx.update(|window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        details_pane.update(app, |pane, cx| {
+            pane.commit_details_date_input
+                .update(cx, |input, cx| input.select_all_text(window, cx));
+        });
+    });
+    cx.run_until_parked();
 
     cx.update(|_window, app| {
         let details_pane = view.read(app).details_pane.clone();
         let pane = details_pane.read(app);
         assert_eq!(
-            pane.commit_details_sha_input.read(app).selected_text(),
-            Some(commit_sha)
-        );
-        assert_eq!(
             pane.commit_details_date_input.read(app).selected_text(),
-            Some(commit_date)
+            Some(commit_date),
+            "the newly selected field keeps its selection"
         );
         assert_eq!(
-            pane.commit_details_parent_input.read(app).selected_text(),
-            Some(parent_sha)
+            pane.commit_details_sha_input.read(app).selected_text(),
+            None,
+            "the previously selected field must have been cleared"
         );
     });
 }
@@ -5048,4 +5303,92 @@ fn worktree_file_inputs_are_derived_once_per_scan_and_keyed_by_worktree(
             "a new scan revision must rebuild them"
         );
     });
+}
+
+/// A press on something that takes no focus of its own must still blur a
+/// focused input, the way clicking page background does in a browser.
+#[gpui::test]
+fn clicking_outside_a_focused_input_blurs_it(cx: &mut gpui::TestAppContext) {
+    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+
+    let input = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .commit_details_sha_input
+            .clone()
+    });
+    cx.update(|window, app| {
+        let handle = input.read(app).focus_handle();
+        handle.focus(window, app);
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.update(|window, app| input.read(app).focus_handle().is_focused(window)),
+        "precondition: the input is focused"
+    );
+
+    // The branch sidebar: a real surface that takes no focus of its own, so
+    // without an explicit blur the input stays focused behind the user's back.
+    let size = cx.update(|window, _app| window.viewport_size());
+    let sidebar = gpui::point(size.width * 0.05, size.height * 0.5);
+    cx.simulate_mouse_move(sidebar, None, gpui::Modifiers::default());
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: sidebar,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.run_until_parked();
+
+    assert!(
+        cx.update(|window, app| !input.read(app).focus_handle().is_focused(window)),
+        "a press on a surface that takes no focus must still blur the input"
+    );
+    // Deliberately nothing focused rather than a fallback surface: the press
+    // landed on something that is not a pane, so handing focus to one would
+    // silently redirect the user's next keystroke. Global bindings still
+    // resolve at the window root.
+    assert!(
+        cx.update(|window, app| window.focused(app).is_none()),
+        "blur leaves no element focused"
+    );
+}
+
+/// ...but a selection-neutral gesture must not. Dragging a scrollbar or the
+/// titlebar while typing is not "clicking away".
+#[gpui::test]
+fn a_preserved_press_does_not_blur_a_focused_input(cx: &mut gpui::TestAppContext) {
+    let (view, cx, _sha, _date, _parent) = commit_details_metadata_fixture(cx);
+
+    let input = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .commit_details_sha_input
+            .clone()
+    });
+    cx.update(|window, app| {
+        let handle = input.read(app).focus_handle();
+        handle.focus(window, app);
+    });
+    cx.run_until_parked();
+
+    // The titlebar: a real `preserve` site.
+    let titlebar = gpui::point(gpui::px(2.0), gpui::px(2.0));
+    cx.simulate_mouse_move(titlebar, None, gpui::Modifiers::default());
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: titlebar,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.run_until_parked();
+
+    assert!(
+        cx.update(|window, app| input.read(app).focus_handle().is_focused(window)),
+        "dragging the window must not blur the input being typed in"
+    );
 }

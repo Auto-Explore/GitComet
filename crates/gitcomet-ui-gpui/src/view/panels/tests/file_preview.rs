@@ -2087,7 +2087,7 @@ fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::Te
         });
     });
 
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.diff_text_anchor = Some(DiffTextPos {
@@ -2100,6 +2100,7 @@ fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::Te
                     region: DiffTextRegion::Inline,
                     offset: end,
                 });
+                pane.diff_text_selection_owner.adopt(window, cx);
                 pane.copy_selected_diff_text_to_clipboard(cx);
             });
         });

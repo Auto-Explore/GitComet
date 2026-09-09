@@ -303,6 +303,7 @@ pub(in crate::view) fn markdown_preview_row_element(
                         row_ix,
                         text_region,
                         event.position,
+                        window,
                         cx,
                     );
                     cx.notify();
@@ -771,6 +772,7 @@ pub(in crate::view) fn markdown_preview_row_element(
                                 text_region,
                                 position,
                                 click_count,
+                                window,
                                 cx,
                             );
                         }

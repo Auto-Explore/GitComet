@@ -2986,6 +2986,7 @@ impl DetailsPaneView {
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         crate::press_gesture::claim_press(cx);
+                        crate::text_selection_owner::preserve(cx);
                         this.start_status_section_resize(handle, e.position.y, cx);
                         window.refresh();
                     }),

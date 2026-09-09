@@ -2517,11 +2517,12 @@ fn short_file_editor_uses_the_space_below_eof_for_caret_drag_and_menu(
         target_offset..contents.len()
     );
 
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         let pane = view.read(app).main_pane.clone();
         pane.update(app, |pane, cx| {
-            pane.file_editor_input
-                .update(cx, |input, cx| input.set_selected_range(0..2, false, cx));
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.set_selected_range(0..2, false, window, cx)
+            });
         });
     });
     cx.simulate_mouse_down(below_eof, MouseButton::Right, Modifiers::default());
@@ -3037,7 +3038,7 @@ async fn recent_repository_shortcut_does_not_select_the_file_editor(cx: &mut gpu
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.file_editor_input.update(cx, |input, cx| {
-                    input.set_selected_range(6..6, false, cx);
+                    input.set_caret(6, cx);
                     let focus = input.focus_handle();
                     window.focus(&focus, cx);
                 });

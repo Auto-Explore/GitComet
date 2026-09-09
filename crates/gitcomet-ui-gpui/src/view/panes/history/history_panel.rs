@@ -471,6 +471,7 @@ impl HistoryView {
                     cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                         cx.stop_propagation();
                         crate::press_gesture::claim_press(cx);
+                        crate::text_selection_owner::preserve(cx);
                         if handle == HistoryColResizeHandle::Graph {
                             this.history_col_graph_auto = false;
                         }
