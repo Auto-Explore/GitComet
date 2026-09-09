@@ -310,6 +310,7 @@ pub(in super::super) struct SidebarPaneView {
     /// shared branch-row renderer draws the section-scoped rows instead of the
     /// full cached presentation. `None` during normal (expanded) rendering.
     pub(in super::super) collapsed_popover_presentation: Option<SidebarPresentation>,
+    collapsed_popover_rows_cache: Option<CollapsedPopoverRowsCache>,
     /// When set (and the sidebar is collapsed), this pane renders only the given
     /// section as popover content instead of the full sidebar. The root view
     /// syncs this to its `sidebar_collapsed_popover` before embedding the pane.
@@ -322,6 +323,93 @@ pub(in super::super) struct SidebarPaneView {
     pending_file_browser_reveal_at: Option<std::time::Instant>,
     #[cfg(test)]
     pub(in crate::view) render_count: usize,
+    #[cfg(test)]
+    pub(in crate::view) rendered_rows: usize,
+}
+
+struct CollapsedPopoverRowsCache {
+    repo_id: RepoId,
+    fingerprint: BranchSidebarFingerprint,
+    section: CollapsedSidebarSection,
+    /// The persisted sets as stored, before this popover's own force-expansions.
+    /// They are the key, so a hit compares them without copying them first.
+    collapsed: BTreeSet<String>,
+    pinned: BTreeSet<String>,
+    query: String,
+    rows: Rc<[BranchSidebarRow]>,
+    /// Prefix heights in design pixels, including an end sentinel. Shared by
+    /// every frame; spacers are shorter than ordinary sidebar rows.
+    tops: Vec<f32>,
+}
+
+impl CollapsedPopoverRowsCache {
+    fn visible_range(&self, offset: f32, viewport: f32) -> Range<usize> {
+        let count = self.rows.len();
+        let total = self.tops[count];
+        let offset = offset.max(0.0).min((total - viewport).max(0.0));
+        // The scroll surface also contains the title and optional filter. A
+        // viewport of overdraw above the rows covers those without measuring
+        // them or relying on the preceding frame's panel bounds.
+        let first = self
+            .tops
+            .partition_point(|top| *top <= (offset - viewport).max(0.0))
+            .saturating_sub(1)
+            .min(count);
+        let end = self
+            .tops
+            .partition_point(|top| *top < offset + viewport)
+            .min(count);
+        first..end.max(first)
+    }
+}
+
+/// Visible slice of a uniform-height popover list, with a viewport of overdraw
+/// on each side to cover the title and filter chrome above the rows.
+fn uniform_visible_range(
+    count: usize,
+    row_height: f32,
+    offset: f32,
+    viewport: f32,
+) -> Range<usize> {
+    if count == 0 || row_height <= 0.0 {
+        return 0..0;
+    }
+    let total = count as f32 * row_height;
+    let offset = offset.max(0.0).min((total - viewport).max(0.0));
+    let first = (((offset - viewport).max(0.0)) / row_height).floor() as usize;
+    let end = ((offset + viewport) / row_height).ceil() as usize;
+    let first = first.min(count);
+    first..end.min(count).max(first)
+}
+
+/// Unscaled height of one popover row, matching what the shared row renderer
+/// lays out for that variant.
+///
+/// Exhaustive on purpose: this prefix sum places every row of a virtualized
+/// popover, so a new variant must state its height rather than silently drift
+/// the band. `collapsed_popover_row_heights_match_what_is_laid_out` measures
+/// the answers against the real layout.
+fn branch_sidebar_row_height_px(row: &BranchSidebarRow) -> f32 {
+    use crate::view::rows::sidebar::{BRANCH_TREE_ROW_HEIGHT_PX, BRANCH_TREE_SPACER_HEIGHT_PX};
+    match row {
+        BranchSidebarRow::SectionSpacer => BRANCH_TREE_SPACER_HEIGHT_PX,
+        BranchSidebarRow::PinnedHeader { .. }
+        | BranchSidebarRow::SectionHeader { .. }
+        | BranchSidebarRow::FilterGroupHeader { .. }
+        | BranchSidebarRow::Placeholder { .. }
+        | BranchSidebarRow::RemoteHeader { .. }
+        | BranchSidebarRow::GroupHeader { .. }
+        | BranchSidebarRow::Branch { .. }
+        | BranchSidebarRow::WorktreesHeader { .. }
+        | BranchSidebarRow::WorktreePlaceholder { .. }
+        | BranchSidebarRow::WorktreeItem { .. }
+        | BranchSidebarRow::SubmodulesHeader { .. }
+        | BranchSidebarRow::SubmodulePlaceholder { .. }
+        | BranchSidebarRow::SubmoduleItem { .. }
+        | BranchSidebarRow::StashHeader { .. }
+        | BranchSidebarRow::StashPlaceholder { .. }
+        | BranchSidebarRow::StashItem { .. } => BRANCH_TREE_ROW_HEIGHT_PX,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -341,7 +429,12 @@ struct SidebarNotifyFingerprint {
 }
 
 impl SidebarNotifyFingerprint {
+    #[cfg(test)]
     fn from_state(state: &AppState) -> Self {
+        Self::from_state_with_cache(state, &mut SidebarPresentationCache::default())
+    }
+
+    fn from_state_with_cache(state: &AppState, cache: &mut SidebarPresentationCache) -> Self {
         let active_repo_id = state.active_repo;
         let repo_fingerprint = active_repo_id
             .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
@@ -349,7 +442,7 @@ impl SidebarNotifyFingerprint {
         let (open_repo_workdirs_count, open_repo_workdirs_hash) =
             open_repo_workdirs_fingerprint(state);
         let (active_workspace_badges_count, active_workspace_badges_hash) =
-            active_workspace_badges_fingerprint(state);
+            cache.active_workspace_badges_fingerprint(state);
         let file_browser_rev = active_repo_id
             .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
             .map(|r| r.file_browser.file_browser_rev)
@@ -384,10 +477,17 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
-        let initial_fingerprint = SidebarNotifyFingerprint::from_state(&state);
+        let mut sidebar_presentation_cache = SidebarPresentationCache::default();
+        let initial_fingerprint = SidebarNotifyFingerprint::from_state_with_cache(
+            &state,
+            &mut sidebar_presentation_cache,
+        );
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
-            let next_fingerprint = SidebarNotifyFingerprint::from_state(&next);
+            let next_fingerprint = SidebarNotifyFingerprint::from_state_with_cache(
+                &next,
+                &mut this.sidebar_presentation_cache,
+            );
             let should_notify = next_fingerprint != this.notify_fingerprint;
             let repo_changed =
                 this.notify_fingerprint.active_repo_id != next_fingerprint.active_repo_id;
@@ -403,6 +503,9 @@ impl SidebarPaneView {
             // Guarded by repo change so it never fights per-keystroke edits.
             if repo_changed {
                 this.sync_search_input_with_state(cx);
+                this.collapsed_popover_scroll
+                    .set_offset(point(px(0.0), px(0.0)));
+                this.collapsed_popover_rows_cache = None;
             }
 
             if should_notify {
@@ -507,7 +610,7 @@ impl SidebarPaneView {
             collapsed_popover_filter_input,
             collapsed_popover_filter_query: String::new(),
             _collapsed_popover_filter_subscription: collapsed_popover_filter_subscription,
-            sidebar_presentation_cache: SidebarPresentationCache::default(),
+            sidebar_presentation_cache,
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             sidebar_collapsed_items_by_repo,
             sidebar_pinned_branches_by_repo,
@@ -520,11 +623,14 @@ impl SidebarPaneView {
             file_search_options: DiffSearchOptions::default(),
             file_browser_rows_cache: std::cell::RefCell::new(None),
             collapsed_popover_presentation: None,
+            collapsed_popover_rows_cache: None,
             collapsed_popover_section: None,
             pending_file_browser_reveal: None,
             pending_file_browser_reveal_at: None,
             #[cfg(test)]
             render_count: 0,
+            #[cfg(test)]
+            rendered_rows: 0,
         };
         this.dispatch_sidebar_data_request_if_needed(cx);
         // Reflect any already-active repo's stored search query on first mount.
@@ -550,6 +656,9 @@ impl SidebarPaneView {
             return;
         }
         self.collapsed_popover_section = section;
+        self.collapsed_popover_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        self.collapsed_popover_rows_cache = None;
         self.reset_collapsed_popover_filter(cx);
         cx.notify();
     }
@@ -1322,9 +1431,25 @@ impl SidebarPaneView {
             };
             components::empty_state(theme, "Files", message).into_any_element()
         } else {
-            let rows = Self::render_file_browser_rows(self, 0..visible_rows.len(), window, cx);
-            // Match the branch-section popovers: intrinsic eager rows, with the
-            // enclosing popover panel owning the min/max bounds and scrolling.
+            // Virtualized like the branch-section popovers: only the visible
+            // slice becomes elements, with spacers standing in for the rest.
+            let scale = crate::ui_scale::UiScale::current(cx);
+            let panel_height = self.collapsed_popover_scroll.bounds().size.height;
+            let viewport = if scale.design_units_from_pixels(panel_height) > 1.0 {
+                panel_height
+            } else {
+                window.viewport_size().height
+            };
+            let range = uniform_visible_range(
+                visible_rows.len(),
+                FILE_BROWSER_ROW_HEIGHT_PX,
+                scale.design_units_from_pixels(-self.collapsed_popover_scroll.offset().y),
+                scale.design_units_from_pixels(viewport).max(1.0),
+            );
+            let before = scale.px(range.start as f32 * FILE_BROWSER_ROW_HEIGHT_PX);
+            let after =
+                scale.px((visible_rows.len() - range.end) as f32 * FILE_BROWSER_ROW_HEIGHT_PX);
+            let rows = Self::render_file_browser_rows(self, range, window, cx);
             div()
                 .debug_selector(|| "collapsed_file_browser_rows".to_string())
                 .flex()
@@ -1333,7 +1458,9 @@ impl SidebarPaneView {
                 .pb(px(6.0))
                 .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
                 .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+                .child(div().flex_shrink_0().h(before))
                 .children(rows)
+                .child(div().flex_shrink_0().h(after))
                 .into_any_element()
         };
 
@@ -1368,10 +1495,29 @@ impl SidebarPaneView {
             return components::empty_state(theme, section.title(), message).into_any_element();
         }
 
-        // Render the scoped rows eagerly (a single section is bounded) so the
-        // shared row renderer can reuse the transient presentation override.
+        let scale = crate::ui_scale::UiScale::current(cx);
+        let cache = self
+            .collapsed_popover_rows_cache
+            .as_ref()
+            .expect("popover rows cached");
+        // The panel's own height once it has been laid out; the window is a safe
+        // over-estimate for the first frame, before any bounds exist.
+        let panel_height = self.collapsed_popover_scroll.bounds().size.height;
+        let viewport = if scale.design_units_from_pixels(panel_height) > 1.0 {
+            panel_height
+        } else {
+            window.viewport_size().height
+        };
+        let range = cache.visible_range(
+            scale.design_units_from_pixels(-self.collapsed_popover_scroll.offset().y),
+            scale.design_units_from_pixels(viewport).max(1.0),
+        );
+        let before = scale.px(cache.tops[range.start]);
+        let after = scale.px(cache.tops[row_count] - cache.tops[range.end]);
+        // Only the visible slice gets elements. Keep the override local to the
+        // shared renderer so expanded and popup presentations never mix.
         self.collapsed_popover_presentation = Some(presentation);
-        let rows = Self::render_branch_sidebar_rows(self, 0..row_count, window, cx);
+        let rows = Self::render_branch_sidebar_rows(self, range, window, cx);
         self.collapsed_popover_presentation = None;
 
         // Intrinsic height: the enclosing popover panel sizes to content and owns
@@ -1379,13 +1525,16 @@ impl SidebarPaneView {
         div()
             .flex()
             .flex_col()
+            .flex_shrink_0()
             .pt(px(2.0))
             // A little breathing room below the last row (content-sized popovers
             // otherwise sit the last item flush against the bottom border).
             .pb(px(6.0))
             .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
             .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+            .child(div().flex_shrink_0().h(before))
             .children(rows)
+            .child(div().flex_shrink_0().h(after))
             .into_any_element()
     }
 
@@ -1396,11 +1545,44 @@ impl SidebarPaneView {
         // Workspace badges are collapse-independent; reuse the cached ones.
         let base = self.branch_sidebar_presentation_cached()?;
         let repo = self.active_repo()?;
-        let mut collapsed = self
+        let empty = BTreeSet::new();
+        // Probed against what is *stored*, not a mutated copy: every edit below
+        // is a pure function of `section` and `query`, which the key already
+        // carries. So a hit clones neither set, on every frame it is open.
+        let stored_collapsed = self
             .sidebar_collapsed_items_by_repo
             .get(&repo.spec.workdir)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&empty);
+        let pinned = self
+            .sidebar_pinned_branches_by_repo
+            .get(&repo.spec.workdir)
+            .unwrap_or(&empty);
+        let query = if self.collapsed_popover_filter_open {
+            self.collapsed_popover_filter_query.trim()
+        } else {
+            ""
+        };
+        let fingerprint = BranchSidebarFingerprint::from_repo(repo);
+        if let Some(cached) = self.collapsed_popover_rows_cache.as_ref().filter(|cached| {
+            cached.repo_id == repo.id
+                && cached.fingerprint == fingerprint
+                && cached.section == section
+                && cached.query == query
+                && &cached.collapsed == stored_collapsed
+                && &cached.pinned == pinned
+        }) {
+            return Some(SidebarPresentation {
+                rows: Rc::clone(&cached.rows),
+                workspace_badges: base.workspace_badges,
+            });
+        }
+        // While filtering, ignore every persisted collapse state: a match hidden
+        // inside a collapsed `feat/` group would make the filter look broken.
+        let mut collapsed = if query.is_empty() {
+            stored_collapsed.clone()
+        } else {
+            BTreeSet::new()
+        };
         // Force-expand the target section so its content is present regardless of
         // the persisted collapse state (which we never mutate here).
         if let Some(key) = section.storage_key()
@@ -1421,31 +1603,32 @@ impl SidebarPaneView {
                 branch_sidebar::toggle_collapse_state(&mut collapsed, pinned_key);
             }
         }
-        let pinned = self
-            .sidebar_pinned_branches_by_repo
-            .get(&repo.spec.workdir)
-            .cloned()
-            .unwrap_or_default();
-        let query = if self.collapsed_popover_filter_open {
-            self.collapsed_popover_filter_query.trim()
-        } else {
-            ""
-        };
-        // While filtering, ignore every persisted collapse state: a match hidden
-        // inside a collapsed `feat/` group would make the filter look broken.
-        let collapsed = if query.is_empty() {
-            collapsed
-        } else {
-            BTreeSet::new()
-        };
-        let full = branch_sidebar::branch_sidebar_rows(repo, &collapsed, &pinned, query);
+        let full = branch_sidebar::branch_sidebar_rows(repo, &collapsed, pinned, query);
         let scoped = if query.is_empty() {
             section_content_rows(&full, section)
         } else {
             filter_result_rows(&full, section)
         };
+        let rows: Rc<[BranchSidebarRow]> = scoped.into();
+        let mut tops = Vec::with_capacity(rows.len() + 1);
+        let mut top = 0.0;
+        for row in rows.iter() {
+            tops.push(top);
+            top += branch_sidebar_row_height_px(row);
+        }
+        tops.push(top);
+        self.collapsed_popover_rows_cache = Some(CollapsedPopoverRowsCache {
+            repo_id: repo.id,
+            fingerprint,
+            section,
+            collapsed: stored_collapsed.clone(),
+            pinned: pinned.clone(),
+            query: query.to_owned(),
+            rows: Rc::clone(&rows),
+            tops,
+        });
         Some(SidebarPresentation {
-            rows: scoped.into(),
+            rows,
             workspace_badges: base.workspace_badges,
         })
     }
@@ -2466,6 +2649,10 @@ impl SidebarPaneView {
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
 
+        #[cfg(test)]
+        {
+            this.rendered_rows += range.len();
+        }
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
         };
@@ -2887,6 +3074,7 @@ impl Render for SidebarPaneView {
         #[cfg(test)]
         {
             self.render_count += 1;
+            self.rendered_rows = 0;
         }
         match self.collapsed_popover_section {
             Some(section) => self.render_collapsed_popover(section, window, cx),
@@ -3046,34 +3234,6 @@ fn open_repo_workdirs_fingerprint(state: &AppState) -> (usize, u64) {
     }
 
     (state.repos.len(), hasher.finish())
-}
-
-fn active_workspace_badges_fingerprint(state: &AppState) -> (usize, u64) {
-    let Some(active_repo_id) = state.active_repo else {
-        return (0, 0);
-    };
-    let Some(active_repo) = state.repos.iter().find(|repo| repo.id == active_repo_id) else {
-        return (0, 0);
-    };
-
-    let mut badges =
-        crate::view::rows::active_workspace_paths_by_branch(active_repo, state.repos.as_slice())
-            .into_iter()
-            .collect::<Vec<_>>();
-    badges.sort_unstable_by(|(left_branch, left_path), (right_branch, right_path)| {
-        left_branch
-            .cmp(right_branch)
-            .then_with(|| left_path.as_os_str().cmp(right_path.as_os_str()))
-    });
-
-    let mut hasher = FxHasher::default();
-    badges.len().hash(&mut hasher);
-    for (branch, path) in &badges {
-        branch.hash(&mut hasher);
-        path.hash(&mut hasher);
-    }
-
-    (badges.len(), hasher.finish())
 }
 
 /// One matcher per non-empty query line: lines are OR-alternatives, so a
@@ -3809,3 +3969,6 @@ mod tests {
         assert_eq!(branch_names(&rows), vec!["origin/release".to_string()]);
     }
 }
+
+#[cfg(test)]
+mod long_list_tests;

@@ -7,6 +7,10 @@ use palette::IntoColor;
 use std::num::NonZeroU32;
 
 pub(in crate::view) const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
+/// Row heights the collapsed-rail popover also needs, to size the scroll
+/// spacers it places around its virtualized window.
+pub(in crate::view) const BRANCH_TREE_ROW_HEIGHT_PX: f32 = 24.0;
+pub(in crate::view) const BRANCH_TREE_SPACER_HEIGHT_PX: f32 = 8.0;
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
 pub(in crate::view) fn listed_workspace_paths_by_branch(
@@ -293,12 +297,17 @@ pub(in crate::view) fn active_workspace_paths_by_branch(
         return FxHashMap::default();
     };
 
+    // Preserve the first open repository for a path, as the former linear
+    // lookup did, while avoiding a worktrees × open-repositories scan.
+    let mut open_by_path = FxHashMap::default();
+    for open_repo in open_repos {
+        open_by_path
+            .entry(&open_repo.spec.workdir)
+            .or_insert(open_repo);
+    }
     let mut active_workspaces = FxHashMap::default();
     for worktree in worktrees.iter() {
-        let Some(open_repo) = open_repos
-            .iter()
-            .find(|open_repo| open_repo.spec.workdir == worktree.path)
-        else {
+        let Some(open_repo) = open_by_path.get(&worktree.path) else {
             continue;
         };
 
@@ -407,7 +416,10 @@ impl SidebarPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        const BRANCH_TREE_ROW_HEIGHT_PX: f32 = 24.0;
+        #[cfg(test)]
+        {
+            this.rendered_rows += range.len();
+        }
         const BRANCH_TREE_BASE_PAD_PX: f32 = 8.0;
         const BRANCH_TREE_DEPTH_STEP_PX: f32 = 14.0;
         const BRANCH_TREE_TOGGLE_SLOT_PX: f32 = 14.0;
@@ -713,7 +725,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::SectionSpacer => div()
                     .id(("branch_section_spacer", ix))
-                    .h(scaled_px(8.0))
+                    .h(scaled_px(BRANCH_TREE_SPACER_HEIGHT_PX))
                     .w_full()
                     .into_any_element(),
                 BranchSidebarRow::StashHeader {
@@ -824,6 +836,7 @@ impl SidebarPaneView {
 
                     div()
                         .id(("stash_sidebar_row", index))
+                        .debug_selector(move || format!("stash_sidebar_row_{index}"))
                         .relative()
                         .group(row_group.clone())
                         .flex()
@@ -1280,72 +1293,55 @@ impl SidebarPaneView {
                         )
                     })
                     .into_any_element(),
-                BranchSidebarRow::SubmoduleItem { path } => {
+                BranchSidebarRow::SubmoduleItem {
+                    path,
+                    status,
+                    recorded_head,
+                    checked_out_head,
+                } => {
                     let path_for_open = path.clone();
                     let path_for_menu = path.clone();
                     let repo_workdir_for_open = repo_workdir.clone();
                     let path_label = this.cached_path_display(&path);
-                    let submodule_info =
-                        this.active_repo().and_then(|repo| match &repo.submodules {
-                            Loadable::Ready(submodules) => submodules
-                                .iter()
-                                .find(|submodule| submodule.path == path)
-                                .map(|submodule| {
-                                    (
-                                        submodule.status,
-                                        submodule.recorded_head.clone(),
-                                        submodule.checked_out_head.clone(),
-                                    )
-                                }),
-                            _ => None,
-                        });
-                    let (icon_color, badge_label, can_open, tooltip) =
-                        if let Some((status, recorded_head, checked_out_head)) = submodule_info {
-                            let badge_label = match status {
-                                SubmoduleStatus::NotInitialized => Some("Not loaded"),
-                                SubmoduleStatus::HeadMismatch => Some("Head mismatch"),
-                                SubmoduleStatus::MergeConflict => Some("Conflict"),
-                                SubmoduleStatus::MissingMapping => Some("Missing mapping"),
-                                SubmoduleStatus::Unknown(_) => Some("Unknown"),
-                                SubmoduleStatus::UpToDate => None,
-                            };
-                            let icon_color = match status {
-                                SubmoduleStatus::NotInitialized => with_alpha(
-                                    theme.colors.foreground.secondary,
-                                    if theme.is_dark { 0.78 } else { 0.92 },
-                                ),
-                                SubmoduleStatus::HeadMismatch => {
-                                    theme.colors.status.warning.foreground
-                                }
-                                SubmoduleStatus::MergeConflict
-                                | SubmoduleStatus::MissingMapping => {
-                                    theme.colors.status.danger.foreground
-                                }
-                                SubmoduleStatus::UpToDate | SubmoduleStatus::Unknown(_) => {
-                                    icon_primary
-                                }
-                            };
-                            let can_open = !matches!(
-                                status,
-                                SubmoduleStatus::NotInitialized
-                                    | SubmoduleStatus::MergeConflict
-                                    | SubmoduleStatus::MissingMapping
-                            );
-                            let checked_out = checked_out_head
-                                .as_ref()
-                                .map(|head| head.as_ref())
-                                .unwrap_or("not loaded");
-                            let tooltip: SharedString = format!(
-                                "{}\nRecorded: {}\nChecked out: {}",
-                                path.display(),
-                                recorded_head.as_ref(),
-                                checked_out,
-                            )
-                            .into();
-                            (icon_color, badge_label, can_open, tooltip)
-                        } else {
-                            (icon_primary, None, true, path_label.clone())
+                    let (icon_color, badge_label, can_open, tooltip) = {
+                        let badge_label = match status {
+                            SubmoduleStatus::NotInitialized => Some("Not loaded"),
+                            SubmoduleStatus::HeadMismatch => Some("Head mismatch"),
+                            SubmoduleStatus::MergeConflict => Some("Conflict"),
+                            SubmoduleStatus::MissingMapping => Some("Missing mapping"),
+                            SubmoduleStatus::Unknown(_) => Some("Unknown"),
+                            SubmoduleStatus::UpToDate => None,
                         };
+                        let icon_color = match status {
+                            SubmoduleStatus::NotInitialized => with_alpha(
+                                theme.colors.foreground.secondary,
+                                if theme.is_dark { 0.78 } else { 0.92 },
+                            ),
+                            SubmoduleStatus::HeadMismatch => theme.colors.status.warning.foreground,
+                            SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping => {
+                                theme.colors.status.danger.foreground
+                            }
+                            SubmoduleStatus::UpToDate | SubmoduleStatus::Unknown(_) => icon_primary,
+                        };
+                        let can_open = !matches!(
+                            status,
+                            SubmoduleStatus::NotInitialized
+                                | SubmoduleStatus::MergeConflict
+                                | SubmoduleStatus::MissingMapping
+                        );
+                        let checked_out = checked_out_head
+                            .as_ref()
+                            .map(|head| head.as_ref())
+                            .unwrap_or("not loaded");
+                        let tooltip: SharedString = format!(
+                            "{}\nRecorded: {}\nChecked out: {}",
+                            path.display(),
+                            recorded_head.as_ref(),
+                            checked_out,
+                        )
+                        .into();
+                        (icon_color, badge_label, can_open, tooltip)
+                    };
                     let context_menu_invoker: SharedString =
                         format!("submodule_menu_{}_{}", repo_id.0, path.display()).into();
                     let context_menu_active =
@@ -2559,7 +2555,7 @@ impl DetailsPaneView {
                             origin: origin_for_click.clone(),
                             submodule_repo_path: worktree_path_for_click.clone(),
                             parent_submodule_path: worktree_path_for_click.clone(),
-                            entries: inputs_for_click.entries.clone(),
+                            entries: Arc::clone(&inputs_for_click.entries),
                             selected_ix: ix_for_click,
                         });
                         cx.notify();

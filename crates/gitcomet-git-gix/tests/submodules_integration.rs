@@ -267,6 +267,14 @@ fn list_submodules_reports_missing_gitmodules_mapping() {
     assert_eq!(submodules[0].path, PathBuf::from("submod"));
     assert_eq!(submodules[0].status, SubmoduleStatus::MissingMapping);
     assert_eq!(submodules[0].recorded_head.as_ref(), submodule_head);
+    let summary = opened
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: PathBuf::from("submod"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap();
+    assert_eq!(summary.status, Some(SubmoduleStatus::MissingMapping));
+    assert!(summary.checkout_available);
 }
 
 #[test]
@@ -328,6 +336,15 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     assert_eq!(not_initialized[0].status, SubmoduleStatus::NotInitialized);
     assert_eq!(not_initialized[0].recorded_head.as_ref(), original_head);
     assert_eq!(not_initialized[0].checked_out_head, None);
+    let summary = opened
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: PathBuf::from("sm"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap();
+    assert_eq!(summary.status, Some(SubmoduleStatus::NotInitialized));
+    assert!(!summary.checkout_available);
+    assert!(summary.live_staged.is_empty() && summary.live_unstaged.is_empty());
 
     run_git(
         &parent_repo,
@@ -494,6 +511,72 @@ fn list_submodules_recurses_into_nested_submodules() {
             .iter()
             .all(|submodule| submodule.status == SubmoduleStatus::UpToDate)
     );
+
+    let nested = opened
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: PathBuf::from("mods/child/nested/grand"),
+            area: DiffArea::Unstaged,
+        })
+        .expect("summarize the nested gitlink against its owning repository");
+    assert_eq!(nested.path, PathBuf::from("mods/child/nested/grand"));
+    assert!(nested.checkout_available);
+    assert_eq!(
+        nested.ranges[0].from.as_ref(),
+        Some(&listed[1].recorded_head)
+    );
+    assert_eq!(nested.ranges[0].to, nested.ranges[0].from);
+}
+
+#[test]
+fn submodule_summary_ignores_broken_sibling_indexes_and_honors_cancellation() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let parent = dir.path().join("parent");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&parent).unwrap();
+    init_repo_with_seed(&source, "file.txt", "hello\n", "seed");
+    init_repo_with_seed(&parent, "root.txt", "root\n", "root");
+    add_submodule_raw(&parent, &source, Path::new("wanted"), None);
+    add_submodule_raw(&parent, &source, Path::new("unrelated"), None);
+    run_git(
+        &parent,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "submodules"],
+    );
+    let unrelated = parent.join("unrelated");
+    let index = git_stdout(&unrelated, &["rev-parse", "--git-path", "index"]);
+    fs::write(unrelated.join(index.trim()), b"broken sibling index").unwrap();
+    fs::write(parent.join("wanted/file.txt"), "changed\n").unwrap();
+
+    let repo = GixBackend.open(&parent).unwrap();
+    let listed = repo
+        .list_submodules()
+        .expect("one submodule with an unreadable index must not fail the whole enumeration");
+    let paths: Vec<_> = listed.iter().map(|s| s.path.clone()).collect();
+    assert!(paths.contains(&PathBuf::from("wanted")), "{paths:?}");
+    assert!(paths.contains(&PathBuf::from("unrelated")), "{paths:?}");
+    let target = DiffTarget::WorkingTree {
+        path: PathBuf::from("wanted"),
+        area: DiffArea::Unstaged,
+    };
+    let token = gitcomet_core::services::CancellationToken::new();
+    let summary = repo
+        .submodule_diff_summary_cancellable(&target, &token)
+        .unwrap();
+    assert!(summary.checkout_available);
+    assert_eq!(summary.live_unstaged.len(), 1);
+    assert_eq!(summary.live_unstaged[0].path, PathBuf::from("file.txt"));
+    assert_eq!(summary.live_unstaged[0].additions, Some(1));
+    token.cancel();
+    let error = repo
+        .submodule_diff_summary_cancellable(&target, &token)
+        .unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        gitcomet_core::error::ErrorKind::Cancelled
+    ));
 }
 
 #[test]
@@ -646,6 +729,56 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
         listed[0].recorded_head.as_ref(),
         "0000000000000000000000000000000000000000"
     );
+    let summary = opened
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: PathBuf::from("sm"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap();
+    assert_eq!(summary.status, Some(SubmoduleStatus::MergeConflict));
+    assert_eq!(
+        summary.ranges[0].to.as_ref(),
+        Some(&listed[0].recorded_head)
+    );
+    assert!(summary.ranges[0].unavailable_reason.is_some());
+    // A conflicted gitlink still has a usable checkout on disk, so the pointer
+    // ranges are unavailable while the working tree itself stays readable.
+    assert!(summary.checkout_available);
+    assert!(summary.checked_out_head.is_none());
+}
+
+#[test]
+fn submodule_summary_keeps_head_pointer_after_gitlink_is_removed_from_index() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let parent = dir.path().join("parent");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&parent).unwrap();
+    init_repo_with_seed(&source, "file.txt", "hello\n", "seed");
+    init_repo_with_seed(&parent, "root.txt", "root\n", "root");
+    add_submodule_raw(&parent, &source, Path::new("sm"), None);
+    run_git(
+        &parent,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "submodule"],
+    );
+    let head = git_stdout(&source, &["rev-parse", "HEAD"]);
+    run_git(&parent, &["rm", "--cached", "sm"]);
+    let repo = GixBackend.open(&parent).unwrap();
+    let summary = repo
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: PathBuf::from("sm"),
+            area: DiffArea::Staged,
+        })
+        .unwrap();
+    assert!(summary.checkout_available);
+    assert_eq!(
+        summary.ranges[0].from.as_ref().map(AsRef::as_ref),
+        Some(head.as_str())
+    );
+    assert_eq!(summary.ranges[0].to, None);
 }
 
 #[test]
@@ -1430,5 +1563,115 @@ fn submodule_update_refuses_remote_helper_urls_from_gitmodules() {
     ] {
         let err = result.expect_err(label);
         assert!(err.to_string().contains("remote-helper"), "{label}: {err}");
+    }
+}
+
+#[test]
+fn list_submodules_keeps_a_broken_submodules_own_row_and_prunes_only_its_children() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let grand = dir.path().join("grand");
+    let child = dir.path().join("child");
+    let parent = dir.path().join("parent");
+    fs::create_dir_all(&grand).unwrap();
+    fs::create_dir_all(&child).unwrap();
+    fs::create_dir_all(&parent).unwrap();
+    init_repo_with_seed(&grand, "grand.txt", "grand\n", "seed grand");
+    init_repo_with_seed(&child, "child.txt", "child\n", "seed child");
+    init_repo_with_seed(&parent, "parent.txt", "parent\n", "seed parent");
+
+    add_submodule_raw(&child, &grand, Path::new("nested/grand"), None);
+    run_git(
+        &child,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "add grand"],
+    );
+    add_submodule_raw(&parent, &child, Path::new("mods/child"), None);
+    run_git(
+        &parent,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "add child"],
+    );
+    run_git(
+        &parent,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+        ],
+    );
+
+    let repo = GixBackend.open(&parent).unwrap();
+    let healthy = repo.list_submodules().expect("list nested submodules");
+    assert_eq!(
+        healthy.iter().map(|s| s.path.clone()).collect::<Vec<_>>(),
+        vec![
+            PathBuf::from("mods/child"),
+            PathBuf::from("mods/child/nested/grand"),
+        ]
+    );
+
+    let checked_out_child = parent.join("mods/child");
+    let index = git_stdout(&checked_out_child, &["rev-parse", "--git-path", "index"]);
+    fs::write(
+        checked_out_child.join(index.trim()),
+        b"broken sibling index",
+    )
+    .unwrap();
+
+    let repo = GixBackend.open(&parent).unwrap();
+    let listed = repo
+        .list_submodules()
+        .expect("a broken nested index must not fail the whole enumeration");
+    assert_eq!(
+        listed.iter().map(|s| s.path.clone()).collect::<Vec<_>>(),
+        vec![PathBuf::from("mods/child")],
+        "the broken submodule keeps its own row; only its children are pruned"
+    );
+}
+
+#[test]
+fn checked_out_submodules_always_report_checkout_available() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source");
+    let parent = dir.path().join("parent");
+    fs::create_dir_all(&source).unwrap();
+    fs::create_dir_all(&parent).unwrap();
+    init_repo_with_seed(&source, "file.txt", "hello\n", "seed");
+    init_repo_with_seed(&parent, "root.txt", "root\n", "root");
+    add_submodule_raw(&parent, &source, Path::new("plain"), None);
+    add_submodule_raw(&parent, &source, Path::new("moved"), Some("renamed"));
+    run_git(
+        &parent,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "submodules"],
+    );
+    fs::write(parent.join("moved/file.txt"), "changed\n").unwrap();
+
+    let repo = GixBackend.open(&parent).unwrap();
+    let listed = repo.list_submodules().expect("list submodules");
+    assert_eq!(listed.len(), 2);
+    for submodule in &listed {
+        let summary = repo
+            .submodule_diff_summary(&DiffTarget::WorkingTree {
+                path: submodule.path.clone(),
+                area: DiffArea::Unstaged,
+            })
+            .expect("summarize a configured submodule");
+        assert_eq!(summary.status, Some(submodule.status));
+        assert!(
+            !matches!(
+                submodule.status,
+                SubmoduleStatus::UpToDate | SubmoduleStatus::HeadMismatch
+            ) || summary.checkout_available,
+            "{:?} reports {:?} but checkout_available is false",
+            submodule.path,
+            submodule.status
+        );
     }
 }
