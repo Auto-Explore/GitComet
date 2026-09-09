@@ -2136,7 +2136,8 @@ impl DetailsPaneView {
                         depth,
                         collapsed,
                         chain,
-                        subtree,
+                        subtree: _,
+                        counts,
                         additions,
                         deletions,
                     } => {
@@ -2149,10 +2150,19 @@ impl DetailsPaneView {
                                     label: &label,
                                     depth,
                                     collapsed,
-                                    file_count: subtree.len(),
+                                    counts,
                                     additions,
                                     deletions,
                                     row_height_px: 24.0,
+                                    row_group: None,
+                                    detail: crate::view::rows::directory_row_detail_for_width(
+                                        // No width probe on this list.
+                                        gpui::Pixels::MAX,
+                                        depth,
+                                        counts,
+                                        additions.is_some() || deletions.is_some(),
+                                        ui_scale_percent,
+                                    ),
                                 },
                             )
                             .debug_selector(move || format!("commit_file_dir_{}_{}", repo_id.0, ix))
@@ -2421,7 +2431,8 @@ impl DetailsPaneView {
                         depth,
                         collapsed,
                         chain,
-                        subtree,
+                        subtree: _,
+                        counts,
                         additions,
                         deletions,
                     } => {
@@ -2434,10 +2445,19 @@ impl DetailsPaneView {
                                     label: &label,
                                     depth,
                                     collapsed,
-                                    file_count: subtree.len(),
+                                    counts,
                                     additions,
                                     deletions,
                                     row_height_px: 24.0,
+                                    row_group: None,
+                                    detail: crate::view::rows::directory_row_detail_for_width(
+                                        // No width probe on this list.
+                                        gpui::Pixels::MAX,
+                                        depth,
+                                        counts,
+                                        additions.is_some() || deletions.is_some(),
+                                        ui_scale_percent,
+                                    ),
                                 },
                             )
                             .debug_selector(move || {
@@ -2615,7 +2635,8 @@ impl DetailsPaneView {
                         depth,
                         collapsed,
                         chain,
-                        subtree,
+                        subtree: _,
+                        counts,
                         additions,
                         deletions,
                     } => {
@@ -2628,10 +2649,19 @@ impl DetailsPaneView {
                                     label: &label,
                                     depth,
                                     collapsed,
-                                    file_count: subtree.len(),
+                                    counts,
                                     additions,
                                     deletions,
                                     row_height_px: 24.0,
+                                    row_group: None,
+                                    detail: crate::view::rows::directory_row_detail_for_width(
+                                        // No width probe on this list.
+                                        gpui::Pixels::MAX,
+                                        depth,
+                                        counts,
+                                        additions.is_some() || deletions.is_some(),
+                                        ui_scale_percent,
+                                    ),
                                 },
                             )
                             .debug_selector(move || format!("range_file_dir_{}_{}", repo_id.0, ix))

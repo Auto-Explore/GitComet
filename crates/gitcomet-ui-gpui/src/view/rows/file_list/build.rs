@@ -1,17 +1,22 @@
 use super::*;
-use crate::view::rows::CommitFileSort;
+use crate::view::rows::{CommitFileKindCounts, CommitFileSort};
+use gitcomet_core::domain::FileStatusKind;
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::view) struct FileTreeItem<'a> {
     pub(in crate::view) path: &'a Path,
+    pub(in crate::view) kind: Option<FileStatusKind>,
     pub(in crate::view) additions: Option<u32>,
     pub(in crate::view) deletions: Option<u32>,
 }
 
 impl<'a> FileTreeItem<'a> {
+    /// A path alone, for tests that only exercise the grouping.
+    #[cfg(test)]
     pub(in crate::view) fn new(path: &'a Path) -> Self {
         Self {
             path,
+            kind: None,
             additions: None,
             deletions: None,
         }
@@ -57,6 +62,7 @@ impl DirNode {
 pub(in crate::view) struct FileTree {
     nodes: Vec<DirNode>,
     stats: Vec<Option<(u32, u32)>>,
+    kinds: Vec<Option<FileStatusKind>>,
     sort: CommitFileSort,
 }
 
@@ -69,11 +75,13 @@ impl FileTree {
         let mut tree = Self {
             nodes: vec![root],
             stats: Vec::new(),
+            kinds: Vec::new(),
             sort,
         };
 
         for item in items {
             let ordinal = tree.stats.len() as u32;
+            tree.kinds.push(item.kind);
             tree.stats.push(match (item.additions, item.deletions) {
                 (None, None) => None,
                 (additions, deletions) => Some((additions.unwrap_or(0), deletions.unwrap_or(0))),
@@ -83,9 +91,10 @@ impl FileTree {
             let mut components = item.path.components().peekable();
             let mut prefix = PathBuf::new();
             while let Some(component) = components.next() {
-                let Some(segment) = component.as_os_str().to_str() else {
-                    continue;
-                };
+                // Lossy, not skipped: dropping a component would register
+                // every deeper node under a path missing a segment.
+                let segment = component.as_os_str().to_string_lossy();
+                let segment = segment.as_ref();
                 prefix.push(segment);
                 if components.peek().is_none() {
                     break;
@@ -129,6 +138,9 @@ impl FileTree {
         }
     }
 
+    /// Returns its subtree totals so a parent folds them in as the recursion
+    /// unwinds. Rescanning `ordered[start..end]` per directory would be
+    /// O(N x depth), and this runs on every chevron click.
     fn emit(
         &self,
         node_ix: usize,
@@ -136,7 +148,8 @@ impl FileTree {
         hidden: bool,
         collapsed: &CollapsedDirs,
         out: &mut Flatten,
-    ) {
+    ) -> SubtreeTotals {
+        let mut totals = SubtreeTotals::default();
         for entry in self.emit_order(node_ix) {
             match entry {
                 TreeEntry::File(ordinal) => {
@@ -148,6 +161,7 @@ impl FileTree {
                         });
                     }
                     out.ordered.push(ordinal as usize);
+                    totals.add_file(self.kinds[ordinal as usize], self.stats[ordinal as usize]);
                 }
                 TreeEntry::Dir(child) => {
                     let (deepest, chain, label) = self.fold(child as usize);
@@ -164,6 +178,7 @@ impl FileTree {
                             collapsed: is_collapsed,
                             chain: Arc::clone(&chain),
                             subtree: 0..0,
+                            counts: CommitFileKindCounts::default(),
                             additions: None,
                             deletions: None,
                         });
@@ -171,8 +186,10 @@ impl FileTree {
                     });
 
                     let start = out.ordered.len();
-                    self.emit(deepest, depth + 1, hidden || is_collapsed, collapsed, out);
+                    let child =
+                        self.emit(deepest, depth + 1, hidden || is_collapsed, collapsed, out);
                     let end = out.ordered.len();
+                    totals.merge(&child);
                     // Recorded even inside a hidden subtree: revealing a file
                     // has to expand every collapsed folder above it at once,
                     // and the nested ones never got a row.
@@ -183,21 +200,15 @@ impl FileTree {
                     if let Some(row_ix) = row_ix
                         && let FileListRow::Directory {
                             subtree,
+                            counts,
                             additions,
                             deletions,
                             ..
                         } = &mut out.rows[row_ix]
                     {
                         *subtree = start..end;
-                        let mut sums: Option<(u64, u64)> = None;
-                        for ordinal in &out.ordered[start..end] {
-                            if let Some((a, d)) = self.stats[*ordinal] {
-                                let entry = sums.get_or_insert((0, 0));
-                                entry.0 += u64::from(a);
-                                entry.1 += u64::from(d);
-                            }
-                        }
-                        if let Some((a, d)) = sums {
+                        *counts = child.counts;
+                        if let Some((a, d)) = child.sums {
                             *additions = Some(a);
                             *deletions = Some(d);
                         }
@@ -205,6 +216,7 @@ impl FileTree {
                 }
             }
         }
+        totals
     }
 
     /// Directories before files under a path sort, mirrored for Z-A. Edit-size
@@ -241,6 +253,48 @@ impl FileTree {
             label.push_str(self.nodes[node_ix].segment.as_ref());
         }
         (node_ix, chain, label)
+    }
+}
+
+/// What one subtree contributes to its parent: kind counts and `+/-` sums.
+#[derive(Clone, Copy, Default)]
+struct SubtreeTotals {
+    counts: CommitFileKindCounts,
+    sums: Option<(u64, u64)>,
+}
+
+impl SubtreeTotals {
+    fn add_file(&mut self, kind: Option<FileStatusKind>, stats: Option<(u32, u32)>) {
+        self.counts.all += 1;
+        // Buckets match `build_commit_file_projection`, so a badge and the
+        // filter tabs above it cannot disagree.
+        match kind {
+            Some(FileStatusKind::Untracked | FileStatusKind::Added) => self.counts.added += 1,
+            Some(FileStatusKind::Modified | FileStatusKind::Conflicted) => {
+                self.counts.modified += 1
+            }
+            Some(FileStatusKind::Deleted) => self.counts.removed += 1,
+            Some(FileStatusKind::Renamed) => self.counts.renamed += 1,
+            None => {}
+        }
+        if let Some((a, d)) = stats {
+            let entry = self.sums.get_or_insert((0, 0));
+            entry.0 += u64::from(a);
+            entry.1 += u64::from(d);
+        }
+    }
+
+    fn merge(&mut self, child: &Self) {
+        self.counts.all += child.counts.all;
+        self.counts.modified += child.counts.modified;
+        self.counts.added += child.counts.added;
+        self.counts.removed += child.counts.removed;
+        self.counts.renamed += child.counts.renamed;
+        if let Some((a, d)) = child.sums {
+            let entry = self.sums.get_or_insert((0, 0));
+            entry.0 += a;
+            entry.1 += d;
+        }
     }
 }
 

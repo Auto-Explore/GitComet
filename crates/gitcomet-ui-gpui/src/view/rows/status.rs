@@ -325,7 +325,7 @@ impl DetailsPaneView {
         let order_rev = self
             .active_repo()
             .filter(|repo| repo.id == repo_id)
-            .map(|repo| status_section_rev(repo, section));
+            .map(|repo| self.status_anchor_order_rev(repo, section));
         let sel = self.status_multi_selection_for_repo_mut(repo_id);
         apply_status_multi_selection_click(
             sel,
@@ -390,6 +390,12 @@ fn render_status_rows_for_section(
     };
     let plan = this.status_file_plan(repo, section);
     let is_tree = plan.is_tree();
+    let line_stats = status_section_line_stats(repo, section);
+    // Measured from the section's prepaint probe; unmeasured reads as roomy.
+    let detail_width = this
+        .current_status_sections_bounds()
+        .map(|bounds| bounds.size.width)
+        .unwrap_or(gpui::Pixels::MAX);
     let repo_id = repo.id;
     let selected = repo.diff_state.diff_target.as_ref();
     // Hashed once per batch: a scan per visible row made multi-select cost
@@ -427,9 +433,31 @@ fn render_status_rows_for_section(
                     depth,
                     collapsed,
                     chain,
-                    subtree,
-                    ..
+                    subtree: _,
+                    counts,
+                    additions: subtree_additions,
+                    deletions: subtree_deletions,
                 } => {
+                    let group: SharedString =
+                        format!("status_dir_{}_{}_{}", repo_id.0, section.id_label(), ix).into();
+                    let detail: crate::view::rows::DirectoryRowDetail =
+                        crate::view::rows::directory_row_detail_for_width(
+                            detail_width,
+                            depth,
+                            counts,
+                            subtree_additions.is_some() || subtree_deletions.is_some(),
+                            this.ui_scale_percent,
+                        );
+                    let action = status_folder_action(
+                        theme,
+                        ui_scale,
+                        ix,
+                        section,
+                        repo_id,
+                        Arc::clone(&key),
+                        group.clone(),
+                        cx,
+                    );
                     return Some(
                         crate::view::rows::directory_row(crate::view::rows::DirectoryRowProps {
                             theme,
@@ -438,14 +466,17 @@ fn render_status_rows_for_section(
                             label: &label,
                             depth,
                             collapsed,
-                            file_count: subtree.len(),
-                            additions: None,
-                            deletions: None,
+                            counts,
+                            additions: subtree_additions,
+                            deletions: subtree_deletions,
                             row_height_px: STATUS_ROW_HEIGHT_PX,
+                            row_group: Some(group),
+                            detail,
                         })
                         .debug_selector(move || {
                             format!("status_dir_{}_{}_{}", repo_id.0, section.id_label(), ix)
                         })
+                        .child(action)
                         .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
                             if !e.standard_click() {
                                 return;
@@ -495,7 +526,7 @@ fn render_status_rows_for_section(
                     theme,
                     ui_scale,
                     row_ix: ix,
-                    ordinal: ordinal.0,
+                    display_position: plan.display_position(ordinal).unwrap_or(ordinal.0),
                     depth,
                     is_tree,
                     section,
@@ -503,6 +534,7 @@ fn render_status_rows_for_section(
                     is_selected,
                     is_submodule,
                     submodule_status,
+                    line_stats: line_stats.and_then(|stats| stats.get(&entry.path)).copied(),
                 },
                 entry,
                 path_display,
@@ -560,9 +592,8 @@ struct StatusRowCtx {
     ui_scale: crate::ui_scale::UiScale,
     /// Display row, which is what element ids and debug selectors key on.
     row_ix: usize,
-    /// Position in the section's display order, which is what selection and
-    /// keyboard navigation key on.
-    ordinal: usize,
+    /// Position among the drawn file rows, which selection ranges span.
+    display_position: usize,
     depth: usize,
     is_tree: bool,
     section: StatusSection,
@@ -570,6 +601,89 @@ struct StatusRowCtx {
     is_selected: bool,
     is_submodule: bool,
     submodule_status: Option<SubmoduleStatus>,
+    /// `None` for untracked, binary, or before the counts have loaded.
+    line_stats: Option<gitcomet_core::domain::LineStats>,
+}
+
+/// Stage/Unstage a whole folder, revealed on hover over the trailing numbers.
+///
+/// Acts on the subtree alone, ignoring any multi-selection: clicking Stage on
+/// `src/` and having it stage files in `docs/` would be a surprise. Passes
+/// explicit paths, not a directory pathspec — `unstage_impl` filters conflicted
+/// paths by exact match, and a directory would slip past it.
+#[allow(clippy::too_many_arguments)]
+fn status_folder_action(
+    theme: AppTheme,
+    ui_scale: crate::ui_scale::UiScale,
+    ix: usize,
+    section: StatusSection,
+    repo_id: RepoId,
+    key: Arc<std::path::Path>,
+    row_group: SharedString,
+    cx: &mut gpui::Context<DetailsPaneView>,
+) -> AnyElement {
+    let area = section.diff_area();
+    let label = match area {
+        DiffArea::Unstaged => "Stage",
+        DiffArea::Staged => "Unstage",
+    };
+    let button = components::Button::new(format!("status_dir_action_btn_{ix}"), label)
+        .style(components::ButtonStyle::Solid)
+        .on_click(theme, cx, move |this, e, window, cx| {
+            cx.stop_propagation();
+            let paths = this.status_folder_subtree_paths(repo_id, section, key.as_ref());
+            if paths.is_empty() {
+                return;
+            }
+
+            if area == DiffArea::Unstaged
+                && let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                    &this.state,
+                    repo_id,
+                    paths.clone(),
+                    // No selection was consumed, so cancelling must leave it.
+                    false,
+                )
+            {
+                this.open_popover_at(confirm, e.position(), window, cx);
+                cx.notify();
+                return;
+            }
+
+            match area {
+                DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths {
+                    repo_id,
+                    paths: paths.into(),
+                }),
+                DiffArea::Staged => this.store.dispatch(Msg::UnstagePaths {
+                    repo_id,
+                    paths: paths.into(),
+                }),
+            }
+            cx.notify();
+        })
+        .gitcomet_tooltip(theme, format!("{label} this folder").into());
+
+    div()
+        .debug_selector(move || {
+            format!(
+                "status_dir_action_{}_{}_{}",
+                repo_id.0,
+                section.id_label(),
+                ix
+            )
+        })
+        .absolute()
+        .right_0()
+        .top_0()
+        .bottom_0()
+        .flex()
+        .items_center()
+        .invisible()
+        .group_hover(row_group, |d| d.visible())
+        .pr(ui_scale.px(8.0))
+        .child(button)
+        .into_any_element()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -586,7 +700,7 @@ fn status_row(
         theme,
         ui_scale,
         row_ix,
-        ordinal,
+        display_position,
         depth,
         is_tree,
         section,
@@ -594,9 +708,12 @@ fn status_row(
         is_selected: selected,
         is_submodule,
         submodule_status,
+        line_stats,
     } = ctx;
     let ix = row_ix;
     let scaled_px = |value: f32| ui_scale.px(value);
+    // Untracked is in neither index lane, so the column would always be blank.
+    let show_line_stats = crate::view::status_section_has_line_stats(section);
     let area = section.diff_area();
     let (icon, color) = if is_submodule {
         let color = match submodule_status {
@@ -818,6 +935,14 @@ fn status_row(
                     .render(cx),
                 ),
         )
+        .when(show_line_stats, |row| {
+            row.child(div().flex_none().child(components::diff_stat_optional(
+                theme,
+                ui_scale,
+                line_stats.and_then(|stats| stats.additions),
+                line_stats.and_then(|stats| stats.deletions),
+            )))
+        })
         .child(
             div()
                 .debug_selector(move || {
@@ -850,10 +975,7 @@ fn status_row(
                     repo.id == repo_id && repo.diff_state.diff_target.as_ref() == Some(&target)
                 });
             let entries = if modifiers.shift {
-                this.active_repo()
-                    .filter(|r| r.id == repo_id)
-                    .and_then(|repo| this.status_section_entries(repo, section))
-                    .map(|entries| entries.path_vec())
+                Some(this.status_display_order_paths(repo_id, section))
             } else {
                 None
             };
@@ -861,9 +983,9 @@ fn status_row(
                 repo_id,
                 section,
                 (*path_for_row).clone(),
-                // The ordinal, not the row: a tree's directory rows share the
-                // list with files but not their index space.
-                Some(ordinal),
+                // Drawn-row position: not the row index (directories count
+                // too), not the ordinal (a tree reorders it).
+                Some(display_position),
                 modifiers,
                 entries.as_deref(),
             );
@@ -908,6 +1030,7 @@ mod tests {
             &entries,
             &all,
             crate::view::rows::CommitFileSort::PathAscending,
+            None,
         );
         assert_eq!(ascending.as_ref(), &[1, 2, 0], "apple, Banana, Zoo");
 
@@ -915,6 +1038,7 @@ mod tests {
             &entries,
             &all,
             crate::view::rows::CommitFileSort::PathDescending,
+            None,
         );
         assert_eq!(descending.as_ref(), &[0, 2, 1], "Zoo, Banana, apple");
     }
@@ -932,9 +1056,76 @@ mod tests {
             crate::view::rows::CommitFileSort::EditSizeAscending,
             crate::view::rows::CommitFileSort::EditSizeDescending,
         ] {
-            let ordered = crate::view::rows::status_section_sorted_indexes(&entries, &all, sort);
+            let ordered =
+                crate::view::rows::status_section_sorted_indexes(&entries, &all, sort, None);
             assert_eq!(ordered.as_ref(), &[1, 0], "{sort:?} falls back to path A-Z");
         }
+    }
+
+    /// Mirrors the committed-file list: unknown sizes last, path breaks ties.
+    #[test]
+    fn edit_size_sort_orders_by_size_with_unknowns_last() {
+        use gitcomet_core::domain::LineStats;
+
+        let entries = vec![
+            file_status("small.rs", FileStatusKind::Modified),
+            file_status("big.rs", FileStatusKind::Modified),
+            file_status("unknown.rs", FileStatusKind::Modified),
+        ];
+        let all: Vec<usize> = (0..entries.len()).collect();
+        let mut stats = rustc_hash::FxHashMap::default();
+        stats.insert(
+            pb("small.rs"),
+            LineStats {
+                additions: Some(1),
+                deletions: Some(1),
+            },
+        );
+        stats.insert(
+            pb("big.rs"),
+            LineStats {
+                additions: Some(90),
+                deletions: Some(10),
+            },
+        );
+        // `unknown.rs` is absent on purpose — a binary file, say.
+
+        let largest = crate::view::rows::status_section_sorted_indexes(
+            &entries,
+            &all,
+            crate::view::rows::CommitFileSort::EditSizeDescending,
+            Some(&stats),
+        );
+        assert_eq!(largest.as_ref(), &[1, 0, 2], "big, small, then unknown");
+
+        let smallest = crate::view::rows::status_section_sorted_indexes(
+            &entries,
+            &all,
+            crate::view::rows::CommitFileSort::EditSizeAscending,
+            Some(&stats),
+        );
+        assert_eq!(
+            smallest.as_ref(),
+            &[0, 1, 2],
+            "unknowns stay last in both directions"
+        );
+    }
+
+    /// With nothing to order by the list must stay in a stable path order.
+    #[test]
+    fn edit_size_sort_falls_back_to_path_order_without_stats() {
+        let entries = vec![
+            file_status("b.rs", FileStatusKind::Modified),
+            file_status("a.rs", FileStatusKind::Modified),
+        ];
+        let all: Vec<usize> = (0..entries.len()).collect();
+        let ordered = crate::view::rows::status_section_sorted_indexes(
+            &entries,
+            &all,
+            crate::view::rows::CommitFileSort::EditSizeDescending,
+            None,
+        );
+        assert_eq!(ordered.as_ref(), &[1, 0]);
     }
 
     fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {

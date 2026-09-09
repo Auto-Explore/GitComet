@@ -2068,21 +2068,20 @@ impl MainPaneView {
             .unwrap_or(ChangeTrackingView::Combined)
     }
 
-    /// `ordinal` is a position in the section's display order. A tree also has
-    /// directory rows, and it may be hiding the file under a collapsed folder,
-    /// so the folder is expanded first and the ordinal resolved to a row.
+    /// `position` is an index into the drawn file order, not a display row: a
+    /// tree pads the list with directory rows and may be hiding the target.
     pub(in crate::view) fn scroll_status_section_to_ix(
         &mut self,
         section: StatusSection,
-        ordinal: usize,
+        position: usize,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
                     let ix = pane
-                        .reveal_status_row(section, ordinal, cx)
-                        .unwrap_or(ordinal);
+                        .reveal_status_row(section, position, cx)
+                        .unwrap_or(position);
                     match section {
                         StatusSection::CombinedUnstaged | StatusSection::Unstaged => pane
                             .unstaged_scroll
@@ -2101,16 +2100,22 @@ impl MainPaneView {
 }
 
 impl MainPaneView {
+    /// `position` is an index into the tree-ordered file list, not a display
+    /// row: a tree pads the list with directory rows and may be hiding the
+    /// target entirely, so it is revealed and resolved first.
     pub(in crate::view) fn scroll_commit_details_file_to_ix(
         &mut self,
-        ix: usize,
+        position: usize,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    let row = pane
+                        .reveal_commit_file_row(position, cx)
+                        .unwrap_or(position);
                     pane.commit_files_scroll
-                        .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center);
+                        .scroll_to_item_strict(row, gpui::ScrollStrategy::Center);
                     cx.notify();
                 });
         });

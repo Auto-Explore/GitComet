@@ -18,7 +18,13 @@ fn sorts_for(list: crate::view::rows::FileListId) -> &'static [crate::view::rows
         CommitFileSort::PathDescending,
     ];
     match list {
-        crate::view::rows::FileListId::Status(_) => &PATH_ONLY,
+        // Untracked files are in neither index lane, so git reports no counts
+        // for them — an edit-size mode there would silently sort by path.
+        crate::view::rows::FileListId::Status(section)
+            if !crate::view::status_section_has_line_stats(section) =>
+        {
+            &PATH_ONLY
+        }
         _ => &CommitFileSort::ALL,
     }
 }
@@ -71,32 +77,42 @@ mod tests {
         }));
     }
 
-    /// Status lists have no edit counts, so offering "Edit size" there would be
-    /// a mode that silently does nothing.
-    #[test]
-    fn status_lists_are_offered_path_sorts_only() {
-        let model = super::model_for_sort(
-            crate::view::rows::FileListId::Status(crate::view::StatusSection::Staged),
-            crate::view::rows::CommitFileSort::PathAscending,
-        );
-        let labels = model
+    fn sort_labels(list: crate::view::rows::FileListId) -> Vec<String> {
+        super::model_for_sort(list, crate::view::rows::CommitFileSort::PathAscending)
             .items
             .iter()
             .filter_map(|item| match item {
                 ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
                 _ => None,
             })
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    /// Untracked files are in neither index lane, so git reports no counts for
+    /// them — an edit-size mode there would silently sort by path instead.
+    #[test]
+    fn only_the_untracked_section_is_limited_to_path_sorts() {
+        use crate::view::StatusSection;
+        use crate::view::rows::{CommitFileSort, FileListId};
+
         assert_eq!(
-            labels,
+            sort_labels(FileListId::Status(StatusSection::Untracked)),
             vec![
-                crate::view::rows::CommitFileSort::PathAscending
-                    .label()
-                    .to_string(),
-                crate::view::rows::CommitFileSort::PathDescending
-                    .label()
-                    .to_string(),
+                CommitFileSort::PathAscending.label().to_string(),
+                CommitFileSort::PathDescending.label().to_string(),
             ]
         );
+
+        for section in [
+            StatusSection::Staged,
+            StatusSection::Unstaged,
+            StatusSection::CombinedUnstaged,
+        ] {
+            assert_eq!(
+                sort_labels(FileListId::Status(section)).len(),
+                CommitFileSort::ALL.len(),
+                "{section:?} has line counts, so it offers every sort"
+            );
+        }
     }
 }

@@ -190,6 +190,31 @@ pub(crate) fn status_section_rev(repo: &RepoState, section: StatusSection) -> u6
     }
 }
 
+/// The rev anything derived from a section must key on: its status lane and
+/// its line-stats lane. Counts arrive without `status_section_rev` moving, so a
+/// cache keyed on that alone keeps serving pre-stats rows.
+pub(crate) fn status_section_content_rev(repo: &RepoState, section: StatusSection) -> u64 {
+    gitcomet_state::model::mix_status_cache_revs([
+        status_section_rev(repo, section),
+        repo.line_stats_rev(section.diff_area()),
+    ])
+}
+
+/// `None` while unloaded, and always `None` for Untracked — those files are in
+/// neither index lane.
+pub(crate) fn status_section_line_stats(
+    repo: &RepoState,
+    section: StatusSection,
+) -> Option<&rustc_hash::FxHashMap<std::path::PathBuf, gitcomet_core::domain::LineStats>> {
+    status_section_has_line_stats(section)
+        .then(|| repo.line_stats_for_area(section.diff_area()))
+        .flatten()
+}
+
+pub(crate) const fn status_section_has_line_stats(section: StatusSection) -> bool {
+    !matches!(section, StatusSection::Untracked)
+}
+
 pub(crate) fn status_section_is_loading(repo: &RepoState, section: StatusSection) -> bool {
     match section {
         StatusSection::Staged => repo.staged_status_is_loading(),

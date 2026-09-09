@@ -596,6 +596,27 @@ pub trait GitRepository: Send + Sync {
             "range file listing is not implemented for this backend",
         )))
     }
+    /// Added/removed line counts for every uncommitted change, both lanes.
+    ///
+    /// Separate from `status`, which decides most entries from stat data alone
+    /// and never reads content. Counting reads both sides of every changed
+    /// file, so keeping them apart leaves status latency untouched.
+    fn uncommitted_line_stats(&self) -> Result<UncommittedLineStats> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "uncommitted line stats are not implemented for this backend",
+        )))
+    }
+    /// Cancellable [`Self::uncommitted_line_stats`]. It reads every changed
+    /// file, so on a large dirty tree it is the load most worth interrupting.
+    fn uncommitted_line_stats_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<UncommittedLineStats> {
+        cancellation.check_cancelled()?;
+        let stats = self.uncommitted_line_stats()?;
+        cancellation.check_cancelled()?;
+        Ok(stats)
+    }
     /// Full `%B` messages of the given commits, in input order. Message-only
     /// on purpose: callers like the cherry-pick editor need nothing else, and
     /// implementations should skip the per-commit tree diff `commit_details`

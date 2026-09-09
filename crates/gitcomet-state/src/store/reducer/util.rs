@@ -614,6 +614,22 @@ pub(super) fn append_requested_status_refresh_effects(
         (false, true) => effects.push_effect(Effect::LoadStagedStatus { repo_id }),
         (false, false) => {}
     }
+    append_requested_line_stats_effect(repo_state, effects);
+}
+
+/// Same triggers as the status lanes, but its own effect so the lists render at
+/// today's speed and the numbers land after.
+pub(super) fn append_requested_line_stats_effect(
+    repo_state: &mut RepoState,
+    effects: &mut impl EffectAccumulator,
+) {
+    let repo_id = repo_state.id;
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::UNCOMMITTED_LINE_STATS)
+    {
+        effects.push_effect(Effect::LoadUncommittedLineStats { repo_id });
+    }
 }
 
 fn push_rebase_and_merge_refresh_effect(effects: &mut impl EffectAccumulator, repo_id: RepoId) {
@@ -715,6 +731,8 @@ pub(super) fn append_refresh_primary_effects(
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
         push_rebase_and_merge_refresh_effect(effects, repo_id);
         effects.push_effect(Effect::LoadStatus { repo_id });
+        // This batch short-circuits the status-refresh funnel.
+        append_requested_line_stats_effect(repo_state, effects);
         effects.push_effect(Effect::LoadLog {
             repo_id,
             seq,
@@ -1902,7 +1920,7 @@ mod tests {
         let mut primary = repo_state(1);
         primary.set_log_loading_more(true);
         let primary_effects = refresh_primary_effects(&mut primary);
-        assert_eq!(primary_effects.len(), 5);
+        assert_eq!(primary_effects.len(), 6);
         assert!(!primary.log_loading_more);
         assert!(matches!(primary_effects[0], Effect::LoadHeadBranch { .. }));
         assert!(
@@ -1910,8 +1928,15 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
         );
+        // Guards that the batch path still asks for counts.
+        assert!(
+            primary_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. })),
+            "the primary-refresh batch must request line stats too"
+        );
         assert!(matches!(
-            primary_effects[4],
+            primary_effects[5],
             Effect::LoadLog {
                 limit: DEFAULT_LOG_PAGE_SIZE,
                 ..
@@ -1935,12 +1960,17 @@ mod tests {
         let mut full = repo_state(2);
         full.set_log_loading_more(true);
         let full_effects = refresh_full_effects(&mut full, GitLogSettings::default());
-        assert_eq!(full_effects.len(), 8);
+        assert_eq!(full_effects.len(), 9);
         assert!(!full.log_loading_more);
         assert!(
             full_effects
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
+        );
+        assert!(
+            full_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. }))
         );
         assert!(
             !full_effects.iter().any(|effect| {

@@ -24,7 +24,10 @@ mod render;
 mod tests;
 
 pub(in crate::view) use build::{FileTree, FileTreeItem};
-pub(in crate::view) use render::{DirectoryRowProps, directory_row, file_row_indent_px};
+pub(in crate::view) use render::{
+    DirectoryRowDetail, DirectoryRowProps, directory_row, directory_row_detail_for_width,
+    file_row_indent_px,
+};
 
 /// Display row index, directory rows included.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -57,6 +60,8 @@ pub(in crate::view) enum FileListRow {
         chain: DirChain,
         /// Into [`FileListPlan::ordered`]; the subtree's files in tree order.
         subtree: Range<usize>,
+        /// Replaces a bare total, which said how much changed but not what.
+        counts: crate::view::rows::CommitFileKindCounts,
         additions: Option<u64>,
         deletions: Option<u64>,
     },
@@ -150,6 +155,18 @@ impl FileListPlan {
         match self {
             Self::Flat { len } => FileListOrdered::Identity(*len),
             Self::Tree { ordered, .. } => FileListOrdered::Ordered(ordered),
+        }
+    }
+
+    /// Where `ordinal` sits among the displayed files — not the ordinal
+    /// itself, since a tree hoists directories above files at each level.
+    ///
+    /// Collapse-independent like [`Self::ordered`]: a shift-click range that
+    /// skipped hidden files would act on less than the rows it spans.
+    pub(in crate::view) fn display_position(&self, ordinal: FileOrdinal) -> Option<usize> {
+        match self {
+            Self::Flat { len } => (ordinal.0 < *len).then_some(ordinal.0),
+            Self::Tree { ordered, .. } => ordered.iter().position(|value| *value == ordinal.0),
         }
     }
 
@@ -304,11 +321,24 @@ pub(in crate::view) fn file_list_projection_key(
     sort: crate::view::rows::CommitFileSort,
     filter: crate::view::rows::CommitFileFilter,
 ) -> u64 {
+    file_list_projection_key_scoped(repo, rev, sort, filter, None)
+}
+
+/// [`file_list_projection_key`] plus what else identifies the list's subject:
+/// every worktree in one scan shares a `rev`.
+pub(in crate::view) fn file_list_projection_key_scoped(
+    repo: u64,
+    rev: u64,
+    sort: crate::view::rows::CommitFileSort,
+    filter: crate::view::rows::CommitFileFilter,
+    scope: Option<&Path>,
+) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = rustc_hash::FxHasher::default();
     repo.hash(&mut hasher);
     rev.hash(&mut hasher);
     sort.hash(&mut hasher);
     filter.hash(&mut hasher);
+    scope.hash(&mut hasher);
     hasher.finish()
 }

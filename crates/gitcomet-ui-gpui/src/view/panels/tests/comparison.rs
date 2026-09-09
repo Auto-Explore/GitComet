@@ -325,6 +325,7 @@ mod worktree_uncommitted {
             deleted: 0,
             staged,
             unstaged,
+            line_stats: Default::default(),
         };
         draw_worktree_summary(cx, repo_id, summary, selected)
     }
@@ -395,6 +396,7 @@ mod worktree_uncommitted {
                 file("b.rs", FileStatusKind::Modified),
                 file("c.rs", FileStatusKind::Modified),
             ],
+            line_stats: Default::default(),
         };
 
         let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -548,6 +550,7 @@ mod worktree_uncommitted {
                 deleted: 0,
                 staged: Vec::new(),
                 unstaged: Vec::new(),
+                line_stats: Default::default(),
             },
             true,
         );

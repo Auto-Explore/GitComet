@@ -370,8 +370,8 @@ pub(in crate::view) fn status_section_sorted_indexes(
     entries: &[gitcomet_core::domain::FileStatus],
     indexes: &[usize],
     sort: CommitFileSort,
+    stats: Option<&rustc_hash::FxHashMap<std::path::PathBuf, gitcomet_core::domain::LineStats>>,
 ) -> std::sync::Arc<[usize]> {
-    let descending = sort == CommitFileSort::PathDescending;
     let mut sortable: Vec<(usize, String)> = indexes
         .iter()
         .filter_map(|ix| {
@@ -380,9 +380,16 @@ pub(in crate::view) fn status_section_sorted_indexes(
                 .map(|entry| (*ix, commit_file_path_sort_key(&entry.path)))
         })
         .collect();
-    sortable.sort_by(|left, right| {
-        let order = left
-            .1
+
+    // Same shape as `build_commit_file_projection`: files with unknown sizes
+    // sort last, and path order breaks every tie so the result is stable.
+    let edit_size = |ix: usize| -> Option<u64> {
+        let entry = entries.get(ix)?;
+        let stats = stats?.get(&entry.path)?;
+        Some(u64::from(stats.additions?) + u64::from(stats.deletions?))
+    };
+    let by_path = |left: &(usize, String), right: &(usize, String)| {
+        left.1
             .cmp(&right.1)
             .then_with(|| {
                 entries[left.0]
@@ -390,8 +397,27 @@ pub(in crate::view) fn status_section_sorted_indexes(
                     .as_os_str()
                     .cmp(entries[right.0].path.as_os_str())
             })
-            .then_with(|| left.0.cmp(&right.0));
-        if descending { order.reverse() } else { order }
+            .then_with(|| left.0.cmp(&right.0))
+    };
+
+    sortable.sort_by(|left, right| match sort {
+        CommitFileSort::PathAscending => by_path(left, right),
+        CommitFileSort::PathDescending => by_path(left, right).reverse(),
+        CommitFileSort::EditSizeAscending | CommitFileSort::EditSizeDescending => {
+            match (edit_size(left.0), edit_size(right.0)) {
+                (Some(left_size), Some(right_size)) => {
+                    let order = if sort == CommitFileSort::EditSizeAscending {
+                        left_size.cmp(&right_size)
+                    } else {
+                        right_size.cmp(&left_size)
+                    };
+                    order.then_with(|| by_path(left, right))
+                }
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => by_path(left, right),
+            }
+        }
     });
     sortable
         .into_iter()
@@ -770,8 +796,9 @@ impl CommitCard {
 mod diff_canvas;
 mod file_list;
 pub(in crate::view) use file_list::{
-    CollapsedDirs, DirectoryRowProps, FileListId, FileListPlan, FileListPlanCache, FileListRow,
-    FileOrdinal, FileTree, FileTreeItem, RowIx, directory_row, file_list_projection_key,
+    CollapsedDirs, DirectoryRowDetail, DirectoryRowProps, FileListId, FileListPlan,
+    FileListPlanCache, FileListRow, FileOrdinal, FileTree, FileTreeItem, RowIx, directory_row,
+    directory_row_detail_for_width, file_list_projection_key, file_list_projection_key_scoped,
     file_row_indent_px,
 };
 mod diff_text;

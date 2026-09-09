@@ -199,11 +199,13 @@ fn directory_rows_carry_subtree_edit_totals() {
     let items = [
         FileTreeItem {
             path: owned[0].as_path(),
+            kind: Some(gitcomet_core::domain::FileStatusKind::Modified),
             additions: Some(3),
             deletions: Some(1),
         },
         FileTreeItem {
             path: owned[1].as_path(),
+            kind: Some(gitcomet_core::domain::FileStatusKind::Added),
             additions: Some(4),
             deletions: None,
         },
@@ -224,6 +226,115 @@ fn directory_rows_carry_subtree_edit_totals() {
     assert_eq!(subtree, 0..2);
 }
 
+fn kinded(paths: &[(&str, gitcomet_core::domain::FileStatusKind)]) -> Vec<PathBuf> {
+    paths.iter().map(|(path, _)| PathBuf::from(path)).collect()
+}
+
+#[test]
+fn directory_rows_carry_subtree_kind_counts() {
+    use gitcomet_core::domain::FileStatusKind::*;
+
+    let entries = [
+        ("src/a.rs", Modified),
+        ("src/b.rs", Modified),
+        ("src/nested/c.rs", Added),
+        ("src/nested/d.rs", Deleted),
+        ("src/e.rs", Renamed),
+    ];
+    let owned = kinded(&entries);
+    let items = owned
+        .iter()
+        .zip(entries.iter())
+        .map(|(path, (_, kind))| FileTreeItem {
+            path: path.as_path(),
+            kind: Some(*kind),
+            additions: None,
+            deletions: None,
+        });
+    let plan =
+        FileTree::build(items, CommitFileSort::PathAscending).flatten(&CollapsedDirs::default());
+
+    let Some(FileListRow::Directory { counts, .. }) = plan.row_at(RowIx(0)) else {
+        panic!("expected the src/ folder row");
+    };
+    assert_eq!(counts.all, 5);
+    assert_eq!(counts.modified, 2);
+    assert_eq!(counts.added, 1);
+    assert_eq!(counts.removed, 1);
+    assert_eq!(counts.renamed, 1, "renames stay their own badge");
+}
+
+/// The badge counts the subtree, not what is on screen.
+#[test]
+fn kind_counts_are_collapse_independent() {
+    use gitcomet_core::domain::FileStatusKind::Modified;
+
+    let paths = ["a/b/one.rs", "a/b/two.rs", "a/three.rs"];
+    let owned: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+    let build = || {
+        FileTree::build(
+            owned.iter().map(|path| FileTreeItem {
+                path: path.as_path(),
+                kind: Some(Modified),
+                additions: None,
+                deletions: None,
+            }),
+            CommitFileSort::PathAscending,
+        )
+    };
+
+    let mut collapsed = CollapsedDirs::default();
+    let open = build().flatten(&collapsed);
+    let open_counts = match open.row_at(RowIx(0)) {
+        Some(FileListRow::Directory { counts, .. }) => counts,
+        other => panic!("expected a folder row, got {other:?}"),
+    };
+
+    collapse_label(&open, &mut collapsed, "b");
+    let shut = build().flatten(&collapsed);
+    let shut_counts = match shut.row_at(RowIx(0)) {
+        Some(FileListRow::Directory { counts, .. }) => counts,
+        other => panic!("expected a folder row, got {other:?}"),
+    };
+    assert_eq!(shut_counts, open_counts);
+    assert_eq!(shut_counts.all, 3);
+}
+
+/// Locks the bottom-up roll-up: totals reach every leaf, not just children.
+#[test]
+fn nested_directory_totals_roll_all_the_way_up() {
+    use gitcomet_core::domain::FileStatusKind::Modified;
+
+    let owned = [
+        PathBuf::from("a/b/c/deep.rs"),
+        PathBuf::from("a/b/mid.rs"),
+        PathBuf::from("a/top.rs"),
+    ];
+    let plan = FileTree::build(
+        owned.iter().enumerate().map(|(ix, path)| FileTreeItem {
+            path: path.as_path(),
+            kind: Some(Modified),
+            additions: Some(ix as u32 + 1),
+            deletions: Some(1),
+        }),
+        CommitFileSort::PathAscending,
+    )
+    .flatten(&CollapsedDirs::default());
+
+    let Some(FileListRow::Directory {
+        counts,
+        additions,
+        deletions,
+        ..
+    }) = plan.row_at(RowIx(0))
+    else {
+        panic!("expected the a/ folder row");
+    };
+    assert_eq!(counts.all, 3, "every leaf below, not just direct children");
+    assert_eq!(additions, Some(1 + 2 + 3));
+    assert_eq!(deletions, Some(3));
+}
+
 #[test]
 fn root_level_files_keep_depth_zero() {
     let plan = plan(&["only.rs"], &CollapsedDirs::default());
@@ -233,5 +344,133 @@ fn root_level_files_keep_depth_zero() {
             ordinal: FileOrdinal(0),
             depth: 0
         })
+    );
+}
+
+/// UI scale grows the row but not the pane, so 100% and 200% differ.
+#[test]
+fn directory_row_detail_drops_the_stat_before_the_label() {
+    use crate::view::rows::{
+        CommitFileKindCounts, DirectoryRowDetail, directory_row_detail_for_width,
+    };
+    use gpui::px;
+
+    let counts = CommitFileKindCounts {
+        all: 12,
+        modified: 7,
+        added: 3,
+        removed: 2,
+        renamed: 0,
+    };
+
+    assert_eq!(
+        directory_row_detail_for_width(gpui::Pixels::MAX, 0, counts, true, 100),
+        DirectoryRowDetail::BadgesAndStat,
+        "an unmeasured list always shows everything"
+    );
+    assert_eq!(
+        directory_row_detail_for_width(px(600.0), 0, counts, true, 100),
+        DirectoryRowDetail::BadgesAndStat
+    );
+    // ~232 design px needed: 400 device px is roomy at 100%, short at 200%.
+    assert_eq!(
+        directory_row_detail_for_width(px(400.0), 0, counts, true, 100),
+        DirectoryRowDetail::BadgesAndStat
+    );
+    assert_eq!(
+        directory_row_detail_for_width(px(400.0), 0, counts, true, 200),
+        DirectoryRowDetail::BadgesOnly,
+        "the same pane is too narrow once everything is twice the size"
+    );
+    assert_eq!(
+        directory_row_detail_for_width(px(180.0), 0, counts, true, 100),
+        DirectoryRowDetail::BadgesOnly
+    );
+    assert_eq!(
+        directory_row_detail_for_width(px(600.0), 0, counts, false, 100),
+        DirectoryRowDetail::BadgesOnly,
+        "nothing to show means nothing to budget for"
+    );
+
+    // Depth costs indent, so a deep row gives way before a shallow one.
+    let deep = directory_row_detail_for_width(px(260.0), 8, counts, true, 100);
+    let shallow = directory_row_detail_for_width(px(260.0), 0, counts, true, 100);
+    assert_eq!(deep, DirectoryRowDetail::BadgesOnly);
+    assert_eq!(shallow, DirectoryRowDetail::BadgesAndStat);
+}
+
+/// A non-UTF-8 component still gets its own node. Dropping it would attach the
+/// file to its grandparent, making `a/<bad>/x.rs` and `a/x.rs` look identical.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_path_component_still_forms_its_own_directory() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut weird = PathBuf::from("a");
+    weird.push(OsStr::from_bytes(b"b\xffd"));
+    weird.push("x.rs");
+    let plain = PathBuf::from("a/x.rs");
+    let owned = [weird, plain];
+
+    let plan = FileTree::build(
+        owned.iter().map(|path| FileTreeItem {
+            path: path.as_path(),
+            kind: Some(gitcomet_core::domain::FileStatusKind::Modified),
+            additions: None,
+            deletions: None,
+        }),
+        CommitFileSort::PathAscending,
+    )
+    .flatten(&CollapsedDirs::default());
+
+    let dirs: Vec<String> = (0..plan.row_len())
+        .filter_map(|ix| match plan.row_at(RowIx(ix)) {
+            Some(FileListRow::Directory { label, .. }) => Some(label.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        dirs.len(),
+        2,
+        "expected `a` and the lossy child to be separate folders, got {dirs:?}"
+    );
+    assert_eq!(plan.ordered().len(), 2, "both files are still present");
+}
+
+/// Every worktree in one scan shares a `worktree_dirty_rev`, so without the
+/// scope two of them would be served each other's trie.
+#[test]
+fn projection_keys_separate_lists_that_share_a_rev() {
+    use crate::view::rows::{
+        CommitFileFilter, CommitFileSort, file_list_projection_key, file_list_projection_key_scoped,
+    };
+
+    let base = |scope: Option<&Path>| {
+        file_list_projection_key_scoped(
+            7,
+            42,
+            CommitFileSort::PathAscending,
+            CommitFileFilter::All,
+            scope,
+        )
+    };
+    let a = PathBuf::from("/tmp/wt-a");
+    let b = PathBuf::from("/tmp/wt-b");
+
+    assert_ne!(
+        base(Some(a.as_path())),
+        base(Some(b.as_path())),
+        "two worktrees at the same rev must not share a cache slot"
+    );
+    assert_eq!(
+        base(Some(a.as_path())),
+        base(Some(a.as_path())),
+        "the same worktree keeps its slot"
+    );
+    assert_eq!(
+        base(None),
+        file_list_projection_key(7, 42, CommitFileSort::PathAscending, CommitFileFilter::All),
+        "an unscoped list keeps the plain key"
     );
 }

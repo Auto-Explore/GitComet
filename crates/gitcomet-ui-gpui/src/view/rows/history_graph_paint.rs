@@ -1085,6 +1085,7 @@ mod band_tests {
             deleted: 0,
             staged: Vec::new(),
             unstaged: Vec::new(),
+            line_stats: Default::default(),
         }
     }
 
