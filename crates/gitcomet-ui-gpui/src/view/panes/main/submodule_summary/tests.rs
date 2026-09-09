@@ -79,6 +79,26 @@ fn publish(
     test_support::redraw(cx);
 }
 
+/// Edit the published state in place, then redraw. `publish` builds a whole
+/// repository; this is for moving one field of the one it built.
+fn restate(
+    view: &Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    edit: impl FnOnce(&mut RepoState),
+) {
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            let mut state = (*view.store.snapshot()).clone();
+            edit(&mut state.repos[0]);
+            state.repos[0].diff_state.diff_state_rev += 1;
+            let state = Arc::new(state);
+            view.store.replace_snapshot_for_test(Arc::clone(&state));
+            test_support::push_test_state(view, state, cx);
+        })
+    });
+    test_support::redraw(cx);
+}
+
 fn wait_for_inline_selection(
     view: &Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
@@ -134,7 +154,21 @@ fn large_submodule_summaries_render_a_bounded_window_and_reuse_their_rows(
                 "{count} files built {} rows",
                 cache.rendered_rows
             );
-            assert_eq!(cache.presentation.entries.len(), count);
+            assert_eq!(
+                cache
+                    .presentation
+                    .rows
+                    .iter()
+                    .filter(|row| matches!(
+                        row,
+                        SummaryRow::Change {
+                            inline_index: Some(_),
+                            ..
+                        }
+                    ))
+                    .count(),
+                count
+            );
             Arc::clone(&cache.presentation)
         });
         cx.update(|_window, app| {
@@ -262,16 +296,16 @@ fn submodule_summary_rows_keep_section_specific_navigation_and_menus(
     let (row_ix, target) = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let rows = &pane.submodule_summary_cache.as_ref().unwrap().presentation;
-        let (ix, entry) = rows
+        let (ix, change_ix, entry) = rows
             .rows
             .iter()
             .enumerate()
             .find_map(|(ix, row)| match row {
                 SummaryRow::Change {
-                    section: ChangeSection::Unstaged,
+                    section: ChangeSection::LiveUnstaged,
+                    index,
                     inline_index: Some(entry),
-                    ..
-                } => Some((ix, *entry)),
+                } => Some((ix, *index, *entry)),
                 _ => None,
             })
             .unwrap();
@@ -279,7 +313,16 @@ fn submodule_summary_rows_keep_section_specific_navigation_and_menus(
             entry, 2,
             "same path in range, staged and unstaged must have distinct indexes"
         );
-        (ix, rows.entries[entry].target.clone())
+        // The row's own target must be the entry the click selects.
+        let target =
+            submodule_inline_diff_target(&rows.summary, ChangeSection::LiveUnstaged, change_ix)
+                .expect("an unstaged row is always navigable");
+        assert_eq!(
+            submodule_inline_diff_entries(&rows.summary)[entry].target,
+            target,
+            "the row's target must be the entry the click selects"
+        );
+        (ix, target)
     });
     assert_eq!(row_ix, 7);
     let bounds = cx.debug_bounds("submodule_change_7").unwrap();
@@ -367,27 +410,23 @@ fn restoring_scroll_clamps_past_the_end_of_a_shorter_rebuild() {
     assert_eq!(restored.offset_in_item, px(0.0));
 }
 
-/// Both are frame-invariant: rebuilding them costs a `PathBuf` per visible row
-/// and a `Vec` per click.
+/// Frame-invariant: rebuilding it costs a `PathBuf` per visible row.
 #[gpui::test]
-fn summary_redraws_reuse_the_cached_repo_path_and_entry_list(cx: &mut gpui::TestAppContext) {
+fn summary_redraws_reuse_the_cached_repo_path(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     publish(&view, cx, RepoId(72), summary(2_000));
-    let (path, entries) = cx.update(|_window, app| {
+    let path = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let cache = pane.submodule_summary_cache.as_ref().unwrap();
         assert_eq!(
             cache.submodule_repo_path.as_path(),
             std::path::Path::new("/tmp/gitcomet-summary-render/vendor/large")
         );
-        (
-            Arc::clone(&cache.submodule_repo_path),
-            Arc::clone(&cache.presentation.entries),
-        )
+        Arc::clone(&cache.submodule_repo_path)
     });
 
     cx.update(|_window, app| {
@@ -406,10 +445,6 @@ fn summary_redraws_reuse_the_cached_repo_path_and_entry_list(cx: &mut gpui::Test
         assert!(
             Arc::ptr_eq(&path, &cache.submodule_repo_path),
             "redraws must not rebuild the submodule workdir path"
-        );
-        assert!(
-            Arc::ptr_eq(&entries, &cache.presentation.entries),
-            "redraws must not rebuild the inline entry list"
         );
         assert_eq!(
             cache.rebuilds, 1,
@@ -465,6 +500,105 @@ fn leaving_the_diff_panel_releases_the_summary_cache(cx: &mut gpui::TestAppConte
                 .submodule_summary_cache
                 .is_none(),
             "the summary rows must not outlive the diff panel"
+        );
+    });
+}
+
+/// A failed load leaves its message on screen for as long as the user leaves it
+/// there, so what it may keep behind that message is worth pinning: this
+/// target's rows, never another's.
+#[gpui::test]
+fn a_failed_load_releases_another_targets_summary_cache(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    publish(&view, cx, RepoId(74), summary(2_000));
+    let cached = |app: &gpui::App| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .submodule_summary_cache
+            .is_some()
+    };
+    cx.update(|_window, app| assert!(cached(app)));
+
+    // A second submodule whose load fails: the first one's rows are stale.
+    restate(&view, cx, |repo| {
+        repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+            path: PathBuf::from("vendor/other"),
+            area: DiffArea::Staged,
+        });
+        repo.diff_state.submodule_summary = Loadable::Error("no such submodule".to_string());
+        repo.diff_state.submodule_summary_rev += 1;
+    });
+    cx.update(|_window, app| {
+        assert!(
+            !cached(app),
+            "a failed load of another submodule must not pin the previous one's rows"
+        );
+    });
+
+    // A refresh of what *is* on screen keeps them, reading position and all.
+    publish(&view, cx, RepoId(74), summary(2_000));
+    let top = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let cache = pane.submodule_summary_cache.as_ref().unwrap();
+        cache.scroll.scroll_to(gpui::ListOffset {
+            item_ix: 900,
+            offset_in_item: px(0.0),
+        });
+        cache.scroll.logical_scroll_top()
+    });
+    restate(&view, cx, |repo| {
+        repo.diff_state.submodule_summary = Loadable::Loading;
+        repo.diff_state.submodule_summary_rev += 1;
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let cache = pane
+            .submodule_summary_cache
+            .as_ref()
+            .expect("a refresh of the shown target keeps its rows");
+        assert_eq!(cache.scroll.logical_scroll_top().item_ix, top.item_ix);
+    });
+}
+
+/// Only a target that names a file names a submodule. Nothing routes a range
+/// here today, but the pane is what decides what it draws -- and it used to draw
+/// a summary against any target at all.
+#[gpui::test]
+fn a_commit_range_target_draws_no_submodule_summary(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    publish(&view, cx, RepoId(75), summary(50));
+    assert!(cx.debug_bounds("submodule_change_2").is_some());
+
+    restate(&view, cx, |repo| {
+        repo.diff_state.diff_target = Some(DiffTarget::CommitRange {
+            from_commit_id: CommitId("a".into()),
+            to_commit_id: Some(CommitId("b".into())),
+            path: None,
+        });
+        repo.diff_state.diff_target_rev += 1;
+    });
+
+    assert!(
+        cx.debug_bounds("submodule_change_2").is_none(),
+        "a commit range has no submodule to summarize"
+    );
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .submodule_summary_cache
+                .is_none(),
+            "and nothing may be cached for it"
         );
     });
 }

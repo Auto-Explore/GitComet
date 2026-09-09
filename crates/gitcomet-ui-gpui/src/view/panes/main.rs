@@ -95,11 +95,7 @@ impl Render for MainPaneView {
         let in_rebase = self.active_repo().is_some_and(|r| {
             r.interactive_rebase_setup.is_some() || r.interactive_cherry_pick_setup.is_some()
         });
-        // Leaving the diff panel retires the summary: its prepared rows are one
-        // per changed file, and only `diff_view` would otherwise drop them.
-        if !show_diff {
-            self.submodule_summary_cache = None;
-        }
+        self.release_stale_submodule_summary_cache();
         // Keep blame in sync with the displayed file/revision while annotate is
         // on; the request is a no-op when the target is unchanged. Render must not
         // force a retry — a persistent error would re-dispatch every frame.

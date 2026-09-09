@@ -540,13 +540,22 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 detached.hash(&mut h);
                 is_active.hash(&mut h);
             }
-            BranchSidebarRow::SubmoduleItem { path, .. } => {
+            BranchSidebarRow::SubmoduleItem {
+                path,
+                status,
+                recorded_head,
+                checked_out_head,
+            } => {
                 let path_len = path
                     .to_str()
                     .map_or_else(|| path.to_string_lossy().len(), str::len);
                 let path_label = path_display::path_display_shared_fast(path.as_path());
                 path_len.hash(&mut h);
                 path_label.len().hash(&mut h);
+                // The badge, tooltip and icon colour are built from these.
+                status.hash(&mut h);
+                recorded_head.hash(&mut h);
+                checked_out_head.hash(&mut h);
             }
             BranchSidebarRow::StashItem {
                 index,

@@ -449,6 +449,21 @@ fn collect_repo_submodules(
     Ok(())
 }
 
+/// Whether a failed nested enumeration prunes that subtree instead of failing
+/// the whole listing. Everything but cancellation does: narrowing it to the
+/// corrupt-repository kinds would let one unreadable gitlink empty the whole
+/// Submodules section, and a pruned subtree only looks like an empty one.
+fn nested_failure_prunes_subtree(kind: &ErrorKind) -> bool {
+    match kind {
+        ErrorKind::Backend(_)
+        | ErrorKind::Unsupported(_)
+        | ErrorKind::NotARepository
+        | ErrorKind::Io(_)
+        | ErrorKind::Git(_) => true,
+        ErrorKind::Cancelled => false,
+    }
+}
+
 /// Recurse into one submodule; a broken one prunes only its own subtree,
 /// rather than failing the whole listing.
 fn collect_nested_submodules(
@@ -460,11 +475,11 @@ fn collect_nested_submodules(
     let collected = out.len();
     match collect_repo_submodules(nested_repo, full_path, out, cancellation) {
         Ok(()) => Ok(()),
-        Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => Err(error),
-        Err(_) => {
+        Err(error) if nested_failure_prunes_subtree(error.kind()) => {
             out.truncate(collected);
             Ok(())
         }
+        Err(error) => Err(error),
     }
 }
 
@@ -2119,6 +2134,31 @@ mod tests {
     use std::ffi::OsStr;
     use std::path::Path;
     use std::process::Command;
+
+    /// One unreadable submodule costs its own subtree and nothing else.
+    #[test]
+    fn only_cancellation_stops_a_nested_listing_instead_of_pruning_it() {
+        for kind in [
+            ErrorKind::Backend("gix index: decode failed".to_string()),
+            ErrorKind::Unsupported("path is not valid UTF-8"),
+            ErrorKind::NotARepository,
+            ErrorKind::Io(std::io::ErrorKind::PermissionDenied),
+            ErrorKind::Git(GitFailure::new(
+                "git submodule status",
+                GitFailureId::CommandFailed,
+                Some(128),
+                Vec::new(),
+                Vec::new(),
+                None,
+            )),
+        ] {
+            assert!(
+                nested_failure_prunes_subtree(&kind),
+                "{kind:?} must cost only this subtree, not the whole listing"
+            );
+        }
+        assert!(!nested_failure_prunes_subtree(&ErrorKind::Cancelled));
+    }
 
     #[test]
     fn configured_submodule_urls_survive_validation() {

@@ -969,13 +969,29 @@ pub(super) fn submodule_summary_loaded(
 
         match result {
             Ok(summary) => {
-                // An identical reload keeps the same `Arc` and revision: the UI
-                // caches a row per changed file against both, and rebuilding a
-                // large summary also discards every measured row height.
-                let unchanged = matches!(
+                // An identical reload keeps the same `Arc`, revision and entry
+                // list: the UI caches a row per changed file against them.
+                //
+                // The open patch is another matter -- editing an inner file in
+                // place moves no numstat, so this poll is the only notice we
+                // get. A range entry is two fixed commits and needs none.
+                if matches!(
                     &repo_state.diff_state.submodule_summary,
                     Loadable::Ready(existing) if **existing == summary
-                );
+                ) {
+                    let live_inline = repo_state
+                        .diff_state
+                        .inline_submodule_diff
+                        .as_ref()
+                        .is_some_and(|inline| {
+                            matches!(inline.target, DiffTarget::WorkingTree { .. })
+                        });
+                    return if live_inline {
+                        refresh_inline_submodule_selected_diff(state, repo_id)
+                    } else {
+                        Vec::new()
+                    };
+                }
                 let had_inline = repo_state.diff_state.inline_submodule_diff.is_some();
                 let next_entries = if had_inline {
                     submodule_inline_diff_entries(&summary)
@@ -1010,11 +1026,9 @@ pub(super) fn submodule_summary_loaded(
                 } else if had_inline {
                     repo_state.diff_state.inline_submodule_diff = None;
                 }
-                if !unchanged {
-                    repo_state.diff_state.submodule_summary_rev =
-                        repo_state.diff_state.submodule_summary_rev.wrapping_add(1);
-                    repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(summary));
-                }
+                repo_state.diff_state.submodule_summary_rev =
+                    repo_state.diff_state.submodule_summary_rev.wrapping_add(1);
+                repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(summary));
             }
             Err(e) => {
                 repo_state.diff_state.submodule_summary_rev =

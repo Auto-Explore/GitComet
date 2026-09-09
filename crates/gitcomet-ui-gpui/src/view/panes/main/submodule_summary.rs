@@ -7,14 +7,10 @@ use gitcomet_core::domain::{
     SubmoduleDiffRangeKind, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
     SubmoduleStatus,
 };
-use gitcomet_state::model::{InlineSubmoduleDiffEntry, submodule_inline_diff_entries};
-
-#[derive(Clone, Copy)]
-enum ChangeSection {
-    Range(usize),
-    Staged,
-    Unstaged,
-}
+use gitcomet_state::model::{
+    SubmoduleChangeSection as ChangeSection, submodule_inline_diff_entries,
+    submodule_inline_diff_target,
+};
 
 #[derive(Clone, Copy)]
 enum SummaryRow {
@@ -33,7 +29,6 @@ enum SummaryRow {
 struct SummaryRows {
     summary: Arc<SubmoduleDiffSummary>,
     rows: Vec<SummaryRow>,
-    entries: Arc<[InlineSubmoduleDiffEntry]>,
 }
 
 /// Carry a scroll position across a rebuild. `ListState::scroll_to` keeps an
@@ -63,8 +58,6 @@ fn restored_scroll_top(
 
 impl SummaryRows {
     fn new(summary: Arc<SubmoduleDiffSummary>) -> Self {
-        let entries: Arc<[InlineSubmoduleDiffEntry]> =
-            submodule_inline_diff_entries(&summary).into();
         let mut rows = vec![SummaryRow::Header];
         let mut inline_index = 0;
         for (slot, range) in summary.ranges.iter().enumerate() {
@@ -87,8 +80,8 @@ impl SummaryRows {
         }
         if summary.mode == SubmoduleDiffSummaryMode::Worktree {
             for (section, changes) in [
-                (ChangeSection::Staged, &summary.live_staged),
-                (ChangeSection::Unstaged, &summary.live_unstaged),
+                (ChangeSection::LiveStaged, &summary.live_staged),
+                (ChangeSection::LiveUnstaged, &summary.live_unstaged),
             ] {
                 if changes.is_empty() {
                     continue;
@@ -104,11 +97,7 @@ impl SummaryRows {
                 }
             }
         }
-        Self {
-            summary,
-            rows,
-            entries,
-        }
+        Self { summary, rows }
     }
 }
 
@@ -131,21 +120,51 @@ pub(in crate::view) struct SubmoduleSummaryCache {
 }
 
 impl MainPaneView {
+    /// The one owner of `submodule_summary_cache`, run once per frame before
+    /// anything renders: it holds a row per changed file, so it is released as
+    /// soon as the pane leaves the repository and target it was built for.
+    ///
+    /// A `Loading`/`Error` refresh of that target keeps it, and so does an
+    /// inline diff opened from one of its rows -- both come back to these rows,
+    /// at the position they left.
+    pub(in crate::view) fn release_stale_submodule_summary_cache(&mut self) {
+        let Some(cache) = self.submodule_summary_cache.as_ref() else {
+            return;
+        };
+        let still_shown = self.active_repo().is_some_and(|repo| {
+            repo.id == cache.repo_id
+                && !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded)
+                && repo.diff_state.diff_target.as_ref() == Some(&cache.target)
+        });
+        if !still_shown {
+            self.submodule_summary_cache = None;
+        }
+    }
+
     pub(in crate::view) fn render_submodule_summary(
         &mut self,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let Some(repo) = self.active_repo() else {
-            self.submodule_summary_cache = None;
             return components::empty_state(theme, "Submodule", "No repository.")
                 .into_any_element();
         };
         let Some(target) = repo.diff_state.diff_target.clone() else {
-            self.submodule_summary_cache = None;
             return components::empty_state(theme, "Submodule", "No submodule selected.")
                 .into_any_element();
         };
+        // Only a file-shaped target names a submodule; a commit range has none
+        // to summarize. The reducer leaves those at `NotLoaded` -- this makes it
+        // the pane's invariant too. No cache is ever built for one, so none can
+        // need releasing here.
+        if !matches!(
+            &target,
+            DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+        ) {
+            return components::empty_state(theme, "Submodule", "No submodule selected.")
+                .into_any_element();
+        }
         let summary = match &repo.diff_state.submodule_summary {
             Loadable::Ready(summary) => Arc::clone(summary),
             state => {
@@ -153,7 +172,8 @@ impl MainPaneView {
                     Loadable::Error(error) => error.clone(),
                     _ => "Loading submodule summary…".to_string(),
                 };
-                // Keep the same target's scroll position while refreshing.
+                // Any cache surviving here is this target's own; see
+                // `release_stale_submodule_summary_cache`.
                 return components::empty_state(theme, "Submodule", message).into_any_element();
             }
         };
@@ -331,8 +351,10 @@ impl MainPaneView {
                 .text_xs()
                 .text_color(theme.colors.foreground.secondary)
                 .child(match section {
-                    ChangeSection::Staged => "Uncommitted inner staged",
-                    _ => "Uncommitted inner unstaged",
+                    ChangeSection::LiveStaged => "Uncommitted inner staged",
+                    ChangeSection::LiveUnstaged => "Uncommitted inner unstaged",
+                    // `SummaryRows` emits `LiveHeader` for the live halves only.
+                    ChangeSection::Range(_) => "",
                 })
                 .into_any_element(),
             SummaryRow::Change {
@@ -342,8 +364,8 @@ impl MainPaneView {
             } => {
                 let changes = match section {
                     ChangeSection::Range(slot) => &summary.ranges[slot].changes,
-                    ChangeSection::Staged => &summary.live_staged,
-                    ChangeSection::Unstaged => &summary.live_unstaged,
+                    ChangeSection::LiveStaged => &summary.live_staged,
+                    ChangeSection::LiveUnstaged => &summary.live_unstaged,
                 };
                 let row = self.render_submodule_change(
                     repo_id,
@@ -351,7 +373,8 @@ impl MainPaneView {
                     &changes[index],
                     summary,
                     &submodule_repo_path,
-                    Arc::clone(&presentation.entries),
+                    section,
+                    index,
                     inline_index,
                     theme,
                     cx,
@@ -683,9 +706,10 @@ impl MainPaneView {
         repo_id: RepoId,
         row_ix: usize,
         change: &SubmoduleInnerChange,
-        summary: &SubmoduleDiffSummary,
+        summary: &Arc<SubmoduleDiffSummary>,
         submodule_repo_path: &Arc<std::path::PathBuf>,
-        inline_entries: Arc<[InlineSubmoduleDiffEntry]>,
+        section: ChangeSection,
+        change_ix: usize,
         inline_selected_ix: Option<usize>,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
@@ -715,13 +739,14 @@ impl MainPaneView {
             .map(|value| format!("-{value}"))
             .unwrap_or_else(|| "—".to_string());
         let change_path = change.path.clone();
-        let target = inline_selected_ix
-            .and_then(|ix| inline_entries.get(ix))
-            .map(|entry| entry.target.clone());
+        // `None` exactly when this row has nothing to open: a pointer range
+        // missing an endpoint has no two sides to diff.
+        let target = submodule_inline_diff_target(summary, section, change_ix);
         let repo_path_for_click = submodule_repo_path.clone();
         let repo_path_for_menu = submodule_repo_path.clone();
         let summary_path_for_inline = summary.path.clone();
-        let inline_entries_for_click = Arc::clone(&inline_entries);
+        // Built by the click, not by the frame: one entry per changed file.
+        let summary_for_click = Arc::clone(summary);
         let context_menu_path = change_path.clone();
 
         let mut row = div()
@@ -769,7 +794,7 @@ impl MainPaneView {
                         origin: gitcomet_state::model::ForeignDiffOrigin::Submodule,
                         submodule_repo_path: repo_path_for_click.as_ref().clone(),
                         parent_submodule_path: summary_path_for_inline.clone(),
-                        entries: Arc::clone(&inline_entries_for_click),
+                        entries: submodule_inline_diff_entries(&summary_for_click).into(),
                         selected_ix,
                     });
                     cx.notify();

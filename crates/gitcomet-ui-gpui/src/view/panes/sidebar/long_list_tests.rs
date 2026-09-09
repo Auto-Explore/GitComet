@@ -323,6 +323,170 @@ fn cross_section_filter_popover_places_rows_using_both_row_heights(cx: &mut gpui
     });
 }
 
+/// Every row kind has to lay out at the height `branch_sidebar_row_height_px`
+/// claims. Measured across a window spanning headers and the section spacer:
+/// one wrong height in between moves every row after it.
+#[gpui::test]
+fn collapsed_popover_row_heights_match_what_is_laid_out(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+    let state = branch_fixture(400);
+
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(Arc::clone(&state));
+            test_support::push_test_state(view, Arc::clone(&state), cx);
+            view.set_sidebar_collapsed(true, cx);
+            view.open_sidebar_collapsed_popover(CollapsedSidebarSection::Local, cx);
+        })
+    });
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        pane.update(app, |pane, cx| {
+            pane.collapsed_popover_filter_open = true;
+            pane.collapsed_popover_filter_query = "shared/topic".to_string();
+            pane.collapsed_popover_rows_cache = None;
+            cx.notify();
+        })
+    });
+    test_support::redraw(cx);
+
+    let (rows, tops) = cx.update(|_window, app| {
+        let pane = pane.read(app);
+        let cache = pane
+            .collapsed_popover_rows_cache
+            .as_ref()
+            .expect("popover rows cached");
+        (Rc::clone(&cache.rows), cache.tops.clone())
+    });
+    let spacer_ix = rows
+        .iter()
+        .position(|row| matches!(row, BranchSidebarRow::SectionSpacer))
+        .expect("a cross-section filter separates the two sections with a spacer");
+
+    // Park the window over the spacer, where the mixed kinds are.
+    cx.update(|_window, app| {
+        pane.update(app, |pane, cx| {
+            let top = crate::ui_scale::UiScale::current(cx).px(tops[spacer_ix.saturating_sub(4)]);
+            pane.collapsed_popover_scroll
+                .set_offset(gpui::point(px(0.0), -top));
+            cx.notify();
+        })
+    });
+    test_support::redraw(cx);
+
+    // Two branch rows either side of the spacer, chosen from the row list so the
+    // probe leaks exactly two selectors (`debug_bounds` takes `&'static str`).
+    let is_branch = |ix: &usize| matches!(rows[*ix], BranchSidebarRow::Branch { .. });
+    let first_ix = (0..spacer_ix)
+        .rev()
+        .find(is_branch)
+        .expect("a branch row before the spacer");
+    let last_ix = (spacer_ix + 1..rows.len())
+        .filter(is_branch)
+        .nth(14)
+        .expect("branch rows after the spacer");
+    let bounds_of = |cx: &mut gpui::VisualTestContext, ix: usize| {
+        let selector: &'static str = format!("branch_row_81_{ix}").leak();
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("row {ix} must be inside the rendered window"))
+    };
+    let first = bounds_of(cx, first_ix);
+    let last = bounds_of(cx, last_ix);
+    let covered: Vec<&BranchSidebarRow> = rows[first_ix..last_ix].iter().collect();
+    assert!(
+        covered
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::FilterGroupHeader { .. })),
+        "and a header, so the check is not only about branch rows"
+    );
+
+    let measured = f32::from(last.origin.y - first.origin.y);
+    let predicted = tops[last_ix] - tops[first_ix];
+    assert!(
+        (measured - predicted).abs() < 0.5,
+        "rows {first_ix}..{last_ix} ({} of them, kinds {:?}) predicted {predicted}px, laid out {measured}px",
+        covered.len(),
+        covered
+            .iter()
+            .map(|row| format!("{row:?}").chars().take(24).collect::<String>())
+            .collect::<std::collections::BTreeSet<_>>(),
+    );
+}
+
+/// The popover rebuilds its presentation on every frame it is open, so a hit
+/// must not copy the persisted sets just to compare them.
+#[gpui::test]
+fn an_open_popover_reuses_its_rows_without_copying_the_persisted_sets(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+    let state = branch_fixture(400);
+    let workdir = state.repos[0].spec.workdir.clone();
+
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(Arc::clone(&state));
+            test_support::push_test_state(view, Arc::clone(&state), cx);
+            view.set_sidebar_collapsed(true, cx);
+            view.sidebar_pane.update(cx, |pane, _cx| {
+                pane.sidebar_collapsed_items_by_repo.insert(
+                    workdir.clone(),
+                    (0..400).map(|ix| format!("group:feat/{ix:06}")).collect(),
+                );
+                pane.sidebar_pinned_branches_by_repo.insert(
+                    workdir.clone(),
+                    (0..400).map(|ix| format!("shared/topic-{ix:06}")).collect(),
+                );
+            });
+            view.open_sidebar_collapsed_popover(CollapsedSidebarSection::Local, cx);
+        })
+    });
+    test_support::redraw(cx);
+
+    let (rows, allocations) = cx.update(|_window, app| {
+        pane.update(app, |pane, _cx| {
+            let mut rows = None;
+            let mut fewest = u64::MAX;
+            // `measure_allocations` watches a process-global allocator, so a
+            // parallel test can only ever inflate a sample: take the smallest.
+            for _ in 0..3 {
+                let (presentation, metrics) = crate::perf_alloc::measure_allocations(|| {
+                    pane.build_collapsed_popover_presentation(CollapsedSidebarSection::Local)
+                });
+                fewest = fewest.min(metrics.alloc_ops);
+                rows = presentation.map(|presentation| presentation.rows);
+            }
+            (rows.expect("a popover presentation"), fewest)
+        })
+    });
+
+    cx.update(|_window, app| {
+        let cached = pane.read(app);
+        let cached = cached
+            .collapsed_popover_rows_cache
+            .as_ref()
+            .expect("popover rows cached");
+        assert!(
+            Rc::ptr_eq(&rows, &cached.rows),
+            "a repeat frame must hand back the rows it already built"
+        );
+        assert_eq!(cached.collapsed.len(), 400);
+        assert_eq!(cached.pinned.len(), 400);
+    });
+    assert!(
+        allocations < 200,
+        "a cache hit allocated {allocations} times against 800 persisted entries"
+    );
+}
+
 fn file_fixture(count: usize) -> Arc<AppState> {
     let mut repo = RepoState::new_opening(
         RepoId(81),

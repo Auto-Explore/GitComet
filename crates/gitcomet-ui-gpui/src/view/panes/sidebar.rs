@@ -331,6 +331,8 @@ struct CollapsedPopoverRowsCache {
     repo_id: RepoId,
     fingerprint: BranchSidebarFingerprint,
     section: CollapsedSidebarSection,
+    /// The persisted sets as stored, before this popover's own force-expansions.
+    /// They are the key, so a hit compares them without copying them first.
     collapsed: BTreeSet<String>,
     pinned: BTreeSet<String>,
     query: String,
@@ -382,11 +384,31 @@ fn uniform_visible_range(
 
 /// Unscaled height of one popover row, matching what the shared row renderer
 /// lays out for that variant.
+///
+/// Exhaustive on purpose: this prefix sum places every row of a virtualized
+/// popover, so a new variant must state its height rather than silently drift
+/// the band. `collapsed_popover_row_heights_match_what_is_laid_out` measures
+/// the answers against the real layout.
 fn branch_sidebar_row_height_px(row: &BranchSidebarRow) -> f32 {
-    if matches!(row, BranchSidebarRow::SectionSpacer) {
-        crate::view::rows::sidebar::BRANCH_TREE_SPACER_HEIGHT_PX
-    } else {
-        crate::view::rows::sidebar::BRANCH_TREE_ROW_HEIGHT_PX
+    use crate::view::rows::sidebar::{BRANCH_TREE_ROW_HEIGHT_PX, BRANCH_TREE_SPACER_HEIGHT_PX};
+    match row {
+        BranchSidebarRow::SectionSpacer => BRANCH_TREE_SPACER_HEIGHT_PX,
+        BranchSidebarRow::PinnedHeader { .. }
+        | BranchSidebarRow::SectionHeader { .. }
+        | BranchSidebarRow::FilterGroupHeader { .. }
+        | BranchSidebarRow::Placeholder { .. }
+        | BranchSidebarRow::RemoteHeader { .. }
+        | BranchSidebarRow::GroupHeader { .. }
+        | BranchSidebarRow::Branch { .. }
+        | BranchSidebarRow::WorktreesHeader { .. }
+        | BranchSidebarRow::WorktreePlaceholder { .. }
+        | BranchSidebarRow::WorktreeItem { .. }
+        | BranchSidebarRow::SubmodulesHeader { .. }
+        | BranchSidebarRow::SubmodulePlaceholder { .. }
+        | BranchSidebarRow::SubmoduleItem { .. }
+        | BranchSidebarRow::StashHeader { .. }
+        | BranchSidebarRow::StashPlaceholder { .. }
+        | BranchSidebarRow::StashItem { .. } => BRANCH_TREE_ROW_HEIGHT_PX,
     }
 }
 
@@ -1523,11 +1545,44 @@ impl SidebarPaneView {
         // Workspace badges are collapse-independent; reuse the cached ones.
         let base = self.branch_sidebar_presentation_cached()?;
         let repo = self.active_repo()?;
-        let mut collapsed = self
+        let empty = BTreeSet::new();
+        // Probed against what is *stored*, not a mutated copy: every edit below
+        // is a pure function of `section` and `query`, which the key already
+        // carries. So a hit clones neither set, on every frame it is open.
+        let stored_collapsed = self
             .sidebar_collapsed_items_by_repo
             .get(&repo.spec.workdir)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&empty);
+        let pinned = self
+            .sidebar_pinned_branches_by_repo
+            .get(&repo.spec.workdir)
+            .unwrap_or(&empty);
+        let query = if self.collapsed_popover_filter_open {
+            self.collapsed_popover_filter_query.trim()
+        } else {
+            ""
+        };
+        let fingerprint = BranchSidebarFingerprint::from_repo(repo);
+        if let Some(cached) = self.collapsed_popover_rows_cache.as_ref().filter(|cached| {
+            cached.repo_id == repo.id
+                && cached.fingerprint == fingerprint
+                && cached.section == section
+                && cached.query == query
+                && &cached.collapsed == stored_collapsed
+                && &cached.pinned == pinned
+        }) {
+            return Some(SidebarPresentation {
+                rows: Rc::clone(&cached.rows),
+                workspace_badges: base.workspace_badges,
+            });
+        }
+        // While filtering, ignore every persisted collapse state: a match hidden
+        // inside a collapsed `feat/` group would make the filter look broken.
+        let mut collapsed = if query.is_empty() {
+            stored_collapsed.clone()
+        } else {
+            BTreeSet::new()
+        };
         // Force-expand the target section so its content is present regardless of
         // the persisted collapse state (which we never mutate here).
         if let Some(key) = section.storage_key()
@@ -1548,38 +1603,7 @@ impl SidebarPaneView {
                 branch_sidebar::toggle_collapse_state(&mut collapsed, pinned_key);
             }
         }
-        let pinned = self
-            .sidebar_pinned_branches_by_repo
-            .get(&repo.spec.workdir)
-            .cloned()
-            .unwrap_or_default();
-        let query = if self.collapsed_popover_filter_open {
-            self.collapsed_popover_filter_query.trim()
-        } else {
-            ""
-        };
-        // While filtering, ignore every persisted collapse state: a match hidden
-        // inside a collapsed `feat/` group would make the filter look broken.
-        let collapsed = if query.is_empty() {
-            collapsed
-        } else {
-            BTreeSet::new()
-        };
-        let fingerprint = BranchSidebarFingerprint::from_repo(repo);
-        if let Some(cached) = self.collapsed_popover_rows_cache.as_ref().filter(|cached| {
-            cached.repo_id == repo.id
-                && cached.fingerprint == fingerprint
-                && cached.section == section
-                && cached.collapsed == collapsed
-                && cached.pinned == pinned
-                && cached.query == query
-        }) {
-            return Some(SidebarPresentation {
-                rows: Rc::clone(&cached.rows),
-                workspace_badges: base.workspace_badges,
-            });
-        }
-        let full = branch_sidebar::branch_sidebar_rows(repo, &collapsed, &pinned, query);
+        let full = branch_sidebar::branch_sidebar_rows(repo, &collapsed, pinned, query);
         let scoped = if query.is_empty() {
             section_content_rows(&full, section)
         } else {
@@ -1597,8 +1621,8 @@ impl SidebarPaneView {
             repo_id: repo.id,
             fingerprint,
             section,
-            collapsed,
-            pinned,
+            collapsed: stored_collapsed.clone(),
+            pinned: pinned.clone(),
             query: query.to_owned(),
             rows: Rc::clone(&rows),
             tops,

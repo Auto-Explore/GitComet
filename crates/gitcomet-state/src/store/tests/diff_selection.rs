@@ -4058,6 +4058,69 @@ fn a_rescan_reloads_the_open_worktree_patch_even_when_nothing_moved() {
     );
 }
 
+/// A linked worktree is rescanned on a timer, so re-wrapping an identical scan
+/// allocated an entry per changed file on every tick. `Arc::ptr_eq` is how the
+/// test sees the list was left alone, not an invariant readers rely on.
+#[test]
+fn a_rescan_that_moved_nothing_does_not_rebuild_the_worktree_entry_list() {
+    let (mut state, _) = worktree_inline_diff_fixture(&["a.rs", "b.rs"], 1, "side");
+    let before = Arc::clone(
+        &state.repos[0]
+            .diff_state
+            .inline_submodule_diff
+            .as_ref()
+            .expect("the diff is open")
+            .entries,
+    );
+
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![worktree_dirty_summary(&["a.rs", "b.rs"], "side")]),
+        }),
+    );
+
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the diff stays open");
+    assert_eq!(inline.selected_ix, 1);
+    assert!(
+        Arc::ptr_eq(&before, &inline.entries),
+        "an unchanged scan must not rebuild the list"
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![worktree_dirty_summary(
+                &["a.rs", "b.rs", "c.rs"],
+                "side",
+            )]),
+        }),
+    );
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the diff stays open");
+    assert_eq!(inline.entries.len(), 3, "a new file joins the list");
+    assert_eq!(inline.selected_ix, 1, "and the open file keeps its row");
+    assert!(
+        !Arc::ptr_eq(&before, &inline.entries),
+        "a scan that did move something must replace the list"
+    );
+}
+
 /// A file that is staged *and* modified again has a row in each half of the
 /// list. Re-resolving by path alone always found the staged one, so every rescan
 /// silently moved a reader of the unstaged half onto the staged copy.
@@ -4842,4 +4905,266 @@ fn reloading_an_identical_submodule_summary_keeps_the_arc_and_revision() {
         "a changed summary replaces it"
     );
     assert_ne!(first_rev, third_rev, "and bumps the revision");
+}
+
+/// The poll behind an idle repository redelivers the same summary every 250ms:
+/// rebuilding the entry list from it is churn, but re-reading the patch is not
+/// -- editing an inner file in place moves nothing in the summary.
+#[test]
+fn reloading_an_identical_submodule_summary_rereads_the_patch_without_rebuilding_entries() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let path = PathBuf::from("vendor/submodule");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    };
+    let summary = || SubmoduleDiffSummary {
+        path: path.clone(),
+        mode: SubmoduleDiffSummaryMode::Worktree,
+        status: Some(SubmoduleStatus::HeadMismatch),
+        checkout_available: true,
+        commit_id: None,
+        parent_commit_id: None,
+        checked_out_head: Some(CommitId("head".into())),
+        ranges: vec![],
+        live_staged: vec![],
+        live_unstaged: (0..4)
+            .map(|ix| SubmoduleInnerChange {
+                path: PathBuf::from(format!("src/file_{ix}.rs")),
+                kind: FileStatusKind::Modified,
+                additions: Some(1),
+                deletions: Some(1),
+            })
+            .collect(),
+    };
+    let entries: Arc<[crate::model::InlineSubmoduleDiffEntry]> =
+        crate::model::submodule_inline_diff_entries(&summary()).into();
+    let inline_target = entries[2].target.clone();
+
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
+            path: path.clone(),
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        }]),
+        staged: std::sync::Arc::new(vec![]),
+    })));
+    repo_state.set_submodules(Loadable::Ready(vec![Submodule {
+        path: path.clone(),
+        recorded_head: CommitId("recorded".into()),
+        checked_out_head: Some(CommitId("head".into())),
+        status: SubmoduleStatus::HeadMismatch,
+    }]));
+    repo_state.set_diff_target(Some(target.clone()));
+    repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(summary()));
+    repo_state.diff_state.submodule_summary_rev = 1;
+    repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+        origin: crate::model::ForeignDiffOrigin::Submodule,
+        submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
+        parent_submodule_path: path.clone(),
+        entries: Arc::clone(&entries),
+        selected_ix: 2,
+        target: inline_target.clone(),
+        rev: 7,
+        diff_rev: 1,
+        diff: Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
+            target: inline_target,
+            lines: Vec::new(),
+        })),
+        diff_file_rev: 1,
+        diff_file: Loadable::NotLoaded,
+        diff_file_image: Loadable::NotLoaded,
+    });
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+    let diff_state_rev = state.repos[0].diff_state.diff_state_rev;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id: RepoId(1),
+            target: target.clone(),
+            result: Ok(summary()),
+        }),
+    );
+
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [
+                Effect::LoadInlineSubmoduleSelectedDiff { .. },
+                Effect::LoadInlineSubmoduleSelectedDiffFile { .. },
+            ]
+        ),
+        "the open live file must still be re-read, got {effects:?}"
+    );
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the inline diff stays open");
+    assert_eq!(inline.selected_ix, 2, "the selection must not move");
+    assert!(
+        Arc::ptr_eq(&entries, &inline.entries),
+        "and its entry list must not be rebuilt"
+    );
+    assert!(
+        matches!(inline.diff, Loadable::Ready(_)),
+        "the patch on screen must stay until the new one lands, got {:?}",
+        inline.diff
+    );
+    assert_eq!(
+        state.repos[0].diff_state.submodule_summary_rev, 1,
+        "the summary itself did not change"
+    );
+    assert_eq!(
+        state.repos[0].diff_state.diff_state_rev, diff_state_rev,
+        "and the re-read owes no repaint of its own"
+    );
+
+    // A changed summary still refreshes the open diff.
+    let mut changed = summary();
+    changed.live_unstaged.remove(0);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id: RepoId(1),
+            target,
+            result: Ok(changed),
+        }),
+    );
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the inline diff stays open");
+    assert_eq!(inline.selected_ix, 1, "the selected file moved up one row");
+    assert_ne!(inline.rev, 7);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadInlineSubmoduleSelectedDiff { .. })),
+        "a changed summary must still reload the open diff, got {effects:?}"
+    );
+}
+
+/// The other half of the same rule: a range entry is a diff between two fixed
+/// commits, so an identical summary has nothing to re-read for it.
+#[test]
+fn reloading_an_identical_submodule_summary_does_not_re_read_a_range_entry() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let path = PathBuf::from("vendor/submodule");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    };
+    let summary = || SubmoduleDiffSummary {
+        path: path.clone(),
+        mode: SubmoduleDiffSummaryMode::Worktree,
+        status: Some(SubmoduleStatus::HeadMismatch),
+        checkout_available: true,
+        commit_id: None,
+        parent_commit_id: None,
+        checked_out_head: Some(CommitId("head".into())),
+        ranges: vec![gitcomet_core::domain::SubmoduleDiffRange {
+            kind: gitcomet_core::domain::SubmoduleDiffRangeKind::StagedPointer,
+            from: Some(CommitId("aaaa".into())),
+            to: Some(CommitId("bbbb".into())),
+            unavailable_reason: None,
+            changes: vec![SubmoduleInnerChange {
+                path: PathBuf::from("src/lib.rs"),
+                kind: FileStatusKind::Modified,
+                additions: Some(1),
+                deletions: Some(1),
+            }],
+        }],
+        live_staged: vec![],
+        live_unstaged: vec![],
+    };
+    let entries: Arc<[crate::model::InlineSubmoduleDiffEntry]> =
+        crate::model::submodule_inline_diff_entries(&summary()).into();
+    let inline_target = entries[0].target.clone();
+    assert!(matches!(
+        inline_target,
+        gitcomet_core::domain::DiffTarget::CommitRange { .. }
+    ));
+
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
+            path: path.clone(),
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        }]),
+        staged: std::sync::Arc::new(vec![]),
+    })));
+    repo_state.set_submodules(Loadable::Ready(vec![Submodule {
+        path: path.clone(),
+        recorded_head: CommitId("recorded".into()),
+        checked_out_head: Some(CommitId("head".into())),
+        status: SubmoduleStatus::HeadMismatch,
+    }]));
+    repo_state.set_diff_target(Some(target.clone()));
+    repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(summary()));
+    repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+        origin: crate::model::ForeignDiffOrigin::Submodule,
+        submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
+        parent_submodule_path: path.clone(),
+        entries: Arc::clone(&entries),
+        selected_ix: 0,
+        target: inline_target.clone(),
+        rev: 7,
+        diff_rev: 1,
+        diff: Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
+            target: inline_target,
+            lines: Vec::new(),
+        })),
+        diff_file_rev: 1,
+        diff_file: Loadable::NotLoaded,
+        diff_file_image: Loadable::NotLoaded,
+    });
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id: RepoId(1),
+            target,
+            result: Ok(summary()),
+        }),
+    );
+
+    assert!(
+        effects.is_empty(),
+        "two fixed commits cannot have changed, got {effects:?}"
+    );
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the inline diff stays open");
+    assert_eq!(inline.rev, 7, "the inline generation must not move");
+    assert!(Arc::ptr_eq(&entries, &inline.entries));
 }

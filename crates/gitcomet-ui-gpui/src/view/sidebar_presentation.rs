@@ -507,6 +507,75 @@ mod tests {
         );
     }
 
+    /// A repository's own worktree is the one row the badge index leaves out, so
+    /// the index changes meaning when `set_spec` moves `spec.workdir` under it.
+    #[test]
+    fn workspace_badge_cache_follows_a_repositorys_workdir_moving() {
+        let worktrees = Arc::new(vec![
+            gitcomet_core::domain::Worktree {
+                path: PathBuf::from("/tmp/repo"),
+                head: None,
+                branch: Some("main".to_string()),
+                detached: false,
+            },
+            gitcomet_core::domain::Worktree {
+                path: PathBuf::from("/tmp/repo-feature"),
+                head: None,
+                branch: Some("feature".to_string()),
+                detached: false,
+            },
+        ]);
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::clone(&worktrees));
+        repo.worktrees_rev = 1;
+        let mut state = AppState {
+            active_repo: Some(RepoId(1)),
+            repos: vec![repo],
+            ..Default::default()
+        };
+        let mut cache = SidebarPresentationCache::default();
+
+        let badges = workspace_badges_cached(
+            &mut cache.workspace_badges,
+            &state.repos[0],
+            state.repos.as_slice(),
+        );
+        assert!(badges.listed_path("main").is_none(), "the repo's own row");
+        assert_eq!(
+            badges.listed_path("feature"),
+            Some(&PathBuf::from("/tmp/repo-feature"))
+        );
+        let fingerprint = cache.active_workspace_badges_fingerprint(&state);
+
+        // The same worktree list, the same open repositories -- only the
+        // repository's own path moved.
+        state.repos[0].spec.workdir = PathBuf::from("/tmp/repo-feature");
+        assert!(matches!(
+            &state.repos[0].worktrees,
+            Loadable::Ready(current) if Arc::ptr_eq(current, &worktrees)
+        ));
+
+        let badges = workspace_badges_cached(
+            &mut cache.workspace_badges,
+            &state.repos[0],
+            state.repos.as_slice(),
+        );
+        assert_eq!(
+            badges.listed_path("main"),
+            Some(&PathBuf::from("/tmp/repo")),
+            "the old workdir's row is a listed workspace now"
+        );
+        assert!(
+            badges.listed_path("feature").is_none(),
+            "and the new one is the repository itself"
+        );
+        assert_ne!(
+            fingerprint,
+            cache.active_workspace_badges_fingerprint(&state),
+            "the sidebar has to repaint for it"
+        );
+    }
+
     #[test]
     fn workspace_badge_index_returns_none_for_unknown_branch() {
         let mut repo = repo_state(RepoId(1), "/tmp/repo");

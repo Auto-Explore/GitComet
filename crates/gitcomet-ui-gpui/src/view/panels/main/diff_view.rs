@@ -1669,9 +1669,6 @@ impl MainPaneView {
         let has_submodule_summary = self
             .active_repo()
             .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
-        if !has_submodule_summary {
-            self.submodule_summary_cache = None;
-        }
         let untracked_directory_notice = if has_submodule_summary || inline_submodule_diff_active {
             None
         } else {

@@ -251,7 +251,7 @@ impl WorktreeDirtySummary {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SubmoduleStatus {
     UpToDate,
     NotInitialized,

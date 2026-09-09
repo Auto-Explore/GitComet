@@ -748,10 +748,12 @@ fn refresh_worktree_inline_diff_entries(
     let changed = entries[..] != inline.entries[..]
         || selected != inline.selected_ix
         || origin != inline.origin;
-    inline.entries = entries.into();
-    inline.selected_ix = selected;
-    inline.origin = origin;
+    // Only a real change replaces the list: a rescan lands on a timer, and
+    // re-wrapping an identical one allocates an entry per changed file.
     if changed {
+        inline.entries = entries.into();
+        inline.selected_ix = selected;
+        inline.origin = origin;
         repo_state.bump_diff_state_rev();
     }
     Some(if target_moved {
