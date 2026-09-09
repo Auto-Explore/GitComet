@@ -393,7 +393,7 @@ impl SettingsCategory {
         match self {
             Self::General => {
                 "general theme date format ui scale ui font editor font ligatures \
-                 external code editor date timezone appearance density compact comfortable \
+                 external code editor date timezone appearance density compact comfortable spacious \
                  font size markdown preview"
             }
             Self::SecurityPrivacy => {

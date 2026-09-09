@@ -1,8 +1,7 @@
 use super::*;
 use crate::view::terminal_alacritty::{terminal_default_background, terminal_default_foreground};
 
-/// One side of the dialog: at least `preferred` where the window allows it,
-/// growing with the window up to `max`, and never past what is available.
+/// One side of the dialog.
 fn hook_activity_dialog_extent(
     available: Pixels,
     preferred: Pixels,

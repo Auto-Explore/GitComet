@@ -972,13 +972,10 @@ pub(super) fn history_commit_row_canvas(
                 HISTORY_TAG_CHIP_HEIGHT_PX,
                 HISTORY_TAG_CHIP_COMFORTABLE_HEIGHT_PX,
             ));
-            let chip_pad_x = scaled_px(
-                if theme.metrics.density == crate::appearance::UiDensity::Comfortable {
-                    HISTORY_TAG_CHIP_COMFORTABLE_PADDING_X_PX
-                } else {
-                    HISTORY_TAG_CHIP_PADDING_X_PX
-                },
-            );
+            let chip_pad_x = scaled_px(theme.metrics.ramp(
+                HISTORY_TAG_CHIP_PADDING_X_PX,
+                HISTORY_TAG_CHIP_COMFORTABLE_PADDING_X_PX,
+            ));
             let chip_gap = scaled_px(HISTORY_TAG_CHIP_GAP_PX);
 
             let branch_content_bounds = Bounds::new(
@@ -1644,7 +1641,10 @@ mod tests {
             "the padding has to follow the chip or the label crowds its edges"
         );
 
-        for metrics in [compact, comfortable] {
+        for metrics in UiDensity::ALL.into_iter().map(|density| Appearance {
+            density,
+            ..Appearance::default()
+        }) {
             let row = crate::view::rows::history_row_height(
                 crate::ui_scale::UiScale::from_percent(100).with_appearance(metrics),
             );

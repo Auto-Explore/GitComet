@@ -3181,7 +3181,7 @@ fn appearance_sizes_apply_live_to_every_main_window_and_keep_ui_scale_independen
 #[test]
 fn density_and_font_geometry_remain_independent_across_scales() {
     for percent in [80, 100, 125, 200] {
-        for density in [UiDensity::Compact, UiDensity::Comfortable] {
+        for density in UiDensity::ALL {
             for ui_size in [10, 14, 24] {
                 for editor_size in [8, 13, 32] {
                     let metrics = Appearance {

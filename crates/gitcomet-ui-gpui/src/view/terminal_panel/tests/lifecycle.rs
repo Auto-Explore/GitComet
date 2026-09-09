@@ -193,9 +193,9 @@ fn comfortable_bottom_panel_tabs_grow_with_the_density(cx: &mut gpui::TestAppCon
         "bottom_panel_tab_terminal_close",
         "bottom_panel_tab_reflog",
     ];
-    let mut compact = Vec::new();
+    let mut per_density: Vec<Vec<gpui::Pixels>> = Vec::new();
 
-    for density in [UiDensity::Compact, UiDensity::Comfortable] {
+    for density in UiDensity::ALL {
         cx.update(|_window, app| {
             app.set_global(Appearance {
                 density,
@@ -208,42 +208,34 @@ fn comfortable_bottom_panel_tabs_grow_with_the_density(cx: &mut gpui::TestAppCon
         });
         cx.run_until_parked();
 
-        for (ix, selector) in selectors.into_iter().enumerate() {
-            let height = cx
-                .debug_bounds(selector)
-                .unwrap_or_else(|| panic!("missing {selector} at {density:?} density"))
-                .size
-                .height;
-            match density {
-                UiDensity::Compact => compact.push(height),
-                UiDensity::Comfortable => assert!(
-                    height > compact[ix],
-                    "{selector} must grow under Comfortable, stayed {height:?}"
-                ),
-            }
-        }
-
         let mut height = |selector: &'static str| {
             cx.debug_bounds(selector)
-                .unwrap_or_else(|| panic!("missing {selector}"))
+                .unwrap_or_else(|| panic!("missing {selector} at {density:?} density"))
                 .size
                 .height
         };
-        let (terminal_tab, switcher_tab) = (
+        per_density.push(selectors.into_iter().map(&mut height).collect());
+
+        // Both strips are built from `panel_tab`, so they must agree.
+        assert_eq!(
             height("terminal_tab-0"),
-            height("bottom_panel_tab_terminal"),
+            height("bottom_panel_tab_terminal")
         );
-        let (terminal_close, switcher_close) = (
+        assert_eq!(
             height("terminal_tab_close-0"),
-            height("bottom_panel_tab_terminal_close"),
+            height("bottom_panel_tab_terminal_close")
         );
-        assert_eq!(
-            terminal_tab, switcher_tab,
-            "both strips share `panel_tab`, so their tabs must measure the same at {density:?}"
-        );
-        assert_eq!(
-            terminal_close, switcher_close,
-            "and so must their close affordances at {density:?}"
-        );
+    }
+
+    for (step, pair) in per_density.windows(2).enumerate() {
+        for (ix, selector) in selectors.into_iter().enumerate() {
+            assert!(
+                pair[1][ix] > pair[0][ix],
+                "{selector} must grow from {:?} to {:?}, stayed {:?}",
+                UiDensity::ALL[step],
+                UiDensity::ALL[step + 1],
+                pair[1][ix]
+            );
+        }
     }
 }

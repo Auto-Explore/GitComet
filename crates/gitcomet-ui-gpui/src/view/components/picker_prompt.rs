@@ -2275,10 +2275,7 @@ mod tests {
         let items = [PickerPromptItem::plain("only")];
         let layout = picker_prompt_layout(&items, "");
 
-        for density in [
-            crate::appearance::UiDensity::Compact,
-            crate::appearance::UiDensity::Comfortable,
-        ] {
+        for density in crate::appearance::UiDensity::ALL {
             for percent in [100, 150] {
                 let scale =
                     UiScale::from_percent(percent).with_appearance(crate::appearance::Appearance {

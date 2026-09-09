@@ -332,7 +332,6 @@ impl Render for ActionBarView {
             window.viewport_size().width / (theme.metrics.ui_font_size_px as f32 / 14.0).max(1.0),
             ui_scale_percent,
         );
-        let comfortable = theme.metrics.density == crate::appearance::UiDensity::Comfortable;
         let dense_spacing = density != ActionBarDensity::Wide;
         let badge_label_max_chars = match density {
             ActionBarDensity::Compact => COMPACT_BADGE_LABEL_MAX_CHARS,
@@ -340,20 +339,18 @@ impl Render for ActionBarView {
             ActionBarDensity::Wide => BADGE_LABEL_MAX_CHARS,
         };
         let action_label = |label: &'static str| secondary_action_label(density, label);
-        let action_group_gap = if comfortable {
-            scaled_px(6.0)
-        } else if dense_spacing {
-            scaled_px(4.0)
-        } else {
-            scaled_px(8.0)
+        // Two independent things called density: the responsive breakpoint above
+        // picks the base gap from the viewport, then the user's density setting
+        // ramps it.
+        let gap = |dense: f32, wide: f32, comfortable: f32| {
+            scaled_px(
+                theme
+                    .metrics
+                    .ramp(if dense_spacing { dense } else { wide }, comfortable),
+            )
         };
-        let tracking_action_gap = if comfortable {
-            scaled_px(6.0)
-        } else if dense_spacing {
-            scaled_px(2.0)
-        } else {
-            scaled_px(4.0)
-        };
+        let action_group_gap = gap(4.0, 8.0, 6.0);
+        let tracking_action_gap = gap(2.0, 4.0, 6.0);
         let action_bar_padding_x = if dense_spacing {
             scaled_px(4.0)
         } else {

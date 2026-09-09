@@ -2439,10 +2439,11 @@ impl SettingsWindowView {
         let theme = self.theme;
         let mut density = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
             .child(div().flex_1().child("UI density"));
-        for value in [UiDensity::Compact, UiDensity::Comfortable] {
+        for value in UiDensity::ALL {
             density = density.child(
                 components::Button::new(format!("settings_density_{}", value.key()), value.label())
                     .selected(self.appearance_metrics.density == value)

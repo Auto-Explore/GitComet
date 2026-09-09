@@ -19,8 +19,8 @@ const PANEL_TAB_GAP_PX: f32 = 6.0;
 const PANEL_TAB_PAD_X_PX: f32 = 8.0;
 const PANEL_TAB_ICON_PX: f32 = 12.0;
 
-/// The `x` on a panel tab. The caller adds the handler -- with
-/// `stop_propagation`, so closing never also selects -- and the tooltip.
+/// The `x` on a panel tab. The caller adds the tooltip and the handler, which
+/// needs `stop_propagation` so closing never also selects.
 pub fn panel_tab_close(
     id: impl Into<ElementId>,
     theme: AppTheme,

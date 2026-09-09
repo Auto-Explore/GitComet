@@ -582,10 +582,7 @@ impl SidebarPaneView {
                         .id(("pinned_section", ix))
                         .debug_selector(move || format!("pinned_section_{selector_suffix}"))
                         .relative()
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -660,10 +657,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_section", ix))
                         .relative()
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -723,10 +717,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_filter_group", ix))
                         .debug_selector(move || format!("branch_filter_group_{selector_suffix}"))
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -774,10 +765,7 @@ impl SidebarPaneView {
                         .id(("stash_section", ix))
                         .debug_selector(move || format!("stash_section_{ix}"))
                         .relative()
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -836,10 +824,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::StashPlaceholder { message } => div()
                     .id(("stash_placeholder", ix))
-                    .h(crate::ui_scale::UiScale::current(cx).row_height(
-                        SIDEBAR_TREE_ROW_HEIGHT_PX,
-                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                    ))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .px_2()
                     .text_size(theme.ui_text(14.0))
@@ -874,10 +859,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
@@ -929,10 +911,7 @@ impl SidebarPaneView {
                     message,
                 } => div()
                     .id(("branch_placeholder", ix))
-                    .h(crate::ui_scale::UiScale::current(cx).row_height(
-                        SIDEBAR_TREE_ROW_HEIGHT_PX,
-                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                    ))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .px_2()
                     .text_size(theme.ui_text(14.0))
@@ -961,10 +940,7 @@ impl SidebarPaneView {
                         .id(("worktrees_section", ix))
                         .debug_selector(move || format!("worktrees_section_{ix}"))
                         .relative()
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1028,10 +1004,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::WorktreePlaceholder { message } => div()
                     .id(("worktree_placeholder", ix))
-                    .h(crate::ui_scale::UiScale::current(cx).row_height(
-                        SIDEBAR_TREE_ROW_HEIGHT_PX,
-                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                    ))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .px_2()
                     .text_size(theme.ui_text(14.0))
@@ -1078,10 +1051,7 @@ impl SidebarPaneView {
                         .id(("worktree_item", ix))
                         .debug_selector(move || row_debug_selector.clone())
                         .relative()
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .flex()
                         .items_center()
@@ -1246,10 +1216,7 @@ impl SidebarPaneView {
                         .id(("submodules_section", ix))
                         .debug_selector(move || format!("submodules_section_{ix}"))
                         .relative()
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1313,10 +1280,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::SubmodulePlaceholder { message, can_load } => div()
                     .id(("submodule_placeholder", ix))
-                    .h(crate::ui_scale::UiScale::current(cx).row_height(
-                        SIDEBAR_TREE_ROW_HEIGHT_PX,
-                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                    ))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .pl_2()
                     .pr_1()
@@ -1427,10 +1391,7 @@ impl SidebarPaneView {
                     div()
                         .id(("submodule_item", ix))
                         .relative()
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .flex()
                         .items_center()
@@ -1536,10 +1497,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_remote", ix))
                         .relative()
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1637,10 +1595,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_group", ix))
                         .debug_selector(move || format!("branch_group_{ix}"))
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(usize::from(depth)))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1846,10 +1801,7 @@ impl SidebarPaneView {
                         .id(("branch_item", ix))
                         .debug_selector(move || row_debug_selector.clone())
                         .relative()
-                        .h(crate::ui_scale::UiScale::current(cx).row_height(
-                            SIDEBAR_TREE_ROW_HEIGHT_PX,
-                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                        ))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .group(row_group.clone())
                         .flex()
@@ -2641,18 +2593,24 @@ mod tests {
                 ..Appearance::default()
             })
         };
-        let compact = scale(UiDensity::Compact);
-        let comfortable = scale(UiDensity::Comfortable);
-
-        assert!(worktree_badge_height(comfortable) > worktree_badge_height(compact));
+        let heights: Vec<_> = UiDensity::ALL.into_iter().map(scale).collect();
+        for at in &heights {
+            assert!(
+                worktree_badge_height(*at)
+                    < at.row_height(
+                        SIDEBAR_TREE_ROW_HEIGHT_PX,
+                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                    ),
+                "the badge must still fit the row it sits in"
+            );
+        }
         assert!(
-            worktree_badge_height(comfortable)
-                < comfortable.row_height(
-                    SIDEBAR_TREE_ROW_HEIGHT_PX,
-                    SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
-                ),
-            "the badge must still fit the row it sits in"
+            heights
+                .windows(2)
+                .all(|w| worktree_badge_height(w[1]) > worktree_badge_height(w[0])),
+            "the badge must grow at every density step"
         );
+        let compact = scale(UiDensity::Compact);
         assert_eq!(
             worktree_badge_height(ui_scale::UiScale::from_percent(200)),
             worktree_badge_height(compact) * 2.0,

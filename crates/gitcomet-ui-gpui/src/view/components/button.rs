@@ -11,6 +11,10 @@ use std::rc::Rc;
 
 use super::{control_height, control_pad_x, control_pad_y, icon_pad_x};
 
+/// Gap between a button's icon and its label.
+const CONTENT_GAP_PX: f32 = 4.0;
+const CONTENT_GAP_COMFORTABLE_PX: f32 = 6.0;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ButtonStyle {
     Filled,
@@ -369,13 +373,9 @@ impl Button {
         let control_pad_x = control_pad_x(ui_scale);
         let control_pad_y = control_pad_y(ui_scale);
         let icon_pad_x = icon_pad_x(ui_scale);
-        let content_gap = ui_scale.px(
-            if ui_scale.appearance.density == crate::appearance::UiDensity::Comfortable {
-                6.0
-            } else {
-                4.0
-            },
-        );
+        let content_gap = ui_scale.px(ui_scale
+            .appearance
+            .ramp(CONTENT_GAP_PX, CONTENT_GAP_COMFORTABLE_PX));
         let separated_slot_pad = ui_scale.px(6.0);
 
         let mut leading = div().flex().items_center().gap(content_gap);

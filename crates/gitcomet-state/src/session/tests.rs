@@ -2877,6 +2877,27 @@ fn persist_ui_settings_round_trips_file_browser_follow_selected_commit() {
     );
 }
 
+/// The layer stores density as an opaque string, so a value this build has never
+/// heard of must survive a write/read cycle intact rather than being dropped or
+/// normalised — that is what lets a newer build's choice come back.
+#[test]
+fn an_unknown_density_survives_the_session_round_trip() {
+    let path = unique_session_test_dir("density_forward_compat").join("session.json");
+
+    for density in ["compact", "comfortable", "spacious", "something-newer"] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                ui_density: Some(density.into()),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .unwrap();
+
+        assert_eq!(load_from_path(&path).ui_density.as_deref(), Some(density));
+    }
+}
+
 #[test]
 fn appearance_settings_round_trip_and_partial_writes_preserve_independent_sizes() {
     let path = unique_session_test_dir("appearance").join("session.json");

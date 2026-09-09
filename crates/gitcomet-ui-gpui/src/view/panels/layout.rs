@@ -116,11 +116,10 @@ const COMMIT_FILE_FILTER_TAB_PAD_X_PX: f32 = 2.0;
 const COMMIT_FILE_FILTER_TAB_COMFORTABLE_PAD_X_PX: f32 = 8.0;
 
 fn commit_file_filter_tab_pad_x(metrics: crate::appearance::Appearance) -> f32 {
-    if metrics.density == crate::appearance::UiDensity::Comfortable {
-        COMMIT_FILE_FILTER_TAB_COMFORTABLE_PAD_X_PX
-    } else {
-        COMMIT_FILE_FILTER_TAB_PAD_X_PX
-    }
+    metrics.ramp(
+        COMMIT_FILE_FILTER_TAB_PAD_X_PX,
+        COMMIT_FILE_FILTER_TAB_COMFORTABLE_PAD_X_PX,
+    )
 }
 const COMMIT_FILE_FILTER_TAB_COMPACT_GAP_PX: f32 = 4.0;
 const COMMIT_FILE_FILTER_TAB_FULL_GAP_PX: f32 = 6.0;

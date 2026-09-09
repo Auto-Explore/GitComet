@@ -881,16 +881,20 @@ mod tests {
                 ..Appearance::default()
             })
         };
-        let compact = scale(UiDensity::Compact);
-        let comfortable = scale(UiDensity::Comfortable);
+        let steps: Vec<_> = UiDensity::ALL.into_iter().map(scale).collect();
 
-        assert!(title_bar_button_height(comfortable) > title_bar_button_height(compact));
-        for scale in [compact, comfortable] {
+        for at in &steps {
             assert!(
-                title_bar_button_height(scale) < title_bar_height(scale),
-                "the plate must leave the bar an inset at {scale:?}"
+                title_bar_button_height(*at) < title_bar_height(*at),
+                "the plate must leave the bar an inset at {at:?}"
             );
         }
+        assert!(
+            steps
+                .windows(2)
+                .all(|w| title_bar_button_height(w[1]) > title_bar_button_height(w[0])),
+            "the plate must grow at every density step"
+        );
     }
 
     #[test]

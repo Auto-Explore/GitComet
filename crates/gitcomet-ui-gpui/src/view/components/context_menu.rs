@@ -126,9 +126,10 @@ pub fn context_menu_header<V: 'static>(
     let max_lines = title.resolved_max_lines(1);
     div()
         .px(scaled_px(8.0))
-        // An entry-sized box, not padding around a text run: `TruncatedText`
-        // reserves its own line box, which is taller than an entry.
-        .h(control_height_md(ui_scale))
+        // At least an entry-sized box, not padding around a text run:
+        // `TruncatedText` reserves its own line box. A minimum rather than a
+        // fixed height so a multi-line heading grows instead of clipping.
+        .min_h(control_height_md(ui_scale))
         .flex()
         .items_center()
         .overflow_hidden()
@@ -720,10 +721,7 @@ mod tests {
     /// headings each used to reserve a taller box than a plain entry.
     #[gpui::test]
     fn every_menu_row_kind_shares_one_height(cx: &mut gpui::TestAppContext) {
-        for density in [
-            crate::appearance::UiDensity::Compact,
-            crate::appearance::UiDensity::Comfortable,
-        ] {
+        for density in crate::appearance::UiDensity::ALL {
             let _guard = crate::test_support::lock_visual_test();
             cx.update(|app| {
                 app.set_global(crate::appearance::Appearance {

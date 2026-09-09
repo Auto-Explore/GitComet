@@ -5076,9 +5076,9 @@ fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext)
         "app_menu",
         "repo_picker_toggle",
     ];
-    let mut compact = Vec::new();
+    let mut per_density: Vec<Vec<gpui::Pixels>> = Vec::new();
 
-    for density in [UiDensity::Compact, UiDensity::Comfortable] {
+    for density in UiDensity::ALL {
         cx.update(|_, app| {
             app.set_global(Appearance {
                 density,
@@ -5090,19 +5090,28 @@ fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext)
         });
         draw_and_drain_test_window(cx);
 
+        per_density.push(
+            selectors
+                .into_iter()
+                .map(|selector| {
+                    cx.debug_bounds(selector)
+                        .unwrap_or_else(|| panic!("missing {selector} at {density:?} density"))
+                        .size
+                        .height
+                })
+                .collect(),
+        );
+    }
+
+    for (step, pair) in per_density.windows(2).enumerate() {
         for (ix, selector) in selectors.into_iter().enumerate() {
-            let height = cx
-                .debug_bounds(selector)
-                .unwrap_or_else(|| panic!("missing {selector} at {density:?} density"))
-                .size
-                .height;
-            match density {
-                UiDensity::Compact => compact.push(height),
-                UiDensity::Comfortable => assert!(
-                    height > compact[ix],
-                    "{selector} must grow under Comfortable, stayed {height:?}"
-                ),
-            }
+            assert!(
+                pair[1][ix] > pair[0][ix],
+                "{selector} must grow from {:?} to {:?}, stayed {:?}",
+                UiDensity::ALL[step],
+                UiDensity::ALL[step + 1],
+                pair[1][ix]
+            );
         }
     }
 }

@@ -5075,7 +5075,7 @@ fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::Tes
             .height
     };
 
-    for density in [UiDensity::Compact, UiDensity::Comfortable] {
+    for density in UiDensity::ALL {
         let file_row = height_of(
             gitcomet_state::model::SidebarMode::Files,
             &["file_browser_row_0"],

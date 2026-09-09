@@ -7,20 +7,41 @@ pub(crate) enum UiDensity {
     #[default]
     Compact,
     Comfortable,
+    Spacious,
 }
 
 impl UiDensity {
+    pub(crate) const ALL: [Self; 3] = [Self::Compact, Self::Comfortable, Self::Spacious];
+
+    /// Position on the compact-to-comfortable ramp. Spacious continues the same
+    /// step rather than carrying a third hand-tuned number per element.
+    fn step(self) -> f32 {
+        match self {
+            Self::Compact => 0.0,
+            Self::Comfortable => 1.0,
+            Self::Spacious => 1.6,
+        }
+    }
+
     pub(crate) fn key(self) -> &'static str {
         match self {
             Self::Compact => "compact",
             Self::Comfortable => "comfortable",
+            Self::Spacious => "spacious",
         }
+    }
+
+    /// Anything unrecognised is the caller's cue to fall back to the default, so
+    /// a session written by a newer build still loads.
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
     }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Compact => "Compact",
             Self::Comfortable => "Comfortable",
+            Self::Spacious => "Spacious",
         }
     }
 }
@@ -94,11 +115,11 @@ impl gpui::Global for Appearance {}
 impl Appearance {
     pub(crate) fn from_session(session: &UiSession) -> Self {
         Self {
-            density: if session.ui_density.as_deref() == Some("comfortable") {
-                UiDensity::Comfortable
-            } else {
-                UiDensity::Compact
-            },
+            density: session
+                .ui_density
+                .as_deref()
+                .and_then(UiDensity::from_key)
+                .unwrap_or_default(),
             ui_font_size_px: FontRole::Ui.sanitize(session.ui_font_size_px),
             editor_font_size_px: FontRole::Editor.sanitize(session.editor_font_size_px),
             markdown_preview_font_size_px: FontRole::Markdown
@@ -127,13 +148,14 @@ impl Appearance {
         design_px * self.ui_font_size_px as f32 / 14.0
     }
 
+    /// Places a per-element (compact, comfortable) pair on the density ramp.
+    /// Each element's own delta was measured, so scaling it keeps that intent.
+    pub(crate) fn ramp(self, compact: f32, comfortable: f32) -> f32 {
+        compact + (comfortable - compact) * self.density.step()
+    }
+
     pub(crate) fn row_height(self, compact: f32, comfortable: f32) -> f32 {
-        let baseline = if self.density == UiDensity::Comfortable {
-            comfortable
-        } else {
-            compact
-        };
-        baseline + (self.ui_text(20.0) - 20.0).max(0.0)
+        self.ramp(compact, comfortable) + (self.ui_text(20.0) - 20.0).max(0.0)
     }
 
     pub(crate) fn editor_line_height(self) -> f32 {
@@ -145,10 +167,22 @@ pub(crate) fn current(cx: &App) -> Appearance {
     cx.try_global::<Appearance>().copied().unwrap_or_default()
 }
 
+/// Tracks whether the session has been applied. The presence of the global
+/// cannot answer that: `UiScale::current` reads the appearance through
+/// `update_default_global`, which installs the Default when none is set.
+#[derive(Default)]
+struct AppearanceInitialized(bool);
+impl gpui::Global for AppearanceInitialized {}
+
 pub(crate) fn initialize(session: &UiSession, cx: &mut App) {
-    if cx.try_global::<Appearance>().is_none() {
-        cx.set_global(Appearance::from_session(session));
+    if cx
+        .try_global::<AppearanceInitialized>()
+        .is_some_and(|initialized| initialized.0)
+    {
+        return;
     }
+    cx.set_global(Appearance::from_session(session));
+    cx.set_global(AppearanceInitialized(true));
 }
 
 pub(crate) fn editor_size(window: &Window, cx: &App) -> Pixels {
@@ -178,6 +212,73 @@ mod tests {
             (appearance.ui_font_size_px, appearance.editor_font_size_px),
             (10, 32)
         );
+    }
+
+    /// Existing users must not shift: the two measured anchors have to come back
+    /// out of the ramp exactly, and each step has to be strictly roomier.
+    #[test]
+    fn the_density_ramp_keeps_its_anchors_and_only_grows() {
+        let at = |density| Appearance {
+            density,
+            ..Appearance::default()
+        };
+
+        assert_eq!(at(UiDensity::Compact).ramp(24.0, 32.0), 24.0);
+        assert_eq!(at(UiDensity::Comfortable).ramp(24.0, 32.0), 32.0);
+
+        for pair in [(22.0, 32.0), (24.0, 32.0), (34.0, 40.0), (18.0, 24.0)] {
+            let ramped: Vec<f32> = UiDensity::ALL
+                .into_iter()
+                .map(|density| at(density).ramp(pair.0, pair.1))
+                .collect();
+            assert!(
+                ramped.windows(2).all(|w| w[1] > w[0]),
+                "{pair:?} must grow at every step, got {ramped:?}"
+            );
+        }
+
+        assert_eq!(at(UiDensity::Spacious).ramp(20.0, 20.0), 20.0);
+    }
+
+    /// Treating an installed Default as "already configured" would silently
+    /// drop the saved session.
+    #[gpui::test]
+    fn initialize_still_applies_the_session_after_something_installed_a_default(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = UiSession {
+            ui_density: Some(UiDensity::Spacious.key().to_string()),
+            ui_font_size_px: Some(20),
+            ..UiSession::default()
+        };
+
+        cx.update(|cx| {
+            // Anything that asks for the scale before the first view is built.
+            let _ = crate::ui_scale::UiScale::current(cx);
+
+            initialize(&session, cx);
+
+            assert_eq!(current(cx).density, UiDensity::Spacious);
+            assert_eq!(current(cx).ui_font_size_px, 20);
+        });
+    }
+
+    #[test]
+    fn density_keys_round_trip_and_unknown_falls_back() {
+        for density in UiDensity::ALL {
+            assert_eq!(UiDensity::from_key(density.key()), Some(density));
+            assert_eq!(
+                Appearance::from_session(&UiSession {
+                    ui_density: Some(density.key().to_string()),
+                    ..UiSession::default()
+                })
+                .density,
+                density
+            );
+        }
+
+        assert_eq!(UiDensity::from_key("nonsense"), None);
+        assert_eq!(UiDensity::default(), UiDensity::Compact);
     }
 
     #[test]

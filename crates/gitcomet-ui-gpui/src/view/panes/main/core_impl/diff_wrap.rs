@@ -13,10 +13,9 @@ pub(super) fn split_wrap_text_width(
     text_start: Pixels,
     pad: Pixels,
 ) -> Pixels {
-    let usable = |column: Pixels, annotation: Pixels| column - annotation - text_start - pad;
-    usable(left_w, annotation_width)
-        .min(usable(right_w, px(0.0)))
-        .max(px(0.0))
+    let left = left_w - annotation_width - text_start - pad;
+    let right = right_w - text_start - pad;
+    left.min(right).max(px(0.0))
 }
 
 pub(super) fn diff_wrap_columns_for_width(width: Pixels, char_width: Pixels) -> usize {

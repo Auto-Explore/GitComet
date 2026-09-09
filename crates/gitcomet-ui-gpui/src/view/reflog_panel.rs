@@ -275,17 +275,18 @@ mod tests {
     /// clip the moment Comfortable lifts them.
     #[test]
     fn the_tab_bar_holds_a_tab_at_every_density() {
-        for metrics in [
-            crate::appearance::Appearance::default(),
-            crate::appearance::Appearance {
-                density: crate::appearance::UiDensity::Comfortable,
+        let font_stress = crate::appearance::Appearance {
+            ui_font_size_px: 24,
+            ..crate::appearance::Appearance::default()
+        };
+        for metrics in crate::appearance::UiDensity::ALL
+            .into_iter()
+            .map(|density| crate::appearance::Appearance {
+                density,
                 ..crate::appearance::Appearance::default()
-            },
-            crate::appearance::Appearance {
-                ui_font_size_px: 24,
-                ..crate::appearance::Appearance::default()
-            },
-        ] {
+            })
+            .chain(std::iter::once(font_stress))
+        {
             let scale = crate::ui_scale::UiScale::from_percent(100).with_appearance(metrics);
             let bar = bottom_panel_tab_bar_height(scale);
             let tab = components::control_height(scale);

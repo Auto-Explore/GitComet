@@ -8,8 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::time::SystemTime;
 
 const REFLOG_ROW_HEIGHT_PX: f32 = 28.0;
-/// Table columns, in UI-font units: the cells hold text, so a larger font has
-/// to widen them or the selector, sha and date run into each other.
+/// Table columns, in UI-font units — see `reflog_column`.
 const REFLOG_MARKER_COLUMN_PX: f32 = 14.0;
 const REFLOG_SELECTOR_COLUMN_PX: f32 = 70.0;
 const REFLOG_SHA_COLUMN_PX: f32 = 70.0;

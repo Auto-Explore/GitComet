@@ -269,8 +269,8 @@ mod tests {
         assert_eq!(step_up(200), 200);
     }
 
-    /// A `scaler` must agree with the scale it was built from and carry the
-    /// appearance, so callers can hold one instead of a percent.
+    /// A `scaler` must agree with the scale it was built from, appearance
+    /// included.
     #[test]
     fn scaler_matches_the_scale_it_was_built_from() {
         let comfortable =

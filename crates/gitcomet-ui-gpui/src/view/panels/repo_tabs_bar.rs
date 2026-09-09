@@ -111,13 +111,23 @@ const REPO_TAB_HOVER_BOX_RADIUS_PX: f32 = 4.0;
 /// halves of one hover surface.
 const REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX: f32 = 26.0;
 
-/// Height of the label plate behind an idle tab's badge and name. Comfortable
-/// matches the close button so neither sticks out past the other.
-fn repo_tab_hover_box_height(metrics: crate::appearance::Appearance) -> f32 {
+fn repo_tab_close_button_height(metrics: crate::appearance::Appearance) -> f32 {
     metrics.row_height(
-        REPO_TAB_CONTENT_HEIGHT_PX + REPO_TAB_HOVER_BOX_Y_OVERHANG_PX * 2.0,
+        REPO_TAB_STATUS_SIZE_PX,
         REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX,
     )
+}
+
+/// Height of the label plate behind an idle tab's badge and name. Floored at the
+/// close button that overlays its right edge: the two are one hover surface, so
+/// neither may stick out past the other at any density.
+fn repo_tab_hover_box_height(metrics: crate::appearance::Appearance) -> f32 {
+    metrics
+        .row_height(
+            REPO_TAB_CONTENT_HEIGHT_PX + REPO_TAB_HOVER_BOX_Y_OVERHANG_PX * 2.0,
+            REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX,
+        )
+        .max(repo_tab_close_button_height(metrics))
 }
 
 /// Returns the drag direction and its new high/low-water mark. A direction is
@@ -855,10 +865,7 @@ impl Render for RepoTabsBarView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(ui_scale.row_height(
-                    REPO_TAB_STATUS_SIZE_PX,
-                    REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX,
-                ))
+                .size(scaled_px(repo_tab_close_button_height(theme.metrics)))
                 .rounded(px(theme.radii.row))
                 // Fully cover any label ink beneath the button; the sibling
                 // ramp transitions into this exact background.
@@ -879,10 +886,7 @@ impl Render for RepoTabsBarView {
             let close_overlay = div()
                 .flex()
                 .items_center()
-                .h(ui_scale.row_height(
-                    REPO_TAB_STATUS_SIZE_PX,
-                    REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX,
-                ))
+                .h(scaled_px(repo_tab_close_button_height(theme.metrics)))
                 .child(
                     components::trailing_fade(label_bg, scaled_px(REPO_TAB_CLOSE_FADE_WIDTH_PX))
                         .debug_selector(move || format!("repo_tab_close_fade_{}", repo_id.0)),
@@ -1380,43 +1384,48 @@ fn repo_tab_insert_before_for_drop(
 mod tests {
     use super::*;
 
-    /// The plate behind an idle tab's label and the close button that overlays
-    /// its right edge are one hover surface: neither may stick out past the
-    /// other once Comfortable lifts the tab.
-    #[test]
-    fn the_label_plate_matches_the_close_button_under_comfortable() {
-        let comfortable = crate::appearance::Appearance {
-            density: crate::appearance::UiDensity::Comfortable,
+    fn metrics_at(density: crate::appearance::UiDensity) -> crate::appearance::Appearance {
+        crate::appearance::Appearance {
+            density,
             ..crate::appearance::Appearance::default()
-        };
-        let compact = crate::appearance::Appearance::default();
+        }
+    }
 
-        let close = |metrics: crate::appearance::Appearance| {
-            metrics.row_height(
-                REPO_TAB_STATUS_SIZE_PX,
-                REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX,
-            )
-        };
+    /// The plate behind an idle tab's label and the close button that overlays
+    /// its right edge are one hover surface, so the plate may never sit below
+    /// the button at any density -- they converge at Comfortable, and the plate
+    /// follows the button from there.
+    #[test]
+    fn the_label_plate_never_sits_below_the_close_button() {
+        for density in crate::appearance::UiDensity::ALL {
+            let metrics = metrics_at(density);
+            assert!(
+                repo_tab_hover_box_height(metrics) >= repo_tab_close_button_height(metrics),
+                "{density:?} plate must cover its close button"
+            );
+        }
 
-        assert_eq!(repo_tab_hover_box_height(comfortable), close(comfortable));
-        assert!(repo_tab_hover_box_height(compact) > close(compact));
-        assert!(repo_tab_hover_box_height(comfortable) > repo_tab_hover_box_height(compact));
+        let compact = metrics_at(crate::appearance::UiDensity::Compact);
+        let comfortable = metrics_at(crate::appearance::UiDensity::Comfortable);
+        assert_eq!(
+            repo_tab_hover_box_height(comfortable),
+            repo_tab_close_button_height(comfortable)
+        );
+        assert!(repo_tab_hover_box_height(compact) > repo_tab_close_button_height(compact));
     }
 
     /// The plate has to fit the tab it sits in, overhang included.
     #[test]
     fn the_label_plate_fits_inside_the_tab() {
-        for metrics in [
-            crate::appearance::Appearance::default(),
-            crate::appearance::Appearance {
-                density: crate::appearance::UiDensity::Comfortable,
-                ..crate::appearance::Appearance::default()
-            },
-            crate::appearance::Appearance {
-                ui_font_size_px: 24,
-                ..crate::appearance::Appearance::default()
-            },
-        ] {
+        let font_stress = crate::appearance::Appearance {
+            ui_font_size_px: 24,
+            ..crate::appearance::Appearance::default()
+        };
+        for metrics in crate::appearance::UiDensity::ALL
+            .into_iter()
+            .map(metrics_at)
+            .chain(std::iter::once(font_stress))
+        {
             let plate = px(repo_tab_hover_box_height(metrics));
             let content = components::Tab::content_height(
                 crate::ui_scale::UiScale::from_percent(100).with_appearance(metrics),
