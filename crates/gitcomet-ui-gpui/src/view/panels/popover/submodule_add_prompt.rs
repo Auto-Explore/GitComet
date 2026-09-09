@@ -18,7 +18,7 @@ fn advanced_toggle(
     .child(
         div()
             .debug_selector(|| "submodule_add_advanced_label".to_string())
-            .text_sm()
+            .text_size(theme.ui_text(14.0))
             .child("Advanced"),
     )
     .child(svg_icon(
@@ -48,12 +48,12 @@ fn force_toggle(
     .flex()
     .child(
         div()
-            .text_sm()
+            .text_size(theme.ui_text(14.0))
             .child("Force reuse / bypass collision checks"),
     )
     .child(
         div()
-            .text_sm()
+            .text_size(theme.ui_text(14.0))
             .text_color(if enabled {
                 theme.colors.status.success.foreground
             } else {
@@ -78,8 +78,8 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(popover_title("Add submodule"))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(popover_title(theme, "Add submodule"))
+        .child(super::popover_rule(theme))
         .child(input_label(theme, "URL"))
         .child(
             div()
@@ -146,21 +146,16 @@ pub(super) fn panel(
                     div()
                         .px_2()
                         .pb_1()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(
                             "Force reuses an existing local submodule git dir or bypasses Git's normal collision refusal.",
                         ),
                 )
         })
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(
                     cancel_button("submodule_add_cancel", "submodule_add_cancel_hint", theme)
                         .focus_handle(this.submodule_focus.cancel.clone())

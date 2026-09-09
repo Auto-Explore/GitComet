@@ -107,6 +107,18 @@ pub(in crate::view) const REPO_TAB_SIDE_PADDING_PX: f32 = 14.0;
 const REPO_TAB_HOVER_BOX_X_OVERHANG_PX: f32 = 4.0;
 const REPO_TAB_HOVER_BOX_Y_OVERHANG_PX: f32 = 3.0;
 const REPO_TAB_HOVER_BOX_RADIUS_PX: f32 = 4.0;
+/// Comfortable height shared by the close button and the label plate: two
+/// halves of one hover surface.
+const REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX: f32 = 26.0;
+
+/// Height of the label plate behind an idle tab's badge and name. Comfortable
+/// matches the close button so neither sticks out past the other.
+fn repo_tab_hover_box_height(metrics: crate::appearance::Appearance) -> f32 {
+    metrics.row_height(
+        REPO_TAB_CONTENT_HEIGHT_PX + REPO_TAB_HOVER_BOX_Y_OVERHANG_PX * 2.0,
+        REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX,
+    )
+}
 
 /// Returns the drag direction and its new high/low-water mark. A direction is
 /// established immediately, but reversing it requires deliberate travel away
@@ -729,7 +741,9 @@ impl Render for RepoTabsBarView {
 
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
+        let ui_scale =
+            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics);
         let drag_direction_reversal = scaled_px(REPO_TAB_DIRECTION_REVERSAL_PX);
         let active = self.active_repo_id();
         let spinner = |id: (&'static str, u64), color: gpui::Rgba| {
@@ -764,8 +778,11 @@ impl Render for RepoTabsBarView {
             .iter()
             .zip(&repo_tab_labels)
             .map(|(repo, label)| {
-                let text_width =
-                    repo_tab_text_width(label.clone(), scaled_px(REPO_TAB_FONT_SIZE_PX), window);
+                let text_width = repo_tab_text_width(
+                    label.clone(),
+                    scaled_px(theme.metrics.ui_text(REPO_TAB_FONT_SIZE_PX)),
+                    window,
+                );
                 let terminal_width = if self.open_terminal_repo_ids.contains(&repo.id) {
                     scaled_px(REPO_TAB_LABEL_GAP_PX + REPO_TAB_STATUS_SIZE_PX)
                 } else {
@@ -838,7 +855,10 @@ impl Render for RepoTabsBarView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(scaled_px(REPO_TAB_STATUS_SIZE_PX))
+                .size(ui_scale.row_height(
+                    REPO_TAB_STATUS_SIZE_PX,
+                    REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX,
+                ))
                 .rounded(px(theme.radii.row))
                 // Fully cover any label ink beneath the button; the sibling
                 // ramp transitions into this exact background.
@@ -859,7 +879,10 @@ impl Render for RepoTabsBarView {
             let close_overlay = div()
                 .flex()
                 .items_center()
-                .h(scaled_px(REPO_TAB_STATUS_SIZE_PX))
+                .h(ui_scale.row_height(
+                    REPO_TAB_STATUS_SIZE_PX,
+                    REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX,
+                ))
                 .child(
                     components::trailing_fade(label_bg, scaled_px(REPO_TAB_CLOSE_FADE_WIDTH_PX))
                         .debug_selector(move || format!("repo_tab_close_fade_{}", repo_id.0)),
@@ -890,7 +913,11 @@ impl Render for RepoTabsBarView {
                 .flex()
                 .flex_1()
                 .items_center()
-                .h(scaled_px(REPO_TAB_CONTENT_HEIGHT_PX))
+                // The plate overhangs this box, so carry its height minus the
+                // overhang, and never past what the tab gives its children.
+                .h(scaled_px(repo_tab_hover_box_height(theme.metrics))
+                    .min(components::Tab::content_height(ui_scale))
+                    - scaled_px(REPO_TAB_HOVER_BOX_Y_OVERHANG_PX * 2.0))
                 .gap(scaled_px(REPO_TAB_LABEL_GAP_PX))
                 .min_w(px(0.0))
                 // Idle tabs highlight only their compact content box. The
@@ -945,8 +972,10 @@ impl Render for RepoTabsBarView {
                     components::FadingText::new(
                         div()
                             .debug_selector(move || format!("repo_tab_label_text_{}", repo_id.0))
-                            .text_size(scaled_px(REPO_TAB_FONT_SIZE_PX))
-                            .line_height(scaled_px(REPO_TAB_CONTENT_HEIGHT_PX))
+                            .text_size(theme.ui_text(REPO_TAB_FONT_SIZE_PX))
+                            .line_height(scaled_px(
+                                theme.metrics.ui_text(REPO_TAB_CONTENT_HEIGHT_PX),
+                            ))
                             .child(label),
                         label_bg,
                     )
@@ -1123,7 +1152,11 @@ impl Render for RepoTabsBarView {
             // Only the visible control row should intercept title-bar input.
             // A full-height child here blocks window dragging in the blank
             // chrome above the button when the tab row overflows.
-            .h(scaled_px(components::CONTROL_HEIGHT_PX))
+            .h(scaled_px(
+                theme
+                    .metrics
+                    .row_height(components::CONTROL_HEIGHT_PX, 32.0),
+            ))
             .self_center()
             .flex()
             .items_center()
@@ -1345,6 +1378,56 @@ fn repo_tab_insert_before_for_drop(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The plate behind an idle tab's label and the close button that overlays
+    /// its right edge are one hover surface: neither may stick out past the
+    /// other once Comfortable lifts the tab.
+    #[test]
+    fn the_label_plate_matches_the_close_button_under_comfortable() {
+        let comfortable = crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Comfortable,
+            ..crate::appearance::Appearance::default()
+        };
+        let compact = crate::appearance::Appearance::default();
+
+        let close = |metrics: crate::appearance::Appearance| {
+            metrics.row_height(
+                REPO_TAB_STATUS_SIZE_PX,
+                REPO_TAB_COMFORTABLE_CONTROL_HEIGHT_PX,
+            )
+        };
+
+        assert_eq!(repo_tab_hover_box_height(comfortable), close(comfortable));
+        assert!(repo_tab_hover_box_height(compact) > close(compact));
+        assert!(repo_tab_hover_box_height(comfortable) > repo_tab_hover_box_height(compact));
+    }
+
+    /// The plate has to fit the tab it sits in, overhang included.
+    #[test]
+    fn the_label_plate_fits_inside_the_tab() {
+        for metrics in [
+            crate::appearance::Appearance::default(),
+            crate::appearance::Appearance {
+                density: crate::appearance::UiDensity::Comfortable,
+                ..crate::appearance::Appearance::default()
+            },
+            crate::appearance::Appearance {
+                ui_font_size_px: 24,
+                ..crate::appearance::Appearance::default()
+            },
+        ] {
+            let plate = px(repo_tab_hover_box_height(metrics));
+            let content = components::Tab::content_height(
+                crate::ui_scale::UiScale::from_percent(100).with_appearance(metrics),
+            );
+
+            assert!(
+                plate < content - px(2.0),
+                "plate {plate:?} must leave a gap inside the tab's {content:?} content box"
+            );
+        }
+    }
     use super::{
         RepoTabsBarView, repo_tab_close_button_fill, repo_tab_drag_direction,
         repo_tab_insert_before_for_drag_cursor, repo_tab_insert_before_for_drop,

@@ -366,7 +366,10 @@ pub(super) fn layer(
         .flex()
         .flex_col()
         .w(super::REPO_TAB_MENU_WIDTH.preferred_px(ui_scale))
-        .p(super::popover_scaled_px_from_percent(4.0, ui_scale_percent));
+        .p(crate::ui_scale::design_px_from_percent(
+            4.0,
+            ui_scale_percent,
+        ));
     // Only enabled entries are keyboard targets, so the menu's own selection
     // index counts those alone.
     let mut nav_ix = 0usize;
@@ -440,11 +443,11 @@ pub(super) fn layer(
     // sides. Capping to that and scrolling inside is what keeps the destructive
     // entries at the bottom reachable in a short window or at a large UI scale —
     // the treatment `popover_view` gives every other context menu.
-    let margin_y = super::popover_scaled_px_from_percent(16.0, ui_scale_percent);
+    let margin_y = crate::ui_scale::design_px_from_percent(16.0, ui_scale_percent);
     let window_h = window.window_bounds().get_bounds().size.height;
     let max_menu_h = ((window_h - menu.position.y) - margin_y)
         .max(menu.position.y - margin_y)
-        .max(super::popover_scaled_px_from_percent(
+        .max(crate::ui_scale::design_px_from_percent(
             96.0,
             ui_scale_percent,
         ));

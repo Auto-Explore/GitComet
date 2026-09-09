@@ -854,9 +854,8 @@ fn assert_collapsed_diff_loading_does_not_render_patch_rows(
     draw_and_drain_test_window(cx);
 
     let expected = cx.update(|_window, app| {
-        crate::view::panes::main::diff_row_height_for_ui_scale(
-            crate::ui_scale::UiScale::current(app).percent(),
-        )
+        AppTheme::gitcomet_dark()
+            .editor_row_height(crate::ui_scale::UiScale::current(app).percent())
     });
     match diff_view {
         DiffViewMode::Inline => {
@@ -2754,7 +2753,24 @@ index 1111111..2222222 100644
 
     cx.update(|_window, app| {
         crate::app::set_app_ui_scale_percent(app, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+        let mut appearance = crate::appearance::current(app);
+        appearance.editor_font_size_px = 26;
+        app.set_global(appearance);
+        view.update(app, |view, cx| view.notify_font_preferences_changed(cx));
     });
+    draw_and_drain_test_window(cx);
+    let larger_editor_columns = cx.update(|_, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_wrap_visible_cache_key
+            .expect("expected updated wrap cache after changing editor size")
+            .inline_columns
+    });
+    assert!(
+        larger_editor_columns < default_columns,
+        "changing only the editor font must remeasure wrapping and gutters"
+    );
 }
 
 #[gpui::test]
@@ -2821,7 +2837,11 @@ async fn diff_word_wrap_column_count_consistency_with_available_width(
             .diff_wrap_visible_cache_key
             .expect("wrap cache key must be populated after rendering with wrap on");
         let inline_columns = cache_key.inline_columns;
-        let char_width = rows::diff_canvas_text_wrap_char_width(window, editor_font_family);
+        let char_width = rows::diff_canvas_text_wrap_char_width(
+            window,
+            editor_font_family,
+            crate::appearance::Appearance::default().editor_font_size_px,
+        );
         let show_line_numbers = pane.diff_show_line_numbers;
         (inline_columns, char_width, show_line_numbers)
     });

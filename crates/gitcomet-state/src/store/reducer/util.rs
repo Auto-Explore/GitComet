@@ -1131,6 +1131,7 @@ fn summarize_command(
             RepoCommandKind::PullBranch { .. } => "Pull",
             RepoCommandKind::MergeRef { .. } => "Merge",
             RepoCommandKind::SquashRef { .. } => "Squash",
+            RepoCommandKind::PushWithTags { request } => request.mode.label(),
             RepoCommandKind::Push => "Push",
             RepoCommandKind::PushAfterCommit { .. } => "Push after commit",
             RepoCommandKind::ForcePush => "Force push",
@@ -1300,6 +1301,12 @@ fn summarize_command(
                 "Force push with lease: Completed".to_string()
             }
         }
+        RepoCommandKind::PushWithTags { request } => format!(
+            "{} to {}/{}: Completed",
+            request.mode.label(),
+            request.remote,
+            request.branch
+        ),
         RepoCommandKind::PushSetUpstream { remote, branch } => {
             let base = if output.stderr.contains("Everything up-to-date") {
                 "Everything up-to-date"

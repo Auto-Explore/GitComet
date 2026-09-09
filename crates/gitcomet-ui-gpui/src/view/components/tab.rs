@@ -181,6 +181,15 @@ impl Tab {
         )
     }
 
+    /// Vertical room a tab gives its children: its height less the insets that
+    /// fuse it to the bar and its top border.
+    pub fn content_height(ui_scale: impl Into<UiScale>) -> Pixels {
+        let ui_scale = ui_scale.into();
+        ui_scale.row_height(TAB_HEIGHT_PX, 40.0)
+            - ui_scale.px(Self::TAB_TOP_PADDING_PX + Self::TAB_BOTTOM_FUSE_PAD_PX)
+            - px(1.0)
+    }
+
     pub fn new(id: impl Into<ElementId>) -> Self {
         let id = id.into();
         Self {
@@ -238,8 +247,8 @@ impl Tab {
     }
 
     pub fn render(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Stateful<Div> {
-        let ui_scale = ui_scale.into();
-        let scaled_px = |value| ui_scale.px(value);
+        let ui_scale = ui_scale.into().with_appearance(theme.metrics);
+        let scaled_px = crate::ui_scale::scaler(ui_scale);
         let horizontal_padding = self
             .horizontal_padding
             .unwrap_or_else(|| scaled_px(Self::TAB_HORIZONTAL_PADDING_PX));
@@ -284,7 +293,7 @@ impl Tab {
         let mut base = self
             .div
             .group("tab")
-            .h(scaled_px(TAB_HEIGHT_PX))
+            .h(ui_scale.row_height(TAB_HEIGHT_PX, 40.0))
             .min_w(scaled_px(Self::MIN_WIDTH_PX))
             .mx(scaled_px(Self::HORIZONTAL_MARGIN_PX))
             .px(horizontal_padding)

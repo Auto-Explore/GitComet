@@ -1,4 +1,5 @@
 use super::*;
+use crate::appearance::{Appearance, FontRole, UiDensity};
 use crate::ui_scale;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
@@ -392,7 +393,8 @@ impl SettingsCategory {
         match self {
             Self::General => {
                 "general theme date format ui scale ui font editor font ligatures \
-                 external code editor date timezone appearance"
+                 external code editor date timezone appearance density compact comfortable \
+                 font size markdown preview"
             }
             Self::SecurityPrivacy => {
                 "security privacy allowed remote protocols https http ssh git file ftp ftps \
@@ -475,6 +477,9 @@ pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
     ui_scale_percent: u32,
+    appearance_metrics: Appearance,
+    font_size_inputs: [Entity<components::TextInput>; 3],
+    _font_size_subscriptions: Vec<gpui::Subscription>,
     ui_font_family: String,
     editor_font_family: String,
     use_font_ligatures: bool,
@@ -880,6 +885,7 @@ impl SettingsWindowView {
 
         let ui_session = session::load();
         let ui_preferences = UiPreferences::from_session(&ui_session);
+        crate::appearance::initialize(&ui_session, cx);
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
@@ -959,7 +965,10 @@ impl SettingsWindowView {
                     if !this.theme_mode.is_automatic() {
                         return;
                     }
-                    this.theme = this.theme_mode.resolve_theme(window.appearance());
+                    this.theme = this
+                        .theme_mode
+                        .resolve_theme(window.appearance())
+                        .with_appearance(this.appearance_metrics);
                     cx.notify();
                 });
             })
@@ -1107,9 +1116,36 @@ impl SettingsWindowView {
             },
         );
 
+        let appearance_metrics = crate::appearance::current(cx);
+        let font_size_inputs = FontRole::ALL.map(|role| {
+            cx.new(|cx| {
+                let mut input =
+                    components::TextInput::new(components::TextInputOptions::default(), window, cx);
+                input.set_text(appearance_metrics.size(role).to_string(), cx);
+                input.set_theme(theme, cx);
+                input
+            })
+        });
+        let font_size_subscriptions = FontRole::ALL
+            .into_iter()
+            .map(|role| {
+                cx.observe(&font_size_inputs[role.index()], move |this, input, cx| {
+                    let text = input.read(cx).text().to_string();
+                    if let Ok(value) = text.trim().parse::<u32>()
+                        && role.range().contains(&value)
+                    {
+                        this.set_font_size(role, value, cx);
+                    }
+                })
+            })
+            .collect();
+
         Self {
             theme_mode,
-            theme,
+            appearance_metrics,
+            font_size_inputs,
+            _font_size_subscriptions: font_size_subscriptions,
+            theme: theme.with_appearance(appearance_metrics),
             ui_scale_percent: ui_scale.percent,
             ui_font_family: font_preferences.ui_font_family,
             editor_font_family: font_preferences.editor_font_family,

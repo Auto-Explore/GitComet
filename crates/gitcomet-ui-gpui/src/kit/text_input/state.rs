@@ -839,6 +839,9 @@ impl ContentWidthCache {
 }
 
 pub struct TextInput {
+    pub(super) appearance_metrics: crate::appearance::Appearance,
+    pub(super) editor_font: bool,
+    pub(super) editor_line_height: Pixels,
     pub(super) focus_handle: FocusHandle,
     pub(super) content: TextModel,
     pub(super) placeholder: SharedString,

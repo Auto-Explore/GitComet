@@ -806,6 +806,7 @@ fn a_skeleton_holds_the_box_the_picture_will_fill() {
     // Read from the file: the picture's own pixels, which is what an
     // undeclared picture lays out at.
     let skeleton = markdown_preview_picture_skeleton(
+        AppTheme::gitcomet_dark(),
         &picture_row("demo.gif", None, None),
         100,
         &measured("demo.gif", 1280, 720),
@@ -815,6 +816,7 @@ fn a_skeleton_holds_the_box_the_picture_will_fill() {
 
     // A declared size wins, and scales with the UI the way the picture will.
     let skeleton = markdown_preview_picture_skeleton(
+        AppTheme::gitcomet_dark(),
         &picture_row("demo.gif", Some(200), Some(100)),
         200,
         &measured("demo.gif", 1280, 720),
@@ -824,19 +826,24 @@ fn a_skeleton_holds_the_box_the_picture_will_fill() {
 
     // Nothing to go on: fall back to the rows the parser set aside, which
     // is all the row grid ever had.
-    let skeleton =
-        markdown_preview_picture_skeleton(&picture_row("demo.gif", None, None), 100, empty);
+    let skeleton = markdown_preview_picture_skeleton(
+        AppTheme::gitcomet_dark(),
+        &picture_row("demo.gif", None, None),
+        100,
+        empty,
+    );
     assert_eq!(skeleton.width, None);
     assert_eq!(skeleton.aspect_ratio, None);
     assert_eq!(
         skeleton.reserved_height,
-        markdown_preview_row_height(100) * 8.0
+        markdown_preview_row_height(AppTheme::gitcomet_dark(), 100) * 8.0
     );
 }
 
 #[test]
 fn a_height_only_skeleton_scales_the_measured_width_with_the_picture() {
     let skeleton = markdown_preview_picture_skeleton(
+        AppTheme::gitcomet_dark(),
         &picture_row("wide.gif", None, Some(60)),
         100,
         &measured("wide.gif", 1280, 720),

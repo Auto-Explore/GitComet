@@ -1620,6 +1620,11 @@ where
     style.font_family = crate::font_preferences::current_editor_font_family(cx).into();
     style.font_features = gpui::FontFeatures::disable_ligatures();
     style.font_weight = FontWeight::NORMAL;
+    let appearance =
+        cx.update_default_global::<crate::appearance::Appearance, _>(|appearance, _| *appearance);
+    style.font_size =
+        crate::ui_scale::design_px_from_window(appearance.editor_font_size_px as f32, window)
+            .into();
     style.font_style = gpui::FontStyle::Normal;
     style.color = terminal_default_foreground(theme).into_color();
     style.white_space = gpui::WhiteSpace::Nowrap;
@@ -1642,7 +1647,7 @@ fn terminal_grid_size(bounds: Bounds<Pixels>, metrics: TerminalTextMetrics) -> T
 
 fn terminal_layout_cache(mut base_style: gpui::TextStyle, window: &Window) -> TerminalLayoutCache {
     let rem_size = window.rem_size();
-    let font_size = base_style.font_size.to_pixels(rem_size) * TERMINAL_FONT_SCALE;
+    let font_size = base_style.font_size.to_pixels(rem_size);
     let line_height = terminal_line_height(font_size);
     base_style.line_height = line_height.into();
     let font_id = window.text_system().resolve_font(&base_style.font());

@@ -167,3 +167,83 @@ fn shutdown_confirmation_for_an_exited_tab_does_not_close_its_sibling(
         assert_eq!(session.active_index, 0);
     });
 }
+
+/// Both bottom-panel strips and the terminal's own tabs: click targets that
+/// used to sit at a fixed pixel size whatever the density.
+#[gpui::test]
+fn comfortable_bottom_panel_tabs_grow_with_the_density(cx: &mut gpui::TestAppContext) {
+    use crate::appearance::{Appearance, UiDensity};
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.terminal_sessions
+                .insert(repo_id, test_terminal_session(vec![(10, None)], 0, cx));
+            this.open_reflog_panel(repo_id, cx);
+            this.active_bottom_panel
+                .insert(repo_id, crate::view::BottomPanelTab::Terminal);
+        })
+    });
+
+    let selectors = [
+        "terminal_tab-0",
+        "terminal_tab_close-0",
+        "bottom_panel_tab_terminal",
+        "bottom_panel_tab_terminal_close",
+        "bottom_panel_tab_reflog",
+    ];
+    let mut compact = Vec::new();
+
+    for density in [UiDensity::Compact, UiDensity::Comfortable] {
+        cx.update(|_window, app| {
+            app.set_global(Appearance {
+                density,
+                ..Appearance::default()
+            });
+            view.update(app, |this, cx| this.notify_font_preferences_changed(cx));
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        for (ix, selector) in selectors.into_iter().enumerate() {
+            let height = cx
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("missing {selector} at {density:?} density"))
+                .size
+                .height;
+            match density {
+                UiDensity::Compact => compact.push(height),
+                UiDensity::Comfortable => assert!(
+                    height > compact[ix],
+                    "{selector} must grow under Comfortable, stayed {height:?}"
+                ),
+            }
+        }
+
+        let mut height = |selector: &'static str| {
+            cx.debug_bounds(selector)
+                .unwrap_or_else(|| panic!("missing {selector}"))
+                .size
+                .height
+        };
+        let (terminal_tab, switcher_tab) = (
+            height("terminal_tab-0"),
+            height("bottom_panel_tab_terminal"),
+        );
+        let (terminal_close, switcher_close) = (
+            height("terminal_tab_close-0"),
+            height("bottom_panel_tab_terminal_close"),
+        );
+        assert_eq!(
+            terminal_tab, switcher_tab,
+            "both strips share `panel_tab`, so their tabs must measure the same at {density:?}"
+        );
+        assert_eq!(
+            terminal_close, switcher_close,
+            "and so must their close affordances at {density:?}"
+        );
+    }
+}

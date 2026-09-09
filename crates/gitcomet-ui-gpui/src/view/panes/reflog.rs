@@ -8,6 +8,22 @@ use std::hash::{Hash, Hasher};
 use std::time::SystemTime;
 
 const REFLOG_ROW_HEIGHT_PX: f32 = 28.0;
+/// Table columns, in UI-font units: the cells hold text, so a larger font has
+/// to widen them or the selector, sha and date run into each other.
+const REFLOG_MARKER_COLUMN_PX: f32 = 14.0;
+const REFLOG_SELECTOR_COLUMN_PX: f32 = 70.0;
+const REFLOG_SHA_COLUMN_PX: f32 = 70.0;
+const REFLOG_AVATAR_COLUMN_PX: f32 = 22.0;
+const REFLOG_DATE_COLUMN_PX: f32 = 260.0;
+const REFLOG_FILTER_WIDTH_PX: f32 = 220.0;
+/// A dense table like the log, so rows take the log's comfortable height.
+const REFLOG_ROW_COMFORTABLE_HEIGHT_PX: f32 = 36.0;
+
+/// A reflog table column: design pixels widened by the UI font, so text cells
+/// keep their content as the font grows.
+fn reflog_column(ui_scale: UiScale, design_px: f32) -> Pixels {
+    ui_scale.px(ui_scale.appearance.ui_text(design_px))
+}
 
 /// Per-repository reflog panel state: unlike the popover picker it replaced,
 /// this survives being hidden behind the terminal tab, so scroll position, the
@@ -355,7 +371,7 @@ impl ReflogPaneView {
     ) -> Vec<AnyElement> {
         let requested = range.len();
         let theme = this.theme;
-        let ui_scale = UiScale::from_percent(this.ui_scale_percent);
+        let ui_scale = UiScale::from_percent(this.ui_scale_percent).with_appearance(theme.metrics);
         let now = SystemTime::now();
 
         let Some(repo_id) = this.state.active_repo else {
@@ -424,10 +440,11 @@ impl ReflogPaneView {
             .id(("reflog_row", entry.index))
             .flex()
             .items_center()
-            .h(px(REFLOG_ROW_HEIGHT_PX))
+            .h(ui_scale.row_height(REFLOG_ROW_HEIGHT_PX, REFLOG_ROW_COMFORTABLE_HEIGHT_PX))
+            .w_full()
             .flex_none()
-            .px(px(8.0))
-            .gap(px(8.0))
+            .px(ui_scale.px(8.0))
+            .gap(ui_scale.px(8.0))
             .bg(row_bg)
             .cursor(CursorStyle::PointingHand)
             .hover(move |s| {
@@ -440,7 +457,7 @@ impl ReflogPaneView {
             .child({
                 let marker = div()
                     .id(("reflog_row_marker", entry.index))
-                    .w(px(14.0))
+                    .w(reflog_column(ui_scale, REFLOG_MARKER_COLUMN_PX))
                     .flex_none()
                     .text_color(theme.colors.accent.foreground)
                     .child(if is_current { "▶" } else { "" });
@@ -452,18 +469,18 @@ impl ReflogPaneView {
             })
             .child(
                 div()
-                    .w(px(70.0))
+                    .w(reflog_column(ui_scale, REFLOG_SELECTOR_COLUMN_PX))
                     .flex_none()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(selector),
             )
             .child(
                 div()
                     .id(("reflog_row_sha", entry.index))
-                    .w(px(70.0))
+                    .w(reflog_column(ui_scale, REFLOG_SHA_COLUMN_PX))
                     .flex_none()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .font_family(UI_MONOSPACE_FONT_FAMILY)
                     .text_color(theme.colors.accent.foreground)
                     .child(short_sha)
@@ -471,7 +488,7 @@ impl ReflogPaneView {
             )
             .child(
                 div()
-                    .w(px(22.0))
+                    .w(reflog_column(ui_scale, REFLOG_AVATAR_COLUMN_PX))
                     .flex_none()
                     .child(components::author_avatar(
                         theme,
@@ -481,9 +498,9 @@ impl ReflogPaneView {
             )
             .child(
                 div()
-                    .w(px(260.0))
+                    .w(reflog_column(ui_scale, REFLOG_DATE_COLUMN_PX))
                     .flex_none()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(date),
             )
@@ -493,7 +510,7 @@ impl ReflogPaneView {
                     .min_w(px(0.0))
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .child(message),
             )
             .on_mouse_down(
@@ -559,6 +576,7 @@ impl ReflogPaneView {
     fn render_header(
         &mut self,
         theme: AppTheme,
+        ui_scale: UiScale,
         repo_id: RepoId,
         entry_count: Option<usize>,
         cx: &mut gpui::Context<Self>,
@@ -569,43 +587,28 @@ impl ReflogPaneView {
             .map(|panel| panel.query_input.clone());
         let text_color = theme.colors.interaction.selected_foreground;
 
-        let close = div()
-            .id("reflog_panel_tab_close")
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .size(px(14.0))
-            .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(with_alpha(theme.colors.status.danger.foreground, 0.18)))
-            .child(svg_icon("icons/generic_close.svg", text_color, px(10.0)))
-            .gitcomet_tooltip(theme, "Close reflog".into())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                    cx.stop_propagation();
-                    this.close(repo_id, cx);
-                }),
-            );
+        let close =
+            components::panel_tab_close("reflog_panel_tab_close", theme, ui_scale, text_color)
+                .gitcomet_tooltip(theme, "Close reflog".into())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                        this.close(repo_id, cx);
+                    }),
+                );
 
-        let tab = div()
-            .id("reflog_panel_tab")
-            .debug_selector(|| "reflog_panel_tab".to_string())
-            .flex()
-            .flex_none()
-            .flex_row()
-            .items_center()
-            .gap(px(6.0))
-            .px(px(8.0))
-            .py(px(3.0))
-            .rounded(px(theme.radii.row))
-            .bg(theme.colors.interaction.selected_background)
-            .text_color(text_color)
-            .text_size(px(12.0))
-            .child(svg_icon("icons/history.svg", text_color, px(12.0)))
-            .child("Reflog")
-            .child(close);
+        let tab = components::panel_tab(
+            "reflog_panel_tab",
+            theme,
+            ui_scale,
+            "icons/history.svg",
+            "Reflog",
+            theme.colors.interaction.selected_background,
+            text_color,
+        )
+        .debug_selector(|| "reflog_panel_tab".to_string())
+        .child(close);
 
         // The tab and the entry count take the leading edge and absorb the slack,
         // which parks the filter box against the trailing edge — the same shape
@@ -614,14 +617,14 @@ impl ReflogPaneView {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
+            .gap(ui_scale.px(6.0))
             .flex_1()
             .min_w(px(0.0))
             .child(tab)
             .child(
                 div()
                     .flex_none()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(match entry_count {
                         Some(count) => format!("{count} entries"),
@@ -634,9 +637,9 @@ impl ReflogPaneView {
             .flex_none()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
-            .px(px(4.0))
-            .py(px(4.0))
+            .gap(ui_scale.px(6.0))
+            .px(ui_scale.px(4.0))
+            .py(ui_scale.px(4.0))
             .bg(theme.colors.surface.panel)
             .border_b_1()
             .border_color(theme.colors.stroke.subtle)
@@ -646,30 +649,57 @@ impl ReflogPaneView {
                     .id("reflog_panel_filter")
                     .debug_selector(|| "reflog_panel_filter".to_string())
                     .flex_none()
-                    .w(px(220.0))
+                    .w(reflog_column(ui_scale, REFLOG_FILTER_WIDTH_PX))
                     .children(query_input),
             )
             .into_any()
     }
 
-    fn render_table_header(&self, theme: AppTheme) -> AnyElement {
+    fn pane_scale(&self, theme: AppTheme) -> UiScale {
+        UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics)
+    }
+
+    fn render_table_header(&self, theme: AppTheme, ui_scale: UiScale) -> AnyElement {
         div()
             .flex()
             .flex_none()
             .items_center()
-            .px(px(8.0))
-            .py(px(3.0))
-            .gap(px(8.0))
-            .text_xs()
+            .px(ui_scale.px(8.0))
+            .py(ui_scale.px(3.0))
+            .gap(ui_scale.px(8.0))
+            .text_size(theme.ui_text(12.0))
             .text_color(theme.colors.foreground.secondary)
             .bg(theme.colors.surface.panel)
             .border_b_1()
             .border_color(theme.colors.stroke.subtle)
-            .child(div().w(px(14.0)).flex_none())
-            .child(div().w(px(70.0)).flex_none().child("Selector"))
-            .child(div().w(px(70.0)).flex_none().child("SHA"))
-            .child(div().w(px(22.0)).flex_none())
-            .child(div().w(px(260.0)).flex_none().child("Date"))
+            .child(
+                div()
+                    .w(reflog_column(ui_scale, REFLOG_MARKER_COLUMN_PX))
+                    .flex_none(),
+            )
+            .child(
+                div()
+                    .w(reflog_column(ui_scale, REFLOG_SELECTOR_COLUMN_PX))
+                    .flex_none()
+                    .child("Selector"),
+            )
+            .child(
+                div()
+                    .w(reflog_column(ui_scale, REFLOG_SHA_COLUMN_PX))
+                    .flex_none()
+                    .child("SHA"),
+            )
+            .child(
+                div()
+                    .w(reflog_column(ui_scale, REFLOG_AVATAR_COLUMN_PX))
+                    .flex_none(),
+            )
+            .child(
+                div()
+                    .w(reflog_column(ui_scale, REFLOG_DATE_COLUMN_PX))
+                    .flex_none()
+                    .child("Date"),
+            )
             .child(
                 div()
                     .flex_1()
@@ -763,11 +793,12 @@ impl Render for ReflogPaneView {
             .panels
             .get(&repo_id)
             .is_none_or(|panel| panel.query.is_empty());
+        let ui_scale = self.pane_scale(theme);
 
         let body = match reflog {
             None => reflog_placeholder(theme, "No repository"),
             Some(Loadable::Error(e)) => {
-                reflog_error_placeholder(theme, format!("Couldn't load reflog: {e}"))
+                reflog_error_placeholder(theme, ui_scale, format!("Couldn't load reflog: {e}"))
             }
             Some(Loadable::NotLoaded | Loadable::Loading) => reflog_placeholder(theme, "Loading…"),
             Some(Loadable::Ready(_)) if row_count == 0 => reflog_placeholder(
@@ -781,8 +812,8 @@ impl Render for ReflogPaneView {
             Some(Loadable::Ready(_)) => self.render_rows(theme, repo_id, row_count, cx),
         };
 
-        let header = self.render_header(theme, repo_id, entry_count, cx);
-        let table_header = self.render_table_header(theme);
+        let header = self.render_header(theme, ui_scale, repo_id, entry_count, cx);
+        let table_header = self.render_table_header(theme, ui_scale);
         container.child(header).child(table_header).child(body)
     }
 }
@@ -826,14 +857,18 @@ fn reflog_placeholder(theme: AppTheme, text: impl Into<SharedString>) -> AnyElem
 /// git can refuse to read the reflog for a repo that is present but has no
 /// commits yet ("unborn HEAD"), and that message deserves to look distinct
 /// from "still loading" or "nothing to show".
-fn reflog_error_placeholder(theme: AppTheme, text: impl Into<SharedString>) -> AnyElement {
+fn reflog_error_placeholder(
+    theme: AppTheme,
+    ui_scale: UiScale,
+    text: impl Into<SharedString>,
+) -> AnyElement {
     div()
         .flex()
         .flex_1()
         .items_center()
         .justify_center()
         .min_h(px(0.0))
-        .px(px(16.0))
+        .px(ui_scale.px(16.0))
         .text_color(theme.colors.status.danger.foreground)
         .child(text.into())
         .into_any()
@@ -841,6 +876,34 @@ fn reflog_error_placeholder(theme: AppTheme, text: impl Into<SharedString>) -> A
 
 #[cfg(test)]
 mod tests {
+
+    /// The table's cells hold text, so a larger UI font has to widen them or the
+    /// selector, sha and date columns run into each other.
+    #[test]
+    fn reflog_columns_widen_with_the_ui_font() {
+        let scale = |ui_font_size_px| {
+            UiScale::from_percent(100).with_appearance(crate::appearance::Appearance {
+                ui_font_size_px,
+                ..crate::appearance::Appearance::default()
+            })
+        };
+
+        for column in [
+            REFLOG_SELECTOR_COLUMN_PX,
+            REFLOG_SHA_COLUMN_PX,
+            REFLOG_DATE_COLUMN_PX,
+            REFLOG_FILTER_WIDTH_PX,
+        ] {
+            assert_eq!(reflog_column(scale(14), column), px(column));
+            assert!(reflog_column(scale(24), column) > reflog_column(scale(14), column));
+        }
+
+        assert_eq!(
+            reflog_column(UiScale::from_percent(200), REFLOG_SHA_COLUMN_PX),
+            px(REFLOG_SHA_COLUMN_PX) * 2.0,
+            "and still follow the UI zoom"
+        );
+    }
     use super::*;
     use std::sync::Arc as StdArc;
 

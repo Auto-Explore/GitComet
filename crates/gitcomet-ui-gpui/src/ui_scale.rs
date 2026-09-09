@@ -97,6 +97,7 @@ pub(crate) fn step_down(current: u32) -> u32 {
 pub(crate) struct UiScale {
     percent: u32,
     factor: f32,
+    pub(crate) appearance: crate::appearance::Appearance,
 }
 
 impl From<u32> for UiScale {
@@ -111,6 +112,7 @@ impl UiScale {
         Self {
             percent,
             factor: percent as f32 / DEFAULT_UI_SCALE_PERCENT as f32,
+            appearance: crate::appearance::Appearance::default(),
         }
     }
 
@@ -119,14 +121,34 @@ impl UiScale {
         let percent = sanitize_percent(Some(
             (factor * DEFAULT_UI_SCALE_PERCENT as f32).round() as u32
         ));
-        Self { percent, factor }
+        Self {
+            percent,
+            factor,
+            appearance: crate::appearance::Appearance::default(),
+        }
     }
 
     pub(crate) fn current<C>(cx: &mut C) -> Self
     where
         C: BorrowAppContext,
     {
-        Self::from_percent(current(cx).percent)
+        let scale = Self::from_percent(current(cx).percent);
+        let appearance = cx
+            .update_default_global::<crate::appearance::Appearance, _>(|appearance, _| *appearance);
+        scale.with_appearance(appearance)
+    }
+
+    pub(crate) fn with_appearance(mut self, appearance: crate::appearance::Appearance) -> Self {
+        self.appearance = appearance;
+        self
+    }
+
+    pub(crate) fn row_height(self, compact: f32, comfortable: f32) -> Pixels {
+        self.px(self.appearance.row_height(compact, comfortable))
+    }
+
+    pub(crate) fn ui_text(self, design_px: f32) -> Pixels {
+        self.px(self.appearance.ui_text(design_px))
     }
 
     pub(crate) fn percent(self) -> u32 {
@@ -196,6 +218,13 @@ pub(crate) fn design_px_from_percent(value: f32, percent: u32) -> Pixels {
     UiScale::from_percent(percent).px(value)
 }
 
+/// A reusable `design px -> Pixels`. Captures the scale by value, so it does
+/// not borrow the view for the whole render.
+pub(crate) fn scaler<S: Into<UiScale>>(scale: S) -> impl Fn(f32) -> Pixels + Copy + use<S> {
+    let scale = scale.into();
+    move |value: f32| scale.px(value)
+}
+
 pub(crate) fn design_px_from_window(value: f32, window: &Window) -> Pixels {
     UiScale::from_window(window).px(value)
 }
@@ -238,6 +267,30 @@ mod tests {
         assert_eq!(step_up(150), 175);
         assert_eq!(step_up(175), 200);
         assert_eq!(step_up(200), 200);
+    }
+
+    /// A `scaler` must agree with the scale it was built from and carry the
+    /// appearance, so callers can hold one instead of a percent.
+    #[test]
+    fn scaler_matches_the_scale_it_was_built_from() {
+        let comfortable =
+            UiScale::from_percent(150).with_appearance(crate::appearance::Appearance {
+                density: crate::appearance::UiDensity::Comfortable,
+                ..crate::appearance::Appearance::default()
+            });
+
+        for scale in [
+            UiScale::from_percent(100),
+            UiScale::from_percent(150),
+            comfortable,
+        ] {
+            let scaled = scaler(scale);
+            for value in [0.0, 1.0, 13.5, 220.0] {
+                assert_eq!(scaled(value), scale.px(value));
+            }
+        }
+
+        assert_eq!(scaler(150u32)(10.0), design_px_from_percent(10.0, 150));
     }
 
     #[test]

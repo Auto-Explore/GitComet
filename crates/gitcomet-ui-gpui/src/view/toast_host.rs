@@ -638,7 +638,11 @@ impl ToastHost {
         cx.notify();
     }
 
-    fn render_progress_shell(&self, content: impl IntoElement) -> AnyElement {
+    fn render_progress_shell(
+        &self,
+        ui_scale: crate::ui_scale::UiScale,
+        content: impl IntoElement,
+    ) -> AnyElement {
         let theme = self.theme;
         let shell_bg = with_alpha(
             theme.colors.surface.raised,
@@ -648,26 +652,26 @@ impl ToastHost {
         let shell_accent = clone_progress_shell_accent_color(theme);
 
         div()
-            .min_w(px(360.0))
-            .max_w(px(900.0))
+            .min_w(ui_scale.px(360.0))
+            .max_w(ui_scale.px(900.0))
             .flex()
-            .gap(px(12.0))
+            .gap(ui_scale.px(12.0))
             .bg(shell_bg)
             .border_1()
             .border_color(shell_border)
             .rounded(px(theme.radii.popover))
             .overflow_hidden()
             .shadow(crate::theme::shadow_popover(theme))
-            .text_lg()
+            .text_size(theme.ui_text(18.0))
             .text_color(theme.colors.foreground.primary)
-            .child(div().w(px(5.0)).bg(shell_accent).flex_shrink_0())
+            .child(div().w(ui_scale.px(5.0)).bg(shell_accent).flex_shrink_0())
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .pl(px(16.0))
-                    .pr(px(16.0))
-                    .py(px(12.0))
+                    .pl(ui_scale.px(16.0))
+                    .pr(ui_scale.px(16.0))
+                    .py(ui_scale.px(12.0))
                     .child(content),
             )
             .into_any_element()
@@ -679,6 +683,7 @@ impl ToastHost {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let ui_scale = crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics);
         let spinner_color = crate::view::clone_progress::clone_progress_color(theme, &op);
         let percent = op.progress.percent.min(100);
         let bar_fill_color = crate::view::clone_progress::clone_progress_bar_fill_color(theme, &op);
@@ -754,7 +759,7 @@ impl ToastHost {
                             )
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(crate::view::clone_progress::clone_progress_dest_label(
                                         op.dest.as_ref(),
@@ -768,7 +773,7 @@ impl ToastHost {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .child(
                         div()
                             .text_color(spinner_color)
@@ -783,7 +788,7 @@ impl ToastHost {
             .child(
                 div()
                     .w_full()
-                    .h(px(8.0))
+                    .h(ui_scale.px(8.0))
                     .flex()
                     .rounded(px(999.0))
                     .overflow_hidden()
@@ -795,12 +800,13 @@ impl ToastHost {
             )
             .child(div().pt_1().child(abort_button));
 
-        self.render_progress_shell(content)
+        self.render_progress_shell(ui_scale, content)
     }
 
     fn render_submodule_add_progress_toast(
         &self,
         ix: u64,
+        ui_scale: crate::ui_scale::UiScale,
         progress: &SubmoduleAddProgressState,
     ) -> AnyElement {
         let theme = self.theme;
@@ -829,19 +835,19 @@ impl ToastHost {
                         )
                         .child(
                             div()
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(progress.path.display().to_string()),
                         )
                         .child(
                             div()
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(submodule_add_progress_url_label(&progress.url)),
                         ),
                 ),
         );
-        self.render_progress_shell(content)
+        self.render_progress_shell(ui_scale, content)
     }
 
     fn render_hook_progress_toast(
@@ -865,8 +871,7 @@ impl ToastHost {
             format!("Running {hook_name} hook…")
         };
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
         let open_button =
             components::Button::new(format!("hook_progress_open_{}", operation_id.0), "Open")
@@ -921,7 +926,7 @@ impl ToastHost {
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .font_weight(FontWeight::BOLD)
                     .line_clamp(1)
                     .whitespace_nowrap()
@@ -954,19 +959,21 @@ impl Render for ToastHost {
             .collect::<Vec<_>>();
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
         let mut progress_toasts = Vec::new();
         if let Some(progress) = self.clone_progress.clone() {
             progress_toasts.push(self.render_clone_progress_toast(progress, cx));
         }
-        progress_toasts.extend(
-            self.submodule_add_progress
-                .iter()
-                .enumerate()
-                .map(|(ix, progress)| {
-                    self.render_submodule_add_progress_toast(ix as u64, progress)
-                }),
-        );
+        progress_toasts.extend(self.submodule_add_progress.iter().enumerate().map(
+            |(ix, progress)| {
+                self.render_submodule_add_progress_toast(
+                    ix as u64,
+                    crate::ui_scale::UiScale::current(cx).with_appearance(self.theme.metrics),
+                    progress,
+                )
+            },
+        ));
         if !hook_progress.is_empty() {
             progress_toasts.push(self.render_hook_progress_toast(&hook_progress, cx));
         }
@@ -1011,7 +1018,7 @@ impl Render for ToastHost {
 
                 let message_scroll = div()
                     .id(("toast_message_scroll", t.id))
-                    .max_h(px(200.0))
+                    .max_h(scaled_px(200.0))
                     .overflow_y_scroll()
                     .child(
                         div()
@@ -1077,8 +1084,14 @@ impl Render for ToastHost {
 
                 div()
                     .relative()
-                    .child(components::toast(theme, t.kind, message))
-                    .child(div().absolute().top(px(8.0)).right(px(8.0)).child(close))
+                    .child(components::toast(theme, ui_scale_percent, t.kind, message))
+                    .child(
+                        div()
+                            .absolute()
+                            .top(scaled_px(8.0))
+                            .right(scaled_px(8.0))
+                            .child(close),
+                    )
                     .with_animations(
                         ("toast", t.id),
                         animations,
@@ -1108,7 +1121,7 @@ impl Render for ToastHost {
             .top_0()
             .left_0()
             .size_full()
-            .p(px(16.0))
+            .p(scaled_px(16.0))
             .flex()
             .child(
                 div()
@@ -1118,7 +1131,7 @@ impl Render for ToastHost {
                     .flex()
                     .flex_col()
                     .items_start()
-                    .gap(px(12.0))
+                    .gap(scaled_px(12.0))
                     .children(children),
             );
 

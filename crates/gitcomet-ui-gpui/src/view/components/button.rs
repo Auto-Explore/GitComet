@@ -226,7 +226,7 @@ impl Button {
             end_slot,
             separate_end_slot,
         } = self;
-        let ui_scale = ui_scale.into();
+        let ui_scale = ui_scale.into().with_appearance(theme.metrics);
 
         let transparent = gpui::rgba(0x00000000);
         let outlined_border = if theme.is_dark {
@@ -369,7 +369,13 @@ impl Button {
         let control_pad_x = control_pad_x(ui_scale);
         let control_pad_y = control_pad_y(ui_scale);
         let icon_pad_x = icon_pad_x(ui_scale);
-        let content_gap = ui_scale.px(4.0);
+        let content_gap = ui_scale.px(
+            if ui_scale.appearance.density == crate::appearance::UiDensity::Comfortable {
+                6.0
+            } else {
+                4.0
+            },
+        );
         let separated_slot_pad = ui_scale.px(6.0);
 
         let mut leading = div().flex().items_center().gap(content_gap);
@@ -407,6 +413,7 @@ impl Button {
         let mut base = div()
             .id(id.clone())
             .h(control_height)
+            .when(icon_only, |d| d.min_w(control_height))
             .px(if icon_only { icon_pad_x } else { control_pad_x })
             .py(control_pad_y)
             .flex()
@@ -422,7 +429,7 @@ impl Button {
                 d.rounded_tr(control_radius).rounded_br(control_radius)
             })
             .bg(bg)
-            .text_sm()
+            .text_size(ui_scale.ui_text(14.0))
             .text_color(text)
             .cursor(CursorStyle::PointingHand)
             .child(inner);

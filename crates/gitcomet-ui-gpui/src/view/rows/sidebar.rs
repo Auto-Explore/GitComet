@@ -7,6 +7,24 @@ use palette::IntoColor;
 use std::num::NonZeroU32;
 
 pub(in crate::view) const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
+
+/// Row height of every continuous list in the sidebar. The tabs swap lists in
+/// place, so a differing rhythm would make the rows jump.
+const SIDEBAR_TREE_ROW_HEIGHT_PX: f32 = 24.0;
+const SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX: f32 = 32.0;
+
+pub(in crate::view) fn sidebar_list_row_height(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> gpui::Pixels {
+    ui_scale::design_px_from_percent(
+        theme.metrics.row_height(
+            SIDEBAR_TREE_ROW_HEIGHT_PX,
+            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+        ),
+        ui_scale_percent,
+    )
+}
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
 pub(in crate::view) fn listed_workspace_paths_by_branch(
@@ -212,6 +230,18 @@ pub(in crate::view) fn worktree_origin_label(
 ///
 /// Deliberately style-only: callers add the id, cursor, hover and click when the
 /// chip is an affordance rather than a label.
+/// Height of a worktree badge. Comfortable lifts it with the rows and title
+/// bars it sits in.
+const WORKTREE_BADGE_HEIGHT_PX: f32 = 18.0;
+const WORKTREE_BADGE_COMFORTABLE_HEIGHT_PX: f32 = 24.0;
+
+pub(in crate::view) fn worktree_badge_height(scale: impl Into<ui_scale::UiScale>) -> Pixels {
+    scale.into().row_height(
+        WORKTREE_BADGE_HEIGHT_PX,
+        WORKTREE_BADGE_COMFORTABLE_HEIGHT_PX,
+    )
+}
+
 pub(in crate::view) fn worktree_origin_chip(
     theme: AppTheme,
     label: SharedString,
@@ -236,7 +266,7 @@ pub(in crate::view) fn worktree_origin_chip(
         .child(svg_icon(WORKTREE_ICON_PATH, palette.icon, icon_size))
         .child(
             div()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(palette.text)
                 .line_clamp(1)
                 .whitespace_nowrap()
@@ -273,9 +303,8 @@ fn filtered_label_element<V: 'static>(
             font_weight: Some(FontWeight::BOLD),
             ..Default::default()
         };
-        components::TruncatedText::new(label)
+        components::TruncatedText::new(label, text_size)
             .text_color(text_color)
-            .text_size(text_size)
             .font_weight(font_weight)
             .highlights([(range, highlight)])
             .render(cx)
@@ -407,7 +436,6 @@ impl SidebarPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        const BRANCH_TREE_ROW_HEIGHT_PX: f32 = 24.0;
         const BRANCH_TREE_BASE_PAD_PX: f32 = 8.0;
         const BRANCH_TREE_DEPTH_STEP_PX: f32 = 14.0;
         const BRANCH_TREE_TOGGLE_SLOT_PX: f32 = 14.0;
@@ -428,7 +456,7 @@ impl SidebarPaneView {
         /// over the badge.
         const BRANCH_ROW_TRAILING_PAD_PX: f32 = 4.0;
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
 
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
@@ -554,7 +582,10 @@ impl SidebarPaneView {
                         .id(("pinned_section", ix))
                         .debug_selector(move || format!("pinned_section_{selector_suffix}"))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -571,7 +602,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -629,7 +660,10 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_section", ix))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -643,7 +677,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -689,7 +723,10 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_filter_group", ix))
                         .debug_selector(move || format!("branch_filter_group_{selector_suffix}"))
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -702,7 +739,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -737,7 +774,10 @@ impl SidebarPaneView {
                         .id(("stash_section", ix))
                         .debug_selector(move || format!("stash_section_{ix}"))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -751,7 +791,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -796,10 +836,13 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::StashPlaceholder { message } => div()
                     .id(("stash_placeholder", ix))
-                    .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                    .h(crate::ui_scale::UiScale::current(cx).row_height(
+                        SIDEBAR_TREE_ROW_HEIGHT_PX,
+                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                    ))
                     .w_full()
                     .px_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
@@ -831,14 +874,17 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 14.0))
                         .child(
                             components::FadingText::new(
-                                div().text_sm().child(message.clone()),
+                                div().text_size(theme.ui_text(14.0)).child(message.clone()),
                                 row_style.resolved_background(row_state),
                             )
                             .hover_bg(
@@ -883,10 +929,13 @@ impl SidebarPaneView {
                     message,
                 } => div()
                     .id(("branch_placeholder", ix))
-                    .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                    .h(crate::ui_scale::UiScale::current(cx).row_height(
+                        SIDEBAR_TREE_ROW_HEIGHT_PX,
+                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                    ))
                     .w_full()
                     .px_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
@@ -912,7 +961,10 @@ impl SidebarPaneView {
                         .id(("worktrees_section", ix))
                         .debug_selector(move || format!("worktrees_section_{ix}"))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -926,7 +978,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -976,10 +1028,13 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::WorktreePlaceholder { message } => div()
                     .id(("worktree_placeholder", ix))
-                    .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                    .h(crate::ui_scale::UiScale::current(cx).row_height(
+                        SIDEBAR_TREE_ROW_HEIGHT_PX,
+                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                    ))
                     .w_full()
                     .px_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
@@ -1023,7 +1078,10 @@ impl SidebarPaneView {
                         .id(("worktree_item", ix))
                         .debug_selector(move || row_debug_selector.clone())
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .flex()
                         .items_center()
@@ -1037,7 +1095,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .flex()
                                 .items_center()
                                 .overflow_hidden()
@@ -1049,17 +1107,19 @@ impl SidebarPaneView {
                                         .min_w(px(0.0))
                                         .overflow_hidden()
                                         .child(
-                                            components::TruncatedText::path(path_label.clone())
-                                                .id(("worktree_path_text", ix))
-                                                .text_sm()
-                                                // Set the color explicitly: TruncatedText
-                                                // resolves an unset color from the ambient text
-                                                // style inside a deferred measure closure, which
-                                                // doesn't see ancestor `text_color` — so in the
-                                                // collapsed popover it would render near-black.
-                                                .text_color(theme.colors.foreground.primary)
-                                                .full_text_tooltip(this.tooltip_host.clone())
-                                                .render(cx),
+                                            components::TruncatedText::path(
+                                                path_label.clone(),
+                                                theme.ui_text(14.0),
+                                            )
+                                            .id(("worktree_path_text", ix))
+                                            // Set the color explicitly: TruncatedText
+                                            // resolves an unset color from the ambient text
+                                            // style inside a deferred measure closure, which
+                                            // doesn't see ancestor `text_color` — so in the
+                                            // collapsed popover it would render near-black.
+                                            .text_color(theme.colors.foreground.primary)
+                                            .full_text_tooltip(this.tooltip_host.clone())
+                                            .render(cx),
                                         ),
                                 )
                                 .when_some(branch_badge_label.clone(), |row, badge_label| {
@@ -1069,6 +1129,10 @@ impl SidebarPaneView {
                                             .items_center()
                                             .gap(scaled_px(3.0))
                                             .px(scaled_px(6.0))
+                                            .h(worktree_badge_height(
+                                                ui_scale::UiScale::from_percent(ui_scale_percent)
+                                                    .with_appearance(theme.metrics),
+                                            ))
                                             // Same control radius as the branch
                                             // rows' worktree badge; the two are
                                             // the same chip in two lists.
@@ -1076,7 +1140,7 @@ impl SidebarPaneView {
                                             .border_1()
                                             .border_color(branch_badge_colors.border)
                                             .bg(branch_badge_colors.bg)
-                                            .text_size(scaled_px(11.0))
+                                            .text_size(theme.ui_text(11.0))
                                             .text_color(branch_badge_colors.text)
                                             .id(("worktree_branch_badge", ix))
                                             .debug_selector(move || {
@@ -1100,9 +1164,9 @@ impl SidebarPaneView {
                                                     .child(
                                                         components::TruncatedText::new(
                                                             badge_label.clone(),
+                                                            theme.ui_text(11.0),
                                                         )
                                                         .id(("worktree_branch_badge_text", ix))
-                                                        .text_size(scaled_px(11.0))
                                                         // Explicit color: TruncatedText resolves an
                                                         // unset color from the ambient text style in
                                                         // a deferred measure closure that misses the
@@ -1182,7 +1246,10 @@ impl SidebarPaneView {
                         .id(("submodules_section", ix))
                         .debug_selector(move || format!("submodules_section_{ix}"))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1196,7 +1263,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -1246,14 +1313,17 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::SubmodulePlaceholder { message, can_load } => div()
                     .id(("submodule_placeholder", ix))
-                    .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                    .h(crate::ui_scale::UiScale::current(cx).row_height(
+                        SIDEBAR_TREE_ROW_HEIGHT_PX,
+                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                    ))
                     .w_full()
                     .pl_2()
                     .pr_1()
                     .flex()
                     .items_center()
                     .gap(scaled_px(6.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(
                         div()
@@ -1357,7 +1427,10 @@ impl SidebarPaneView {
                     div()
                         .id(("submodule_item", ix))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .flex()
                         .items_center()
@@ -1371,7 +1444,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .debug_selector(move || format!("submodule_label_{ix}"))
@@ -1399,7 +1472,7 @@ impl SidebarPaneView {
                                         theme.colors.surface.panel,
                                         if theme.is_dark { 0.9 } else { 0.7 },
                                     ))
-                                    .text_size(scaled_px(11.0))
+                                    .text_size(theme.ui_text(11.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(badge_label),
                             )
@@ -1463,7 +1536,10 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_remote", ix))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1472,7 +1548,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(remote_color)
                         .child(tree_toggle_slot(Some(collapsed)))
@@ -1561,7 +1637,10 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_group", ix))
                         .debug_selector(move || format!("branch_group_{ix}"))
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .pl(indent_px(usize::from(depth)))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1570,7 +1649,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .font_weight(FontWeight::NORMAL)
                         .text_color(theme.colors.foreground.secondary)
                         .child(tree_toggle_slot(Some(collapsed)))
@@ -1716,7 +1795,7 @@ impl SidebarPaneView {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(color)
                                 .child(svg_icon(icon_path, color, 11.0))
@@ -1742,7 +1821,7 @@ impl SidebarPaneView {
                             .gap(scaled_px(3.0))
                             .px(scaled_px(6.0))
                             .rounded(px(theme.radii.control))
-                            .text_size(scaled_px(11.0))
+                            .text_size(theme.ui_text(11.0))
                             .text_color(colors.text)
                             .bg(colors.bg)
                             .border_1()
@@ -1767,7 +1846,10 @@ impl SidebarPaneView {
                         .id(("branch_item", ix))
                         .debug_selector(move || row_debug_selector.clone())
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(crate::ui_scale::UiScale::current(cx).row_height(
+                            SIDEBAR_TREE_ROW_HEIGHT_PX,
+                            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                        ))
                         .w_full()
                         .group(row_group.clone())
                         .flex()
@@ -1788,7 +1870,7 @@ impl SidebarPaneView {
                             // fade them into the row instead of slicing a glyph.
                             components::FadingText::new(
                                 div()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .text_color(branch_selected_label_color)
                                     .child(filtered_label_element(
                                         label,
@@ -1874,6 +1956,10 @@ impl SidebarPaneView {
                             .items_center()
                             .gap(scaled_px(3.0))
                             .px(scaled_px(6.0))
+                            .h(worktree_badge_height(
+                                ui_scale::UiScale::from_percent(ui_scale_percent)
+                                    .with_appearance(theme.metrics),
+                            ))
                             // Squared off on the control radius the buttons and
                             // tabs use, matching the upstream status chip rather
                             // than the fully-round decorative pills.
@@ -1881,7 +1967,7 @@ impl SidebarPaneView {
                             .border_1()
                             .border_color(badge_colors.border)
                             .bg(badge_colors.bg)
-                            .text_size(scaled_px(11.0))
+                            .text_size(theme.ui_text(11.0))
                             .text_color(badge_colors.text)
                             .cursor(CursorStyle::PointingHand)
                             // A worktree folder can outrun the pane. Cap and
@@ -1895,15 +1981,17 @@ impl SidebarPaneView {
                             .child(svg_icon(WORKTREE_ICON_PATH, badge_colors.icon, 9.0))
                             .child(
                                 div().min_w(px(0.0)).overflow_hidden().child(
-                                    components::TruncatedText::new(workspace_badge_label)
-                                        .id(("branch_workspace_badge_text", ix))
-                                        .text_size(scaled_px(11.0))
-                                        // Explicit color: TruncatedText resolves an
-                                        // unset one from the ambient text style in a
-                                        // deferred measure closure that never sees the
-                                        // pill's `.text_color`.
-                                        .text_color(badge_colors.text)
-                                        .render(cx),
+                                    components::TruncatedText::new(
+                                        workspace_badge_label,
+                                        theme.ui_text(11.0),
+                                    )
+                                    .id(("branch_workspace_badge_text", ix))
+                                    // Explicit color: TruncatedText resolves an
+                                    // unset one from the ambient text style in a
+                                    // deferred measure closure that never sees the
+                                    // pill's `.text_color`.
+                                    .text_color(badge_colors.text)
+                                    .render(cx),
                                 ),
                             )
                             .hover(move |s| {
@@ -2087,8 +2175,7 @@ impl DetailsPaneView {
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = repo.id;
         let has_active_menu = this.active_context_menu_invoker.is_some();
         let file_rows = this.cached_commit_file_rows(
@@ -2156,7 +2243,7 @@ impl DetailsPaneView {
                 let mut row = div()
                     .id(("commit_file", ix))
                     .debug_selector(move || format!("commit_file_{}_{}", repo_id.0, ix))
-                    .h(scaled_px(24.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
@@ -2185,16 +2272,16 @@ impl DetailsPaneView {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_sm()
-                            .line_height(scaled_px(18.0))
+                            .text_size(theme.ui_text(14.0))
+                            .line_height(theme.ui_text(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
                                 components::TruncatedText::aligned_path(
                                     path_label,
+                                    theme.ui_text(14.0),
                                     path_alignment_group.clone(),
                                 )
-                                .text_sm()
                                 .render(cx),
                             ),
                     )
@@ -2299,8 +2386,7 @@ impl DetailsPaneView {
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let file_rows =
             this.cached_worktree_file_rows(repo_id, worktree_dirty_rev, &summary.path, files);
         let selected_ix_now = repo
@@ -2343,7 +2429,7 @@ impl DetailsPaneView {
                 let mut row = div()
                     .id(("worktree_file", ix))
                     .debug_selector(move || format!("worktree_file_{}_{}", repo_id.0, ix))
-                    .h(scaled_px(24.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
@@ -2364,16 +2450,16 @@ impl DetailsPaneView {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_sm()
-                            .line_height(scaled_px(18.0))
+                            .text_size(theme.ui_text(14.0))
+                            .line_height(theme.ui_text(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
                                 components::TruncatedText::aligned_path(
                                     path_label,
+                                    theme.ui_text(14.0),
                                     path_alignment_group.clone(),
                                 )
-                                .text_sm()
                                 .render(cx),
                             ),
                     )
@@ -2425,8 +2511,7 @@ impl DetailsPaneView {
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = repo.id;
         let from = range_selection.from.clone();
         let to = range_selection.to.clone();
@@ -2464,7 +2549,7 @@ impl DetailsPaneView {
                 let mut row = div()
                     .id(("range_file", ix))
                     .debug_selector(move || format!("range_file_{}_{}", repo_id.0, ix))
-                    .h(scaled_px(24.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
@@ -2487,16 +2572,16 @@ impl DetailsPaneView {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_sm()
-                            .line_height(scaled_px(18.0))
+                            .text_size(theme.ui_text(14.0))
+                            .line_height(theme.ui_text(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
                                 components::TruncatedText::aligned_path(
                                     path_label,
+                                    theme.ui_text(14.0),
                                     path_alignment_group.clone(),
                                 )
-                                .text_sm()
                                 .render(cx),
                             ),
                     )
@@ -2544,6 +2629,36 @@ impl DetailsPaneView {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every worktree badge -- the branch row pill, the details chip, the log
+    /// row badge -- goes through one height, so they cannot drift apart.
+    #[test]
+    fn worktree_badges_grow_with_the_density() {
+        use crate::appearance::{Appearance, UiDensity};
+        let scale = |density| {
+            ui_scale::UiScale::from_percent(100).with_appearance(Appearance {
+                density,
+                ..Appearance::default()
+            })
+        };
+        let compact = scale(UiDensity::Compact);
+        let comfortable = scale(UiDensity::Comfortable);
+
+        assert!(worktree_badge_height(comfortable) > worktree_badge_height(compact));
+        assert!(
+            worktree_badge_height(comfortable)
+                < comfortable.row_height(
+                    SIDEBAR_TREE_ROW_HEIGHT_PX,
+                    SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                ),
+            "the badge must still fit the row it sits in"
+        );
+        assert_eq!(
+            worktree_badge_height(ui_scale::UiScale::from_percent(200)),
+            worktree_badge_height(compact) * 2.0,
+            "and follow the UI zoom"
+        );
+    }
     use super::*;
     use gitcomet_core::domain::{
         Branch, Commit, CommitId, DiffTarget, LogPage, RemoteBranch, RepoSpec, Upstream,

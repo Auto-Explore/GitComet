@@ -57,7 +57,7 @@ fn commit_details_author_row(
                     .flex_col()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(display_name),
@@ -65,7 +65,7 @@ fn commit_details_author_row(
                     .when(!details.author_email.is_empty(), |column| {
                         column.child(
                             div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .line_clamp(1)
                                 .whitespace_nowrap()
@@ -77,7 +77,7 @@ fn commit_details_author_row(
                 row.child(
                     div()
                         .flex_none()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(relative),
                 )
@@ -110,15 +110,30 @@ enum CommitFileFilterLabels {
 const COMMIT_FILE_FILTER_TEXT_WIDTH_PX: f32 = 5.2;
 const COMMIT_FILE_FILTER_ICON_WIDTH_PX: f32 = 12.0;
 const COMMIT_FILE_FILTER_ICON_GAP_PX: f32 = 3.0;
+/// Side padding inside a committed-files filter chip. Compact keeps all five
+/// in a narrow details pane; Comfortable can afford room.
 const COMMIT_FILE_FILTER_TAB_PAD_X_PX: f32 = 2.0;
+const COMMIT_FILE_FILTER_TAB_COMFORTABLE_PAD_X_PX: f32 = 8.0;
+
+fn commit_file_filter_tab_pad_x(metrics: crate::appearance::Appearance) -> f32 {
+    if metrics.density == crate::appearance::UiDensity::Comfortable {
+        COMMIT_FILE_FILTER_TAB_COMFORTABLE_PAD_X_PX
+    } else {
+        COMMIT_FILE_FILTER_TAB_PAD_X_PX
+    }
+}
 const COMMIT_FILE_FILTER_TAB_COMPACT_GAP_PX: f32 = 4.0;
 const COMMIT_FILE_FILTER_TAB_FULL_GAP_PX: f32 = 6.0;
-const COMMIT_FILE_FILTER_HEIGHT_PX: f32 = 22.0;
+/// The "Unstaged" / "Untracked" chip: the section's click target, so its hit
+/// area follows the header bar's density ramp.
+const CHANGE_TRACKING_HEADER_CHIP_HEIGHT_PX: f32 = 18.0;
+const CHANGE_TRACKING_HEADER_CHIP_COMFORTABLE_HEIGHT_PX: f32 = 28.0;
 
 fn commit_file_filter_labels_for_width(
     available_width: Pixels,
     counts: crate::view::rows::CommitFileKindCounts,
     ui_scale_percent: u32,
+    metrics: crate::appearance::Appearance,
 ) -> CommitFileFilterLabels {
     if available_width <= px(0.0) {
         return CommitFileFilterLabels::Full;
@@ -138,7 +153,7 @@ fn commit_file_filter_labels_for_width(
         + count
             * (COMMIT_FILE_FILTER_ICON_WIDTH_PX
                 + COMMIT_FILE_FILTER_ICON_GAP_PX
-                + 2.0 * COMMIT_FILE_FILTER_TAB_PAD_X_PX)
+                + 2.0 * commit_file_filter_tab_pad_x(metrics))
         + (count - 1.0) * COMMIT_FILE_FILTER_TAB_FULL_GAP_PX;
 
     if crate::ui_scale::design_px_from_percent(needed, ui_scale_percent) <= available_width {
@@ -176,11 +191,17 @@ fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyE
         .gap_1()
         .child(
             div()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(key),
         )
-        .child(div().w_full().min_w(px(0.0)).text_sm().child(value))
+        .child(
+            div()
+                .w_full()
+                .min_w(px(0.0))
+                .text_size(theme.ui_text(14.0))
+                .child(value),
+        )
 }
 
 fn commit_details_monospace_value(input: Entity<components::TextInput>) -> AnyElement {
@@ -316,13 +337,11 @@ enum StatusActionLabels {
 /// Budgeted rather than measured, the same way the history columns decide what
 /// to drop (`view/panes/history.rs`).
 ///
-/// Calibrated against the shipped UI font rather than guessed: at 100% zoom
-/// `Stage all changes` renders 108px of ink over 17 characters (6.35/char) and
-/// the bold `Unstaged` renders 59px over 8 (7.4/char). Guessed values that ran
-/// a little high kept the header on the short labels while ~20px of room was
-/// still going spare, so keep these honest — the header truncates its title
-/// gracefully if a budget ever falls slightly short, but a budget that runs
-/// long silently withholds the full wording.
+/// Per character at the default 14px UI font, measured not guessed: at 100%
+/// zoom `Stage all changes` renders 108px of ink over 17 characters (6.35/char)
+/// and the bold `Unstaged` renders 59px over 8 (7.4/char). Both go through
+/// `ui_text`, so a larger UI font widens the budget with the ink. Keep them
+/// honest: a budget that runs long silently withholds the full wording.
 const STATUS_ACTION_CHAR_WIDTH_PX: f32 = 6.4;
 const STATUS_HEADER_TITLE_CHAR_WIDTH_PX: f32 = 7.4;
 /// The header's own `px_2`, and the `gap_2` between the title and the action
@@ -334,9 +353,14 @@ const STATUS_HEADER_GAP_PX: f32 = 8.0;
 const STATUS_HEADER_DROPDOWN_EXTRA_PX: f32 = 24.0;
 const STATUS_HEADER_SPINNER_PX: f32 = 14.0;
 
-fn status_action_button_width_px(label_chars: usize) -> f32 {
+fn status_action_button_width_px(
+    label_chars: usize,
+    metrics: crate::appearance::Appearance,
+) -> f32 {
     // `control_pad_x` each side, plus the 1px border every style reserves.
-    2.0 * components::CONTROL_PAD_X_PX + 2.0 + label_chars as f32 * STATUS_ACTION_CHAR_WIDTH_PX
+    2.0 * components::CONTROL_PAD_X_PX
+        + 2.0
+        + label_chars as f32 * metrics.ui_text(STATUS_ACTION_CHAR_WIDTH_PX)
 }
 
 fn status_action_labels_for_width(
@@ -346,13 +370,14 @@ fn status_action_labels_for_width(
     action_label_chars: &[usize],
     has_spinner: bool,
     ui_scale_percent: u32,
+    metrics: crate::appearance::Appearance,
 ) -> StatusActionLabels {
     if available_width <= px(0.0) || action_label_chars.is_empty() {
         return StatusActionLabels::Full;
     }
 
     let mut needed = 2.0 * STATUS_HEADER_PAD_X_PX
-        + title_chars as f32 * STATUS_HEADER_TITLE_CHAR_WIDTH_PX
+        + title_chars as f32 * metrics.ui_text(STATUS_HEADER_TITLE_CHAR_WIDTH_PX)
         + if title_is_dropdown {
             STATUS_HEADER_DROPDOWN_EXTRA_PX
         } else {
@@ -367,7 +392,7 @@ fn status_action_labels_for_width(
         if ix > 0 {
             needed += STATUS_HEADER_GAP_PX;
         }
-        needed += status_action_button_width_px(*chars);
+        needed += status_action_button_width_px(*chars, metrics);
     }
 
     if crate::ui_scale::design_px_from_percent(needed, ui_scale_percent) <= available_width {
@@ -1027,8 +1052,7 @@ impl DetailsPaneView {
     ) -> AnyElement {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, self.ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
 
         let short_sha = card.short_sha.clone();
         let summary = card.summary.clone();
@@ -1062,10 +1086,15 @@ impl DetailsPaneView {
                     .flex()
                     .flex_col()
                     .gap(scaled_px(2.0))
-                    .child(div().text_sm().line_clamp(1).child(summary))
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(theme.ui_text(14.0))
+                            .line_clamp(1)
+                            .child(summary),
+                    )
+                    .child(
+                        div()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .child(when),
@@ -1074,7 +1103,7 @@ impl DetailsPaneView {
             .child(
                 div()
                     .flex_none()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
                     .text_color(theme.colors.foreground.secondary)
                     .child(short_sha),
@@ -1176,20 +1205,13 @@ impl DetailsPaneView {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
 
-        let header = div()
-            .flex()
-            .items_center()
+        let header = components::content_header_bar(theme, ui_scale)
             .justify_between()
-            .h(components::control_height_md(ui_scale))
-            .px_2()
-            .bg(theme.colors.surface.raised)
-            .border_b_1()
-            .border_color(theme.colors.stroke.default)
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .font_weight(FontWeight::BOLD)
                     .line_clamp(1)
                     .child(SharedString::from(format!("{count} commits selected"))),
@@ -1274,19 +1296,12 @@ impl DetailsPaneView {
             return div().into_any_element();
         };
 
-        let header = div()
-            .flex()
-            .items_center()
+        let header = components::content_header_bar(theme, ui_scale)
             .gap_2()
-            .h(components::control_height_md(ui_scale))
-            .px_2()
-            .bg(theme.colors.surface.raised)
-            .border_b_1()
-            .border_color(theme.colors.stroke.default)
             .child(
                 div()
                     .flex_none()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .font_weight(FontWeight::BOLD)
                     // Not "Uncommitted changes": that is the current repo's
                     // own row, and these are somebody else's.
@@ -1300,7 +1315,7 @@ impl DetailsPaneView {
                     theme,
                     chip_label,
                     ui_scale.px(10.0),
-                    ui_scale.px(18.0),
+                    crate::view::rows::sidebar::worktree_badge_height(ui_scale),
                     ui_scale.px(220.0),
                     ui_scale.px(6.0),
                 )
@@ -1352,7 +1367,7 @@ impl DetailsPaneView {
             // the header above it counts the changes.
             div()
                 .debug_selector(|| "worktree_files_loading".to_string())
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Loading files…")
                 .into_any_element()
@@ -1394,7 +1409,7 @@ impl DetailsPaneView {
                     .p_2()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .child(SharedString::from(format!("{file_count} changed"))),
@@ -1467,20 +1482,13 @@ impl DetailsPaneView {
             format!("Viewing diff: {} → {}", range.from_label, range.to_label).into()
         };
 
-        let header = div()
-            .flex()
-            .items_center()
+        let header = components::content_header_bar(theme, ui_scale)
             .justify_between()
-            .h(components::control_height_md(ui_scale))
-            .px_2()
-            .bg(theme.colors.surface.raised)
-            .border_b_1()
-            .border_color(theme.colors.stroke.default)
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .font_weight(FontWeight::BOLD)
                     .line_clamp(1)
                     .child(header_title),
@@ -1541,7 +1549,7 @@ impl DetailsPaneView {
         let files_body: AnyElement = match &files_state {
             RangeFilesState::Loading => div()
                 .debug_selector(|| "range_files_loading".to_string())
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Loading")
                 .into_any_element(),
@@ -1550,13 +1558,13 @@ impl DetailsPaneView {
             // failed comparison as a successful, empty one.
             RangeFilesState::Failed(message) => div()
                 .debug_selector(|| "range_files_error".to_string())
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.status.danger.foreground)
                 .child(SharedString::from(message.clone()))
                 .into_any_element(),
             RangeFilesState::Loaded(0) => div()
                 .debug_selector(|| "range_files_empty".to_string())
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("No files.")
                 .into_any_element(),
@@ -1597,7 +1605,7 @@ impl DetailsPaneView {
                     .p_2()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .child(subheader),
@@ -1622,7 +1630,7 @@ impl DetailsPaneView {
                             .child(
                                 div()
                                     .debug_selector(move || files_label_selector.to_string())
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(files_label),
                             )
@@ -1659,8 +1667,12 @@ impl DetailsPaneView {
             .as_ref()
             .map(|bounds| bounds.size.width)
             .unwrap_or(Pixels::MAX);
-        let labels =
-            commit_file_filter_labels_for_width(available_width, counts, self.ui_scale_percent);
+        let labels = commit_file_filter_labels_for_width(
+            available_width,
+            counts,
+            self.ui_scale_percent,
+            theme.metrics,
+        );
         let tab_gap = match labels {
             CommitFileFilterLabels::Full => COMMIT_FILE_FILTER_TAB_FULL_GAP_PX,
             CommitFileFilterLabels::Compact => COMMIT_FILE_FILTER_TAB_COMPACT_GAP_PX,
@@ -1675,7 +1687,7 @@ impl DetailsPaneView {
             .gap(ui_scale.px(tab_gap))
             .w_full()
             .min_w(px(0.0))
-            .h(ui_scale.px(COMMIT_FILE_FILTER_HEIGHT_PX))
+            .h(components::control_height(ui_scale))
             .overflow_hidden();
 
         for (ix, filter) in crate::view::rows::CommitFileFilter::ALL
@@ -1705,8 +1717,8 @@ impl DetailsPaneView {
                 .items_center()
                 .justify_center()
                 .gap(ui_scale.px(COMMIT_FILE_FILTER_ICON_GAP_PX))
-                .h(ui_scale.px(COMMIT_FILE_FILTER_HEIGHT_PX))
-                .px(ui_scale.px(COMMIT_FILE_FILTER_TAB_PAD_X_PX))
+                .h(components::control_height(ui_scale))
+                .px(ui_scale.px(commit_file_filter_tab_pad_x(theme.metrics)))
                 .rounded(px(theme.radii.control))
                 .border_1()
                 .border_color(if selected {
@@ -1714,7 +1726,7 @@ impl DetailsPaneView {
                 } else {
                     gpui::rgba(0x00000000)
                 })
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .whitespace_nowrap()
                 .text_color(if selected {
                     theme.colors.interaction.selected_foreground
@@ -1778,13 +1790,13 @@ impl DetailsPaneView {
         let visible_count = projection.source_indices.len();
         let files = if details.files.is_empty() {
             div()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("No files.")
                 .into_any_element()
         } else if visible_count == 0 {
             div()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("No files match this filter.")
                 .into_any_element()
@@ -1800,7 +1812,10 @@ impl DetailsPaneView {
                     cx.processor(Self::render_commit_file_rows),
                 ),
             )
-            .min_h(ui_scale.px(24.0))
+            .min_h(crate::view::rows::sidebar::sidebar_list_row_height(
+                theme,
+                ui_scale.percent(),
+            ))
             .into_any_element()
         };
 
@@ -1836,7 +1851,7 @@ impl DetailsPaneView {
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .line_clamp(1)
                     .child(format!("Committed files ({})", projection.counts.all)),
@@ -1924,13 +1939,13 @@ impl DetailsPaneView {
                 .flex()
                 .items_center()
                 .justify_between()
-                .h(components::control_height_md(ui_scale))
+                .h(components::content_header_height(ui_scale))
                 .px_2()
                 .child(
                     div()
                         .flex_1()
                         .min_w(px(0.0))
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
                         .font_weight(FontWeight::BOLD)
                         .line_clamp(1)
                         .child(header_title),
@@ -2316,6 +2331,7 @@ impl DetailsPaneView {
                     action_label_chars,
                     local_actions_in_flight,
                     ui_scale_percent,
+                    theme.metrics,
                 )
             };
         let count_chars =
@@ -2385,6 +2401,7 @@ impl DetailsPaneView {
             // Empty paths: this button stages every change there is.
             this.stage_all_with_conflict_confirmation(repo_id, Vec::new(), _w, cx);
         })
+        .debug_selector(|| "stage_all_button".to_string())
         .gitcomet_tooltip(theme, "Stage all changes".into());
 
         let stage_selected = components::Button::new(
@@ -2751,7 +2768,10 @@ impl DetailsPaneView {
                 .items_center()
                 .justify_between()
                 .gap_2()
-                .h(components::control_height_md(ui_scale_percent))
+                .h(components::content_header_height(
+                    ui_scale::UiScale::from_percent(ui_scale_percent)
+                        .with_appearance(theme.metrics),
+                ))
                 .px_2()
                 .overflow_hidden()
                 // The labels shrink before this matters, but a UI zoom or a font
@@ -2771,7 +2791,7 @@ impl DetailsPaneView {
 
         let normal_header_title = |label: &'static str| {
             div()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .font_weight(FontWeight::BOLD)
                 .line_clamp(1)
                 .whitespace_nowrap()
@@ -2906,11 +2926,15 @@ impl DetailsPaneView {
                 let change_tracking_invoker = change_tracking_invoker.clone();
                 div()
                     .id(id)
+                    .debug_selector(move || id.to_string())
                     .flex()
                     .items_center()
                     .gap_1()
                     .px_1()
-                    .h(px(18.0))
+                    .h(ui_scale.row_height(
+                        CHANGE_TRACKING_HEADER_CHIP_HEIGHT_PX,
+                        CHANGE_TRACKING_HEADER_CHIP_COMFORTABLE_HEIGHT_PX,
+                    ))
                     .rounded(px(theme.radii.row))
                     .when(change_tracking_active, |d| {
                         d.bg(theme.colors.interaction.pressed_background)
@@ -2926,7 +2950,7 @@ impl DetailsPaneView {
                     .cursor(CursorStyle::PointingHand)
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .font_weight(FontWeight::BOLD)
                             .line_clamp(1)
                             .whitespace_nowrap()
@@ -3616,6 +3640,43 @@ mod tests {
         }
     }
 
+    /// The chips get real side padding under Comfortable, and the width budget
+    /// that decides between full and count-only labels has to use the same
+    /// value or the labels overflow the pane they were measured for.
+    #[test]
+    fn comfortable_filter_chips_get_padding_the_width_budget_accounts_for() {
+        let comfortable = crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Comfortable,
+            ..crate::appearance::Appearance::default()
+        };
+        let compact = crate::appearance::Appearance::default();
+
+        assert!(commit_file_filter_tab_pad_x(comfortable) > commit_file_filter_tab_pad_x(compact));
+
+        let counts = commit_file_filter_test_counts();
+        let labels = |width: f32, metrics| {
+            commit_file_filter_labels_for_width(
+                px(width),
+                counts,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                metrics,
+            )
+        };
+        let mut widths_where_padding_decides = 0;
+        for width in 200..600 {
+            let width = width as f32;
+            if labels(width, compact) != labels(width, comfortable) {
+                assert_eq!(labels(width, compact), CommitFileFilterLabels::Full);
+                assert_eq!(labels(width, comfortable), CommitFileFilterLabels::Compact);
+                widths_where_padding_decides += 1;
+            }
+        }
+        assert!(
+            widths_where_padding_decides > 0,
+            "the extra padding must reach the budget that picks the labels"
+        );
+    }
+
     #[test]
     fn commit_file_filter_tabs_use_full_labels_when_they_fit() {
         assert_eq!(
@@ -3623,6 +3684,7 @@ mod tests {
                 px(500.0),
                 commit_file_filter_test_counts(),
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             CommitFileFilterLabels::Full
         );
@@ -3636,12 +3698,53 @@ mod tests {
                 px(300.0),
                 counts,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             CommitFileFilterLabels::Compact
         );
         assert_eq!(
-            commit_file_filter_labels_for_width(px(600.0), counts, 200),
+            commit_file_filter_labels_for_width(
+                px(600.0),
+                counts,
+                200,
+                crate::appearance::Appearance::default(),
+            ),
             CommitFileFilterLabels::Compact
+        );
+    }
+
+    /// The budget is per-character ink, so a larger UI font has to widen it or
+    /// the header keeps full labels that no longer fit.
+    #[test]
+    fn the_header_budget_follows_the_ui_font() {
+        let labels = |width: f32, ui_font_size_px| {
+            status_action_labels_for_width(
+                px(width),
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                false,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance {
+                    ui_font_size_px,
+                    ..crate::appearance::Appearance::default()
+                },
+            )
+        };
+
+        let mut widths_where_the_font_decides = 0;
+        for width in 200..900 {
+            let width = width as f32;
+            if labels(width, 14) != labels(width, 24) {
+                assert_eq!(labels(width, 14), StatusActionLabels::Full);
+                assert_eq!(labels(width, 24), StatusActionLabels::Compact);
+                widths_where_the_font_decides += 1;
+            }
+        }
+
+        assert!(
+            widths_where_the_font_decides > 0,
+            "a larger UI font must reach the label budget"
         );
     }
 
@@ -3655,6 +3758,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Full
         );
@@ -3675,6 +3779,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Full,
             "the full labels fit at this width in the real app, so the header must show them"
@@ -3691,6 +3796,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Compact
         );
@@ -3709,6 +3815,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Compact
         );
@@ -3720,6 +3827,7 @@ mod tests {
                 &["Stage all changes".len()],
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Full
         );
@@ -3739,6 +3847,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ) == StatusActionLabels::Full
             {
                 break;
@@ -3752,6 +3861,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 true,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Compact,
             "the spinner's own width has to count against the budget"
@@ -3769,6 +3879,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Full
         );
@@ -3780,6 +3891,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 200,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Compact
         );
@@ -3795,6 +3907,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Full
         );

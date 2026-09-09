@@ -83,7 +83,7 @@ impl MainPaneView {
             let unresolved_count = conflict_count.saturating_sub(resolved_count);
             controls = controls.child(
                 div()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(if unresolved_count == 0 {
                         theme.colors.status.success.foreground
                     } else {
@@ -94,7 +94,7 @@ impl MainPaneView {
             if unresolved_count > 0 {
                 controls = controls.child(
                     div()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.status.danger.foreground)
                         .child(format!("{unresolved_count} unresolved")),
                 );
@@ -502,7 +502,7 @@ impl MainPaneView {
 
         let status: AnyElement = if total == 0 {
             div()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("No conflicts in this file")
                 .into_any_element()
@@ -514,7 +514,7 @@ impl MainPaneView {
             };
             div()
                 .id("conflict_resolver_status")
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.status.warning.foreground)
                 .child(format!("⚠ {unresolved} {noun} unresolved"))
                 .gitcomet_tooltip(
@@ -527,7 +527,7 @@ impl MainPaneView {
         } else {
             div()
                 .id("conflict_resolver_status")
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.status.success.foreground)
                 .child("✓ All conflicts resolved")
                 .gitcomet_tooltip(
@@ -567,7 +567,7 @@ impl MainPaneView {
                             };
                             d.child(
                                 div()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(format!("{whitespace} {noun}")),
                             )
@@ -576,7 +576,7 @@ impl MainPaneView {
                     .when(has_conflict_markers, |d| {
                         d.child(
                             div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.status.danger.foreground)
                                 .child("markers remain"),
                         )
@@ -729,7 +729,7 @@ impl MainPaneView {
                                     if let Some(label) = active_autosolve_trace.as_ref() {
                                         d = d.child(
                                             div()
-                                                .text_xs()
+                                                .text_size(theme.ui_text(12.0))
                                                 .text_color(theme.colors.accent.foreground)
                                                 .child(label.clone()),
                                         );
@@ -784,7 +784,7 @@ impl MainPaneView {
                                     .id("conflict_preview_toggle")
                                     .flex()
                                     .items_center()
-                                    .h(components::control_height(ui_scale_percent))
+                                    .h(components::control_height(ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics)))
                                     .rounded(px(theme.radii.row))
                                     .border_1()
                                     .border_color(view_toggle_border)
@@ -1093,7 +1093,7 @@ impl MainPaneView {
                             };
 
                             let top_title_row = div()
-                                .h(components::control_height(ui_scale_percent))
+                                .h(components::control_height(ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics)))
                                 .w_full()
                                 .flex()
                                 .items_center()
@@ -1111,14 +1111,14 @@ impl MainPaneView {
                                             .flex()
                                             .items_center()
                                             .gap_2()
-                                            .text_xs()
+                                            .text_size(theme.ui_text(12.0))
                                             .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
                                             .when(show_line_numbers, |d| {
                                                 d.child(
                                                     div()
                                                         .w(crate::view::rows::conflict_line_no_width(
-                                                            ui_scale_percent,
+                                                            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
                                                         ))
                                                         .flex_shrink_0(),
                                                 )
@@ -1137,14 +1137,14 @@ impl MainPaneView {
                                             .flex()
                                             .items_center()
                                             .gap_2()
-                                            .text_xs()
+                                            .text_size(theme.ui_text(12.0))
                                             .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
                                             .when(show_line_numbers, |d| {
                                                 d.child(
                                                     div()
                                                         .w(crate::view::rows::conflict_line_no_width(
-                                                            ui_scale_percent,
+                                                            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
                                                         ))
                                                         .flex_shrink_0(),
                                                 )
@@ -1164,14 +1164,14 @@ impl MainPaneView {
                                             .flex()
                                             .items_center()
                                             .gap_2()
-                                            .text_xs()
+                                            .text_size(theme.ui_text(12.0))
                                             .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
                                             .when(show_line_numbers, |d| {
                                                 d.child(
                                                     div()
                                                         .w(crate::view::rows::conflict_line_no_width(
-                                                            ui_scale_percent,
+                                                            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
                                                         ))
                                                         .flex_shrink_0(),
                                                 )
@@ -1189,14 +1189,14 @@ impl MainPaneView {
                                             .flex()
                                             .items_center()
                                             .gap_2()
-                                            .text_xs()
+                                            .text_size(theme.ui_text(12.0))
                                             .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
                                             .when(show_line_numbers, |d| {
                                                 d.child(
                                                     div()
                                                         .w(crate::view::rows::conflict_line_no_width(
-                                                            ui_scale_percent,
+                                                            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
                                                         ))
                                                         .flex_shrink_0(),
                                                 )
@@ -1215,14 +1215,14 @@ impl MainPaneView {
                                             .flex()
                                             .items_center()
                                             .gap_2()
-                                            .text_xs()
+                                            .text_size(theme.ui_text(12.0))
                                             .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
                                             .when(show_line_numbers, |d| {
                                                 d.child(
                                                     div()
                                                         .w(crate::view::rows::conflict_line_no_width(
-                                                            ui_scale_percent,
+                                                            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
                                                         ))
                                                         .flex_shrink_0(),
                                                 )
@@ -1757,7 +1757,7 @@ impl MainPaneView {
                                         .flex()
                                         .items_center()
                                         .gap_1()
-                                        .text_xs()
+                                        .text_size(theme.ui_text(12.0))
                                         .text_color(theme.colors.foreground.secondary)
                                         .child("Resolved output")
                                         .when(output_modified, |d| {
@@ -1909,7 +1909,7 @@ impl MainPaneView {
                                                 theme.colors.accent.foreground,
                                                 if theme.is_dark { 0.14 } else { 0.10 },
                                             ))
-                                            .text_xs()
+                                            .text_size(theme.ui_text(12.0))
                                             .text_color(theme.colors.accent.foreground)
                                             .child(summary),
                                     )
@@ -2311,7 +2311,7 @@ impl MainPaneView {
                         .flex()
                         .items_center()
                         .bg(theme.colors.surface.raised)
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(label),
                 )
@@ -2338,22 +2338,22 @@ impl MainPaneView {
                                     .into_any_element()
                             }
                             Loadable::NotLoaded | Loadable::Loading if has_source => div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child("Processing preview...")
                                 .into_any_element(),
                             Loadable::Error(error) => div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(error)
                                 .into_any_element(),
                             Loadable::Ready(None) if has_source => div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child("Preview unavailable.")
                                 .into_any_element(),
                             _ => div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child("(empty)")
                                 .into_any_element(),
@@ -2523,7 +2523,7 @@ impl MainPaneView {
                 .items_center()
                 .justify_center()
                 .p_2()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(message)
                 .into_any_element()
@@ -2610,7 +2610,7 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .bg(theme.colors.surface.raised)
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(label),
             )

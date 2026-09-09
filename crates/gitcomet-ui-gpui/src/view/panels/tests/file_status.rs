@@ -5049,3 +5049,142 @@ fn worktree_file_inputs_are_derived_once_per_scan_and_keyed_by_worktree(
         );
     });
 }
+
+/// Menu-opening chips across the chrome: click targets that stayed fixed pills
+/// while Comfortable grew everything around them.
+#[gpui::test]
+fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext) {
+    use crate::appearance::{Appearance, UiDensity};
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(83);
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/comfortable-chips"));
+            repo.open = Loadable::Ready(());
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        })
+    });
+
+    let selectors = [
+        "sidebar_tab_branches",
+        "sidebar_tab_files",
+        "history_mode_header",
+        "change_tracking_unstaged_header",
+        "app_menu",
+        "repo_picker_toggle",
+    ];
+    let mut compact = Vec::new();
+
+    for density in [UiDensity::Compact, UiDensity::Comfortable] {
+        cx.update(|_, app| {
+            app.set_global(Appearance {
+                density,
+                ..Appearance::default()
+            });
+            view.update(app, |this, cx| {
+                this.notify_font_preferences_changed(cx);
+            });
+        });
+        draw_and_drain_test_window(cx);
+
+        for (ix, selector) in selectors.into_iter().enumerate() {
+            let height = cx
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("missing {selector} at {density:?} density"))
+                .size
+                .height;
+            match density {
+                UiDensity::Compact => compact.push(height),
+                UiDensity::Comfortable => assert!(
+                    height > compact[ix],
+                    "{selector} must grow under Comfortable, stayed {height:?}"
+                ),
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn comfortable_stage_and_commit_targets_fit_rows_at_laptop_and_4k_sizes(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::appearance::{Appearance, UiDensity};
+    use gitcomet_core::domain::{FileStatus, FileStatusKind, RepoStatus};
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(79);
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/comfortable-targets"));
+            repo.open = Loadable::Ready(());
+            repo.status = Loadable::Ready(
+                RepoStatus {
+                    staged: Arc::new(vec![FileStatus {
+                        path: "staged.txt".into(),
+                        kind: FileStatusKind::Modified,
+                        conflict: None,
+                    }]),
+                    unstaged: Arc::new(vec![FileStatus {
+                        path: "unstaged.txt".into(),
+                        kind: FileStatusKind::Modified,
+                        conflict: None,
+                    }]),
+                }
+                .into(),
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        })
+    });
+    for (width, height, percent) in [
+        (1280.0, 900.0, 80),
+        (1440.0, 1000.0, 100),
+        (3840.0, 2160.0, 200),
+    ] {
+        cx.simulate_resize(gpui::size(px(width), px(height)));
+        for ui_font_size_px in [14, 24] {
+            cx.update(|_, app| {
+                app.set_global(Appearance {
+                    density: UiDensity::Comfortable,
+                    ui_font_size_px,
+                    ..Appearance::default()
+                });
+                crate::app::set_app_ui_scale_percent(app, percent);
+                view.update(app, |this, cx| {
+                    this.notify_font_preferences_changed(cx);
+                });
+            });
+            draw_and_drain_test_window(cx);
+            let minimum = px(32.0 * percent as f32 / 100.0);
+            for selector in [
+                "stage_all_button",
+                "commit_button",
+                "status_row_79_unstaged_0",
+                "status_row_79_staged_0",
+            ] {
+                let bounds = cx
+                    .debug_bounds(selector)
+                    .unwrap_or_else(|| panic!("missing {selector} at {percent}%"));
+                assert!(
+                    bounds.size.height + px(0.5) >= minimum,
+                    "{selector} target {:?} must reach {minimum:?} at UI font {ui_font_size_px}",
+                    bounds.size
+                );
+            }
+            let row = cx.debug_bounds("status_row_79_unstaged_0").unwrap();
+            cx.simulate_mouse_move(row.center(), None, Modifiers::default());
+            draw_and_drain_test_window(cx);
+            let button = cx
+                .debug_bounds("status_stage_button_79_unstaged_0")
+                .unwrap();
+            assert!(
+                button.top() >= row.top() - px(0.5) && button.bottom() <= row.bottom() + px(0.5),
+                "stage target must fit inside its row"
+            );
+        }
+    }
+}

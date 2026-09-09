@@ -2876,3 +2876,35 @@ fn persist_ui_settings_round_trips_file_browser_follow_selected_commit() {
         Some(false)
     );
 }
+
+#[test]
+fn appearance_settings_round_trip_and_partial_writes_preserve_independent_sizes() {
+    let path = unique_session_test_dir("appearance").join("session.json");
+    let default = load_from_path(&path);
+    assert_eq!(default.ui_density, None);
+    assert_eq!(default.ui_font_size_px, None);
+    persist_ui_settings_to_path(
+        UiSettings {
+            ui_density: Some("comfortable".into()),
+            ui_font_size_px: Some(18),
+            editor_font_size_px: Some(15),
+            markdown_preview_font_size_px: Some(22),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            editor_font_size_px: Some(17),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.ui_density.as_deref(), Some("comfortable"));
+    assert_eq!(loaded.ui_font_size_px, Some(18));
+    assert_eq!(loaded.editor_font_size_px, Some(17));
+    assert_eq!(loaded.markdown_preview_font_size_px, Some(22));
+}

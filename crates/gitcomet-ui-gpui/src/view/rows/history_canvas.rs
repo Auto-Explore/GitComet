@@ -11,6 +11,10 @@ use std::cell::RefCell;
 
 const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
 const HISTORY_TAG_CHIP_PADDING_X_PX: f32 = 6.0;
+/// Comfortable raises the history row; the ref chip and its padding follow so
+/// the badge keeps its proportion.
+const HISTORY_TAG_CHIP_COMFORTABLE_HEIGHT_PX: f32 = 24.0;
+const HISTORY_TAG_CHIP_COMFORTABLE_PADDING_X_PX: f32 = 8.0;
 const HISTORY_TAG_CHIP_GAP_PX: f32 = 4.0;
 const HISTORY_BRANCH_CHIP_ICON_PX: f32 = 11.0;
 const HISTORY_BRANCH_CHIP_COMBINED_ICON_PX: f32 = 16.0;
@@ -756,19 +760,6 @@ fn fx_hash_str(text: &str) -> u64 {
     hasher.finish()
 }
 
-fn hit_test_index(bounds: &[Bounds<Pixels>], p: gpui::Point<Pixels>) -> Option<usize> {
-    bounds.iter().position(|b| b.contains(&p))
-}
-
-fn hit_test_branch_chip(
-    chips: &[(Bounds<Pixels>, HistoryBranchChipVm)],
-    p: gpui::Point<Pixels>,
-) -> Option<&HistoryBranchChipVm> {
-    chips
-        .iter()
-        .find_map(|(bounds, chip)| bounds.contains(&p).then_some(chip))
-}
-
 fn history_tag_chip_menu_invoker(
     repo_id: RepoId,
     commit_id: &CommitId,
@@ -795,24 +786,6 @@ fn history_branch_chip_menu_invoker(
         chip.text.as_ref()
     )
     .into()
-}
-
-fn history_branch_chip_popover_kind(
-    repo_id: RepoId,
-    chip: &HistoryBranchChipVm,
-) -> Option<PopoverKind> {
-    let HistoryBranchChipKind::Branch { targets, .. } = &chip.kind else {
-        return None;
-    };
-    match targets.as_ref() {
-        [] => None,
-        [target] => Some(target.popover_kind(repo_id)),
-        _ => Some(PopoverKind::BranchRefsMenu {
-            repo_id,
-            display_name: chip.text.as_ref().to_string(),
-            targets: targets.to_vec(),
-        }),
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -890,8 +863,7 @@ pub(super) fn history_commit_row_canvas(
             let is_selected_branch_tip =
                 history_row_is_selected_branch_tip(&ref_items, selected_branch.as_ref());
 
-            let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
-            let scaled_px = |value| px(value * design_scale_factor);
+            let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
             let base_style = window.text_style();
             // Avatar initials are semibold, matching `components::author_avatar`.
             let initials_style = {
@@ -996,8 +968,17 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            let chip_height = scaled_px(HISTORY_TAG_CHIP_HEIGHT_PX);
-            let chip_pad_x = scaled_px(HISTORY_TAG_CHIP_PADDING_X_PX);
+            let chip_height = scaled_px(theme.metrics.row_height(
+                HISTORY_TAG_CHIP_HEIGHT_PX,
+                HISTORY_TAG_CHIP_COMFORTABLE_HEIGHT_PX,
+            ));
+            let chip_pad_x = scaled_px(
+                if theme.metrics.density == crate::appearance::UiDensity::Comfortable {
+                    HISTORY_TAG_CHIP_COMFORTABLE_PADDING_X_PX
+                } else {
+                    HISTORY_TAG_CHIP_PADDING_X_PX
+                },
+            );
             let chip_gap = scaled_px(HISTORY_TAG_CHIP_GAP_PX);
 
             let branch_content_bounds = Bounds::new(
@@ -1603,24 +1584,6 @@ pub(super) fn history_commit_row_canvas(
                         return;
                     }
 
-                    let tag_menu = hit_test_index(&tag_chip_bounds, event.position)
-                        .and_then(|ix| tag_names.get(ix))
-                        .map(|tag| {
-                            let name = tag.as_ref().to_string();
-                            let invoker =
-                                history_tag_chip_menu_invoker(repo_id, &commit_id, name.as_str());
-                            (name, invoker)
-                        });
-                    let branch_menu = if tag_menu.is_none() {
-                        hit_test_branch_chip(&branch_chip_hits, event.position).and_then(|chip| {
-                            let kind = history_branch_chip_popover_kind(repo_id, chip)?;
-                            let invoker =
-                                history_branch_chip_menu_invoker(repo_id, &commit_id, chip);
-                            Some((kind, invoker))
-                        })
-                    } else {
-                        None
-                    };
                     view.update(cx, |this, cx| {
                         // Right-clicking inside an active multi-selection must
                         // not collapse it — the menu acts on the whole set — but
@@ -1634,26 +1597,13 @@ pub(super) fn history_commit_row_canvas(
                             clicked_index: None,
                             visible_order: None,
                         });
-                        let context_menu_invoker = tag_menu
-                            .as_ref()
-                            .map(|(_, invoker)| invoker.clone())
-                            .or_else(|| branch_menu.as_ref().map(|(_, invoker)| invoker.clone()))
-                            .unwrap_or_else(|| {
-                                format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
-                                    .into()
-                            });
+                        let context_menu_invoker =
+                            format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
+                                .into();
                         this.activate_context_menu_invoker(context_menu_invoker, cx);
-                        let kind = match (tag_menu, branch_menu) {
-                            (Some((name, _)), _) => PopoverKind::TagRefMenu {
-                                repo_id,
-                                commit_id: commit_id.clone(),
-                                name,
-                            },
-                            (None, Some((kind, _))) => kind,
-                            (None, None) => PopoverKind::CommitMenu {
-                                repo_id,
-                                commit_id: commit_id.clone(),
-                            },
+                        let kind = PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
                         };
                         this.open_popover_at(kind, event.position, window, cx);
                         cx.notify();
@@ -1670,6 +1620,40 @@ pub(super) fn history_commit_row_canvas(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ref chip is painted into the row, so a fixed chip in a taller row
+    /// reads as a badge that shrank.
+    #[test]
+    fn the_ref_chip_keeps_its_proportion_in_a_comfortable_row() {
+        use crate::appearance::{Appearance, UiDensity};
+        let compact = Appearance::default();
+        let comfortable = Appearance {
+            density: UiDensity::Comfortable,
+            ..Appearance::default()
+        };
+        let chip = |metrics: Appearance| {
+            metrics.row_height(
+                HISTORY_TAG_CHIP_HEIGHT_PX,
+                HISTORY_TAG_CHIP_COMFORTABLE_HEIGHT_PX,
+            )
+        };
+
+        assert!(chip(comfortable) > chip(compact));
+        assert!(
+            HISTORY_TAG_CHIP_COMFORTABLE_PADDING_X_PX > HISTORY_TAG_CHIP_PADDING_X_PX,
+            "the padding has to follow the chip or the label crowds its edges"
+        );
+
+        for metrics in [compact, comfortable] {
+            let row = crate::view::rows::history_row_height(
+                crate::ui_scale::UiScale::from_percent(100).with_appearance(metrics),
+            );
+            assert!(
+                px(chip(metrics)) < row,
+                "the chip must stay inside its {row:?} row"
+            );
+        }
+    }
 
     fn canvas_layout_for_branch_width(
         window: &Window,
@@ -1905,8 +1889,7 @@ mod tests {
     }
 
     #[test]
-    fn grouped_branch_chip_icons_and_context_menu_keep_exact_refs() {
-        let repo_id = RepoId(5);
+    fn grouped_branch_chip_icons_keep_exact_refs() {
         let combined = branch_chip(
             "feature/x",
             false,
@@ -1948,19 +1931,6 @@ mod tests {
             ),
             px(19.0)
         );
-        assert!(matches!(
-            history_branch_chip_popover_kind(repo_id, &combined),
-            Some(PopoverKind::BranchRefsMenu {
-                repo_id: routed_repo,
-                ref display_name,
-                ref targets,
-            }) if routed_repo == repo_id
-                && display_name == "feature/x"
-                && targets == &vec![
-                    BranchMenuTarget::local("feature/x"),
-                    BranchMenuTarget::remote("origin", "feature/x"),
-                ]
-        ));
 
         let local_only = branch_chip("feature/x", false, &[(BranchSection::Local, "feature/x")]);
         assert_eq!(
@@ -1977,20 +1947,12 @@ mod tests {
             history_branch_chip_icons(&remote_only).as_slice(),
             [HistoryBranchChipIcon::Remote]
         );
-        assert!(matches!(
-            history_branch_chip_popover_kind(repo_id, &remote_only),
-            Some(PopoverKind::BranchMenu {
-                repo_id: routed_repo,
-                target: BranchMenuTarget::Remote { ref remote, ref branch },
-            }) if routed_repo == repo_id && remote == "origin" && branch == "feature/x"
-        ));
 
         let detached = HistoryBranchChipVm {
             text: HistoryTextVm::new("HEAD".into()),
             kind: HistoryBranchChipKind::DetachedHead,
         };
         assert!(history_branch_chip_icons(&detached).is_empty());
-        assert!(history_branch_chip_popover_kind(repo_id, &detached).is_none());
     }
 
     fn ref_item(kind: HistoryRefListItemKind) -> HistoryRefListItem {
@@ -2409,16 +2371,5 @@ mod tests {
             );
             assert_foreground(&visual, custom_light.colors.foreground.emphasis);
         }
-    }
-
-    #[test]
-    fn hit_test_index_returns_clicked_chip_index() {
-        let chips = vec![
-            Bounds::new(point(px(0.0), px(0.0)), size(px(10.0), px(10.0))),
-            Bounds::new(point(px(20.0), px(0.0)), size(px(10.0), px(10.0))),
-        ];
-        assert_eq!(hit_test_index(&chips, point(px(5.0), px(5.0))), Some(0));
-        assert_eq!(hit_test_index(&chips, point(px(25.0), px(5.0))), Some(1));
-        assert_eq!(hit_test_index(&chips, point(px(15.0), px(5.0))), None);
     }
 }

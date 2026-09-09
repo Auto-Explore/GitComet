@@ -70,7 +70,7 @@ pub(super) fn panel(
                 .px_2()
                 .pt_1()
                 .max_w(scaled_px(460.0))
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Git blocks local file transport for submodules by default. Trusting these sources will allow GitComet to enable file transport only for this repo/source pair."),
         )
@@ -101,19 +101,19 @@ pub(super) fn panel(
                 .gap_0p5()
                 .child(
                     div()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(format!("Submodule: {}", source.submodule_path.display())),
                 )
                 .child(
                     div()
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
                         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                         .child(source.display_source),
                 )
                 .child(
                     div()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                         .text_color(theme.colors.foreground.secondary)
                         .child(format!(
@@ -135,7 +135,7 @@ pub(super) fn panel(
                 .when_some(add_branch.clone(), |details, branch| {
                     details.child(
                         div()
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                             .text_color(theme.colors.foreground.secondary)
                             .child(format!("Branch: {branch}")),
@@ -144,7 +144,7 @@ pub(super) fn panel(
                 .when_some(add_name.clone(), |details, name| {
                     details.child(
                         div()
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                             .text_color(theme.colors.foreground.secondary)
                             .child(format!("Logical name: {name}")),
@@ -153,7 +153,7 @@ pub(super) fn panel(
                 .when(add_force, |details| {
                     details.child(
                         div()
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(theme.colors.foreground.secondary)
                             .child("Force: enabled"),
                     )
@@ -241,8 +241,8 @@ fn checking_panel(theme: AppTheme, cx: &mut gpui::Context<PopoverHost>) -> gpui:
         .flex()
         .flex_col()
         .min_w(scaled_px(460.0))
-        .child(popover_title("Checking submodule trust…"))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(popover_title(theme, "Checking submodule trust…"))
+        .child(super::popover_rule(theme))
         .child(
             div()
                 .px_2()
@@ -257,7 +257,7 @@ fn checking_panel(theme: AppTheme, cx: &mut gpui::Context<PopoverHost>) -> gpui:
                 ))
                 .child(
                     div()
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child("Checking local submodule sources…"),
                 ),

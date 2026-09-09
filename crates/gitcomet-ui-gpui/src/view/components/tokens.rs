@@ -32,15 +32,42 @@ pub const REMOVE_BUTTON_HOVER_ALPHA: f32 = 0.18;
 pub const REMOVE_BUTTON_PRESSED_ALPHA: f32 = 0.26;
 
 pub fn control_height(scale: impl Into<UiScale>) -> gpui::Pixels {
-    scale.into().px(CONTROL_HEIGHT_PX)
+    scale.into().row_height(CONTROL_HEIGHT_PX, 32.0)
 }
 
 pub fn control_height_md(scale: impl Into<UiScale>) -> gpui::Pixels {
-    scale.into().px(CONTROL_HEIGHT_MD_PX)
+    scale.into().row_height(CONTROL_HEIGHT_MD_PX, 32.0)
+}
+
+/// Height of a content header bar: the tallest control it holds plus equal
+/// breathing room above and below, so a denser control lifts the bar with it.
+pub fn content_header_height(scale: impl Into<UiScale>) -> gpui::Pixels {
+    let scale = scale.into();
+    control_height(scale) + control_pad_y(scale) * 2.0
+}
+
+/// Height for a control nested inside a list row or a tab. Shorter than a
+/// standalone control, so the row keeps a little air above and below it instead
+/// of the control reading as the row.
+pub const IN_ROW_CONTROL_HEIGHT_PX: f32 = 20.0;
+pub const IN_ROW_CONTROL_COMFORTABLE_HEIGHT_PX: f32 = 26.0;
+
+pub fn in_row_control_height(scale: impl Into<UiScale>) -> gpui::Pixels {
+    scale.into().row_height(
+        IN_ROW_CONTROL_HEIGHT_PX,
+        IN_ROW_CONTROL_COMFORTABLE_HEIGHT_PX,
+    )
 }
 
 pub fn control_pad_x(scale: impl Into<UiScale>) -> gpui::Pixels {
-    scale.into().px(CONTROL_PAD_X_PX)
+    let scale = scale.into();
+    scale.px(
+        if scale.appearance.density == crate::appearance::UiDensity::Comfortable {
+            12.0
+        } else {
+            CONTROL_PAD_X_PX
+        },
+    )
 }
 
 pub fn control_pad_y(scale: impl Into<UiScale>) -> gpui::Pixels {
@@ -53,4 +80,70 @@ pub fn icon_pad_x(scale: impl Into<UiScale>) -> gpui::Pixels {
 
 pub fn split_button_divider_height(scale: impl Into<UiScale>) -> gpui::Pixels {
     scale.into().px(SPLIT_BUTTON_DIVIDER_HEIGHT_PX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::appearance::{Appearance, UiDensity};
+
+    fn scale(density: UiDensity) -> UiScale {
+        UiScale::from_percent(100).with_appearance(Appearance {
+            density,
+            ..Appearance::default()
+        })
+    }
+
+    /// A header sized to its own controls leaves them flush against both edges.
+    #[test]
+    fn a_content_header_clears_the_controls_it_holds() {
+        for density in [UiDensity::Compact, UiDensity::Comfortable] {
+            let scale = scale(density);
+
+            assert!(
+                content_header_height(scale) > control_height(scale),
+                "{density:?} header must leave room around a control"
+            );
+            assert_eq!(
+                content_header_height(scale) - control_height(scale),
+                control_pad_y(scale) * 2.0,
+                "{density:?} header must keep equal air above and below"
+            );
+        }
+    }
+
+    /// A control nested in a row must leave the row visible around it, or the
+    /// row reads as one solid block.
+    #[test]
+    fn an_in_row_control_leaves_air_in_the_row() {
+        for density in [UiDensity::Compact, UiDensity::Comfortable] {
+            let scale = scale(density);
+            let row = scale.row_height(24.0, 32.0);
+
+            assert!(
+                in_row_control_height(scale) < row,
+                "{density:?} in-row control must stop short of its {row:?} row"
+            );
+            assert!(
+                in_row_control_height(scale) < control_height(scale),
+                "{density:?} in-row control must be shorter than a standalone one"
+            );
+        }
+        assert!(
+            in_row_control_height(scale(UiDensity::Comfortable))
+                > in_row_control_height(scale(UiDensity::Compact))
+        );
+    }
+
+    /// Comfortable is only useful if it actually reaches the controls.
+    #[test]
+    fn comfortable_density_grows_controls_and_headers() {
+        let compact = scale(UiDensity::Compact);
+        let comfortable = scale(UiDensity::Comfortable);
+
+        assert!(control_height(comfortable) > control_height(compact));
+        assert!(control_height_md(comfortable) > control_height_md(compact));
+        assert!(content_header_height(comfortable) > content_header_height(compact));
+        assert!(control_pad_x(comfortable) > control_pad_x(compact));
+    }
 }

@@ -94,7 +94,12 @@ fn builds_pure_components_without_panics() {
         });
 
         assert_no_panic("components::toast", || {
-            let _ = components::toast(theme, components::ToastKind::Success, "Hello");
+            let _ = components::toast(
+                theme,
+                ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                components::ToastKind::Success,
+                "Hello",
+            );
         });
 
         assert_no_panic("components::Button render variants", || {
@@ -113,7 +118,7 @@ fn builds_pure_components_without_panics() {
                 .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z5", "Create")
                 .style(components::ButtonStyle::Filled)
-                .separated_end_slot(div().text_xs().child("Enter"))
+                .separated_end_slot(div().text_size(theme.ui_text(12.0)).child("Enter"))
                 .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 

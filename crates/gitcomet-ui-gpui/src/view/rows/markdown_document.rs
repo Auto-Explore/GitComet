@@ -1055,5 +1055,5 @@ fn render_image(
 }
 
 fn scaled(value: f32, context: &MarkdownDocumentContext) -> Pixels {
-    crate::ui_scale::design_px_from_percent(value, context.ui_scale_percent)
+    context.theme.markdown_px(value, context.ui_scale_percent)
 }

@@ -18,8 +18,20 @@ pub(super) fn client_side_decoration_inset(ui_scale_percent: u32) -> Pixels {
     ui_scale::design_px_from_percent(CLIENT_SIDE_DECORATION_INSET_PX, ui_scale_percent)
 }
 
-pub(super) fn title_bar_height(ui_scale_percent: u32) -> Pixels {
-    ui_scale::design_px_from_percent(TITLE_BAR_HEIGHT_PX, ui_scale_percent)
+pub(super) fn title_bar_height(scale: impl Into<ui_scale::UiScale>) -> Pixels {
+    scale.into().row_height(TITLE_BAR_HEIGHT_PX, 44.0)
+}
+
+/// Clickable plate of a title-bar button. Floats inside the bar, so it takes
+/// the bar's density ramp and keeps its inset.
+const TITLE_BAR_BUTTON_HEIGHT_PX: f32 = 26.0;
+const TITLE_BAR_BUTTON_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
+
+pub(super) fn title_bar_button_height(scale: impl Into<ui_scale::UiScale>) -> Pixels {
+    scale.into().row_height(
+        TITLE_BAR_BUTTON_HEIGHT_PX,
+        TITLE_BAR_BUTTON_COMFORTABLE_HEIGHT_PX,
+    )
 }
 
 fn macos_traffic_lights_safe_inset(_ui_scale_percent: u32) -> Pixels {
@@ -438,7 +450,7 @@ impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         let is_macos = cfg!(target_os = "macos");
         let workspace_actions_enabled = self.workspace_actions_enabled;
         let repo_tabs_enabled = workspace_actions_enabled
@@ -492,7 +504,10 @@ impl Render for TitleBarView {
                     // clears the same 8px on each side. The button's intrinsic
                     // `icon_pad_x` is narrower; a fixed width plus the centered
                     // content is what actually matches the two ends of the bar.
-                    .h(scaled_px(26.0))
+                    .h(title_bar_button_height(
+                        ui_scale::UiScale::from_percent(ui_scale_percent)
+                            .with_appearance(theme.metrics),
+                    ))
                     .w(scaled_px(32.0))
                     .rounded(px(theme.radii.control))
                     .block_mouse_except_scroll()
@@ -517,7 +532,10 @@ impl Render for TitleBarView {
                 div()
                     .id("repo_picker_btn")
                     .debug_selector(|| "repo_picker_toggle".to_string())
-                    .h(scaled_px(26.0))
+                    .h(title_bar_button_height(
+                        ui_scale::UiScale::from_percent(ui_scale_percent)
+                            .with_appearance(theme.metrics),
+                    ))
                     .w(scaled_px(32.0))
                     .flex()
                     .items_center()
@@ -757,7 +775,9 @@ impl Render for TitleBarView {
             .relative()
             .flex()
             .items_center()
-            .h(title_bar_height(ui_scale_percent))
+            .h(title_bar_height(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            ))
             .w_full()
             .bg(bar_bg)
             .when_some(frame_rounding, |d, rounding| {
@@ -849,6 +869,29 @@ pub(crate) fn window_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The app-menu and repo-picker plates float inside the bar, so they have to
+    /// grow with it and still clear its edges.
+    #[test]
+    fn title_bar_buttons_grow_with_the_bar_and_stay_inside_it() {
+        use crate::appearance::{Appearance, UiDensity};
+        let scale = |density| {
+            ui_scale::UiScale::from_percent(100).with_appearance(Appearance {
+                density,
+                ..Appearance::default()
+            })
+        };
+        let compact = scale(UiDensity::Compact);
+        let comfortable = scale(UiDensity::Comfortable);
+
+        assert!(title_bar_button_height(comfortable) > title_bar_button_height(compact));
+        for scale in [compact, comfortable] {
+            assert!(
+                title_bar_button_height(scale) < title_bar_height(scale),
+                "the plate must leave the bar an inset at {scale:?}"
+            );
+        }
+    }
 
     #[test]
     fn titlebar_buttons_do_not_double_set_hover_style() {

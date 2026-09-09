@@ -275,7 +275,7 @@ pub(super) fn panel(
     let theme = this.theme;
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
     let width = super::LARGE_PICKER_WIDTH;
 
     let Some(search) = this.workspace_picker_search_input.clone() else {

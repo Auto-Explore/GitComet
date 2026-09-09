@@ -5,6 +5,13 @@ use std::rc::Rc;
 use super::HistoryView;
 use crate::view::caches::HistoryListRow;
 
+/// The log's column-header bar and the chips inside it ("All branches", the
+/// author filter). Bar and chips lift together, so the targets track the row.
+const HISTORY_HEADER_HEIGHT_PX: f32 = 24.0;
+const HISTORY_HEADER_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
+const HISTORY_HEADER_CHIP_HEIGHT_PX: f32 = 18.0;
+const HISTORY_HEADER_CHIP_COMFORTABLE_HEIGHT_PX: f32 = 26.0;
+
 impl Render for HistoryView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.last_window_size = window.viewport_size();
@@ -380,7 +387,9 @@ impl HistoryView {
 
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
-        let scaled_px = |value| ui_scale::design_px_from_percent(value, self.ui_scale_percent);
+        let scaled_px = ui_scale::scaler(self.ui_scale_percent);
+        let ui_scale =
+            ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics);
         let icon_muted = with_alpha(
             theme.colors.accent.foreground,
             if theme.is_dark { 0.72 } else { 0.82 },
@@ -543,11 +552,14 @@ impl HistoryView {
         let mut header = div()
             .relative()
             .flex()
-            .h(scaled_px(24.0))
+            .h(ui_scale.row_height(
+                HISTORY_HEADER_HEIGHT_PX,
+                HISTORY_HEADER_COMFORTABLE_HEIGHT_PX,
+            ))
             .w_full()
             .items_center()
             .px_2()
-            .text_xs()
+            .text_size(theme.ui_text(12.0))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.colors.foreground.secondary)
             .child(
@@ -570,12 +582,16 @@ impl HistoryView {
                             .child(
                                 div()
                                     .id("history_mode_header")
+                                    .debug_selector(|| "history_mode_header".to_string())
                                     .flex()
                                     .items_center()
                                     .gap_1()
                                     .px_1()
-                                    .h(scaled_px(18.0))
-                                    .line_height(scaled_px(18.0))
+                                    .h(ui_scale.row_height(
+                                        HISTORY_HEADER_CHIP_HEIGHT_PX,
+                                        HISTORY_HEADER_CHIP_COMFORTABLE_HEIGHT_PX,
+                                    ))
+                                    .line_height(scaled_px(HISTORY_HEADER_CHIP_HEIGHT_PX))
                                     .rounded(px(theme.radii.row))
                                     .when(scope_active, |d| {
                                         d.bg(theme.colors.interaction.pressed_background)
@@ -701,12 +717,18 @@ impl HistoryView {
                                 .child(
                                     div()
                                         .id("history_author_filter_header")
+                                        .debug_selector(|| {
+                                            "history_author_filter_header".to_string()
+                                        })
                                         .flex()
                                         .items_center()
                                         .gap_1()
                                         .px_1()
-                                        .h(scaled_px(18.0))
-                                        .line_height(scaled_px(18.0))
+                                        .h(ui_scale.row_height(
+                                            HISTORY_HEADER_CHIP_HEIGHT_PX,
+                                            HISTORY_HEADER_CHIP_COMFORTABLE_HEIGHT_PX,
+                                        ))
+                                        .line_height(scaled_px(HISTORY_HEADER_CHIP_HEIGHT_PX))
                                         .rounded(px(theme.radii.row))
                                         .when(author_active, |d| {
                                             d.bg(theme.colors.interaction.pressed_background)

@@ -339,13 +339,6 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         target: BranchMenuTarget,
     },
-    /// Disambiguates a compact history chip that represents more than one
-    /// exact branch ref before handing off to the ordinary branch menu.
-    BranchRefsMenu {
-        repo_id: RepoId,
-        display_name: String,
-        targets: Vec<BranchMenuTarget>,
-    },
     BranchSectionMenu {
         repo_id: RepoId,
         section: BranchSection,
@@ -400,11 +393,6 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
-    TagRefMenu {
-        repo_id: RepoId,
-        commit_id: CommitId,
-        name: String,
-    },
     HistoryBranchFilter {
         repo_id: RepoId,
     },
@@ -429,15 +417,6 @@ pub(crate) enum PopoverKind {
         can_drop: bool,
     },
     InteractiveRebaseAutosquashMenu,
-}
-
-impl BranchMenuTarget {
-    pub(in crate::view) fn popover_kind(&self, repo_id: RepoId) -> PopoverKind {
-        PopoverKind::BranchMenu {
-            repo_id,
-            target: self.clone(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
