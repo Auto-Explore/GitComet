@@ -3051,7 +3051,7 @@ mod nav_history_tests {
             repo_id: RepoId(1),
             submodule_repo_path: std::path::PathBuf::from("/tmp/sub"),
             parent_submodule_path: std::path::PathBuf::from("sub"),
-            entries: vec![],
+            entries: vec![].into(),
             selected_ix: 0,
         }));
     }
@@ -3090,7 +3090,7 @@ mod nav_history_tests {
                 repo_id,
                 submodule_repo_path: std::path::PathBuf::from("/tmp/repo/vendor/first"),
                 parent_submodule_path: std::path::PathBuf::from("vendor/first"),
-                entries: vec![],
+                entries: vec![].into(),
                 selected_ix: 0,
             },
         );

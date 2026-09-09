@@ -881,6 +881,7 @@ fn selected_submodule_command_reloads_selected_summary() {
             path: command_path.to_path_buf(),
             mode: SubmoduleDiffSummaryMode::Worktree,
             status: Some(SubmoduleStatus::NotInitialized),
+            checkout_available: true,
             commit_id: None,
             parent_commit_id: None,
             checked_out_head: None,
@@ -901,7 +902,8 @@ fn selected_submodule_command_reloads_selected_summary() {
                 kind: FileStatusKind::Modified,
                 target: inline_target.clone(),
                 section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-            }],
+            }]
+            .into(),
             selected_ix: 0,
             target: inline_target,
             rev: 1,

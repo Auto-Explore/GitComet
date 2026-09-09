@@ -1199,6 +1199,132 @@ pub struct InlineSubmoduleDiffEntry {
     pub section: InlineSubmoduleDiffSection,
 }
 
+/// Which half of a submodule summary a changed file sits in, and therefore
+/// which target the inline diff opens it with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmoduleChangeSection {
+    /// One of the summary's pointer ranges, by slot.
+    Range(usize),
+    LiveStaged,
+    LiveUnstaged,
+}
+
+/// The changed file at `section`/`index` and the target it opens under, or
+/// `None` when there is nothing to open.
+///
+/// The one place a summary's coordinates become a target, so a row and the entry
+/// a click resolves cannot describe different files.
+fn submodule_change_at(
+    summary: &SubmoduleDiffSummary,
+    section: SubmoduleChangeSection,
+    index: usize,
+) -> Option<(
+    &SubmoduleInnerChange,
+    DiffTarget,
+    InlineSubmoduleDiffSection,
+)> {
+    match section {
+        SubmoduleChangeSection::Range(slot) => {
+            let range = summary.ranges.get(slot)?;
+            let change = range.changes.get(index)?;
+            let (from_commit_id, to_commit_id) = (range.from.as_ref()?, range.to.as_ref()?);
+            Some((
+                change,
+                DiffTarget::CommitRange {
+                    from_commit_id: from_commit_id.clone(),
+                    to_commit_id: Some(to_commit_id.clone()),
+                    path: Some(change.path.clone()),
+                },
+                InlineSubmoduleDiffSection::Range(range.kind),
+            ))
+        }
+        // Only a worktree summary has live halves, and only it gets live rows.
+        SubmoduleChangeSection::LiveStaged | SubmoduleChangeSection::LiveUnstaged
+            if summary.mode != SubmoduleDiffSummaryMode::Worktree =>
+        {
+            None
+        }
+        SubmoduleChangeSection::LiveStaged => {
+            let change = summary.live_staged.get(index)?;
+            Some((
+                change,
+                DiffTarget::WorkingTree {
+                    path: change.path.clone(),
+                    area: DiffArea::Staged,
+                },
+                InlineSubmoduleDiffSection::LiveStaged,
+            ))
+        }
+        SubmoduleChangeSection::LiveUnstaged => {
+            let change = summary.live_unstaged.get(index)?;
+            Some((
+                change,
+                DiffTarget::WorkingTree {
+                    path: change.path.clone(),
+                    area: DiffArea::Unstaged,
+                },
+                InlineSubmoduleDiffSection::LiveUnstaged,
+            ))
+        }
+    }
+}
+
+/// The target alone, without the entry around it: what a row needs per frame.
+pub fn submodule_inline_diff_target(
+    summary: &SubmoduleDiffSummary,
+    section: SubmoduleChangeSection,
+    index: usize,
+) -> Option<DiffTarget> {
+    submodule_change_at(summary, section, index).map(|(_, target, _)| target)
+}
+
+/// The inline-diff entry for one changed file; `submodule_inline_diff_entries`
+/// is this in a loop.
+pub fn submodule_inline_diff_entry(
+    summary: &SubmoduleDiffSummary,
+    section: SubmoduleChangeSection,
+    index: usize,
+) -> Option<InlineSubmoduleDiffEntry> {
+    submodule_change_at(summary, section, index).map(|(change, target, section)| {
+        InlineSubmoduleDiffEntry {
+            path: change.path.clone(),
+            kind: change.kind,
+            target,
+            section,
+        }
+    })
+}
+
+pub fn submodule_inline_diff_entries(
+    summary: &SubmoduleDiffSummary,
+) -> Vec<InlineSubmoduleDiffEntry> {
+    let capacity = summary
+        .ranges
+        .iter()
+        .map(|range| range.changes.len())
+        .sum::<usize>()
+        + summary.live_staged.len()
+        + summary.live_unstaged.len();
+    let mut entries = Vec::with_capacity(capacity);
+    let sections = (0..summary.ranges.len())
+        .map(SubmoduleChangeSection::Range)
+        .chain([
+            SubmoduleChangeSection::LiveStaged,
+            SubmoduleChangeSection::LiveUnstaged,
+        ]);
+    for section in sections {
+        let count = match section {
+            SubmoduleChangeSection::Range(slot) => summary.ranges[slot].changes.len(),
+            SubmoduleChangeSection::LiveStaged => summary.live_staged.len(),
+            SubmoduleChangeSection::LiveUnstaged => summary.live_unstaged.len(),
+        };
+        entries.extend(
+            (0..count).filter_map(|index| submodule_inline_diff_entry(summary, section, index)),
+        );
+    }
+    entries
+}
+
 /// The inline-diff entries for a linked worktree's changed files, in the order
 /// the rows are rendered: staged first, then unstaged, the same order the
 /// working-tree pane uses.
@@ -1247,7 +1373,7 @@ pub struct InlineSubmoduleDiffState {
     pub origin: ForeignDiffOrigin,
     pub submodule_repo_path: PathBuf,
     pub parent_submodule_path: PathBuf,
-    pub entries: Vec<InlineSubmoduleDiffEntry>,
+    pub entries: Arc<[InlineSubmoduleDiffEntry]>,
     pub selected_ix: usize,
     pub target: DiffTarget,
     pub rev: u64,
@@ -2395,6 +2521,96 @@ impl<T> Loadable<T> {
 mod tests {
     use super::*;
     use std::time::SystemTime;
+
+    fn summary_with_live_halves(
+        mode: gitcomet_core::domain::SubmoduleDiffSummaryMode,
+    ) -> SubmoduleDiffSummary {
+        let change = |name: &str| SubmoduleInnerChange {
+            path: PathBuf::from(name),
+            kind: FileStatusKind::Modified,
+            additions: Some(1),
+            deletions: Some(0),
+        };
+        SubmoduleDiffSummary {
+            path: PathBuf::from("vendor/lib"),
+            mode,
+            status: None,
+            checkout_available: true,
+            commit_id: None,
+            parent_commit_id: None,
+            checked_out_head: None,
+            ranges: vec![gitcomet_core::domain::SubmoduleDiffRange {
+                kind: gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
+                from: Some(CommitId("aaaa".into())),
+                to: Some(CommitId("bbbb".into())),
+                unavailable_reason: None,
+                changes: vec![change("range.rs")],
+            }],
+            live_staged: vec![change("staged.rs")],
+            live_unstaged: vec![change("unstaged.rs")],
+        }
+    }
+
+    /// The pane draws live rows only for a worktree summary, and prev/next walks
+    /// this list by index -- so it must describe exactly the rows on screen.
+    #[test]
+    fn only_a_worktree_summary_has_live_inline_entries() {
+        use gitcomet_core::domain::SubmoduleDiffSummaryMode;
+
+        let worktree = summary_with_live_halves(SubmoduleDiffSummaryMode::Worktree);
+        let paths: Vec<_> = submodule_inline_diff_entries(&worktree)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("range.rs"),
+                PathBuf::from("staged.rs"),
+                PathBuf::from("unstaged.rs")
+            ]
+        );
+
+        let history = summary_with_live_halves(SubmoduleDiffSummaryMode::CommitHistory);
+        let paths: Vec<_> = submodule_inline_diff_entries(&history)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        assert_eq!(paths, vec![PathBuf::from("range.rs")]);
+        assert!(
+            submodule_inline_diff_target(&history, SubmoduleChangeSection::LiveStaged, 0).is_none(),
+            "a commit-history summary has no live half to open"
+        );
+    }
+
+    /// A row asks for the target alone; the list a click dispatches asks for the
+    /// whole entry. Both come from `submodule_change_at`, so they agree.
+    #[test]
+    fn a_rows_target_is_the_entry_the_click_selects() {
+        use gitcomet_core::domain::SubmoduleDiffSummaryMode;
+
+        let summary = summary_with_live_halves(SubmoduleDiffSummaryMode::Worktree);
+        let entries = submodule_inline_diff_entries(&summary);
+        for (index, section) in [
+            SubmoduleChangeSection::Range(0),
+            SubmoduleChangeSection::LiveStaged,
+            SubmoduleChangeSection::LiveUnstaged,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let target = submodule_inline_diff_target(&summary, section, 0).expect("a target");
+            assert_eq!(target, entries[index].target);
+            assert_eq!(
+                Some(&entries[index]),
+                submodule_inline_diff_entry(&summary, section, 0).as_ref()
+            );
+        }
+        assert!(
+            submodule_inline_diff_target(&summary, SubmoduleChangeSection::Range(0), 1).is_none(),
+            "past the end of a section there is no file"
+        );
+    }
 
     fn entry(name: &str) -> ViewHistoryEntry {
         ViewHistoryEntry {

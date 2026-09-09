@@ -265,6 +265,9 @@ pub(super) enum BranchSidebarRow {
     },
     SubmoduleItem {
         path: std::path::PathBuf,
+        status: SubmoduleStatus,
+        recorded_head: CommitId,
+        checked_out_head: Option<CommitId>,
     },
     StashHeader {
         top_border: bool,
@@ -1187,6 +1190,9 @@ pub(super) fn branch_sidebar_rows(
                 for submodule in submodules.iter() {
                     rows.push(BranchSidebarRow::SubmoduleItem {
                         path: submodule.path.clone(),
+                        status: submodule.status,
+                        recorded_head: submodule.recorded_head.clone(),
+                        checked_out_head: submodule.checked_out_head.clone(),
                     });
                 }
             }
