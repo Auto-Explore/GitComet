@@ -1364,11 +1364,11 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
         unstaged: vec![a.clone(), b.clone()],
         unstaged_anchor: Some(b),
         unstaged_anchor_index: None,
-        unstaged_anchor_status_rev: None,
+        unstaged_anchor_order_rev: None,
         staged: vec![c.clone()],
         staged_anchor: Some(c),
         staged_anchor_index: None,
-        staged_anchor_status_rev: None,
+        staged_anchor_order_rev: None,
     };
 
     reconcile_status_multi_selection(&mut selection, &status);

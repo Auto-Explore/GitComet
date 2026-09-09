@@ -41,7 +41,7 @@ pub(crate) struct StatusSectionEntries<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StatusSectionIndexes {
     All,
-    Filtered(Vec<usize>),
+    Filtered(std::sync::Arc<[usize]>),
 }
 
 impl<'a> StatusSectionEntries<'a> {
@@ -70,11 +70,43 @@ impl<'a> StatusSectionEntries<'a> {
                         .filter_map(|(ix, entry)| {
                             status_section_filter_matches(filter, entry).then_some(ix)
                         })
-                        .collect(),
+                        .collect::<Vec<_>>()
+                        .into(),
                 )
             }
         };
         Some(Self { entries, indexes })
+    }
+
+    /// The section's entries in a caller-supplied display order. `indexes` is
+    /// in the backing slice's index space.
+    pub(crate) fn from_repo_with_order(
+        repo: &'a RepoState,
+        section: StatusSection,
+        indexes: std::sync::Arc<[usize]>,
+    ) -> Option<Self> {
+        let entries = match section {
+            StatusSection::Staged => repo.staged_status_entries()?,
+            _ => repo.worktree_status_entries()?,
+        };
+        Some(Self {
+            entries,
+            indexes: StatusSectionIndexes::Filtered(indexes),
+        })
+    }
+
+    /// The section's entries in the backing slice's own order, before any UI
+    /// sort. Callers that render or navigate must go through the pane's
+    /// ordered accessor instead, or they walk a different order than the rows.
+    pub(crate) fn source_order_indexes(
+        repo: &'a RepoState,
+        section: StatusSection,
+    ) -> Option<std::sync::Arc<[usize]>> {
+        let entries = Self::from_repo(repo, section)?;
+        Some(match &entries.indexes {
+            StatusSectionIndexes::All => (0..entries.entries.len()).collect::<Vec<_>>().into(),
+            StatusSectionIndexes::Filtered(indexes) => std::sync::Arc::clone(indexes),
+        })
     }
 
     pub(crate) fn iter(&self) -> StatusSectionIter<'a, '_> {
@@ -174,11 +206,11 @@ pub(crate) struct StatusMultiSelection {
     pub(crate) unstaged: Vec<std::path::PathBuf>,
     pub(crate) unstaged_anchor: Option<std::path::PathBuf>,
     pub(crate) unstaged_anchor_index: Option<usize>,
-    pub(crate) unstaged_anchor_status_rev: Option<u64>,
+    pub(crate) unstaged_anchor_order_rev: Option<u64>,
     pub(crate) staged: Vec<std::path::PathBuf>,
     pub(crate) staged_anchor: Option<std::path::PathBuf>,
     pub(crate) staged_anchor_index: Option<usize>,
-    pub(crate) staged_anchor_status_rev: Option<u64>,
+    pub(crate) staged_anchor_order_rev: Option<u64>,
 }
 
 impl StatusMultiSelection {
@@ -258,7 +290,7 @@ pub(crate) fn reconcile_status_multi_selection(
     {
         selection.unstaged_anchor = None;
         selection.unstaged_anchor_index = None;
-        selection.unstaged_anchor_status_rev = None;
+        selection.unstaged_anchor_order_rev = None;
     }
 
     let mut staged_paths: FxHashSet<&std::path::Path> =
@@ -277,7 +309,7 @@ pub(crate) fn reconcile_status_multi_selection(
     {
         selection.staged_anchor = None;
         selection.staged_anchor_index = None;
-        selection.staged_anchor_status_rev = None;
+        selection.staged_anchor_order_rev = None;
     }
 }
 
@@ -318,7 +350,7 @@ pub(crate) fn reconcile_status_multi_selection_with_repo(
         {
             selection.unstaged_anchor = None;
             selection.unstaged_anchor_index = None;
-            selection.unstaged_anchor_status_rev = None;
+            selection.unstaged_anchor_order_rev = None;
         }
     }
 
@@ -339,7 +371,7 @@ pub(crate) fn reconcile_status_multi_selection_with_repo(
         {
             selection.staged_anchor = None;
             selection.staged_anchor_index = None;
-            selection.staged_anchor_status_rev = None;
+            selection.staged_anchor_order_rev = None;
         }
     }
 }

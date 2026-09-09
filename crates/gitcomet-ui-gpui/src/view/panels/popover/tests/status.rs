@@ -55,11 +55,11 @@ fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext
                         unstaged: vec![a.clone(), b.clone()],
                         unstaged_anchor: Some(a.clone()),
                         unstaged_anchor_index: None,
-                        unstaged_anchor_status_rev: None,
+                        unstaged_anchor_order_rev: None,
                         staged: vec![],
                         staged_anchor: None,
                         staged_anchor_index: None,
-                        staged_anchor_status_rev: None,
+                        staged_anchor_order_rev: None,
                     },
                 );
                 cx.notify();
@@ -161,11 +161,11 @@ fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppConte
                         unstaged: vec![],
                         unstaged_anchor: None,
                         unstaged_anchor_index: None,
-                        unstaged_anchor_status_rev: None,
+                        unstaged_anchor_order_rev: None,
                         staged: vec![a.clone(), b.clone()],
                         staged_anchor: Some(a.clone()),
                         staged_anchor_index: None,
-                        staged_anchor_status_rev: None,
+                        staged_anchor_order_rev: None,
                     },
                 );
                 cx.notify();
@@ -710,11 +710,11 @@ fn status_menu_for(
                             unstaged: selection.clone(),
                             unstaged_anchor: selection.first().cloned(),
                             unstaged_anchor_index: None,
-                            unstaged_anchor_status_rev: None,
+                            unstaged_anchor_order_rev: None,
                             staged: vec![],
                             staged_anchor: None,
                             staged_anchor_index: None,
-                            staged_anchor_status_rev: None,
+                            staged_anchor_order_rev: None,
                         },
                     );
                     cx.notify();

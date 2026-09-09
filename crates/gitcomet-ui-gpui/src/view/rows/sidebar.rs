@@ -2101,26 +2101,93 @@ impl DetailsPaneView {
             repo.history_state.commit_details_rev,
             &details.files,
         );
+        let plan = this.cached_commit_file_plan(
+            repo_id,
+            repo.history_state.commit_details_rev,
+            &details.files,
+        );
+        let is_tree = plan.is_tree();
         let visible_signature = this.commit_files_visible_signature(
             repo_id,
             repo.history_state.commit_details_rev,
             &range,
             projection.source_indices.len(),
         );
-        let path_alignment_group = this
-            .commit_files_path_alignment_group
-            .visible_rows(visible_signature);
+        // A tree shows leaf names, which have no shared prefix to align, and a
+        // row that reported into the group would anchor it on the shortest one.
+        let path_alignment_group = (!is_tree).then(|| {
+            this.commit_files_path_alignment_group
+                .visible_rows(visible_signature)
+        });
 
-        range
-            .filter_map(|visible_ix| {
-                let source_ix = *projection.source_indices.get(visible_ix)?;
-                details
-                    .files
-                    .get(source_ix)
-                    .zip(file_rows.get(source_ix))
-                    .map(|(f, row)| (visible_ix, f, row.label.clone(), row.visuals))
+        let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
+            .filter_map(|row_ix| {
+                plan.row_at(crate::view::rows::RowIx(row_ix))
+                    .map(|row| (row_ix, row))
             })
-            .map(|(ix, f, path_label, visuals)| {
+            .collect();
+
+        rows.into_iter()
+            .filter_map(|(ix, row)| {
+                let (ordinal, depth) = match row {
+                    crate::view::rows::FileListRow::Directory {
+                        key,
+                        label,
+                        depth,
+                        collapsed,
+                        chain,
+                        subtree,
+                        additions,
+                        deletions,
+                    } => {
+                        return Some(
+                            crate::view::rows::directory_row(
+                                crate::view::rows::DirectoryRowProps {
+                                    theme,
+                                    ui_scale_percent,
+                                    id: ("commit_file_dir", ix).into(),
+                                    label: &label,
+                                    depth,
+                                    collapsed,
+                                    file_count: subtree.len(),
+                                    additions,
+                                    deletions,
+                                    row_height_px: 24.0,
+                                },
+                            )
+                            .debug_selector(move || format!("commit_file_dir_{}_{}", repo_id.0, ix))
+                            .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                if !e.standard_click() {
+                                    return;
+                                }
+                                this.toggle_file_list_dir(
+                                    repo_id,
+                                    crate::view::rows::FileListId::CommitFiles,
+                                    Arc::clone(&key),
+                                    Arc::clone(&chain),
+                                    collapsed,
+                                    cx,
+                                );
+                            }))
+                            .into_any_element(),
+                        );
+                    }
+                    crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+                };
+                let source_ix = *projection.source_indices.get(ordinal.0)?;
+                let (f, presentation) =
+                    details.files.get(source_ix).zip(file_rows.get(source_ix))?;
+                let visuals = presentation.visuals;
+                let path_label = if is_tree {
+                    SharedString::from(
+                        f.path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| presentation.label.to_string()),
+                    )
+                } else {
+                    presentation.label.clone()
+                };
                 let commit_id = details.id.clone();
                 let icon = Some(visuals.icon);
                 let color = visuals.color(&theme);
@@ -2160,7 +2227,12 @@ impl DetailsPaneView {
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
-                    .px(scaled_px(8.0))
+                    .pl(if is_tree {
+                        crate::view::rows::file_row_indent_px(depth, ui_scale_percent)
+                    } else {
+                        scaled_px(8.0)
+                    })
+                    .pr(scaled_px(8.0))
                     .w_full()
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |s| {
@@ -2190,10 +2262,12 @@ impl DetailsPaneView {
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
-                                components::TruncatedText::aligned_path(
-                                    path_label,
-                                    path_alignment_group.clone(),
-                                )
+                                match path_alignment_group.clone() {
+                                    Some(group) => {
+                                        components::TruncatedText::aligned_path(path_label, group)
+                                    }
+                                    None => components::TruncatedText::new(path_label),
+                                }
                                 .text_sm()
                                 .render(cx),
                             ),
@@ -2264,7 +2338,7 @@ impl DetailsPaneView {
                     row = row.bg(theme.colors.interaction.pressed_background);
                 }
 
-                row.into_any_element()
+                Some(row.into_any_element())
             })
             .collect()
     }
@@ -2303,6 +2377,11 @@ impl DetailsPaneView {
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         let file_rows =
             this.cached_worktree_file_rows(repo_id, worktree_dirty_rev, &summary.path, files);
+        let projection =
+            this.cached_worktree_file_projection(repo_id, worktree_dirty_rev, &summary.path, files);
+        let plan =
+            this.cached_worktree_file_plan(repo_id, worktree_dirty_rev, &summary.path, files);
+        let is_tree = plan.is_tree();
         let selected_ix_now = repo
             .diff_state
             .inline_submodule_diff
@@ -2316,26 +2395,92 @@ impl DetailsPaneView {
             &range,
             files.len(),
         );
-        let path_alignment_group = this
-            .worktree_files_path_alignment_group
-            .visible_rows(visible_signature);
+        let path_alignment_group = (!is_tree).then(|| {
+            this.worktree_files_path_alignment_group
+                .visible_rows(visible_signature)
+        });
         let worktree_path = summary.path.clone();
         let origin = gitcomet_state::model::ForeignDiffOrigin::Worktree {
             branch: summary.branch.clone(),
             detached: summary.detached,
         };
 
-        range
-            .filter_map(|ix| {
-                files
-                    .get(ix)
-                    .zip(file_rows.get(ix))
-                    .map(|(f, row)| (ix, f.clone(), row.label.clone(), row.visuals))
+        let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
+            .filter_map(|row_ix| {
+                plan.row_at(crate::view::rows::RowIx(row_ix))
+                    .map(|row| (row_ix, row))
             })
-            .map(|(ix, _f, path_label, visuals)| {
+            .collect();
+
+        rows.into_iter()
+            .filter_map(|(ix, row)| {
+                let (ordinal, depth) = match row {
+                    crate::view::rows::FileListRow::Directory {
+                        key,
+                        label,
+                        depth,
+                        collapsed,
+                        chain,
+                        subtree,
+                        additions,
+                        deletions,
+                    } => {
+                        return Some(
+                            crate::view::rows::directory_row(
+                                crate::view::rows::DirectoryRowProps {
+                                    theme,
+                                    ui_scale_percent,
+                                    id: ("worktree_file_dir", ix).into(),
+                                    label: &label,
+                                    depth,
+                                    collapsed,
+                                    file_count: subtree.len(),
+                                    additions,
+                                    deletions,
+                                    row_height_px: 24.0,
+                                },
+                            )
+                            .debug_selector(move || {
+                                format!("worktree_file_dir_{}_{}", repo_id.0, ix)
+                            })
+                            .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                if !e.standard_click() {
+                                    return;
+                                }
+                                this.toggle_file_list_dir(
+                                    repo_id,
+                                    crate::view::rows::FileListId::WorktreeFiles,
+                                    Arc::clone(&key),
+                                    Arc::clone(&chain),
+                                    collapsed,
+                                    cx,
+                                );
+                            }))
+                            .into_any_element(),
+                        );
+                    }
+                    crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+                };
+                // `source_ix` indexes `inputs.entries`, which the reducer
+                // re-derives independently. Sorting the display must not change
+                // the index a click sends.
+                let source_ix = *projection.source_indices.get(ordinal.0)?;
+                let (f, presentation) = files.get(source_ix).zip(file_rows.get(source_ix))?;
+                let visuals = presentation.visuals;
+                let path_label = if is_tree {
+                    SharedString::from(
+                        f.path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| presentation.label.to_string()),
+                    )
+                } else {
+                    presentation.label.clone()
+                };
                 let color = visuals.color(&theme);
-                let selected = selected_ix_now == Some(ix);
+                let selected = selected_ix_now == Some(source_ix);
                 let tooltip = path_label.clone();
+                let ix_for_click = source_ix;
                 let inputs_for_click = Arc::clone(&inputs);
                 let worktree_path_for_click = worktree_path.clone();
                 let origin_for_click = origin.clone();
@@ -2347,7 +2492,12 @@ impl DetailsPaneView {
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
-                    .px(scaled_px(8.0))
+                    .pl(if is_tree {
+                        crate::view::rows::file_row_indent_px(depth, ui_scale_percent)
+                    } else {
+                        scaled_px(8.0)
+                    })
+                    .pr(scaled_px(8.0))
                     .w_full()
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |s| s.bg(theme.colors.interaction.hover_background))
@@ -2369,10 +2519,12 @@ impl DetailsPaneView {
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
-                                components::TruncatedText::aligned_path(
-                                    path_label,
-                                    path_alignment_group.clone(),
-                                )
+                                match path_alignment_group.clone() {
+                                    Some(group) => {
+                                        components::TruncatedText::aligned_path(path_label, group)
+                                    }
+                                    None => components::TruncatedText::new(path_label),
+                                }
                                 .text_sm()
                                 .render(cx),
                             ),
@@ -2388,7 +2540,7 @@ impl DetailsPaneView {
                             submodule_repo_path: worktree_path_for_click.clone(),
                             parent_submodule_path: worktree_path_for_click.clone(),
                             entries: inputs_for_click.entries.clone(),
-                            selected_ix: ix,
+                            selected_ix: ix_for_click,
                         });
                         cx.notify();
                     }))
@@ -2401,7 +2553,7 @@ impl DetailsPaneView {
                     ));
                 }
 
-                row.into_any_element()
+                Some(row.into_any_element())
             })
             .collect()
     }
@@ -2432,24 +2584,88 @@ impl DetailsPaneView {
         let to = range_selection.to.clone();
         let file_rows =
             this.cached_range_file_rows(repo_id, repo.history_state.range_files_rev, &files);
+        let projection =
+            this.cached_range_file_projection(repo_id, repo.history_state.range_files_rev, &files);
+        let plan = this.cached_range_file_plan(repo_id, repo.history_state.range_files_rev, &files);
+        let is_tree = plan.is_tree();
         let visible_signature = this.range_files_visible_signature(
             repo_id,
             repo.history_state.range_files_rev,
             &range,
             files.len(),
         );
-        let path_alignment_group = this
-            .range_files_path_alignment_group
-            .visible_rows(visible_signature);
+        let path_alignment_group = (!is_tree).then(|| {
+            this.range_files_path_alignment_group
+                .visible_rows(visible_signature)
+        });
 
-        range
-            .filter_map(|ix| {
-                files
-                    .get(ix)
-                    .zip(file_rows.get(ix))
-                    .map(|(f, row)| (ix, f, row.label.clone(), row.visuals))
+        let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
+            .filter_map(|row_ix| {
+                plan.row_at(crate::view::rows::RowIx(row_ix))
+                    .map(|row| (row_ix, row))
             })
-            .map(|(ix, f, path_label, visuals)| {
+            .collect();
+
+        rows.into_iter()
+            .filter_map(|(ix, row)| {
+                let (ordinal, depth) = match row {
+                    crate::view::rows::FileListRow::Directory {
+                        key,
+                        label,
+                        depth,
+                        collapsed,
+                        chain,
+                        subtree,
+                        additions,
+                        deletions,
+                    } => {
+                        return Some(
+                            crate::view::rows::directory_row(
+                                crate::view::rows::DirectoryRowProps {
+                                    theme,
+                                    ui_scale_percent,
+                                    id: ("range_file_dir", ix).into(),
+                                    label: &label,
+                                    depth,
+                                    collapsed,
+                                    file_count: subtree.len(),
+                                    additions,
+                                    deletions,
+                                    row_height_px: 24.0,
+                                },
+                            )
+                            .debug_selector(move || format!("range_file_dir_{}_{}", repo_id.0, ix))
+                            .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                if !e.standard_click() {
+                                    return;
+                                }
+                                this.toggle_file_list_dir(
+                                    repo_id,
+                                    crate::view::rows::FileListId::RangeFiles,
+                                    Arc::clone(&key),
+                                    Arc::clone(&chain),
+                                    collapsed,
+                                    cx,
+                                );
+                            }))
+                            .into_any_element(),
+                        );
+                    }
+                    crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+                };
+                let source_ix = *projection.source_indices.get(ordinal.0)?;
+                let (f, presentation) = files.get(source_ix).zip(file_rows.get(source_ix))?;
+                let visuals = presentation.visuals;
+                let path_label = if is_tree {
+                    SharedString::from(
+                        f.path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| presentation.label.to_string()),
+                    )
+                } else {
+                    presentation.label.clone()
+                };
                 let icon = Some(visuals.icon);
                 let color = visuals.color(&theme);
                 let target = DiffTarget::CommitRange {
@@ -2468,7 +2684,12 @@ impl DetailsPaneView {
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
-                    .px(scaled_px(8.0))
+                    .pl(if is_tree {
+                        crate::view::rows::file_row_indent_px(depth, ui_scale_percent)
+                    } else {
+                        scaled_px(8.0)
+                    })
+                    .pr(scaled_px(8.0))
                     .w_full()
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |s| s.bg(theme.colors.interaction.hover_background))
@@ -2492,10 +2713,12 @@ impl DetailsPaneView {
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
-                                components::TruncatedText::aligned_path(
-                                    path_label,
-                                    path_alignment_group.clone(),
-                                )
+                                match path_alignment_group.clone() {
+                                    Some(group) => {
+                                        components::TruncatedText::aligned_path(path_label, group)
+                                    }
+                                    None => components::TruncatedText::new(path_label),
+                                }
                                 .text_sm()
                                 .render(cx),
                             ),
@@ -2536,7 +2759,7 @@ impl DetailsPaneView {
                     ));
                 }
 
-                row.into_any_element()
+                Some(row.into_any_element())
             })
             .collect()
     }

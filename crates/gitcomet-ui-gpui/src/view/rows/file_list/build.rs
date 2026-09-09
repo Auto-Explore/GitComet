@@ -1,0 +1,252 @@
+use super::*;
+use crate::view::rows::CommitFileSort;
+
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct FileTreeItem<'a> {
+    pub(in crate::view) path: &'a Path,
+    pub(in crate::view) additions: Option<u32>,
+    pub(in crate::view) deletions: Option<u32>,
+}
+
+impl<'a> FileTreeItem<'a> {
+    pub(in crate::view) fn new(path: &'a Path) -> Self {
+        Self {
+            path,
+            additions: None,
+            deletions: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TreeEntry {
+    Dir(u32),
+    File(u32),
+}
+
+#[derive(Debug)]
+struct DirNode {
+    segment: Arc<str>,
+    path: Arc<Path>,
+    /// Insertion order, which is first-appearance order in the projection —
+    /// that is what makes tree order a refinement of flat order.
+    entries: Vec<TreeEntry>,
+    dirs: DirLookup,
+}
+
+impl DirNode {
+    fn new(segment: Arc<str>, path: Arc<Path>) -> Self {
+        Self {
+            segment,
+            path,
+            entries: Vec::new(),
+            dirs: DirLookup::default(),
+        }
+    }
+
+    fn only_child_dir(&self) -> Option<u32> {
+        match self.entries.as_slice() {
+            [TreeEntry::Dir(child)] => Some(*child),
+            _ => None,
+        }
+    }
+}
+
+/// A path trie over one list's projection, independent of what is collapsed.
+#[derive(Debug)]
+pub(in crate::view) struct FileTree {
+    nodes: Vec<DirNode>,
+    stats: Vec<Option<(u32, u32)>>,
+    sort: CommitFileSort,
+}
+
+impl FileTree {
+    pub(in crate::view) fn build<'a>(
+        items: impl Iterator<Item = FileTreeItem<'a>>,
+        sort: CommitFileSort,
+    ) -> Self {
+        let root = DirNode::new(Arc::from(""), arc_path(PathBuf::new()));
+        let mut tree = Self {
+            nodes: vec![root],
+            stats: Vec::new(),
+            sort,
+        };
+
+        for item in items {
+            let ordinal = tree.stats.len() as u32;
+            tree.stats.push(match (item.additions, item.deletions) {
+                (None, None) => None,
+                (additions, deletions) => Some((additions.unwrap_or(0), deletions.unwrap_or(0))),
+            });
+
+            let mut node_ix = 0usize;
+            let mut components = item.path.components().peekable();
+            let mut prefix = PathBuf::new();
+            while let Some(component) = components.next() {
+                let Some(segment) = component.as_os_str().to_str() else {
+                    continue;
+                };
+                prefix.push(segment);
+                if components.peek().is_none() {
+                    break;
+                }
+                node_ix = tree.child_dir(node_ix, segment, &prefix);
+            }
+            tree.nodes[node_ix].entries.push(TreeEntry::File(ordinal));
+        }
+
+        tree
+    }
+
+    fn child_dir(&mut self, parent: usize, segment: &str, path: &Path) -> usize {
+        if let Some(existing) = self.nodes[parent].dirs.get(segment) {
+            return *existing;
+        }
+        let key: Arc<str> = Arc::from(segment);
+        let child = self.nodes.len();
+        self.nodes
+            .push(DirNode::new(Arc::clone(&key), Arc::from(path)));
+        self.nodes[parent].dirs.insert(key, child);
+        self.nodes[parent]
+            .entries
+            .push(TreeEntry::Dir(child as u32));
+        child
+    }
+
+    pub(in crate::view) fn flatten(&self, collapsed: &CollapsedDirs) -> FileListPlan {
+        let mut out = Flatten {
+            rows: Vec::new(),
+            ordered: Vec::with_capacity(self.stats.len()),
+            row_ix_by_ordinal: vec![HIDDEN; self.stats.len()],
+            collapsed_spans: Vec::new(),
+        };
+        self.emit(0, 0, false, collapsed, &mut out);
+        FileListPlan::Tree {
+            rows: out.rows.into(),
+            ordered: out.ordered.into(),
+            row_ix_by_ordinal: out.row_ix_by_ordinal.into(),
+            collapsed_spans: out.collapsed_spans.into(),
+        }
+    }
+
+    fn emit(
+        &self,
+        node_ix: usize,
+        depth: usize,
+        hidden: bool,
+        collapsed: &CollapsedDirs,
+        out: &mut Flatten,
+    ) {
+        for entry in self.emit_order(node_ix) {
+            match entry {
+                TreeEntry::File(ordinal) => {
+                    if !hidden {
+                        out.row_ix_by_ordinal[ordinal as usize] = out.rows.len();
+                        out.rows.push(FileListRow::File {
+                            ordinal: FileOrdinal(ordinal as usize),
+                            depth,
+                        });
+                    }
+                    out.ordered.push(ordinal as usize);
+                }
+                TreeEntry::Dir(child) => {
+                    let (deepest, chain, label) = self.fold(child as usize);
+                    let chain: DirChain = chain.into();
+                    let is_collapsed = chain
+                        .iter()
+                        .any(|segment| collapsed.set().contains(segment.as_ref() as &Path));
+                    let row_ix = (!hidden).then(|| {
+                        let row_ix = out.rows.len();
+                        out.rows.push(FileListRow::Directory {
+                            key: Arc::clone(&self.nodes[deepest].path),
+                            label: label.into(),
+                            depth,
+                            collapsed: is_collapsed,
+                            chain: Arc::clone(&chain),
+                            subtree: 0..0,
+                            additions: None,
+                            deletions: None,
+                        });
+                        row_ix
+                    });
+
+                    let start = out.ordered.len();
+                    self.emit(deepest, depth + 1, hidden || is_collapsed, collapsed, out);
+                    let end = out.ordered.len();
+                    // Recorded even inside a hidden subtree: revealing a file
+                    // has to expand every collapsed folder above it at once,
+                    // and the nested ones never got a row.
+                    if is_collapsed {
+                        out.collapsed_spans.push((start..end, chain));
+                    }
+
+                    if let Some(row_ix) = row_ix
+                        && let FileListRow::Directory {
+                            subtree,
+                            additions,
+                            deletions,
+                            ..
+                        } = &mut out.rows[row_ix]
+                    {
+                        *subtree = start..end;
+                        let mut sums: Option<(u64, u64)> = None;
+                        for ordinal in &out.ordered[start..end] {
+                            if let Some((a, d)) = self.stats[*ordinal] {
+                                let entry = sums.get_or_insert((0, 0));
+                                entry.0 += u64::from(a);
+                                entry.1 += u64::from(d);
+                            }
+                        }
+                        if let Some((a, d)) = sums {
+                            *additions = Some(a);
+                            *deletions = Some(d);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Directories before files under a path sort, mirrored for Z-A. Edit-size
+    /// sorts interleave instead: grouping directories first would float a folder
+    /// holding a three-line change above a root file with nine hundred.
+    fn emit_order(&self, node_ix: usize) -> Vec<TreeEntry> {
+        let entries = &self.nodes[node_ix].entries;
+        match self.sort {
+            CommitFileSort::EditSizeAscending | CommitFileSort::EditSizeDescending => {
+                entries.clone()
+            }
+            CommitFileSort::PathAscending | CommitFileSort::PathDescending => {
+                let dirs_first = self.sort == CommitFileSort::PathAscending;
+                let is_dir = |entry: &TreeEntry| matches!(entry, TreeEntry::Dir(_));
+                let mut ordered = Vec::with_capacity(entries.len());
+                ordered.extend(entries.iter().filter(|e| is_dir(e) == dirs_first).copied());
+                ordered.extend(entries.iter().filter(|e| is_dir(e) != dirs_first).copied());
+                ordered
+            }
+        }
+    }
+
+    /// Walk a single-child chain down to the node whose children actually
+    /// render, collecting every segment on the way so a collapse survives the
+    /// chain later splitting or merging.
+    fn fold(&self, start: usize) -> (usize, Vec<Arc<Path>>, String) {
+        let mut node_ix = start;
+        let mut chain = vec![Arc::clone(&self.nodes[start].path)];
+        let mut label = String::from(self.nodes[start].segment.as_ref());
+        while let Some(child) = self.nodes[node_ix].only_child_dir() {
+            node_ix = child as usize;
+            chain.push(Arc::clone(&self.nodes[node_ix].path));
+            label.push('/');
+            label.push_str(self.nodes[node_ix].segment.as_ref());
+        }
+        (node_ix, chain, label)
+    }
+}
+
+struct Flatten {
+    rows: Vec<FileListRow>,
+    ordered: Vec<usize>,
+    row_ix_by_ordinal: Vec<usize>,
+    collapsed_spans: Vec<CollapsedSpan>,
+}

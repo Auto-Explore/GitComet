@@ -490,7 +490,9 @@ impl PopoverHost {
                 commit_id,
                 path,
             } => Some(commit_file::model(self, *repo_id, commit_id, path)),
-            PopoverKind::CommitFileSortMenu => Some(commit_file_sort::model(self, cx)),
+            PopoverKind::CommitFileSortMenu { list } => {
+                Some(commit_file_sort::model(self, *list, cx))
+            }
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 Some(file_browser_file::model(self, *repo_id, path, cx))
             }
@@ -1054,9 +1056,9 @@ impl PopoverHost {
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
             }
-            ContextMenuAction::SetCommitFileSort { sort } => {
+            ContextMenuAction::SetCommitFileSort { list, sort } => {
                 self.details_pane.update(cx, |pane, cx| {
-                    pane.set_commit_file_sort(sort, cx);
+                    pane.set_file_list_sort(list, sort, cx);
                 });
             }
             ContextMenuAction::SetDiffContentMode { mode } => {

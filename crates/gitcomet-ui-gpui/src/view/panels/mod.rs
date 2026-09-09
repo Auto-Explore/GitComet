@@ -251,6 +251,7 @@ pub(in crate::view) enum ContextMenuAction {
         scope: gitcomet_core::domain::LogScope,
     },
     SetCommitFileSort {
+        list: crate::view::rows::FileListId,
         sort: crate::view::rows::CommitFileSort,
     },
     SetDiffContentMode {

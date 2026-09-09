@@ -229,15 +229,6 @@ impl CommitFileSort {
             Self::EditSizeDescending => "Edit size: Largest",
         }
     }
-
-    pub(in crate::view) const fn control_label(self) -> &'static str {
-        match self {
-            Self::PathAscending => "Path A–Z",
-            Self::PathDescending => "Path Z–A",
-            Self::EditSizeAscending => "Edit size ↑",
-            Self::EditSizeDescending => "Edit size ↓",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -279,13 +270,15 @@ impl CommitFileFilter {
         }
     }
 
-    pub(in crate::view) fn tooltip(self, count: usize) -> String {
+    /// `scope` names what the counts belong to — "this commit", "this worktree",
+    /// "this comparison" — so the same tabs read correctly above every list.
+    pub(in crate::view) fn tooltip_in(self, scope: &str, count: usize) -> String {
         match self {
-            Self::All => format!("Show every file changed by this commit ({count})"),
-            Self::Modified => format!("Show files modified by this commit ({count})"),
-            Self::Removed => format!("Show files deleted by this commit ({count})"),
-            Self::Added => format!("Show files added by this commit ({count})"),
-            Self::Renamed => format!("Show files renamed by this commit ({count})"),
+            Self::All => format!("Show every file changed by {scope} ({count})"),
+            Self::Modified => format!("Show files modified by {scope} ({count})"),
+            Self::Removed => format!("Show files deleted by {scope} ({count})"),
+            Self::Added => format!("Show files added by {scope} ({count})"),
+            Self::Renamed => format!("Show files renamed by {scope} ({count})"),
         }
     }
 
@@ -368,6 +361,43 @@ fn compare_commit_file_paths(
                 .cmp(files[right.0].path.as_os_str())
         })
         .then_with(|| left.0.cmp(&right.0))
+}
+
+/// Display order for one status section. Status entries carry no edit stats, so
+/// the edit-size modes degrade to the path order the comparator already falls
+/// back to when a file's counts are unknown.
+pub(in crate::view) fn status_section_sorted_indexes(
+    entries: &[gitcomet_core::domain::FileStatus],
+    indexes: &[usize],
+    sort: CommitFileSort,
+) -> std::sync::Arc<[usize]> {
+    let descending = sort == CommitFileSort::PathDescending;
+    let mut sortable: Vec<(usize, String)> = indexes
+        .iter()
+        .filter_map(|ix| {
+            entries
+                .get(*ix)
+                .map(|entry| (*ix, commit_file_path_sort_key(&entry.path)))
+        })
+        .collect();
+    sortable.sort_by(|left, right| {
+        let order = left
+            .1
+            .cmp(&right.1)
+            .then_with(|| {
+                entries[left.0]
+                    .path
+                    .as_os_str()
+                    .cmp(entries[right.0].path.as_os_str())
+            })
+            .then_with(|| left.0.cmp(&right.0));
+        if descending { order.reverse() } else { order }
+    });
+    sortable
+        .into_iter()
+        .map(|(ix, _)| ix)
+        .collect::<Vec<_>>()
+        .into()
 }
 
 fn build_commit_file_projection(
@@ -738,6 +768,12 @@ impl CommitCard {
 }
 
 mod diff_canvas;
+mod file_list;
+pub(in crate::view) use file_list::{
+    CollapsedDirs, DirectoryRowProps, FileListId, FileListPlan, FileListPlanCache, FileListRow,
+    FileOrdinal, FileTree, FileTreeItem, RowIx, directory_row, file_list_projection_key,
+    file_row_indent_px,
+};
 mod diff_text;
 mod history;
 pub(in crate::view) use history::history_row_height;
@@ -1098,8 +1134,12 @@ mod tests {
             ["All", "Modified", "Deleted", "Added", "Renamed"]
         );
         assert_eq!(
-            CommitFileFilter::Removed.tooltip(1),
+            CommitFileFilter::Removed.tooltip_in("this commit", 1),
             "Show files deleted by this commit (1)"
+        );
+        assert_eq!(
+            CommitFileFilter::Removed.tooltip_in("this worktree", 2),
+            "Show files deleted by this worktree (2)"
         );
     }
 

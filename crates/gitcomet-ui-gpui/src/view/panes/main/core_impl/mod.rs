@@ -2068,15 +2068,21 @@ impl MainPaneView {
             .unwrap_or(ChangeTrackingView::Combined)
     }
 
+    /// `ordinal` is a position in the section's display order. A tree also has
+    /// directory rows, and it may be hiding the file under a collapsed folder,
+    /// so the folder is expanded first and the ordinal resolved to a row.
     pub(in crate::view) fn scroll_status_section_to_ix(
         &mut self,
         section: StatusSection,
-        ix: usize,
+        ordinal: usize,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    let ix = pane
+                        .reveal_status_row(section, ordinal, cx)
+                        .unwrap_or(ordinal);
                     match section {
                         StatusSection::CombinedUnstaged | StatusSection::Unstaged => pane
                             .unstaged_scroll

@@ -3109,7 +3109,9 @@ fn commit_details_file_controls_render_filter_and_open_the_sort_menu(
             .popover_host
             .read(app)
             .popover_kind_for_tests()),
-        Some(PopoverKind::CommitFileSortMenu)
+        Some(PopoverKind::CommitFileSortMenu {
+            list: crate::view::rows::FileListId::CommitFiles
+        })
     );
 
     draw_and_drain_test_window(cx);
@@ -5046,6 +5048,352 @@ fn worktree_file_inputs_are_derived_once_per_scan_and_keyed_by_worktree(
         assert!(
             !Arc::ptr_eq(&other, &rescanned),
             "a new scan revision must rebuild them"
+        );
+    });
+}
+
+fn leaked(selector: String) -> &'static str {
+    Box::leak(selector.into_boxed_str())
+}
+
+fn commit_details_state_with_paths(
+    repo_id: gitcomet_state::model::RepoId,
+    commit_id: &gitcomet_core::domain::CommitId,
+    paths: &[&str],
+    rev: u64,
+) -> gitcomet_state::model::RepoState {
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-file-tree"));
+    repo.history_state.selected_commit = Some(commit_id.clone());
+    repo.history_state.commit_details =
+        gitcomet_state::model::Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+            id: commit_id.clone(),
+            message: "subject".to_string(),
+            author_name: String::new(),
+            author_email: String::new(),
+            authored_at_unix: 0,
+            committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+            committed_at_unix: 0,
+            parent_ids: vec![],
+            files: paths
+                .iter()
+                .map(|path| gitcomet_core::domain::CommitFileChange {
+                    path: (*path).into(),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    is_submodule: false,
+                    additions: Some(1),
+                    deletions: Some(1),
+                })
+                .collect(),
+        }));
+    repo.history_state.commit_details_rev = rev;
+    // The details pane only re-reads a snapshot when its notify fingerprint
+    // moves, and that hashes the rev, not the commit id.
+    repo.history_state.selected_commit_rev = rev;
+    repo
+}
+
+#[gpui::test]
+fn commit_file_layout_toggle_groups_rows_into_folders(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(613);
+    let commit_id = gitcomet_core::domain::CommitId("tree0123456789ab".into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = commit_details_state_with_paths(
+                repo_id,
+                &commit_id,
+                &["src/view/a.rs", "src/view/b.rs", "root.rs"],
+                1,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.debug_bounds(leaked(format!("commit_file_dir_{}_0", repo_id.0)))
+            .is_none(),
+        "flat is the default, so no folder rows"
+    );
+
+    let toggle = cx
+        .debug_bounds("commit_file_layout_button")
+        .expect("expected the layout toggle");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert_eq!(
+            pane.file_list_layout_for(repo_id, crate::view::rows::FileListId::CommitFiles),
+            crate::view::FileListLayout::Tree
+        );
+    });
+    assert!(
+        cx.debug_bounds(leaked(format!("commit_file_dir_{}_0", repo_id.0)))
+            .is_some(),
+        "the single-child chain src/view collapses into one folder row"
+    );
+}
+
+/// Collapsing hides rows; it must not narrow what F1/F4 steps through, or the
+/// prev/next arrows vanish the moment a folder is shut.
+#[gpui::test]
+fn collapsing_a_folder_keeps_every_file_navigable(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(614);
+    let commit_id = gitcomet_core::domain::CommitId("collapse0123456a".into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = commit_details_state_with_paths(
+                repo_id,
+                &commit_id,
+                &["src/view/a.rs", "src/view/b.rs", "root.rs"],
+                1,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    // Drawn before the toggle: the snapshot lands on the next draw, and it is
+    // what resets a per-list override.
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.toggle_file_list_layout(
+                    repo_id,
+                    crate::view::rows::FileListId::CommitFiles,
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let before = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .active_commit_file_source_indices(repo_id)
+            .expect("expected a projection")
+    });
+    assert_eq!(before.len(), 3);
+
+    let folder = cx
+        .debug_bounds(leaked(format!("commit_file_dir_{}_0", repo_id.0)))
+        .expect("expected a folder row");
+    cx.simulate_click(folder.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    let after = cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .active_commit_file_source_indices(repo_id)
+            .expect("expected a projection")
+    });
+    assert_eq!(
+        after.as_ref(),
+        before.as_ref(),
+        "collapsing changes which rows render, not which files navigate"
+    );
+    // Rows are [folder, root.rs] now; before the collapse they were
+    // [folder, a.rs, b.rs, root.rs].
+    assert!(
+        cx.debug_bounds(leaked(format!("commit_file_{}_3", repo_id.0)))
+            .is_none(),
+        "the collapsed folder's children stop rendering"
+    );
+}
+
+/// The override is scoped to the commit it was made on.
+#[gpui::test]
+fn commit_file_layout_override_resets_on_commit_switch(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(615);
+    let first = gitcomet_core::domain::CommitId("first01234567890".into());
+    let second = gitcomet_core::domain::CommitId("second1234567890".into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = commit_details_state_with_paths(repo_id, &first, &["src/view/a.rs"], 1);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.toggle_file_list_layout(
+                    repo_id,
+                    crate::view::rows::FileListId::CommitFiles,
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert_eq!(
+            pane.file_list_layout_for(repo_id, crate::view::rows::FileListId::CommitFiles),
+            crate::view::FileListLayout::Tree,
+            "the override applies while the commit is unchanged"
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = commit_details_state_with_paths(repo_id, &second, &["src/view/a.rs"], 2);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert_eq!(
+            pane.file_list_layout_for(repo_id, crate::view::rows::FileListId::CommitFiles),
+            crate::view::FileListLayout::Flat,
+            "a different commit re-reads the global default"
+        );
+    });
+}
+
+fn repo_with_unstaged_paths(
+    repo_id: gitcomet_state::model::RepoId,
+    paths: &[&str],
+) -> gitcomet_state::model::RepoState {
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-status-tree"));
+    repo.worktree_status = gitcomet_state::model::Loadable::Ready(Arc::new(
+        paths
+            .iter()
+            .map(|path| gitcomet_core::domain::FileStatus {
+                path: (*path).into(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            })
+            .collect(),
+    ));
+    repo.worktree_status_rev = 1;
+    repo
+}
+
+#[gpui::test]
+fn status_layout_toggle_groups_rows_into_folders(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(620);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo =
+                repo_with_unstaged_paths(repo_id, &["src/view/a.rs", "src/view/b.rs", "root.rs"]);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let dir_selector = leaked(format!("status_dir_{}_unstaged_0", repo_id.0));
+    assert!(
+        cx.debug_bounds(dir_selector).is_none(),
+        "flat is the default"
+    );
+
+    let toggle = cx
+        .debug_bounds("status_unstaged_layout_button")
+        .expect("expected the unstaged layout toggle");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.debug_bounds(dir_selector).is_some(),
+        "src/view folds into one folder row"
+    );
+}
+
+/// The anchor index is a position in the display order. Sorting reorders the
+/// list without touching `status_rev`, so an index hint captured under the old
+/// order must not be trusted — it would silently select the wrong range.
+#[gpui::test]
+fn status_shift_click_range_follows_the_sorted_display_order(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(621);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = repo_with_unstaged_paths(repo_id, &["a.rs", "b.rs", "c.rs"]);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.set_status_file_sort(
+                    StatusSection::CombinedUnstaged,
+                    crate::view::rows::CommitFileSort::PathDescending,
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    // Displayed order is now c, b, a.
+    let first = cx
+        .debug_bounds(leaked(format!("status_row_{}_unstaged_0", repo_id.0)))
+        .expect("expected the first status row");
+    cx.simulate_click(first.center(), gpui::Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    let third = cx
+        .debug_bounds(leaked(format!("status_row_{}_unstaged_2", repo_id.0)))
+        .expect("expected the third status row");
+    cx.simulate_click(
+        third.center(),
+        gpui::Modifiers {
+            shift: true,
+            ..Default::default()
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let selected =
+            pane.status_selected_paths_for_area(repo_id, gitcomet_core::domain::DiffArea::Unstaged);
+        let mut names: Vec<String> = selected
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["a.rs".to_string(), "b.rs".to_string(), "c.rs".to_string()],
+            "shift-clicking row 0 to row 2 spans the whole displayed range"
         );
     });
 }

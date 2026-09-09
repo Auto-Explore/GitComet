@@ -869,6 +869,7 @@ impl GitCometView {
         let timezone = ui_preferences.appearance.timezone;
         let show_timezone = ui_preferences.appearance.show_timezone;
         let change_tracking_view = ui_preferences.change_tracking.view;
+        let file_list_layout = ui_preferences.file_lists.layout;
         let terminal_preferences = ui_preferences.terminal.clone();
         let diff_scroll_sync = ui_preferences.diff.scroll_sync;
         let diff_content_mode = ui_preferences.diff.content_mode;
@@ -1367,6 +1368,7 @@ impl GitCometView {
             timezone,
             show_timezone,
             change_tracking_view,
+            file_list_layout,
             terminal_preferences,
             terminal_sessions: FxHashMap::default(),
             terminal_panel_height: px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX),

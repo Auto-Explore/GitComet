@@ -41,20 +41,20 @@ struct StatusMultiSelectionSlice<'a> {
     selected: &'a mut Vec<std::path::PathBuf>,
     anchor: &'a mut Option<std::path::PathBuf>,
     anchor_index: &'a mut Option<usize>,
-    anchor_status_rev: &'a mut Option<u64>,
+    anchor_order_rev: &'a mut Option<u64>,
 }
 
 fn set_status_multi_selection_single(
     selection: StatusMultiSelectionSlice<'_>,
     clicked_path: std::path::PathBuf,
     clicked_index: Option<usize>,
-    status_rev: Option<u64>,
+    order_rev: Option<u64>,
 ) {
     selection.selected.clear();
     selection.selected.push(clicked_path.clone());
     *selection.anchor = Some(clicked_path);
     *selection.anchor_index = clicked_index;
-    *selection.anchor_status_rev = status_rev;
+    *selection.anchor_order_rev = order_rev;
 }
 
 fn apply_status_multi_selection_to_slice(
@@ -62,13 +62,13 @@ fn apply_status_multi_selection_to_slice(
     clicked_path: std::path::PathBuf,
     clicked_index: Option<usize>,
     modifiers: gpui::Modifiers,
-    status_rev: Option<u64>,
+    order_rev: Option<u64>,
     trust_clicked_index: bool,
     entries: Option<&[std::path::PathBuf]>,
 ) {
     if modifiers.shift {
         let Some(entries) = entries else {
-            set_status_multi_selection_single(selection, clicked_path, clicked_index, status_rev);
+            set_status_multi_selection_single(selection, clicked_path, clicked_index, order_rev);
             return;
         };
 
@@ -78,13 +78,13 @@ fn apply_status_multi_selection_to_slice(
             clicked_index,
             trust_clicked_index,
         ) else {
-            set_status_multi_selection_single(selection, clicked_path, clicked_index, status_rev);
+            set_status_multi_selection_single(selection, clicked_path, clicked_index, order_rev);
             return;
         };
 
         let anchor_ix = if let Some(anchor_path) = selection.anchor.as_deref() {
-            let trust_anchor_index = status_rev
-                .zip(*selection.anchor_status_rev)
+            let trust_anchor_index = order_rev
+                .zip(*selection.anchor_order_rev)
                 .is_some_and(|(current, anchor_rev)| current == anchor_rev);
             status_selection_entry_index(
                 entries,
@@ -107,7 +107,7 @@ fn apply_status_multi_selection_to_slice(
             *selection.anchor = Some(clicked_path.clone());
         }
         *selection.anchor_index = Some(anchor_ix);
-        *selection.anchor_status_rev = status_rev;
+        *selection.anchor_order_rev = order_rev;
         return;
     }
 
@@ -117,18 +117,18 @@ fn apply_status_multi_selection_to_slice(
             if selection.selected.is_empty() {
                 *selection.anchor = None;
                 *selection.anchor_index = None;
-                *selection.anchor_status_rev = None;
+                *selection.anchor_order_rev = None;
             }
         } else {
             selection.selected.push(clicked_path.clone());
             *selection.anchor = Some(clicked_path);
             *selection.anchor_index = clicked_index;
-            *selection.anchor_status_rev = status_rev;
+            *selection.anchor_order_rev = order_rev;
         }
         return;
     }
 
-    set_status_multi_selection_single(selection, clicked_path, clicked_index, status_rev);
+    set_status_multi_selection_single(selection, clicked_path, clicked_index, order_rev);
 }
 
 fn status_selection_entry_index_hint(
@@ -179,7 +179,7 @@ pub(super) fn apply_status_multi_selection_click(
     clicked_path: std::path::PathBuf,
     clicked_index: Option<usize>,
     modifiers: gpui::Modifiers,
-    status_rev: Option<u64>,
+    order_rev: Option<u64>,
     trust_clicked_index: bool,
     entries: Option<&[std::path::PathBuf]>,
 ) {
@@ -190,18 +190,18 @@ pub(super) fn apply_status_multi_selection_click(
             selection.staged.clear();
             selection.staged_anchor = None;
             selection.staged_anchor_index = None;
-            selection.staged_anchor_status_rev = None;
+            selection.staged_anchor_order_rev = None;
             apply_status_multi_selection_to_slice(
                 StatusMultiSelectionSlice {
                     selected: &mut selection.unstaged,
                     anchor: &mut selection.unstaged_anchor,
                     anchor_index: &mut selection.unstaged_anchor_index,
-                    anchor_status_rev: &mut selection.unstaged_anchor_status_rev,
+                    anchor_order_rev: &mut selection.unstaged_anchor_order_rev,
                 },
                 clicked_path,
                 clicked_index,
                 modifiers,
-                status_rev,
+                order_rev,
                 trust_clicked_index,
                 entries,
             );
@@ -210,24 +210,24 @@ pub(super) fn apply_status_multi_selection_click(
             selection.unstaged.clear();
             selection.unstaged_anchor = None;
             selection.unstaged_anchor_index = None;
-            selection.unstaged_anchor_status_rev = None;
+            selection.unstaged_anchor_order_rev = None;
             selection.staged.clear();
             selection.staged_anchor = None;
             selection.staged_anchor_index = None;
-            selection.staged_anchor_status_rev = None;
+            selection.staged_anchor_order_rev = None;
             let mut untracked_anchor_index = None;
-            let mut untracked_anchor_status_rev = None;
+            let mut untracked_anchor_order_rev = None;
             apply_status_multi_selection_to_slice(
                 StatusMultiSelectionSlice {
                     selected: &mut selection.untracked,
                     anchor: &mut selection.untracked_anchor,
                     anchor_index: &mut untracked_anchor_index,
-                    anchor_status_rev: &mut untracked_anchor_status_rev,
+                    anchor_order_rev: &mut untracked_anchor_order_rev,
                 },
                 clicked_path,
                 clicked_index,
                 modifiers,
-                status_rev,
+                order_rev,
                 trust_clicked_index,
                 entries,
             );
@@ -238,28 +238,23 @@ pub(super) fn apply_status_multi_selection_click(
             selection.unstaged.clear();
             selection.unstaged_anchor = None;
             selection.unstaged_anchor_index = None;
-            selection.unstaged_anchor_status_rev = None;
+            selection.unstaged_anchor_order_rev = None;
             apply_status_multi_selection_to_slice(
                 StatusMultiSelectionSlice {
                     selected: &mut selection.staged,
                     anchor: &mut selection.staged_anchor,
                     anchor_index: &mut selection.staged_anchor_index,
-                    anchor_status_rev: &mut selection.staged_anchor_status_rev,
+                    anchor_order_rev: &mut selection.staged_anchor_order_rev,
                 },
                 clicked_path,
                 clicked_index,
                 modifiers,
-                status_rev,
+                order_rev,
                 trust_clicked_index,
                 entries,
             );
         }
     }
-}
-
-fn status_paths_for_section(repo: &RepoState, section: StatusSection) -> Vec<std::path::PathBuf> {
-    StatusSectionEntries::from_repo(repo, section)
-        .map_or_else(Vec::new, |entries| entries.path_vec())
 }
 
 fn submodule_status_lookup(repo: &RepoState) -> FxHashMap<&std::path::Path, SubmoduleStatus> {
@@ -307,7 +302,7 @@ impl DetailsPaneView {
         self.status_multi_selection.entry(repo_id).or_default()
     }
 
-    fn status_selected_paths_for_area(
+    pub(in crate::view) fn status_selected_paths_for_area(
         &self,
         repo_id: RepoId,
         area: DiffArea,
@@ -327,7 +322,7 @@ impl DetailsPaneView {
         modifiers: gpui::Modifiers,
         entries: Option<&[std::path::PathBuf]>,
     ) {
-        let status_rev = self
+        let order_rev = self
             .active_repo()
             .filter(|repo| repo.id == repo_id)
             .map(|repo| status_section_rev(repo, section));
@@ -338,7 +333,7 @@ impl DetailsPaneView {
             clicked_path,
             clicked_index,
             modifiers,
-            status_rev,
+            order_rev,
             true,
             entries,
         );
@@ -390,9 +385,12 @@ fn render_status_rows_for_section(
     let Some(repo) = this.active_repo() else {
         return Vec::new();
     };
-    let Some(entries) = StatusSectionEntries::from_repo(repo, section) else {
+    let Some(entries) = this.status_section_entries(repo, section) else {
         return Vec::new();
     };
+    let plan = this.status_file_plan(repo, section);
+    let is_tree = plan.is_tree();
+    let repo_id = repo.id;
     let selected = repo.diff_state.diff_target.as_ref();
     // Hashed once per batch: a scan per visible row made multi-select cost
     // visible × selected path compares per frame.
@@ -406,13 +404,78 @@ fn render_status_rows_for_section(
     let theme = this.theme;
     let ui_scale = this.ui_scale();
     let visible_signature = this.status_visible_signature(repo, section, &range, entries.len());
-    let path_alignment_group = this
-        .status_path_alignment_group(section)
-        .visible_rows(visible_signature);
-    range
-        .filter_map(|ix| entries.get(ix).map(|entry| (ix, entry)))
-        .map(|(ix, entry)| {
-            let path_display = this.cached_path_display(&entry.path);
+    // Leaf names have no shared prefix to align, and a row that reported into
+    // the group would anchor it on the shortest file name.
+    let path_alignment_group = (!is_tree).then(|| {
+        this.status_path_alignment_group(section)
+            .visible_rows(visible_signature)
+    });
+
+    let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
+        .filter_map(|row_ix| {
+            plan.row_at(crate::view::rows::RowIx(row_ix))
+                .map(|row| (row_ix, row))
+        })
+        .collect();
+
+    rows.into_iter()
+        .filter_map(|(ix, row)| {
+            let (ordinal, depth) = match row {
+                crate::view::rows::FileListRow::Directory {
+                    key,
+                    label,
+                    depth,
+                    collapsed,
+                    chain,
+                    subtree,
+                    ..
+                } => {
+                    return Some(
+                        crate::view::rows::directory_row(crate::view::rows::DirectoryRowProps {
+                            theme,
+                            ui_scale_percent: this.ui_scale_percent,
+                            id: ("status_dir", ix).into(),
+                            label: &label,
+                            depth,
+                            collapsed,
+                            file_count: subtree.len(),
+                            additions: None,
+                            deletions: None,
+                            row_height_px: STATUS_ROW_HEIGHT_PX,
+                        })
+                        .debug_selector(move || {
+                            format!("status_dir_{}_{}_{}", repo_id.0, section.id_label(), ix)
+                        })
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                            if !e.standard_click() {
+                                return;
+                            }
+                            this.toggle_file_list_dir(
+                                repo_id,
+                                crate::view::rows::FileListId::Status(section),
+                                Arc::clone(&key),
+                                Arc::clone(&chain),
+                                collapsed,
+                                cx,
+                            );
+                        }))
+                        .into_any_element(),
+                    );
+                }
+                crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+            };
+            let entry = entries.get(ordinal.0)?;
+            let path_display = if is_tree {
+                SharedString::from(
+                    entry
+                        .path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| entry.path.display().to_string()),
+                )
+            } else {
+                this.cached_path_display(&entry.path)
+            };
             let is_selected = if multi_select_active {
                 selected_paths.contains(entry.path.as_path())
             } else {
@@ -427,22 +490,27 @@ fn render_status_rows_for_section(
                 .then(|| submodule_statuses.get(entry.path.as_path()).copied())
                 .flatten();
             let is_submodule = submodule_status.is_some();
-            status_row(
-                theme,
-                ui_scale,
-                ix,
+            Some(status_row(
+                StatusRowCtx {
+                    theme,
+                    ui_scale,
+                    row_ix: ix,
+                    ordinal: ordinal.0,
+                    depth,
+                    is_tree,
+                    section,
+                    repo_id,
+                    is_selected,
+                    is_submodule,
+                    submodule_status,
+                },
                 entry,
-                is_submodule,
-                submodule_status,
                 path_display,
-                section,
-                repo.id,
-                is_selected,
                 this.tooltip_host.clone(),
                 path_alignment_group.clone(),
                 this.active_context_menu_invoker.as_ref(),
                 cx,
-            )
+            ))
         })
         .collect()
 }
@@ -487,23 +555,47 @@ fn status_file_menu_invoker_matches(
     path.to_str().is_some_and(|path| path == rest) || path.display().to_string() == rest
 }
 
-#[allow(clippy::too_many_arguments)]
-fn status_row(
+struct StatusRowCtx {
     theme: AppTheme,
     ui_scale: crate::ui_scale::UiScale,
-    ix: usize,
-    entry: &FileStatus,
-    is_submodule: bool,
-    submodule_status: Option<SubmoduleStatus>,
-    path_display: SharedString,
+    /// Display row, which is what element ids and debug selectors key on.
+    row_ix: usize,
+    /// Position in the section's display order, which is what selection and
+    /// keyboard navigation key on.
+    ordinal: usize,
+    depth: usize,
+    is_tree: bool,
     section: StatusSection,
     repo_id: RepoId,
-    selected: bool,
+    is_selected: bool,
+    is_submodule: bool,
+    submodule_status: Option<SubmoduleStatus>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn status_row(
+    ctx: StatusRowCtx,
+    entry: &FileStatus,
+    path_display: SharedString,
     tooltip_host: WeakEntity<TooltipHost>,
-    path_alignment_group: components::PathTruncationAlignmentGroup,
+    path_alignment_group: Option<components::PathTruncationAlignmentGroup>,
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
+    let StatusRowCtx {
+        theme,
+        ui_scale,
+        row_ix,
+        ordinal,
+        depth,
+        is_tree,
+        section,
+        repo_id,
+        is_selected: selected,
+        is_submodule,
+        submodule_status,
+    } = ctx;
+    let ix = row_ix;
     let scaled_px = |value: f32| ui_scale.px(value);
     let area = section.diff_area();
     let (icon, color) = if is_submodule {
@@ -642,7 +734,12 @@ fn status_row(
         .flex()
         .items_center()
         .gap(scaled_px(8.0))
-        .px(scaled_px(8.0))
+        .pl(if is_tree {
+            crate::view::rows::file_row_indent_px(depth, ui_scale.percent())
+        } else {
+            scaled_px(8.0)
+        })
+        .pr(scaled_px(8.0))
         .h(scaled_px(STATUS_ROW_HEIGHT_PX))
         .w_full()
         .cursor(CursorStyle::PointingHand)
@@ -708,10 +805,14 @@ fn status_row(
                 .flex_1()
                 .min_w(px(0.0))
                 .child(
-                    components::TruncatedText::aligned_path(
-                        path_display_for_label.clone(),
-                        path_alignment_group,
-                    )
+                    match path_alignment_group {
+                        Some(group) => components::TruncatedText::aligned_path(
+                            path_display_for_label.clone(),
+                            group,
+                        ),
+                        None => components::TruncatedText::new(path_display_for_label.clone()),
+                    }
+                    .text_sm()
                     .id(("status_row_path", ix))
                     .full_text_tooltip(tooltip_host)
                     .render(cx),
@@ -751,7 +852,8 @@ fn status_row(
             let entries = if modifiers.shift {
                 this.active_repo()
                     .filter(|r| r.id == repo_id)
-                    .map(|repo| status_paths_for_section(repo, section))
+                    .and_then(|repo| this.status_section_entries(repo, section))
+                    .map(|entries| entries.path_vec())
             } else {
                 None
             };
@@ -759,7 +861,9 @@ fn status_row(
                 repo_id,
                 section,
                 (*path_for_row).clone(),
-                Some(ix),
+                // The ordinal, not the row: a tree's directory rows share the
+                // list with files but not their index space.
+                Some(ordinal),
                 modifiers,
                 entries.as_deref(),
             );
@@ -786,6 +890,51 @@ mod tests {
 
     fn pb(s: &str) -> std::path::PathBuf {
         std::path::PathBuf::from(s)
+    }
+
+    /// Status entries arrive byte-sorted from the backend, where `Zoo.rs` beats
+    /// `apple.rs`. The UI sorts case-insensitively instead, the same way the
+    /// committed-file list always has.
+    #[test]
+    fn status_sort_is_case_insensitive_in_both_directions() {
+        let entries = vec![
+            file_status("Zoo.rs", FileStatusKind::Modified),
+            file_status("apple.rs", FileStatusKind::Modified),
+            file_status("Banana.rs", FileStatusKind::Modified),
+        ];
+        let all: Vec<usize> = (0..entries.len()).collect();
+
+        let ascending = crate::view::rows::status_section_sorted_indexes(
+            &entries,
+            &all,
+            crate::view::rows::CommitFileSort::PathAscending,
+        );
+        assert_eq!(ascending.as_ref(), &[1, 2, 0], "apple, Banana, Zoo");
+
+        let descending = crate::view::rows::status_section_sorted_indexes(
+            &entries,
+            &all,
+            crate::view::rows::CommitFileSort::PathDescending,
+        );
+        assert_eq!(descending.as_ref(), &[0, 2, 1], "Zoo, Banana, apple");
+    }
+
+    /// Status entries have no edit counts, so the edit-size modes have nothing
+    /// to order by and must not shuffle the list into an arbitrary order.
+    #[test]
+    fn edit_size_sorts_fall_back_to_path_order_for_status_entries() {
+        let entries = vec![
+            file_status("b.rs", FileStatusKind::Modified),
+            file_status("a.rs", FileStatusKind::Modified),
+        ];
+        let all: Vec<usize> = (0..entries.len()).collect();
+        for sort in [
+            crate::view::rows::CommitFileSort::EditSizeAscending,
+            crate::view::rows::CommitFileSort::EditSizeDescending,
+        ] {
+            let ordered = crate::view::rows::status_section_sorted_indexes(&entries, &all, sort);
+            assert_eq!(ordered.as_ref(), &[1, 0], "{sort:?} falls back to path A-Z");
+        }
     }
 
     fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {
@@ -1003,7 +1152,7 @@ mod tests {
         assert_eq!(sel.unstaged, vec![pb("b"), pb("c"), pb("d")]);
         assert_eq!(sel.unstaged_anchor, Some(pb("b")));
         assert_eq!(sel.unstaged_anchor_index, Some(1));
-        assert_eq!(sel.unstaged_anchor_status_rev, Some(1));
+        assert_eq!(sel.unstaged_anchor_order_rev, Some(1));
         assert_eq!(bench_snapshot_status_selection().position_scan_steps, 0);
     }
 
@@ -1075,10 +1224,10 @@ mod tests {
         assert!(sel.untracked_anchor.is_none());
         assert!(sel.unstaged_anchor.is_none());
         assert!(sel.unstaged_anchor_index.is_none());
-        assert!(sel.unstaged_anchor_status_rev.is_none());
+        assert!(sel.unstaged_anchor_order_rev.is_none());
         assert_eq!(sel.staged, vec![pb("staged.txt")]);
         assert_eq!(sel.staged_anchor, Some(pb("staged.txt")));
         assert_eq!(sel.staged_anchor_index, Some(2));
-        assert_eq!(sel.staged_anchor_status_rev, Some(3));
+        assert_eq!(sel.staged_anchor_order_rev, Some(3));
     }
 }

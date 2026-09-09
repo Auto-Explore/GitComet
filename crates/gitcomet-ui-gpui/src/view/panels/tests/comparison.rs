@@ -372,6 +372,93 @@ mod worktree_uncommitted {
         cx
     }
 
+    /// `selected_ix` indexes the entry list the reducer re-derives from the
+    /// scan, so it must stay a source index no matter how the rows are sorted
+    /// or grouped. Passing the display row instead opens a different file, and
+    /// the next scan "corrects" it to a third one.
+    #[gpui::test]
+    fn worktree_file_click_sends_a_source_index_under_a_reversed_sort(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let repo_id = RepoId(97);
+        let summary = WorktreeDirtySummary {
+            path: std::path::PathBuf::from("/tmp/linked-worktree"),
+            head: Some(CommitId(sha(0).into())),
+            branch: Some("side".into()),
+            detached: false,
+            added: 0,
+            modified: 3,
+            deleted: 0,
+            staged: Vec::new(),
+            unstaged: vec![
+                file("a.rs", FileStatusKind::Modified),
+                file("b.rs", FileStatusKind::Modified),
+                file("c.rs", FileStatusKind::Modified),
+            ],
+        };
+
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::super::super::GitCometView::new(store, events, None, window, cx)
+        });
+        let worktree_path = summary.path.clone();
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-worktree-sort"));
+                repo.open = Loadable::Ready(());
+                repo.head_branch = Loadable::Ready("main".into());
+                repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+                repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));
+                repo.history_state.worktree_selection = Some(worktree_path.clone());
+                let next_state = app_state_with_repo(repo, repo_id);
+                this.store
+                    .replace_snapshot_for_test(Arc::clone(&next_state));
+                push_test_state(this, next_state, cx);
+            });
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.details_pane.update(cx, |pane, cx| {
+                    pane.set_file_list_sort(
+                        crate::view::rows::FileListId::WorktreeFiles,
+                        crate::view::rows::CommitFileSort::PathDescending,
+                        cx,
+                    );
+                });
+            });
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        // Display order is c, b, a — so row 0 must resolve to source index 2.
+        let expected = cx.update(|_window, app| {
+            let pane = view.read(app).details_pane.read(app);
+            let inputs = pane
+                .cached_worktree_file_inputs(repo_id, 0, &summary)
+                .entries
+                .clone();
+            let projection = pane.cached_worktree_file_projection(
+                repo_id,
+                0,
+                &worktree_path,
+                &pane.cached_worktree_file_inputs(repo_id, 0, &summary).files,
+            );
+            let source_ix = projection.source_indices[0];
+            (source_ix, inputs[source_ix].path.clone())
+        });
+        assert_eq!(
+            expected.1,
+            std::path::PathBuf::from("c.rs"),
+            "the reversed sort puts c.rs first"
+        );
+        assert_eq!(expected.0, 2, "and c.rs is still source index 2");
+    }
+
     #[gpui::test]
     fn a_selected_worktree_row_takes_over_the_details_pane(cx: &mut gpui::TestAppContext) {
         let cx = draw_worktree(

@@ -943,6 +943,7 @@ pub struct GitCometView {
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
+    pub(super) file_list_layout: FileListLayout,
     pub(super) terminal_preferences: TerminalPreferences,
     pub(super) terminal_sessions: FxHashMap<RepoId, RepoTerminalSession>,
     pub(super) terminal_panel_height: Pixels,

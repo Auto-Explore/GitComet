@@ -98,20 +98,20 @@ pub(super) fn status_navigation_context<'a>(
     })
 }
 
-pub(super) fn status_navigation_context_for_repo<'a>(
-    repo: &'a RepoState,
-    diff_target: &DiffTarget,
+/// Which section a working-tree diff target belongs to. Shared so the order
+/// looked up for navigation is the order navigation then walks.
+pub(super) fn status_navigation_section(
+    repo: &RepoState,
+    path: &std::path::Path,
+    area: DiffArea,
     change_tracking_view: ChangeTrackingView,
-) -> Option<StatusNavigationContext<'a>> {
-    let DiffTarget::WorkingTree { path, area } = diff_target else {
-        return None;
-    };
-    let section = match area {
+) -> Option<StatusSection> {
+    Some(match area {
         DiffArea::Staged => StatusSection::Staged,
         DiffArea::Unstaged => match change_tracking_view {
             ChangeTrackingView::Combined => StatusSection::CombinedUnstaged,
             ChangeTrackingView::SplitUntracked => {
-                let entry = repo.status_entry_for_path(DiffArea::Unstaged, path.as_path())?;
+                let entry = repo.status_entry_for_path(DiffArea::Unstaged, path)?;
                 if entry.kind == gitcomet_core::domain::FileStatusKind::Untracked {
                     StatusSection::Untracked
                 } else {
@@ -119,10 +119,30 @@ pub(super) fn status_navigation_context_for_repo<'a>(
                 }
             }
         },
+    })
+}
+
+/// `section_order` is the section's display order in the backing slice's index
+/// space. `None` falls back to source order, which is only correct where the
+/// caller does not care about position (it is what picks a *neighbouring* file).
+pub(super) fn status_navigation_context_for_repo<'a>(
+    repo: &'a RepoState,
+    diff_target: &DiffTarget,
+    change_tracking_view: ChangeTrackingView,
+    section_order: Option<&[usize]>,
+) -> Option<StatusNavigationContext<'a>> {
+    let DiffTarget::WorkingTree { path, area } = diff_target else {
+        return None;
     };
-    let entries: Vec<_> = StatusSectionEntries::from_repo(repo, section)?
-        .iter()
-        .collect();
+    let section = status_navigation_section(repo, path.as_path(), *area, change_tracking_view)?;
+    let entries: Vec<_> = match section_order {
+        Some(order) => StatusSectionEntries::from_repo_with_order(repo, section, order.into())?
+            .iter()
+            .collect(),
+        None => StatusSectionEntries::from_repo(repo, section)?
+            .iter()
+            .collect(),
+    };
     let current_ix = entries.iter().position(|entry| entry.path == *path)?;
     Some(StatusNavigationContext {
         section,
@@ -153,6 +173,7 @@ pub(super) fn adjacent_diff_file_target_for_repo(
     change_tracking_view: ChangeTrackingView,
     direction: i8,
     commit_file_source_indices: Option<&[usize]>,
+    status_section_order: Option<&[usize]>,
 ) -> Option<AdjacentDiffFileTarget> {
     if direction == 0 {
         return None;
@@ -160,8 +181,12 @@ pub(super) fn adjacent_diff_file_target_for_repo(
 
     match diff_target {
         DiffTarget::WorkingTree { .. } => {
-            let navigation =
-                status_navigation_context_for_repo(repo, diff_target, change_tracking_view)?;
+            let navigation = status_navigation_context_for_repo(
+                repo,
+                diff_target,
+                change_tracking_view,
+                status_section_order,
+            )?;
             let target_ix = navigation.adjacent_ix(direction)?;
             let entry = navigation.entries.get(target_ix)?;
             let path = entry.path.clone();
@@ -221,6 +246,30 @@ pub(super) fn adjacent_diff_file_target_for_repo(
 }
 
 impl MainPaneView {
+    /// The display order of the section the open working-tree diff belongs to.
+    /// The pane owns the sort, so navigation has to ask it rather than re-derive
+    /// an order of its own.
+    pub(super) fn active_status_section_order(
+        &self,
+        repo_id: RepoId,
+        change_tracking_view: ChangeTrackingView,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<std::sync::Arc<[usize]>> {
+        let repo = self.active_repo()?;
+        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
+            return None;
+        };
+        let section = status_navigation_section(repo, path.as_path(), *area, change_tracking_view)?;
+        self.root_view
+            .update(cx, |root, cx| {
+                root.details_pane
+                    .read(cx)
+                    .active_status_section_order(repo_id, section)
+            })
+            .ok()
+            .flatten()
+    }
+
     fn try_select_adjacent_diff_file_inner(
         &mut self,
         repo_id: RepoId,
@@ -260,6 +309,8 @@ impl MainPaneView {
             .ok()
             .flatten();
         let change_tracking_view = self.active_change_tracking_view(cx);
+        let status_section_order =
+            self.active_status_section_order(repo_id, change_tracking_view, cx);
         let Some(target) = (|| {
             let repo = self.active_repo()?;
             let diff_target = repo.diff_state.diff_target.as_ref()?;
@@ -269,6 +320,7 @@ impl MainPaneView {
                 change_tracking_view,
                 direction,
                 commit_file_source_indices.as_deref(),
+                status_section_order.as_deref(),
             )
         })() else {
             return false;
@@ -531,6 +583,7 @@ mod tests {
                 ChangeTrackingView::Combined,
                 -1,
                 None,
+                None,
             ),
             Some(AdjacentDiffFileTarget::Commit {
                 commit_id: commit_id.clone(),
@@ -544,6 +597,7 @@ mod tests {
                 &target,
                 ChangeTrackingView::Combined,
                 1,
+                None,
                 None,
             ),
             Some(AdjacentDiffFileTarget::Commit {
@@ -610,6 +664,7 @@ mod tests {
                 ChangeTrackingView::Combined,
                 -1,
                 Some(&visible_source_indices),
+                None,
             ),
             Some(AdjacentDiffFileTarget::Commit {
                 commit_id: commit_id.clone(),
@@ -624,6 +679,7 @@ mod tests {
                 ChangeTrackingView::Combined,
                 1,
                 Some(&visible_source_indices),
+                None,
             ),
             None,
         );
@@ -639,6 +695,7 @@ mod tests {
                 ChangeTrackingView::Combined,
                 1,
                 Some(&visible_source_indices),
+                None,
             ),
             None,
             "navigation is a no-op while the open diff is hidden by the filter"

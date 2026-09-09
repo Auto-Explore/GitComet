@@ -460,10 +460,13 @@ impl MainPaneView {
             let path = path.clone();
             let area = *area;
             let change_tracking_view = self.active_change_tracking_view(cx);
+            let status_section_order =
+                self.active_status_section_order(repo_id, change_tracking_view, cx);
             let next_path_in_section = status_nav::status_navigation_context_for_repo(
                 repo,
                 &diff_target,
                 change_tracking_view,
+                status_section_order.as_deref(),
             )
             .and_then(|navigation| navigation.next_or_prev_path());
             let status_ready = repo.status_entries_for_area(area).is_some();
@@ -590,10 +593,13 @@ impl MainPaneView {
             match key {
                 "s" if area == DiffArea::Unstaged && !mods.shift => {
                     let change_tracking_view = self.active_change_tracking_view(cx);
+                    let status_section_order =
+                        self.active_status_section_order(repo_id, change_tracking_view, cx);
                     let next_path_in_section = status_nav::status_navigation_context_for_repo(
                         repo,
                         &diff_target,
                         change_tracking_view,
+                        status_section_order.as_deref(),
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
 
@@ -658,10 +664,13 @@ impl MainPaneView {
                 }
                 "u" if area == DiffArea::Staged && !mods.shift => {
                     let change_tracking_view = self.active_change_tracking_view(cx);
+                    let status_section_order =
+                        self.active_status_section_order(repo_id, change_tracking_view, cx);
                     let next_path_in_section = status_nav::status_navigation_context_for_repo(
                         repo,
                         &diff_target,
                         change_tracking_view,
+                        status_section_order.as_deref(),
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
 
