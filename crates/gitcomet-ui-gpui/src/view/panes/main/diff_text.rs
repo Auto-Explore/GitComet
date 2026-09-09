@@ -68,11 +68,21 @@ impl MainPaneView {
     }
 
     pub(in super::super::super) fn clear_diff_text_selection(&mut self) {
+        self.clear_diff_text_selection_span();
+        self.clear_diff_text_projected_highlights();
+    }
+
+    /// Drops the selected span only, leaving the projected click affordances
+    /// (bracket pair, occurrences) alone.
+    ///
+    /// Losing the window's text selection says nothing about those: they are a
+    /// separate affordance, and the surface that took the selection did not
+    /// invalidate the rows they are projected onto.
+    pub(in crate::view) fn clear_diff_text_selection_span(&mut self) {
         self.diff_text_selecting = false;
         self.diff_text_anchor = None;
         self.diff_text_head = None;
         self.diff_text_autoscroll_target = None;
-        self.clear_diff_text_projected_highlights();
     }
 
     /// Drop click affordances projected into the current visible-row space.
@@ -955,6 +965,7 @@ impl MainPaneView {
         region: DiffTextRegion,
         position: Point<Pixels>,
         click_count: usize,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
         // Deliberately does not claim the press: the diff row's own release
@@ -966,6 +977,7 @@ impl MainPaneView {
         // a double- or triple-click selects a span, and a press that misses the
         // text entirely is a press away from the pair. Both must dismiss it, and
         // both skip `begin_diff_text_selection`'s set below.
+        self.diff_text_selection_owner.adopt(window, cx);
         self.diff_text_pair_match = None;
         self.diff_text_occurrences.clear();
         self.diff_text_pending_syntax_click = None;
@@ -1000,6 +1012,7 @@ impl MainPaneView {
         region: DiffTextRegion,
         position: Point<Pixels>,
         click_count: usize,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
         if click_count == 1
@@ -1008,21 +1021,22 @@ impl MainPaneView {
                 .is_none()
             && let Some(pos) = self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
         {
-            self.begin_diff_text_selection_from_document_space(pos, position, cx);
+            self.begin_diff_text_selection_from_document_space(pos, position, window, cx);
             return;
         }
 
-        self.handle_diff_text_mouse_down(visible_ix, region, position, click_count, cx);
+        self.handle_diff_text_mouse_down(visible_ix, region, position, click_count, window, cx);
     }
 
     pub(in crate::view) fn handle_diff_text_empty_space_mouse_down(
         &mut self,
         region: DiffTextRegion,
         position: Point<Pixels>,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let (_, pos) = self.diff_text_eof_target(region);
-        self.begin_diff_text_selection_from_document_space(pos, position, cx);
+        self.begin_diff_text_selection_from_document_space(pos, position, window, cx);
     }
 
     /// Start a selection at the document boundary represented by a Markdown
@@ -1034,6 +1048,7 @@ impl MainPaneView {
         next_source_visible_ix: usize,
         region: DiffTextRegion,
         position: Point<Pixels>,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
         self.begin_diff_text_selection_from_document_space(
@@ -1043,6 +1058,7 @@ impl MainPaneView {
                 offset: 0,
             },
             position,
+            window,
             cx,
         );
     }
@@ -1051,8 +1067,10 @@ impl MainPaneView {
         &mut self,
         pos: DiffTextPos,
         position: Point<Pixels>,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.diff_text_selection_owner.adopt(window, cx);
         self.diff_text_pair_match = None;
         self.diff_text_occurrences.clear();
         self.diff_text_pending_syntax_click = None;
@@ -2546,6 +2564,14 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Before every guard, like `TextInput::on_mouse_down_right`: this is a
+        // press on the surface that owns the selection, so it keeps it whether
+        // or not a menu ends up opening. A right-click inside the highlight
+        // must still reach Copy. Gated on there being one, so a pane painting
+        // nothing never holds the window's selection.
+        if self.diff_text_has_selection() {
+            self.diff_text_selection_owner.adopt(window, cx);
+        }
         if self.is_inline_submodule_diff_active() {
             return;
         }

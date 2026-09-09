@@ -21,11 +21,13 @@ mod press_gesture;
 mod startup_probe;
 mod text_runs;
 mod text_selection;
+mod text_selection_owner;
 mod theme;
 mod ui_probe;
 mod ui_runtime;
 mod ui_scale;
 mod view;
+mod window_root_hook;
 
 pub use app::{
     FocusedMergetoolConfig, UiRunOutcome, run, run_focused_mergetool,

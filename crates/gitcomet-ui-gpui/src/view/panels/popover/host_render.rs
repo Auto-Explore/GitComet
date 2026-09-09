@@ -2,6 +2,11 @@ use super::*;
 
 impl Render for PopoverHost {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        // From render, not mirrored at each open/close site: there are many
+        // dismiss paths and one that forgot would latch the flag on for good.
+        // A no-op when unchanged.
+        crate::text_selection_owner::set_overlay_open(window, self.is_open(), cx);
+
         let Some(kind) = self.popover.clone() else {
             return div().into_any_element();
         };

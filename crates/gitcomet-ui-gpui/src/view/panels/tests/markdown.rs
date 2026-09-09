@@ -2913,7 +2913,7 @@ fn preview_mode_copies_the_document_it_draws(cx: &mut gpui::TestAppContext) {
     let last = fixture.row_ix("Body paragraph.");
     let last_len = fixture.document.rows[last].text.len();
 
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 assert!(
@@ -2930,6 +2930,7 @@ fn preview_mode_copies_the_document_it_draws(cx: &mut gpui::TestAppContext) {
                     region: DiffTextRegion::Inline,
                     offset: last_len,
                 });
+                pane.diff_text_selection_owner.adopt(window, cx);
                 cx.notify();
             });
         });
@@ -3147,7 +3148,7 @@ fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext)
 
     let lines: Vec<&str> = source.lines().collect();
     let last_ix = lines.len() - 1;
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 assert!(
@@ -3164,6 +3165,7 @@ fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext)
                     region: DiffTextRegion::Inline,
                     offset: lines[last_ix].len(),
                 });
+                pane.diff_text_selection_owner.adopt(window, cx);
                 cx.notify();
             });
         });

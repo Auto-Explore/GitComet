@@ -3156,6 +3156,7 @@ pub(super) fn worktree_preview_row_canvas(
                                 DiffTextRegion::Inline,
                                 position,
                                 click_count,
+                                window,
                                 cx,
                             );
                             cx.notify();
@@ -3417,6 +3418,7 @@ fn install_diff_row_mouse_handlers(
                             region,
                             position,
                             click_count,
+                            window,
                             cx,
                         );
                         cx.notify();

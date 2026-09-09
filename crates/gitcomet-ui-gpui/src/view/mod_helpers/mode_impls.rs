@@ -829,6 +829,10 @@ pub(crate) struct TerminalViewportView {
     pub(crate) selection_drag_moved: bool,
     /// Bumped whenever a drag starts or ends so a stale autoscroll ticker exits.
     pub(crate) selection_autoscroll_seq: u64,
+    /// Which window's text selection this viewport owns, if any.
+    /// See [`crate::text_selection_owner`].
+    pub(crate) selection_owner: crate::text_selection_owner::SelectionOwnerToken,
+    pub(crate) _selection_owner_observer: gpui::Subscription,
     pub(crate) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
 }
 

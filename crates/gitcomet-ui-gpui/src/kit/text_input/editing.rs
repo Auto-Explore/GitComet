@@ -80,6 +80,9 @@ impl TextInput {
 
     pub(super) fn from_options(options: TextInputOptions, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let selection_owner_observer = crate::text_selection_owner::observe(cx, |this, cx| {
+            this.clear_selection_on_ownership_loss(cx);
+        });
         Self {
             focus_handle,
             content: TextModel::new(),
@@ -106,7 +109,29 @@ impl TextInput {
             selection: SelectionState::new(),
             interaction: InteractionState::new(),
             protected_ranges: Arc::from([]),
+            selection_owner: Default::default(),
+            _selection_owner_observer: selection_owner_observer,
         }
+    }
+
+    /// Collapses the selection once another surface has taken the window's.
+    /// Caret, focus, scroll, content and undo stacks are left alone.
+    fn clear_selection_on_ownership_loss(&mut self, cx: &mut Context<Self>) {
+        if !self.selection_owner.is_stale(cx) || self.selection.range.is_empty() {
+            return;
+        }
+        // Mid-composition the marked range *is* the highlight.
+        if self.selection.marked_range.is_some() {
+            return;
+        }
+        // Not `move_to`: it forces the caret visible, blinking a background input.
+        let cursor = self.cursor_offset();
+        self.selection.range = cursor..cursor;
+        self.selection.reversed = false;
+        self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
+        cx.notify();
     }
 
     pub fn text(&self) -> &str {
@@ -495,11 +520,22 @@ impl TextInput {
         cx.notify();
     }
 
+    /// Collapses the selection to a caret at `offset`.
+    ///
+    /// Needs no window, unlike [`Self::set_selected_range`]: a caret paints no
+    /// highlight, so it never takes the window's selection.
+    pub fn set_caret(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.move_to(offset, cx);
+    }
+
+    /// Installs a selection programmatically. Takes the window because a
+    /// non-empty range is a real highlight and must own the window's selection.
     #[allow(dead_code)]
     pub fn set_selected_range(
         &mut self,
         range: Range<usize>,
         autoscroll: bool,
+        window: &Window,
         cx: &mut Context<Self>,
     ) {
         let start = self.clamp_to_char_boundary(range.start.min(range.end));
@@ -510,6 +546,10 @@ impl TextInput {
                 self.queue_cursor_autoscroll();
             }
             return;
+        }
+        // A programmatic highlight is still a highlight.
+        if !next.is_empty() {
+            self.selection_owner.adopt(window, cx);
         }
 
         self.selection.range = next;
@@ -1352,9 +1392,9 @@ impl TextInput {
         self.selection.range.clone()
     }
 
-    pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
+    pub fn select_all_text(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.move_to(0, cx);
-        self.select_to(self.content.len(), cx);
+        self.select_to(self.content.len(), window, cx);
     }
 
     /// Whether the buffer is currently wrapping long lines.
@@ -1471,33 +1511,43 @@ impl TextInput {
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.previous_boundary(self.cursor_offset()), cx);
+    pub(super) fn select_left(
+        &mut self,
+        _: &SelectLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.previous_boundary(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.next_boundary(self.cursor_offset()), cx);
+    pub(super) fn select_right(
+        &mut self,
+        _: &SelectRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.next_boundary(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
     pub(super) fn select_word_left(
         &mut self,
         _: &SelectWordLeft,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.select_to(self.previous_word_start(self.cursor_offset()), cx);
+        self.select_to(self.previous_word_start(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
     pub(super) fn select_word_right(
         &mut self,
         _: &SelectWordRight,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.select_to(self.next_word_end(self.cursor_offset()), cx);
+        self.select_to(self.next_word_end(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
@@ -1531,7 +1581,7 @@ impl TextInput {
         }
     }
 
-    pub(super) fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
         let Some((target, preferred_x)) = self.vertical_move_target(
             self.cursor_offset(),
             -1.0,
@@ -1539,12 +1589,17 @@ impl TextInput {
         ) else {
             return;
         };
-        self.select_to(target, cx);
+        self.select_to(target, window, cx);
         self.interaction.vertical_motion_x = Some(preferred_x);
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn select_down(
+        &mut self,
+        _: &SelectDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some((target, preferred_x)) = self.vertical_move_target(
             self.cursor_offset(),
             1.0,
@@ -1552,13 +1607,18 @@ impl TextInput {
         ) else {
             return;
         };
-        self.select_to(target, cx);
+        self.select_to(target, window, cx);
         self.interaction.vertical_motion_x = Some(preferred_x);
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_all_text(cx);
+    pub(super) fn select_all(
+        &mut self,
+        _: &SelectAll,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_all_text(window, cx);
     }
 
     pub(super) fn row_start(&self, offset: usize) -> usize {
@@ -1670,8 +1730,13 @@ impl TextInput {
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.row_start(self.cursor_offset()), cx);
+    pub(super) fn select_home(
+        &mut self,
+        _: &SelectHome,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.row_start(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
@@ -1680,8 +1745,13 @@ impl TextInput {
         self.queue_cursor_autoscroll();
     }
 
-    pub(super) fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.select_to(self.row_end(self.cursor_offset()), cx);
+    pub(super) fn select_end(
+        &mut self,
+        _: &SelectEnd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_to(self.row_end(self.cursor_offset()), window, cx);
         self.queue_cursor_autoscroll();
     }
 
@@ -1930,7 +2000,7 @@ impl TextInput {
     pub(super) fn select_page_up(
         &mut self,
         _: &SelectPageUp,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some((target, preferred_x)) = self.page_move_target(
@@ -1940,7 +2010,7 @@ impl TextInput {
         ) else {
             return;
         };
-        self.select_to(target, cx);
+        self.select_to(target, window, cx);
         self.interaction.vertical_motion_x = Some(preferred_x);
         self.queue_cursor_autoscroll();
     }
@@ -1963,7 +2033,7 @@ impl TextInput {
     pub(super) fn select_page_down(
         &mut self,
         _: &SelectPageDown,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some((target, preferred_x)) = self.page_move_target(
@@ -1973,7 +2043,7 @@ impl TextInput {
         ) else {
             return;
         };
-        self.select_to(target, cx);
+        self.select_to(target, window, cx);
         self.interaction.vertical_motion_x = Some(preferred_x);
         self.queue_cursor_autoscroll();
     }
@@ -1983,7 +2053,7 @@ impl TextInput {
             return;
         }
         if self.selection.range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor_offset()), cx)
+            self.extend_selection_to(self.previous_boundary(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
@@ -1993,7 +2063,7 @@ impl TextInput {
             return;
         }
         if self.selection.range.is_empty() {
-            self.select_to(self.next_boundary(self.cursor_offset()), cx)
+            self.extend_selection_to(self.next_boundary(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
@@ -2008,7 +2078,7 @@ impl TextInput {
             return;
         }
         if self.selection.range.is_empty() {
-            self.select_to(self.previous_word_start(self.cursor_offset()), cx)
+            self.extend_selection_to(self.previous_word_start(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
@@ -2023,7 +2093,7 @@ impl TextInput {
             return;
         }
         if self.selection.range.is_empty() {
-            self.select_to(self.next_word_end(self.cursor_offset()), cx)
+            self.extend_selection_to(self.next_word_end(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
@@ -2104,7 +2174,7 @@ impl TextInput {
         }
     }
 
-    pub(super) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
         }
@@ -2112,10 +2182,10 @@ impl TextInput {
             return;
         };
         self.push_redo_snapshot(self.current_undo_snapshot());
-        self.restore_undo_snapshot(snapshot, cx);
+        self.restore_undo_snapshot(snapshot, window, cx);
     }
 
-    pub(super) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
         }
@@ -2123,7 +2193,7 @@ impl TextInput {
             return;
         };
         self.push_undo_snapshot(self.current_undo_snapshot());
-        self.restore_undo_snapshot(snapshot, cx);
+        self.restore_undo_snapshot(snapshot, window, cx);
     }
 
     pub fn cursor_offset(&self) -> usize {
@@ -2350,7 +2420,21 @@ impl TextInput {
         cx.notify();
     }
 
-    pub(super) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    /// Extends the selection and takes the window's, for gestures that leave a
+    /// highlight behind. See [`Self::extend_selection_to`] for the bare move.
+    pub(super) fn select_to(&mut self, offset: usize, window: &Window, cx: &mut Context<Self>) {
+        self.extend_selection_to(offset, cx);
+        // Only a real highlight takes the window's selection: Ctrl+F select-alls
+        // an empty search box, and that must not wipe a diff-text selection.
+        if !self.selection.range.is_empty() {
+            self.selection_owner.adopt(window, cx);
+        }
+    }
+
+    /// Moves the selection head without taking the window's selection. What the
+    /// delete helpers want: they build a range only to feed
+    /// `replace_text_in_range`, and paint no highlight.
+    pub(super) fn extend_selection_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         let offset = self.clamp_to_char_boundary(offset);
         if self.selection.reversed {
             self.selection.range.start = offset;
@@ -2419,7 +2503,12 @@ impl TextInput {
         stack.push(snapshot);
     }
 
-    pub(super) fn restore_undo_snapshot(&mut self, snapshot: UndoSnapshot, cx: &mut Context<Self>) {
+    pub(super) fn restore_undo_snapshot(
+        &mut self,
+        snapshot: UndoSnapshot,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let text_edit_delta =
             utf8_edit_delta_between_texts(self.content.as_ref(), snapshot.content.as_ref());
         self.content = snapshot.content.into();
@@ -2430,6 +2519,9 @@ impl TextInput {
         self.selection.range = snapshot.selected_range;
         self.selection.reversed = snapshot.selection_reversed;
         self.selection.marked_range = None;
+        if !self.selection.range.is_empty() {
+            self.selection_owner.adopt(window, cx);
+        }
         self.interaction.vertical_motion_x = None;
         self.interaction.cursor_blink_visible = true;
         self.interaction.is_selecting = false;
@@ -2723,6 +2815,9 @@ impl TextInput {
         // as a click. Claimed unconditionally, because a double-click that
         // turns into a drag never sets `is_selecting`.
         crate::press_gesture::claim_press(cx);
+        // Unconditional, for the same reason as the claim above.
+        self.selection_owner.adopt(window, cx);
+        self.interaction.took_press = true;
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
         self.interaction.cursor_blink_visible = true;
@@ -2845,6 +2940,11 @@ impl TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Before the suppression guard: when an ancestor renders this input's
+        // menu (the conflict resolver's output pane) the press is still ours.
+        // Adopt rather than preserve -- the menu belongs to this input.
+        self.selection_owner.adopt(window, cx);
+        self.interaction.took_press = true;
         if self.interaction.suppress_right_click {
             return;
         }
@@ -3330,8 +3430,11 @@ impl EntityInputHandler for TextInput {
             .map(|range| self.range_to_utf16(range))
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.selection.marked_range = None;
+        // The observer skips composing inputs and only re-runs on the next
+        // global write, so a selection that went stale mid-IME would stay lit.
+        self.clear_selection_on_ownership_loss(cx);
     }
 
     fn replace_text_in_range(
@@ -3422,6 +3525,9 @@ impl EntityInputHandler for TextInput {
 
         self.interaction.vertical_motion_x = None;
         self.interaction.cursor_blink_visible = true;
+        // Like `unmark_text`: this can end the composition leaving a highlight.
+        // Self-guards on `marked_range`, so a composing input is left alone.
+        self.clear_selection_on_ownership_loss(cx);
         self.invalidate_layout_caches_preserving_wrap_rows();
         self.note_text_edit_for_highlights(&range, &inserted);
         self.queue_cursor_autoscroll();

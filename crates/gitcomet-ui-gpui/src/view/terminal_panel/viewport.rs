@@ -193,8 +193,9 @@ impl TerminalViewportView {
         focus_handle: FocusHandle,
         term_lock: AlacrittyTermLock,
         pty_sender: terminal_alacritty::PtySender,
+        cx: &mut gpui::Context<Self>,
     ) -> Self {
-        Self::with_backend(theme, focus_handle, Some(term_lock), Some(pty_sender))
+        Self::with_backend(theme, focus_handle, Some(term_lock), Some(pty_sender), cx)
     }
 
     /// Shared constructor. Tests use it to build a viewport over a real `Term`
@@ -205,7 +206,19 @@ impl TerminalViewportView {
         focus_handle: FocusHandle,
         term_lock: Option<AlacrittyTermLock>,
         pty_sender: Option<terminal_alacritty::PtySender>,
+        cx: &mut gpui::Context<Self>,
     ) -> Self {
+        let selection_owner_observer = crate::text_selection_owner::observe(cx, |this, cx| {
+            if !this.selection_owner.is_stale(cx) {
+                return;
+            }
+            // Not folded into the condition above: `clear_selection` also ends
+            // any drag and invalidates the autoscroll ticker, which is too much
+            // to hide behind `&&`.
+            if this.clear_selection() {
+                cx.notify();
+            }
+        });
         Self {
             theme,
             focus_handle,
@@ -232,6 +245,8 @@ impl TerminalViewportView {
             selection_drag_moved: false,
             selection_autoscroll_seq: 0,
             ime_state: None,
+            selection_owner: Default::default(),
+            _selection_owner_observer: selection_owner_observer,
         }
     }
 
@@ -409,10 +424,11 @@ impl TerminalViewportView {
     pub(super) fn handle_key_down(
         &mut self,
         keystroke: &gpui::Keystroke,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         if let Some(action) = terminal_clipboard_shortcut_action(keystroke) {
-            self.perform_clipboard_action(action, cx);
+            self.perform_clipboard_action(action, window, cx);
             cx.stop_propagation();
             return true;
         }
@@ -442,6 +458,7 @@ impl TerminalViewportView {
     pub(super) fn perform_clipboard_action(
         &mut self,
         action: TerminalShortcutAction,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
         match action {
@@ -473,7 +490,7 @@ impl TerminalViewportView {
                     self.queue_input(bytes, cx);
                 }
             }
-            TerminalShortcutAction::SelectAll => self.select_all(cx),
+            TerminalShortcutAction::SelectAll => self.select_all(window, cx),
         }
     }
 
@@ -645,7 +662,7 @@ impl TerminalViewportView {
         })
     }
 
-    pub(super) fn select_all(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(super) fn select_all(&mut self, window: &Window, cx: &mut gpui::Context<Self>) {
         let Some(geometry) = self.grid_geometry() else {
             return;
         };
@@ -661,6 +678,7 @@ impl TerminalViewportView {
             geometry.columns as u16 - 1,
         ));
         self.select_all_active = true;
+        self.selection_owner.adopt(window, cx);
         cx.notify();
     }
 
@@ -839,6 +857,10 @@ impl TerminalViewportView {
         window.focus(&self.focus_handle, cx);
         self.reset_cursor_blink(cx);
         crate::press_gesture::claim_press(cx);
+        // Every button, like `TextInput::on_mouse_down`: a right-click opens a
+        // menu that copies this selection, and a middle-click paste must not
+        // let the press resolver collapse it either.
+        self.selection_owner.adopt(window, cx);
 
         let mode = self.live_modes();
         if mode.mouse_mode() {
@@ -1540,8 +1562,8 @@ impl Render for TerminalViewportView {
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 this.handle_mouse_move(e, window, cx);
             }))
-            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _window, cx| {
-                this.handle_key_down(&e.keystroke, cx);
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+                this.handle_key_down(&e.keystroke, window, cx);
             }))
             .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, window, cx| {
                 this.handle_scroll_wheel(e, window, cx);

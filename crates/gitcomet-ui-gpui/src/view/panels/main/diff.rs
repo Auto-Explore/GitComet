@@ -654,6 +654,7 @@ impl MainPaneView {
                                                     move |this, e: &MouseDownEvent, _w, cx| {
                                                         cx.stop_propagation();
                                                         crate::press_gesture::claim_press(cx);
+                                                        crate::text_selection_owner::preserve(cx);
                                                         this.diff_split_resize =
                                                             Some(DiffSplitResizeState {
                                                                 handle:

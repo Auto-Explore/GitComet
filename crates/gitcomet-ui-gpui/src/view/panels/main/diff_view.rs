@@ -127,6 +127,7 @@ impl MainPaneView {
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                     cx.stop_propagation();
                     crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
                     this.annotate_resize = Some(AnnotateResizeState {
                         start_x: e.position.x,
                         start_width: this.annotate_column_width,
@@ -794,7 +795,7 @@ impl MainPaneView {
                 && !mods.shift
                 && key == "a"
             {
-                self.select_all_diff_text();
+                self.select_all_diff_text(window, cx);
                 handled = true;
             }
 
@@ -1040,7 +1041,7 @@ impl MainPaneView {
             && !mods.shift
             && key == "a"
         {
-            self.select_all_diff_text();
+            self.select_all_diff_text(window, cx);
             handled = true;
         }
 
@@ -1077,7 +1078,7 @@ impl MainPaneView {
         let focus = self.diff_search_input.read(cx).focus_handle();
         window.focus(&focus, cx);
         self.diff_search_input
-            .update(cx, |input, cx| input.select_all_text(cx));
+            .update(cx, |input, cx| input.select_all_text(window, cx));
     }
 
     fn deactivate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
@@ -2268,7 +2269,7 @@ impl MainPaneView {
         } else if let Some(message) = untracked_directory_notice {
             components::empty_state(theme, "Directory", message).into_any_element()
         } else if is_file_editor {
-            self.render_file_editor(theme, cx)
+            self.render_file_editor(theme, window, cx)
         } else if is_file_preview {
             if is_markdown_preview_view {
                 match &self.worktree_preview {
@@ -2873,6 +2874,9 @@ impl MainPaneView {
                                                                   cx| {
                                                                 cx.stop_propagation();
                                                                 crate::press_gesture::claim_press(
+                                                                    cx,
+                                                                );
+                                                                crate::text_selection_owner::preserve(
                                                                     cx,
                                                                 );
                                                                 this.diff_split_resize = Some(

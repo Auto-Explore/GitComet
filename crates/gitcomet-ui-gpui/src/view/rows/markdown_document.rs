@@ -225,6 +225,7 @@ fn render_block_gap(
                     next_source_visible_ix,
                     region,
                     event.position,
+                    window,
                     cx,
                 );
                 cx.notify();
@@ -477,6 +478,7 @@ fn row_shell(
                             text_region,
                             position,
                             click_count,
+                            window,
                             cx,
                         );
                     }
@@ -859,6 +861,7 @@ fn render_code_padding(
                     text_region,
                     event.position,
                     event.click_count,
+                    window,
                     cx,
                 );
                 cx.notify();

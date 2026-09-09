@@ -631,6 +631,7 @@ impl Render for TitleBarView {
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _w, cx| {
                     crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
                     this.title_drag_state.on_left_mouse_down(e.click_count);
                     cx.notify();
                 }),
@@ -861,7 +862,12 @@ pub(crate) fn window_frame(
     // Every window built on the frame resets the press claim; see the
     // `press_gesture` module docs.
     outer
-        .child(crate::press_gesture::PressGestureReset)
+        // First child, so its capture listeners are registered before any
+        // content listener and therefore run first; see `window_root_hook`.
+        .child(crate::window_root_hook::WindowRootHook::new(|window| {
+            crate::press_gesture::install_reset(window);
+            crate::text_selection_owner::install_reset(window);
+        }))
         .child(inner)
         .into_any_element()
 }

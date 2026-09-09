@@ -788,6 +788,55 @@ impl Element for TextElement {
             cx,
         );
 
+        // Clicking away blurs, as a browser does. Window-level rather than
+        // hitbox-gated, so it also sees surfaces that take no focus of their own.
+        if focus_handle.is_focused(window) {
+            let input = self.input.clone();
+            let window_handle = window.window_handle();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+                if phase != gpui::DispatchPhase::Capture {
+                    return;
+                }
+                // `on_mouse_down` is wired for these two only, so any other
+                // button would read as a press this input did not take -- even
+                // one inside it. `first_mouse` matches `install_reset`.
+                if !matches!(event.button, MouseButton::Left | MouseButton::Right)
+                    || event.first_mouse
+                {
+                    return;
+                }
+                // Read in the capture phase: a menu row clears this field and
+                // stops propagation in the bubble phase, so a later read sees
+                // `None` and mistakes Copy for clicking away. Adopt rather than
+                // just flag, or the resolver drops the selection the menu acts on.
+                if input.read(cx).interaction.context_menu.is_some() {
+                    input.update(cx, |input, cx| {
+                        input.selection_owner.adopt(window, cx);
+                        input.interaction.took_press = true;
+                    });
+                    return;
+                }
+                input.update(cx, |input, _cx| input.interaction.took_press = false);
+                let input = input.clone();
+                // Deferred so the bubble phase has run: only then is it known
+                // whether the press was ours, another surface took focus, or a
+                // neutral gesture spoke for it.
+                cx.defer(move |cx| {
+                    if input.read(cx).interaction.took_press {
+                        return;
+                    }
+                    let _ = window_handle.update(cx, |_view, window, cx| {
+                        if crate::text_selection_owner::press_keeps_focus(window, cx) {
+                            return;
+                        }
+                        if input.read(cx).focus_handle.is_focused(window) {
+                            window.blur(cx);
+                        }
+                    });
+                });
+            });
+        }
+
         if self.input.read(cx).interaction.is_selecting {
             let input = self.input.clone();
             window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {

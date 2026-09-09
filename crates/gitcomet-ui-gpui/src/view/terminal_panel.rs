@@ -100,7 +100,7 @@ impl GitCometView {
             return;
         };
         viewport.update(cx, |viewport, cx| {
-            viewport.handle_key_down(keystroke, cx);
+            viewport.handle_key_down(keystroke, window, cx);
         });
     }
 
@@ -397,8 +397,14 @@ impl GitCometView {
         let pty_sender = spawned.pty_sender.clone();
         let events_rx = spawned.events_rx;
 
-        let viewport = cx.new(|_cx| {
-            TerminalViewportView::new(theme, focus_handle.clone(), term_lock, pty_sender.clone())
+        let viewport = cx.new(|cx| {
+            TerminalViewportView::new(
+                theme,
+                focus_handle.clone(),
+                term_lock,
+                pty_sender.clone(),
+                cx,
+            )
         });
 
         Some(TerminalInstance {
@@ -1076,7 +1082,7 @@ impl GitCometView {
     pub(super) fn select_all_terminal_for_repo(
         &mut self,
         repo_id: RepoId,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         if let Some(viewport) = self
@@ -1085,7 +1091,7 @@ impl GitCometView {
             .and_then(|s| s.active_instance())
             .map(|i| i.viewport.clone())
         {
-            viewport.update(cx, |v, cx| v.select_all(cx));
+            viewport.update(cx, |v, cx| v.select_all(window, cx));
         }
     }
 
@@ -1515,6 +1521,7 @@ impl GitCometView {
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                     cx.stop_propagation();
                     crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
                     this.terminal_panel_resize = Some(TerminalPanelResizeState {
                         start_y: e.position.y,
                         start_height: this.terminal_panel_height,
