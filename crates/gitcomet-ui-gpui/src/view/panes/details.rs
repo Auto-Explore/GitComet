@@ -23,7 +23,7 @@ type WorktreeFileListInputsCacheEntry = (
 /// view can step between them.
 pub(in super::super) struct WorktreeFileListInputs {
     pub(in super::super) files: Vec<gitcomet_core::domain::CommitFileChange>,
-    pub(in super::super) entries: Vec<gitcomet_state::model::InlineSubmoduleDiffEntry>,
+    pub(in super::super) entries: Arc<[gitcomet_state::model::InlineSubmoduleDiffEntry]>,
 }
 
 pub(in super::super) struct DetailsPaneView {
@@ -1031,7 +1031,7 @@ impl DetailsPaneView {
         // same navigation submodule diffs get. Built by the shared builder rather
         // than here: the reducer re-resolves an open diff's entries against each
         // new scan, and it has to arrive at the same order these rows are in.
-        let entries = gitcomet_state::model::worktree_inline_diff_entries(summary);
+        let entries: Arc<[_]> = gitcomet_state::model::worktree_inline_diff_entries(summary).into();
         let files = entries
             .iter()
             .map(|entry| gitcomet_core::domain::CommitFileChange {

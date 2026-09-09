@@ -1356,9 +1356,18 @@ pub(crate) fn run_git_capture_cancellable(
     label: &str,
     cancellation: &CancellationToken,
 ) -> Result<String> {
+    let bytes = run_git_capture_bytes_cancellable(cmd, label, cancellation)?;
+    Ok(bytes_to_text_preserving_utf8(&bytes))
+}
+
+pub(crate) fn run_git_capture_bytes_cancellable(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<Vec<u8>> {
     let output = run_command_with_timeout(cmd, label, git_command_timeout(), Some(cancellation))?;
     if output.status.success() {
-        Ok(bytes_to_text_preserving_utf8(&output.stdout))
+        Ok(output.stdout)
     } else {
         Err(git_command_failed_error(label, output))
     }
@@ -2554,6 +2563,28 @@ mod tests {
             matches!(error.kind(), ErrorKind::Cancelled),
             "cancellation must win before spawn, got {error:?}"
         );
+    }
+
+    #[test]
+    fn submodule_byte_capture_stops_an_in_flight_command() {
+        let token = CancellationToken::new();
+        let child_token = token.clone();
+        let handle = thread::spawn(move || {
+            run_git_capture_bytes_cancellable(
+                sleep_command(10),
+                "git synthetic submodule numstat",
+                &child_token,
+            )
+        });
+        thread::sleep(Duration::from_millis(50));
+        let cancelled_at = Instant::now();
+        token.cancel();
+        let error = handle
+            .join()
+            .expect("capture worker")
+            .expect_err("cancelled capture");
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
+        assert!(cancelled_at.elapsed() < Duration::from_secs(2));
     }
 
     #[cfg(unix)]
