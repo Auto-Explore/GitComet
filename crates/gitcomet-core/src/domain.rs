@@ -251,7 +251,7 @@ impl WorktreeDirtySummary {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SubmoduleStatus {
     UpToDate,
     NotInitialized,
@@ -355,6 +355,7 @@ pub struct SubmoduleDiffSummary {
     pub path: PathBuf,
     pub mode: SubmoduleDiffSummaryMode,
     pub status: Option<SubmoduleStatus>,
+    pub checkout_available: bool,
     pub commit_id: Option<CommitId>,
     pub parent_commit_id: Option<CommitId>,
     pub checked_out_head: Option<CommitId>,

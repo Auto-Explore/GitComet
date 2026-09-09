@@ -436,10 +436,13 @@ impl Scrollbar {
                     } else if should_schedule_hide {
                         interaction.update(cx, |state, cx| {
                             state.hide_task.take();
+                            // App executor, not `smol::Timer`: that one fires on
+                            // the async-io thread and aborts gpui tests.
+                            let delay = cx.background_executor().timer(Duration::from_millis(1000));
                             let task = cx.spawn(
                                 async move |state: gpui::WeakEntity<ScrollbarInteractionState>,
                                             cx: &mut gpui::AsyncApp| {
-                                    smol::Timer::after(Duration::from_millis(1000)).await;
+                                    delay.await;
                                     let _ = state.update(cx, |s, cx| {
                                         if s.drag_offset.is_none() {
                                             s.showing = false;

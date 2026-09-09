@@ -363,6 +363,7 @@ impl MainPaneView {
             diff_autoscroll_pending: false,
             diff_raw_input,
             submodule_hash_inputs,
+            submodule_summary_cache: None,
             diff_visible_indices: Vec::new(),
             diff_visible_inline_map: None,
             diff_wrap_visible_rows: Vec::new(),

@@ -1352,7 +1352,7 @@ fn set_active_repo_inline_retires_the_activated_worktrees_orphaned_diff() {
         },
         submodule_repo_path: worktree.clone(),
         parent_submodule_path: worktree,
-        entries: Vec::new(),
+        entries: Vec::new().into(),
         selected_ix: 0,
         target: inline_target,
         rev: 1,

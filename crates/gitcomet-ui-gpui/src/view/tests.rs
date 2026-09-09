@@ -3015,7 +3015,7 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
         .expect("expected collapsed Files popover");
     assert!(
         cx.debug_bounds("collapsed_file_browser_rows").is_some(),
-        "collapsed Files should eagerly render intrinsic rows like branch popovers"
+        "collapsed Files should render its virtualized row band"
     );
     assert!(
         cx.debug_bounds("file_browser_scroll_container").is_none(),

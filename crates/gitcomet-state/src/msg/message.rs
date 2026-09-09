@@ -323,7 +323,7 @@ pub enum Msg {
         origin: crate::model::ForeignDiffOrigin,
         submodule_repo_path: PathBuf,
         parent_submodule_path: PathBuf,
-        entries: Vec<crate::model::InlineSubmoduleDiffEntry>,
+        entries: std::sync::Arc<[crate::model::InlineSubmoduleDiffEntry]>,
         selected_ix: usize,
     },
     SelectInlineSubmoduleDiff {
