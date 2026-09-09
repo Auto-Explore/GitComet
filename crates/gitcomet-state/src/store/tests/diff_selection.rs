@@ -898,7 +898,8 @@ fn open_inline_submodule_diff_loads_patch_and_file_text_for_text_targets() {
                 section: crate::model::InlineSubmoduleDiffSection::Range(
                     gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
                 ),
-            }],
+            }]
+            .into(),
             selected_ix: 0,
         },
     );
@@ -958,7 +959,8 @@ fn open_inline_submodule_diff_loads_patch_file_and_image_for_svg_targets() {
                 kind: FileStatusKind::Modified,
                 target: target.clone(),
                 section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-            }],
+            }]
+            .into(),
             selected_ix: 0,
         },
     );
@@ -1025,7 +1027,8 @@ fn stale_inline_submodule_file_load_is_ignored() {
                 section: crate::model::InlineSubmoduleDiffSection::Range(
                     gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
                 ),
-            }],
+            }]
+            .into(),
             selected_ix: 0,
         },
     );
@@ -1092,7 +1095,7 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
             repo_id: RepoId(1),
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/first"),
             parent_submodule_path: PathBuf::from("vendor/first"),
-            entries: vec![entry.clone()],
+            entries: vec![entry.clone()].into(),
             selected_ix: 0,
         },
     );
@@ -1125,7 +1128,7 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
             repo_id: RepoId(1),
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/second"),
             parent_submodule_path: PathBuf::from("vendor/second"),
-            entries: vec![entry],
+            entries: vec![entry].into(),
             selected_ix: 0,
         },
     );
@@ -1213,6 +1216,7 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
         path: parent_path.clone(),
         mode: SubmoduleDiffSummaryMode::Worktree,
         status: Some(SubmoduleStatus::HeadMismatch),
+        checkout_available: true,
         commit_id: None,
         parent_commit_id: None,
         checked_out_head: Some(CommitId("old-head".into())),
@@ -1235,7 +1239,8 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
             kind: FileStatusKind::Modified,
             target: inline_target.clone(),
             section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-        }],
+        }]
+        .into(),
         selected_ix: 0,
         target: inline_target.clone(),
         rev: 1,
@@ -1266,6 +1271,7 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
                 path: parent_path,
                 mode: SubmoduleDiffSummaryMode::Worktree,
                 status: Some(SubmoduleStatus::UpToDate),
+                checkout_available: true,
                 commit_id: None,
                 parent_commit_id: None,
                 checked_out_head: Some(CommitId("new-head".into())),
@@ -3601,7 +3607,8 @@ fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
             kind: FileStatusKind::Modified,
             target: inline_target.clone(),
             section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-        }],
+        }]
+        .into(),
         selected_ix: 0,
         target: inline_target.clone(),
         rev: 1,
@@ -3699,7 +3706,8 @@ fn retiring_a_worktrees_inline_diff_leaves_the_commit_diff_behind_it_intact() {
             kind: FileStatusKind::Modified,
             target: inline_target.clone(),
             section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-        }],
+        }]
+        .into(),
         selected_ix: 0,
         target: inline_target,
         rev: 1,
@@ -3939,7 +3947,7 @@ fn a_rescan_re_resolves_an_open_worktree_diff_against_the_new_file_list() {
                 },
                 submodule_repo_path: worktree.clone(),
                 parent_submodule_path: worktree.clone(),
-                entries,
+                entries: entries.into(),
                 selected_ix,
                 target,
                 rev: 1,
@@ -4103,7 +4111,7 @@ fn a_rescan_keeps_the_worktree_diff_on_the_half_it_was_opened_from() {
         },
         submodule_repo_path: worktree.clone(),
         parent_submodule_path: worktree.clone(),
-        entries,
+        entries: entries.into(),
         selected_ix: unstaged_ix,
         target,
         rev: 1,
@@ -4235,7 +4243,7 @@ fn worktree_inline_diff_fixture(
         },
         submodule_repo_path: worktree.clone(),
         parent_submodule_path: worktree.clone(),
-        entries,
+        entries: entries.into(),
         selected_ix,
         target,
         rev: 1,
@@ -4329,7 +4337,8 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
                     kind: FileStatusKind::Modified,
                     target: inline_target.clone(),
                     section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
-                }],
+                }]
+                .into(),
                 selected_ix: 0,
                 target: inline_target.clone(),
                 rev: 1,
@@ -4427,7 +4436,7 @@ fn a_submodule_inline_diff_survives_the_worktree_invariant() {
         origin: crate::model::ForeignDiffOrigin::Submodule,
         submodule_repo_path: submodule_path.clone(),
         parent_submodule_path: submodule_path.clone(),
-        entries: Vec::new(),
+        entries: Vec::new().into(),
         selected_ix: 0,
         target: inline_target.clone(),
         rev: 1,
@@ -4670,4 +4679,61 @@ fn file_history_actions_resolve_paths_before_opening_content_or_changes() {
             "navigation waits for path resolution"
         );
     }
+}
+
+/// `Arc::make_mut` re-clones the state this lands in on every later dispatch,
+/// so the reducer must share the caller's list rather than copy it.
+#[test]
+fn open_inline_submodule_diff_shares_the_callers_entry_list() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let target = gitcomet_core::domain::DiffTarget::CommitRange {
+        from_commit_id: CommitId("aaaa".into()),
+        to_commit_id: Some(CommitId("bbbb".into())),
+        path: Some(PathBuf::from("src/lib.rs")),
+    };
+    let entries: Arc<[crate::model::InlineSubmoduleDiffEntry]> = (0..512)
+        .map(|ix| crate::model::InlineSubmoduleDiffEntry {
+            path: PathBuf::from(format!("src/file_{ix}.rs")),
+            kind: FileStatusKind::Modified,
+            target: target.clone(),
+            section: crate::model::InlineSubmoduleDiffSection::Range(
+                gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
+            ),
+        })
+        .collect();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
+            repo_id: RepoId(1),
+            submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
+            parent_submodule_path: PathBuf::from("vendor/submodule"),
+            entries: Arc::clone(&entries),
+            selected_ix: 3,
+        },
+    );
+
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("inline submodule diff should be open");
+    assert_eq!(inline.selected_ix, 3);
+    assert!(
+        Arc::ptr_eq(&entries, &inline.entries),
+        "the reducer must store the caller's entries, not a copy"
+    );
 }

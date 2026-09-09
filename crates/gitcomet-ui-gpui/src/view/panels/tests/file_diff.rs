@@ -68,7 +68,8 @@ index 1111111..2222222 100644
                         section: gitcomet_state::model::InlineSubmoduleDiffSection::Range(
                             gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
                         ),
-                    }],
+                    }]
+                    .into(),
                     selected_ix: 0,
                     target: target.clone(),
                     rev: 1,

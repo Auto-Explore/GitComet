@@ -7,13 +7,13 @@ use super::util::{
 };
 use crate::model::{
     AppState, ConflictFileLoadMode, DiagnosticKind, FileEditReturnView, InlineSubmoduleDiffEntry,
-    InlineSubmoduleDiffSection, InlineSubmoduleDiffState, Loadable, RepoId, RepoState,
-    ViewHistoryEntry,
+    InlineSubmoduleDiffState, Loadable, RepoId, RepoState, ViewHistoryEntry,
+    submodule_inline_diff_entries,
 };
 use crate::msg::Effect;
 use gitcomet_core::domain::{
     Diff, DiffArea, DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText, SubmoduleDiffRange, SubmoduleDiffSummary,
+    FileDiffText, SubmoduleDiffSummary,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::services::GitRepository;
@@ -42,74 +42,6 @@ fn next_inline_submodule_diff_rev(repo_state: &mut RepoState) -> u64 {
         .wrapping_add(1);
     repo_state.diff_state.inline_submodule_diff_rev = rev;
     rev
-}
-
-fn inline_submodule_entries_from_range(
-    range: &SubmoduleDiffRange,
-) -> impl Iterator<Item = InlineSubmoduleDiffEntry> + '_ {
-    let range_commits = match (range.from.as_ref(), range.to.as_ref()) {
-        (Some(from_commit_id), Some(to_commit_id)) => Some((from_commit_id, to_commit_id)),
-        _ => None,
-    };
-
-    range.changes.iter().filter_map(move |change| {
-        let (from_commit_id, to_commit_id) = range_commits.as_ref()?;
-        Some(InlineSubmoduleDiffEntry {
-            path: change.path.clone(),
-            kind: change.kind,
-            target: DiffTarget::CommitRange {
-                from_commit_id: (*from_commit_id).clone(),
-                to_commit_id: Some((*to_commit_id).clone()),
-                path: Some(change.path.clone()),
-            },
-            section: InlineSubmoduleDiffSection::Range(range.kind),
-        })
-    })
-}
-
-fn inline_submodule_entries_from_summary(
-    summary: &SubmoduleDiffSummary,
-) -> Vec<InlineSubmoduleDiffEntry> {
-    let capacity = summary
-        .ranges
-        .iter()
-        .map(|range| range.changes.len())
-        .sum::<usize>()
-        + summary.live_staged.len()
-        + summary.live_unstaged.len();
-    let mut entries = Vec::with_capacity(capacity);
-    for range in &summary.ranges {
-        entries.extend(inline_submodule_entries_from_range(range));
-    }
-    entries.extend(
-        summary
-            .live_staged
-            .iter()
-            .map(|change| InlineSubmoduleDiffEntry {
-                path: change.path.clone(),
-                kind: change.kind,
-                target: DiffTarget::WorkingTree {
-                    path: change.path.clone(),
-                    area: DiffArea::Staged,
-                },
-                section: InlineSubmoduleDiffSection::LiveStaged,
-            }),
-    );
-    entries.extend(
-        summary
-            .live_unstaged
-            .iter()
-            .map(|change| InlineSubmoduleDiffEntry {
-                path: change.path.clone(),
-                kind: change.kind,
-                target: DiffTarget::WorkingTree {
-                    path: change.path.clone(),
-                    area: DiffArea::Unstaged,
-                },
-                section: InlineSubmoduleDiffSection::LiveUnstaged,
-            }),
-    );
-    entries
 }
 
 fn inline_submodule_entry_index(
@@ -702,7 +634,7 @@ pub(super) fn open_inline_submodule_diff(
     origin: crate::model::ForeignDiffOrigin,
     submodule_repo_path: std::path::PathBuf,
     parent_submodule_path: std::path::PathBuf,
-    entries: Vec<InlineSubmoduleDiffEntry>,
+    entries: Arc<[InlineSubmoduleDiffEntry]>,
     selected_ix: usize,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
@@ -1039,8 +971,12 @@ pub(super) fn submodule_summary_loaded(
             repo_state.diff_state.submodule_summary_rev.wrapping_add(1);
         repo_state.diff_state.submodule_summary = match result {
             Ok(summary) => {
-                let next_entries = inline_submodule_entries_from_summary(&summary);
                 let had_inline = repo_state.diff_state.inline_submodule_diff.is_some();
+                let next_entries = if had_inline {
+                    submodule_inline_diff_entries(&summary)
+                } else {
+                    Vec::new()
+                };
                 let selected_inline = repo_state
                     .diff_state
                     .inline_submodule_diff
@@ -1054,7 +990,7 @@ pub(super) fn submodule_summary_loaded(
                     let load_plan = inline_submodule_selected_diff_load_plan(&inline_target);
                     let inline_rev = next_inline_submodule_diff_rev(repo_state);
                     if let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() {
-                        inline.entries = next_entries;
+                        inline.entries = next_entries.into();
                         inline.selected_ix = selected_ix;
                         inline.target = inline_target;
                         inline.rev = inline_rev;

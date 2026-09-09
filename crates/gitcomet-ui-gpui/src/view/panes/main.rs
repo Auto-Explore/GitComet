@@ -14,6 +14,7 @@ mod file_editor;
 mod helpers;
 mod interactive_rebase;
 mod preview;
+pub(in crate::view) mod submodule_summary;
 
 #[cfg(feature = "benchmarks")]
 #[allow(unused_imports)]

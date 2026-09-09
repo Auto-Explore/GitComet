@@ -1199,6 +1199,74 @@ pub struct InlineSubmoduleDiffEntry {
     pub section: InlineSubmoduleDiffSection,
 }
 
+fn inline_submodule_entries_from_range(
+    range: &SubmoduleDiffRange,
+) -> impl Iterator<Item = InlineSubmoduleDiffEntry> + '_ {
+    let range_commits = match (range.from.as_ref(), range.to.as_ref()) {
+        (Some(from_commit_id), Some(to_commit_id)) => Some((from_commit_id, to_commit_id)),
+        _ => None,
+    };
+
+    range.changes.iter().filter_map(move |change| {
+        let (from_commit_id, to_commit_id) = range_commits.as_ref()?;
+        Some(InlineSubmoduleDiffEntry {
+            path: change.path.clone(),
+            kind: change.kind,
+            target: DiffTarget::CommitRange {
+                from_commit_id: (*from_commit_id).clone(),
+                to_commit_id: Some((*to_commit_id).clone()),
+                path: Some(change.path.clone()),
+            },
+            section: InlineSubmoduleDiffSection::Range(range.kind),
+        })
+    })
+}
+
+pub fn submodule_inline_diff_entries(
+    summary: &SubmoduleDiffSummary,
+) -> Vec<InlineSubmoduleDiffEntry> {
+    let capacity = summary
+        .ranges
+        .iter()
+        .map(|range| range.changes.len())
+        .sum::<usize>()
+        + summary.live_staged.len()
+        + summary.live_unstaged.len();
+    let mut entries = Vec::with_capacity(capacity);
+    for range in &summary.ranges {
+        entries.extend(inline_submodule_entries_from_range(range));
+    }
+    entries.extend(
+        summary
+            .live_staged
+            .iter()
+            .map(|change| InlineSubmoduleDiffEntry {
+                path: change.path.clone(),
+                kind: change.kind,
+                target: DiffTarget::WorkingTree {
+                    path: change.path.clone(),
+                    area: DiffArea::Staged,
+                },
+                section: InlineSubmoduleDiffSection::LiveStaged,
+            }),
+    );
+    entries.extend(
+        summary
+            .live_unstaged
+            .iter()
+            .map(|change| InlineSubmoduleDiffEntry {
+                path: change.path.clone(),
+                kind: change.kind,
+                target: DiffTarget::WorkingTree {
+                    path: change.path.clone(),
+                    area: DiffArea::Unstaged,
+                },
+                section: InlineSubmoduleDiffSection::LiveUnstaged,
+            }),
+    );
+    entries
+}
+
 /// The inline-diff entries for a linked worktree's changed files, in the order
 /// the rows are rendered: staged first, then unstaged, the same order the
 /// working-tree pane uses.
@@ -1247,7 +1315,7 @@ pub struct InlineSubmoduleDiffState {
     pub origin: ForeignDiffOrigin,
     pub submodule_repo_path: PathBuf,
     pub parent_submodule_path: PathBuf,
-    pub entries: Vec<InlineSubmoduleDiffEntry>,
+    pub entries: Arc<[InlineSubmoduleDiffEntry]>,
     pub selected_ix: usize,
     pub target: DiffTarget,
     pub rev: u64,

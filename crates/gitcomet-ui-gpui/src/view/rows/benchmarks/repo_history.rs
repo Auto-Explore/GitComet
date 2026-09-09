@@ -540,7 +540,7 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 detached.hash(&mut h);
                 is_active.hash(&mut h);
             }
-            BranchSidebarRow::SubmoduleItem { path } => {
+            BranchSidebarRow::SubmoduleItem { path, .. } => {
                 let path_len = path
                     .to_str()
                     .map_or_else(|| path.to_string_lossy().len(), str::len);

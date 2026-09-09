@@ -745,9 +745,10 @@ fn refresh_worktree_inline_diff_entries(
 
     let inline = repo_state.diff_state.inline_submodule_diff.as_mut()?;
     let target_moved = entries[selected].target != inline.target;
-    let changed =
-        entries != inline.entries || selected != inline.selected_ix || origin != inline.origin;
-    inline.entries = entries;
+    let changed = entries[..] != inline.entries[..]
+        || selected != inline.selected_ix
+        || origin != inline.origin;
+    inline.entries = entries.into();
     inline.selected_ix = selected;
     inline.origin = origin;
     if changed {

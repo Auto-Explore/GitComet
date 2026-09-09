@@ -1295,6 +1295,14 @@ impl GitRepository for GixRepo {
         self.submodule_diff_summary_impl(target)
     }
 
+    fn submodule_diff_summary_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<SubmoduleDiffSummary> {
+        self.submodule_diff_summary_cancellable_impl(target, cancellation)
+    }
+
     fn check_submodule_add_trust(&self, url: &str, path: &Path) -> Result<SubmoduleTrustDecision> {
         self.check_submodule_add_trust_impl(url, path, RemoteUrlPolicy::default())
     }
