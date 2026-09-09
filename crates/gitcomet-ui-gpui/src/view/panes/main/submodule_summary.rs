@@ -37,22 +37,25 @@ struct SummaryRows {
 }
 
 /// Carry a scroll position across a rebuild. `ListState::scroll_to` keeps an
-/// in-range `offset_in_item` verbatim, so drop it when the row shape changed.
+/// in-range `offset_in_item` verbatim, so only `Change` rows may carry one:
+/// they are the single fixed-height kind, while headers grow and shrink with
+/// their status and hashes.
 fn restored_scroll_top(
     mut top: gpui::ListOffset,
     previous: &SummaryRows,
     next: &SummaryRows,
 ) -> gpui::ListOffset {
     let ix = top.item_ix.min(next.rows.len().saturating_sub(1));
-    let same_shape = previous
+    let fixed_height = previous
         .rows
         .get(top.item_ix)
         .zip(next.rows.get(ix))
         .is_some_and(|(before, after)| {
-            std::mem::discriminant(before) == std::mem::discriminant(after)
+            matches!(before, SummaryRow::Change { .. })
+                && matches!(after, SummaryRow::Change { .. })
         });
     top.item_ix = ix;
-    if !same_shape {
+    if !fixed_height {
         top.offset_in_item = px(0.0);
     }
     top
@@ -121,6 +124,10 @@ pub(in crate::view) struct SubmoduleSummaryCache {
     ui_scale_percent: u32,
     #[cfg(test)]
     pub(in crate::view) rendered_rows: usize,
+    /// Counts trips through the rebuild path, so a test can prove a redraw
+    /// reuses the cache rather than re-deriving it.
+    #[cfg(test)]
+    pub(in crate::view) rebuilds: usize,
 }
 
 impl MainPaneView {
@@ -151,7 +158,6 @@ impl MainPaneView {
             }
         };
         let repo_id = repo.id;
-        let submodule_repo_path = Arc::new(repo.spec.workdir.join(&summary.path));
         let revision = repo.diff_state.submodule_summary_rev;
         let submodules_rev = repo.submodules_rev;
         let status = self
@@ -184,7 +190,15 @@ impl MainPaneView {
             && self.submodule_summary_cache.as_ref().is_some_and(|cache| {
                 cache.revision == revision && Arc::ptr_eq(&cache.presentation.summary, &summary)
             });
-        if !reusable {
+        // Joined only when the cache is rebuilt: on the reuse path every frame
+        // would otherwise allocate a `PathBuf` and throw it away.
+        let rebuilt_path = (!reusable).then(|| Arc::new(repo.spec.workdir.join(&summary.path)));
+        #[cfg(test)]
+        let rebuilds = self
+            .submodule_summary_cache
+            .as_ref()
+            .map_or(0, |cache| cache.rebuilds);
+        if let Some(submodule_repo_path) = rebuilt_path {
             let presentation = Arc::new(SummaryRows::new(summary));
             let previous = same_target.then(|| {
                 let cache = self.submodule_summary_cache.as_ref().unwrap();
@@ -211,6 +225,8 @@ impl MainPaneView {
                 ui_scale_percent,
                 #[cfg(test)]
                 rendered_rows: 0,
+                #[cfg(test)]
+                rebuilds: rebuilds + 1,
             });
         }
         let cache = self

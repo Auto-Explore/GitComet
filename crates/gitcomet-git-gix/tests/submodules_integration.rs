@@ -741,6 +741,10 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
         Some(&listed[0].recorded_head)
     );
     assert!(summary.ranges[0].unavailable_reason.is_some());
+    // A conflicted gitlink still has a usable checkout on disk, so the pointer
+    // ranges are unavailable while the working tree itself stays readable.
+    assert!(summary.checkout_available);
+    assert!(summary.checked_out_head.is_none());
 }
 
 #[test]

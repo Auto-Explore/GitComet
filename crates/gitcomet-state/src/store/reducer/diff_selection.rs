@@ -967,10 +967,15 @@ pub(super) fn submodule_summary_loaded(
             return Vec::new();
         }
 
-        repo_state.diff_state.submodule_summary_rev =
-            repo_state.diff_state.submodule_summary_rev.wrapping_add(1);
-        repo_state.diff_state.submodule_summary = match result {
+        match result {
             Ok(summary) => {
+                // An identical reload keeps the same `Arc` and revision: the UI
+                // caches a row per changed file against both, and rebuilding a
+                // large summary also discards every measured row height.
+                let unchanged = matches!(
+                    &repo_state.diff_state.submodule_summary,
+                    Loadable::Ready(existing) if **existing == summary
+                );
                 let had_inline = repo_state.diff_state.inline_submodule_diff.is_some();
                 let next_entries = if had_inline {
                     submodule_inline_diff_entries(&summary)
@@ -1005,13 +1010,19 @@ pub(super) fn submodule_summary_loaded(
                 } else if had_inline {
                     repo_state.diff_state.inline_submodule_diff = None;
                 }
-                Loadable::Ready(Arc::new(summary))
+                if !unchanged {
+                    repo_state.diff_state.submodule_summary_rev =
+                        repo_state.diff_state.submodule_summary_rev.wrapping_add(1);
+                    repo_state.diff_state.submodule_summary = Loadable::Ready(Arc::new(summary));
+                }
             }
             Err(e) => {
+                repo_state.diff_state.submodule_summary_rev =
+                    repo_state.diff_state.submodule_summary_rev.wrapping_add(1);
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+                repo_state.diff_state.submodule_summary = Loadable::Error(e.to_string());
             }
-        };
+        }
         repo_state.bump_diff_state_rev();
     }
     effects.into_vec()

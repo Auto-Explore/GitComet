@@ -309,10 +309,11 @@ fn summary_without_ranges(count: usize) -> SubmoduleDiffSummary {
     summary
 }
 
-/// A range header is several times taller than the 28px change row that can
-/// replace it at the same index.
+/// Only `Change` rows have a fixed height. Header heights move with the status
+/// badge, the load button and the hash inputs, so an offset measured against
+/// one is meaningless after a rebuild even when the kind is unchanged.
 #[test]
-fn restoring_scroll_drops_the_offset_when_the_row_at_that_index_changed_shape() {
+fn restoring_scroll_only_carries_the_offset_between_fixed_height_change_rows() {
     let with_ranges = SummaryRows::new(Arc::new(summary(4)));
     let without_ranges = SummaryRows::new(Arc::new(summary_without_ranges(4)));
     assert!(matches!(with_ranges.rows[1], SummaryRow::RangeHeader(_)));
@@ -329,9 +330,25 @@ fn restoring_scroll_drops_the_offset_when_the_row_at_that_index_changed_shape() 
     assert_eq!(swapped.item_ix, 1);
     assert_eq!(swapped.offset_in_item, px(0.0));
 
-    let kept = restored_scroll_top(top, &with_ranges, &with_ranges);
-    assert_eq!(kept.item_ix, 1);
-    assert_eq!(kept.offset_in_item, px(90.0));
+    let same_kind = restored_scroll_top(top, &with_ranges, &with_ranges);
+    assert_eq!(
+        same_kind.offset_in_item,
+        px(0.0),
+        "a header keeps its index but never its offset: its height is not fixed"
+    );
+
+    let change_ix = with_ranges
+        .rows
+        .iter()
+        .position(|row| matches!(row, SummaryRow::Change { .. }))
+        .expect("a change row");
+    let change_top = gpui::ListOffset {
+        item_ix: change_ix,
+        offset_in_item: px(9.0),
+    };
+    let kept = restored_scroll_top(change_top, &with_ranges, &with_ranges);
+    assert_eq!(kept.item_ix, change_ix);
+    assert_eq!(kept.offset_in_item, px(9.0));
 }
 
 #[test]
@@ -393,6 +410,61 @@ fn summary_redraws_reuse_the_cached_repo_path_and_entry_list(cx: &mut gpui::Test
         assert!(
             Arc::ptr_eq(&entries, &cache.presentation.entries),
             "redraws must not rebuild the inline entry list"
+        );
+        assert_eq!(
+            cache.rebuilds, 1,
+            "three redraws must not re-enter the rebuild path"
+        );
+    });
+
+    publish(&view, cx, RepoId(72), summary(2_001));
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let cache = pane.submodule_summary_cache.as_ref().unwrap();
+        assert_eq!(cache.rebuilds, 2, "a new summary must rebuild exactly once");
+        assert!(!Arc::ptr_eq(&path, &cache.submodule_repo_path));
+    });
+}
+
+/// The prepared rows are one per changed file, and `diff_view` is the only
+/// other place that drops them - so it cannot be the only place.
+#[gpui::test]
+fn leaving_the_diff_panel_releases_the_summary_cache(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    publish(&view, cx, RepoId(73), summary(1_000));
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .submodule_summary_cache
+                .is_some()
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            let mut state = (*view.store.snapshot()).clone();
+            state.repos[0].diff_state.diff_target = None;
+            let state = Arc::new(state);
+            view.store.replace_snapshot_for_test(Arc::clone(&state));
+            test_support::push_test_state(view, state, cx);
+        })
+    });
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .submodule_summary_cache
+                .is_none(),
+            "the summary rows must not outlive the diff panel"
         );
     });
 }

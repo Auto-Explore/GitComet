@@ -4737,3 +4737,109 @@ fn open_inline_submodule_diff_shares_the_callers_entry_list() {
         "the reducer must store the caller's entries, not a copy"
     );
 }
+
+/// The UI caches one prepared row per changed file against this `Arc` and rev,
+/// so a reload that produced the same summary must not invalidate either.
+#[test]
+fn reloading_an_identical_submodule_summary_keeps_the_arc_and_revision() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let path = PathBuf::from("vendor/submodule");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    };
+    let summary = || SubmoduleDiffSummary {
+        path: path.clone(),
+        mode: SubmoduleDiffSummaryMode::Worktree,
+        status: Some(SubmoduleStatus::HeadMismatch),
+        checkout_available: true,
+        commit_id: None,
+        parent_commit_id: None,
+        checked_out_head: Some(CommitId("head".into())),
+        ranges: vec![],
+        live_staged: vec![],
+        live_unstaged: vec![SubmoduleInnerChange {
+            path: PathBuf::from("src/lib.rs"),
+            kind: FileStatusKind::Modified,
+            additions: Some(1),
+            deletions: Some(1),
+        }],
+    };
+
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: std::sync::Arc::new(vec![FileStatus {
+            path: path.clone(),
+            kind: FileStatusKind::Modified,
+            conflict: None,
+        }]),
+        staged: std::sync::Arc::new(vec![]),
+    })));
+    repo_state.set_submodules(Loadable::Ready(vec![Submodule {
+        path: path.clone(),
+        recorded_head: CommitId("recorded".into()),
+        checked_out_head: Some(CommitId("head".into())),
+        status: SubmoduleStatus::HeadMismatch,
+    }]));
+    repo_state.set_diff_target(Some(target.clone()));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let load = |state: &mut AppState, repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>| {
+        reduce(
+            repos,
+            &id_alloc,
+            state,
+            Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+                repo_id: RepoId(1),
+                target: target.clone(),
+                result: Ok(summary()),
+            }),
+        );
+    };
+    let snapshot = |state: &AppState| {
+        let diff_state = &state.repos[0].diff_state;
+        let Loadable::Ready(summary) = &diff_state.submodule_summary else {
+            panic!("summary should be ready");
+        };
+        (Arc::clone(summary), diff_state.submodule_summary_rev)
+    };
+
+    load(&mut state, &mut repos);
+    let (first, first_rev) = snapshot(&state);
+
+    load(&mut state, &mut repos);
+    let (second, second_rev) = snapshot(&state);
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "an identical reload must keep the same Arc"
+    );
+    assert_eq!(first_rev, second_rev, "and the same revision");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+            repo_id: RepoId(1),
+            target: target.clone(),
+            result: Ok(SubmoduleDiffSummary {
+                status: Some(SubmoduleStatus::UpToDate),
+                ..summary()
+            }),
+        }),
+    );
+    let (third, third_rev) = snapshot(&state);
+    assert!(
+        !Arc::ptr_eq(&first, &third),
+        "a changed summary replaces it"
+    );
+    assert_ne!(first_rev, third_rev, "and bumps the revision");
+}

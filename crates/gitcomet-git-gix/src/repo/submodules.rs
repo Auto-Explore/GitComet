@@ -906,8 +906,9 @@ fn submodule_worktree_diff_summary(
     };
 
     let nested_workdir = repo_workdir_for_submodule_trust(repo).join(&summary_path);
-    // Reuse the repository `configured_submodule_row` already opened, so the
-    // summary's `checkout_available` agrees with the status it reports.
+    // Reuse the repository `configured_submodule_row` already opened rather than
+    // opening the same directory twice. Conflicted and uninitialised submodules
+    // return none, and still fall back to the on-disk checkout.
     let nested_repo = match configured_repo {
         Some(nested) => Some(nested),
         None => open_gitlink_repo(repo, &summary_path)?,

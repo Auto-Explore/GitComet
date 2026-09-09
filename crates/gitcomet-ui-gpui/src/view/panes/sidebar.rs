@@ -361,6 +361,25 @@ impl CollapsedPopoverRowsCache {
     }
 }
 
+/// Visible slice of a uniform-height popover list, with a viewport of overdraw
+/// on each side to cover the title and filter chrome above the rows.
+fn uniform_visible_range(
+    count: usize,
+    row_height: f32,
+    offset: f32,
+    viewport: f32,
+) -> Range<usize> {
+    if count == 0 || row_height <= 0.0 {
+        return 0..0;
+    }
+    let total = count as f32 * row_height;
+    let offset = offset.max(0.0).min((total - viewport).max(0.0));
+    let first = (((offset - viewport).max(0.0)) / row_height).floor() as usize;
+    let end = ((offset + viewport) / row_height).ceil() as usize;
+    let first = first.min(count);
+    first..end.min(count).max(first)
+}
+
 /// Unscaled height of one popover row, matching what the shared row renderer
 /// lays out for that variant.
 fn branch_sidebar_row_height_px(row: &BranchSidebarRow) -> f32 {
@@ -1390,9 +1409,25 @@ impl SidebarPaneView {
             };
             components::empty_state(theme, "Files", message).into_any_element()
         } else {
-            let rows = Self::render_file_browser_rows(self, 0..visible_rows.len(), window, cx);
-            // Match the branch-section popovers: intrinsic eager rows, with the
-            // enclosing popover panel owning the min/max bounds and scrolling.
+            // Virtualized like the branch-section popovers: only the visible
+            // slice becomes elements, with spacers standing in for the rest.
+            let scale = crate::ui_scale::UiScale::current(cx);
+            let panel_height = self.collapsed_popover_scroll.bounds().size.height;
+            let viewport = if scale.design_units_from_pixels(panel_height) > 1.0 {
+                panel_height
+            } else {
+                window.viewport_size().height
+            };
+            let range = uniform_visible_range(
+                visible_rows.len(),
+                FILE_BROWSER_ROW_HEIGHT_PX,
+                scale.design_units_from_pixels(-self.collapsed_popover_scroll.offset().y),
+                scale.design_units_from_pixels(viewport).max(1.0),
+            );
+            let before = scale.px(range.start as f32 * FILE_BROWSER_ROW_HEIGHT_PX);
+            let after =
+                scale.px((visible_rows.len() - range.end) as f32 * FILE_BROWSER_ROW_HEIGHT_PX);
+            let rows = Self::render_file_browser_rows(self, range, window, cx);
             div()
                 .debug_selector(|| "collapsed_file_browser_rows".to_string())
                 .flex()
@@ -1401,7 +1436,9 @@ impl SidebarPaneView {
                 .pb(px(6.0))
                 .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
                 .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+                .child(div().flex_shrink_0().h(before))
                 .children(rows)
+                .child(div().flex_shrink_0().h(after))
                 .into_any_element()
         };
 
@@ -1441,18 +1478,17 @@ impl SidebarPaneView {
             .collapsed_popover_rows_cache
             .as_ref()
             .expect("popover rows cached");
-        let factor = f32::from(scale.px(1.0));
         // The panel's own height once it has been laid out; the window is a safe
         // over-estimate for the first frame, before any bounds exist.
-        let panel_height = f32::from(self.collapsed_popover_scroll.bounds().size.height);
-        let viewport = if panel_height > 1.0 {
+        let panel_height = self.collapsed_popover_scroll.bounds().size.height;
+        let viewport = if scale.design_units_from_pixels(panel_height) > 1.0 {
             panel_height
         } else {
-            f32::from(window.viewport_size().height)
+            window.viewport_size().height
         };
         let range = cache.visible_range(
-            f32::from(-self.collapsed_popover_scroll.offset().y) / factor,
-            (viewport / factor).max(1.0),
+            scale.design_units_from_pixels(-self.collapsed_popover_scroll.offset().y),
+            scale.design_units_from_pixels(viewport).max(1.0),
         );
         let before = scale.px(cache.tops[range.start]);
         let after = scale.px(cache.tops[row_count] - cache.tops[range.end]);
@@ -2589,6 +2625,10 @@ impl SidebarPaneView {
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
 
+        #[cfg(test)]
+        {
+            this.rendered_rows += range.len();
+        }
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
         };

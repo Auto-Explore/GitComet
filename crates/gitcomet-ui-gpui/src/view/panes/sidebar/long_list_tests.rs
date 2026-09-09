@@ -322,3 +322,103 @@ fn cross_section_filter_popover_places_rows_using_both_row_heights(cx: &mut gpui
         );
     });
 }
+
+fn file_fixture(count: usize) -> Arc<AppState> {
+    let mut repo = RepoState::new_opening(
+        RepoId(81),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/gitcomet-long-sidebar"),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    repo.head_branch = Loadable::Ready("main".into());
+    repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
+    repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
+    repo.submodules = Loadable::Ready(Arc::new(Vec::new()));
+    repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
+    repo.file_browser.active = true;
+    repo.file_browser.entries = Loadable::Ready(Arc::new(
+        (0..count)
+            .map(|ix| gitcomet_core::domain::FileEntry {
+                name: format!("file_{ix:06}.txt"),
+                path: Arc::new(PathBuf::from(format!("file_{ix:06}.txt"))),
+                kind: gitcomet_core::domain::FileEntryKind::File,
+                depth: 0,
+            })
+            .collect(),
+    ));
+    repo.file_browser.bump_rev();
+    Arc::new(AppState {
+        active_repo: Some(repo.id),
+        repos: vec![repo],
+        ..Default::default()
+    })
+}
+
+/// The Files popover holds the most rows of any collapsed-rail section, so it
+/// is the one that must not build an element per row.
+#[gpui::test]
+fn collapsed_files_popover_renders_a_bounded_window(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+
+    for count in [1_000, 50_000] {
+        let state = file_fixture(count);
+        cx.update(|_window, app| {
+            view.update(app, |view, cx| {
+                view.store.replace_snapshot_for_test(Arc::clone(&state));
+                test_support::push_test_state(view, Arc::clone(&state), cx);
+                view.set_sidebar_collapsed(true, cx);
+                view.open_sidebar_collapsed_popover(CollapsedSidebarSection::Files, cx);
+                view.sidebar_pane.update(cx, |pane, cx| {
+                    pane.collapsed_popover_scroll
+                        .set_offset(point(px(0.0), px(0.0)));
+                    cx.notify();
+                });
+            })
+        });
+        test_support::redraw(cx);
+
+        cx.update(|_window, app| {
+            let rendered = pane.read(app).rendered_rows;
+            assert!(
+                rendered > 0 && rendered < 160,
+                "{count} files rendered {rendered} rows"
+            );
+        });
+        assert!(
+            cx.debug_bounds("collapsed_file_browser_rows").is_some(),
+            "{count}: popover row band missing"
+        );
+        assert!(
+            cx.debug_bounds("file_browser_row_0").is_some(),
+            "{count}: first row missing"
+        );
+
+        let max = cx.update(|_window, app| pane.read(app).collapsed_popover_scroll.max_offset().y);
+        assert!(max > px(0.0), "{count} files must overflow the popover");
+        cx.update(|_window, app| {
+            pane.update(app, |pane, cx| {
+                pane.collapsed_popover_scroll
+                    .set_offset(point(px(0.0), -max));
+                cx.notify();
+            })
+        });
+        test_support::redraw(cx);
+
+        assert!(
+            cx.debug_bounds("file_browser_row_0").is_none(),
+            "{count}: the first row must leave the window after scrolling to the end"
+        );
+        cx.update(|_window, app| {
+            let rendered = pane.read(app).rendered_rows;
+            assert!(
+                rendered > 0 && rendered < 160,
+                "{count} files rendered {rendered} rows at the end"
+            );
+        });
+    }
+}
