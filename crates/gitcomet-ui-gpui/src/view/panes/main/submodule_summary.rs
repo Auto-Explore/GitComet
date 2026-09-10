@@ -760,7 +760,9 @@ impl MainPaneView {
         let mut row = div()
             .id(("submodule_change", row_ix))
             .debug_selector(move || format!("submodule_change_{row_ix}"))
-            .h(summary_change_row_height(crate::ui_scale::UiScale::current(cx)))
+            .h(summary_change_row_height(
+                crate::ui_scale::UiScale::current(cx),
+            ))
             .px_2()
             .py_1()
             .rounded(px(theme.radii.row))
