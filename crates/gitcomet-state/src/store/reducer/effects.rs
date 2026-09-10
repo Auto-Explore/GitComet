@@ -2454,12 +2454,12 @@ pub(super) fn uncommitted_line_stats_loaded(
         if let Ok(next) = result {
             repo_state.set_uncommitted_line_stats(Loadable::Ready(std::sync::Arc::new(next)));
         }
-        if repo_state
-            .loads_in_flight
-            .finish(RepoLoadsInFlight::UNCOMMITTED_LINE_STATS)
-        {
-            effects.push(Effect::LoadUncommittedLineStats { repo_id });
-        }
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::UNCOMMITTED_LINE_STATS,
+            Effect::LoadUncommittedLineStats { repo_id },
+            &mut effects,
+        );
     }
     effects
 }

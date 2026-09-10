@@ -6307,6 +6307,19 @@ fn status_navigation_order_matches_the_drawn_rows_in_a_tree(cx: &mut gpui::TestA
             "prev/next must visit files in the order the rows are drawn"
         );
         assert_eq!(drawn.len(), 3, "and the comparison is not two empty lists");
+        for (position, path) in drawn.iter().enumerate() {
+            assert_eq!(
+                pane.status_path_display_position(StatusSection::CombinedUnstaged, path),
+                Some(position)
+            );
+        }
+        assert_eq!(
+            pane.status_path_display_position(
+                StatusSection::CombinedUnstaged,
+                std::path::Path::new("missing")
+            ),
+            None
+        );
     });
 }
 

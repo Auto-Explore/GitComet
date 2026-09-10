@@ -617,6 +617,16 @@ pub trait GitRepository: Send + Sync {
         cancellation.check_cancelled()?;
         Ok(stats)
     }
+    /// Count the files from a status snapshot the caller just collected, avoiding
+    /// another worktree traversal. Contents are read at call time, as with status.
+    fn uncommitted_line_stats_for_status_cancellable(
+        &self,
+        _status: &RepoStatus,
+        cancellation: &CancellationToken,
+    ) -> Result<UncommittedLineStats> {
+        self.uncommitted_line_stats_cancellable(cancellation)
+    }
+
     /// Full `%B` messages of the given commits, in input order. Message-only
     /// on purpose: callers like the cherry-pick editor need nothing else, and
     /// implementations should skip the per-commit tree diff `commit_details`

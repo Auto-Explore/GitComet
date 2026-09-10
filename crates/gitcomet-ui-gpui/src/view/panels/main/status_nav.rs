@@ -387,11 +387,12 @@ impl MainPaneView {
             AdjacentDiffFileTarget::WorkingTree {
                 section,
                 area,
-                target_ix,
+                target_ix: _,
                 path,
                 is_conflicted,
             } => {
                 self.clear_status_multi_selection(repo_id, cx);
+                self.scroll_status_section_to_path(section, &path, cx);
                 if is_conflicted {
                     self.store
                         .dispatch(Msg::SelectConflictDiff { repo_id, path });
@@ -401,7 +402,6 @@ impl MainPaneView {
                         target: DiffTarget::WorkingTree { path, area },
                     });
                 }
-                self.scroll_status_section_to_ix(section, target_ix, cx);
             }
             AdjacentDiffFileTarget::Commit {
                 commit_id,

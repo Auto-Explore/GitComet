@@ -723,7 +723,8 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let submodule_repo_path = Arc::clone(submodule_repo_path);
-        let (icon, icon_color) = crate::view::rows::file_row_icon(&change.path, change.kind, &theme);
+        let (icon, icon_color) =
+            crate::view::rows::file_row_icon(&change.path, change.kind, &theme);
         // The change kind rides the row wash and a badge on the icon's corner.
         let tint = crate::view::rows::file_kind_row_tint(change.kind, &theme);
         let badge = crate::view::rows::file_row_kind_badge(change.kind, &theme);

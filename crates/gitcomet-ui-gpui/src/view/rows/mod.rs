@@ -364,8 +364,8 @@ fn commit_file_type_sort_key(path: &std::path::Path) -> String {
 }
 
 fn compare_commit_file_paths(
-    left: &(usize, String),
-    right: &(usize, String),
+    left: &(usize, String, String),
+    right: &(usize, String, String),
     files: &[gitcomet_core::domain::CommitFileChange],
 ) -> std::cmp::Ordering {
     left.1
@@ -379,21 +379,29 @@ fn compare_commit_file_paths(
         .then_with(|| left.0.cmp(&right.0))
 }
 
-/// Display order for one status section. Status entries carry no edit stats, so
-/// the edit-size modes degrade to the path order the comparator already falls
-/// back to when a file's counts are unknown.
+/// Display order for one status section. Edit-size sorts use the lane's stats,
+/// placing unknown counts last and breaking ties by path.
 pub(in crate::view) fn status_section_sorted_indexes(
     entries: &[gitcomet_core::domain::FileStatus],
     indexes: &[usize],
     sort: CommitFileSort,
     stats: Option<&rustc_hash::FxHashMap<std::path::PathBuf, gitcomet_core::domain::LineStats>>,
 ) -> std::sync::Arc<[usize]> {
-    let mut sortable: Vec<(usize, String)> = indexes
+    let mut sortable: Vec<(usize, String, String)> = indexes
         .iter()
         .filter_map(|ix| {
-            entries
-                .get(*ix)
-                .map(|entry| (*ix, commit_file_path_sort_key(&entry.path)))
+            entries.get(*ix).map(|entry| {
+                (
+                    *ix,
+                    commit_file_path_sort_key(&entry.path),
+                    matches!(
+                        sort,
+                        CommitFileSort::FileTypeAscending | CommitFileSort::FileTypeDescending
+                    )
+                    .then(|| commit_file_type_sort_key(&entry.path))
+                    .unwrap_or_default(),
+                )
+            })
         })
         .collect();
 
@@ -404,7 +412,7 @@ pub(in crate::view) fn status_section_sorted_indexes(
         let stats = stats?.get(&entry.path)?;
         Some(u64::from(stats.additions?) + u64::from(stats.deletions?))
     };
-    let by_path = |left: &(usize, String), right: &(usize, String)| {
+    let by_path = |left: &(usize, String, String), right: &(usize, String, String)| {
         left.1
             .cmp(&right.1)
             .then_with(|| {
@@ -420,14 +428,14 @@ pub(in crate::view) fn status_section_sorted_indexes(
         CommitFileSort::PathAscending => by_path(left, right),
         CommitFileSort::PathDescending => by_path(left, right).reverse(),
         CommitFileSort::FileTypeAscending | CommitFileSort::FileTypeDescending => {
-            let left_type = commit_file_type_sort_key(&entries[left.0].path);
-            let right_type = commit_file_type_sort_key(&entries[right.0].path);
+            let left_type = &left.2;
+            let right_type = &right.2;
             // Only the group order flips; inside a group the path stays A→Z, the
             // same way a descending edit-size sort still falls back to path order.
             let type_order = if sort == CommitFileSort::FileTypeAscending {
-                left_type.cmp(&right_type)
+                left_type.cmp(right_type)
             } else {
-                right_type.cmp(&left_type)
+                right_type.cmp(left_type)
             };
             type_order.then_with(|| by_path(left, right))
         }
@@ -449,7 +457,7 @@ pub(in crate::view) fn status_section_sorted_indexes(
     });
     sortable
         .into_iter()
-        .map(|(ix, _)| ix)
+        .map(|(ix, _, _)| ix)
         .collect::<Vec<_>>()
         .into()
 }
@@ -472,25 +480,36 @@ fn build_commit_file_projection(
         }
     }
 
-    let mut sortable: Vec<(usize, String)> = files
+    let mut sortable: Vec<(usize, String, String)> = files
         .iter()
         .enumerate()
         .filter(|(_, file)| filter.matches(file.kind))
-        .map(|(source_ix, file)| (source_ix, commit_file_path_sort_key(&file.path)))
+        .map(|(source_ix, file)| {
+            (
+                source_ix,
+                commit_file_path_sort_key(&file.path),
+                matches!(
+                    sort,
+                    CommitFileSort::FileTypeAscending | CommitFileSort::FileTypeDescending
+                )
+                .then(|| commit_file_type_sort_key(&file.path))
+                .unwrap_or_default(),
+            )
+        })
         .collect();
 
     sortable.sort_by(|left, right| match sort {
         CommitFileSort::PathAscending => compare_commit_file_paths(left, right, files),
         CommitFileSort::PathDescending => compare_commit_file_paths(left, right, files).reverse(),
         CommitFileSort::FileTypeAscending | CommitFileSort::FileTypeDescending => {
-            let left_type = commit_file_type_sort_key(&files[left.0].path);
-            let right_type = commit_file_type_sort_key(&files[right.0].path);
+            let left_type = &left.2;
+            let right_type = &right.2;
             // Only the group order flips; inside a group the path stays A→Z, the
             // same way a descending edit-size sort still falls back to path order.
             let type_order = if sort == CommitFileSort::FileTypeAscending {
-                left_type.cmp(&right_type)
+                left_type.cmp(right_type)
             } else {
-                right_type.cmp(&left_type)
+                right_type.cmp(left_type)
             };
             type_order.then_with(|| compare_commit_file_paths(left, right, files))
         }
@@ -516,7 +535,7 @@ fn build_commit_file_projection(
     CommitFileProjection {
         source_indices: sortable
             .into_iter()
-            .map(|(source_ix, _)| source_ix)
+            .map(|(source_ix, _, _)| source_ix)
             .collect::<Vec<_>>()
             .into(),
         counts,
@@ -781,7 +800,10 @@ pub(in crate::view) fn file_kind_row_tint(
             theme.colors.status.danger.foreground,
             row_tint_alpha(theme.is_dark),
         ),
-        FileStatusKind::Renamed => (theme.colors.accent.foreground, row_tint_alpha(theme.is_dark)),
+        FileStatusKind::Renamed => (
+            theme.colors.accent.foreground,
+            row_tint_alpha(theme.is_dark),
+        ),
         // Louder than the rest: a conflict is the one kind that blocks you.
         FileStatusKind::Conflicted => (
             theme.colors.status.danger.foreground,
@@ -910,11 +932,7 @@ pub(in crate::view) fn file_row_icon_slot(
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(svg_icon(
-                        badge_icon,
-                        badge_color,
-                        scaled(FILE_ROW_BADGE_PX),
-                    )),
+                    .child(svg_icon(badge_icon, badge_color, scaled(FILE_ROW_BADGE_PX))),
             )
         })
 }
@@ -1256,8 +1274,7 @@ mod tests {
                 assert!(tint.alpha < 1.0, "{kind:?} tint must stay translucent");
 
                 let resting = tinted_row_bg(theme.colors.surface.canvas, Some(tint));
-                let hovered =
-                    tinted_row_bg(theme.colors.interaction.hover_background, Some(tint));
+                let hovered = tinted_row_bg(theme.colors.interaction.hover_background, Some(tint));
                 let pressed =
                     tinted_row_bg(theme.colors.interaction.pressed_background, Some(tint));
 
@@ -1619,7 +1636,12 @@ mod tests {
             commit_file("src/main.rs", FileStatusKind::Modified, Some(1), Some(1)),
             commit_file("Cargo.toml", FileStatusKind::Modified, Some(1), Some(1)),
             commit_file("src/ui/app.ts", FileStatusKind::Modified, Some(1), Some(1)),
-            commit_file("src/core/lib.RS", FileStatusKind::Modified, Some(1), Some(1)),
+            commit_file(
+                "src/core/lib.RS",
+                FileStatusKind::Modified,
+                Some(1),
+                Some(1),
+            ),
         ];
 
         let ascending = build_commit_file_projection(

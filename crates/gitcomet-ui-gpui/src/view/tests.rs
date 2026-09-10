@@ -5526,3 +5526,61 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         "right-clicking a branch group must not toggle it, got {collapsed_after:?}"
     );
 }
+
+#[test]
+fn reconciliation_releases_vanished_selection_but_preserves_intentional_empty_selection() {
+    let status = RepoStatus {
+        staged: Default::default(),
+        unstaged: Default::default(),
+    };
+    for use_repo in [false, true] {
+        let mut selection = StatusMultiSelection {
+            explicit_section: Some(StatusSection::Staged),
+            staged: vec!["gone.txt".into()],
+            ..Default::default()
+        };
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::new(),
+            },
+        );
+        repo.worktree_status = Loadable::Ready(Arc::clone(&status.unstaged));
+        repo.staged_status = Loadable::Ready(Arc::clone(&status.staged));
+        if use_repo {
+            reconcile_status_multi_selection_with_repo(&mut selection, &repo);
+        } else {
+            reconcile_status_multi_selection(&mut selection, &status);
+        }
+        assert!(selection.is_empty());
+        assert_eq!(selection.explicit_section, None);
+        selection.explicit_section = Some(StatusSection::Staged);
+        if use_repo {
+            reconcile_status_multi_selection_with_repo(&mut selection, &repo);
+        } else {
+            reconcile_status_multi_selection(&mut selection, &status);
+        }
+        assert_eq!(selection.explicit_section, Some(StatusSection::Staged));
+    }
+}
+
+#[test]
+fn untracked_content_revision_ignores_line_stats() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::new(),
+        },
+    );
+    let untracked = status_section_content_rev(&repo, StatusSection::Untracked);
+    let unstaged = status_section_content_rev(&repo, StatusSection::Unstaged);
+    repo.unstaged_line_stats_rev += 1;
+    assert_eq!(
+        status_section_content_rev(&repo, StatusSection::Untracked),
+        untracked
+    );
+    assert_ne!(
+        status_section_content_rev(&repo, StatusSection::Unstaged),
+        unstaged
+    );
+}

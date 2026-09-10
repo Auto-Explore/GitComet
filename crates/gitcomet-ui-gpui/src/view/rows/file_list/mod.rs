@@ -196,7 +196,7 @@ impl FileListPlan {
         if self.row_ix_for_ordinal(ordinal).is_some() {
             return Vec::new();
         }
-        let Some(position) = self.ordered().iter().position(|value| value == ordinal.0) else {
+        let Some(position) = self.display_position(ordinal) else {
             return Vec::new();
         };
         collapsed_spans

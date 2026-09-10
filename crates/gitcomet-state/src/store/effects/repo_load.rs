@@ -1056,7 +1056,10 @@ pub(super) fn schedule_load_worktree_dirty(
                         let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
                         // Like the file lists, only the selected worktree pays.
                         let line_stats = if keep_files {
-                            match handle.uncommitted_line_stats_cancellable(&cancellation) {
+                            match handle.uncommitted_line_stats_for_status_cancellable(
+                                &status,
+                                &cancellation,
+                            ) {
                                 Ok(stats) => stats,
                                 // Like the status read above: a cancelled scan
                                 // stops the walk rather than reporting a

@@ -16,11 +16,20 @@ impl super::GixRepo {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<UncommittedLineStats> {
+        let entries = self.worktree_status_cancellable_impl(cancellation)?;
+        self.line_stats_for_entries_impl(&entries, cancellation)
+    }
+
+    pub(super) fn line_stats_for_entries_impl(
+        &self,
+        entries: &[FileStatus],
+        cancellation: &CancellationToken,
+    ) -> Result<UncommittedLineStats> {
         cancellation.check_cancelled()?;
         let repo = self.repo();
         let staged = staged_line_stats(&repo, cancellation)?;
         cancellation.check_cancelled()?;
-        let unstaged = unstaged_line_stats(self, &repo, cancellation)?;
+        let unstaged = unstaged_line_stats(self, &repo, entries, cancellation)?;
         Ok(UncommittedLineStats { staged, unstaged })
     }
 }
@@ -100,12 +109,10 @@ fn staged_line_stats(
 fn unstaged_line_stats(
     gix_repo: &super::GixRepo,
     repo: &gix::Repository,
+    entries: &[FileStatus],
     cancellation: &CancellationToken,
 ) -> Result<FxHashMap<PathBuf, LineStats>> {
     let mut out = FxHashMap::default();
-    // Its own walk: this reads the files themselves, so the list and the
-    // content have to come from the same moment.
-    let entries = gix_repo.worktree_status_cancellable_impl(cancellation)?;
     if entries.is_empty() {
         return Ok(out);
     }
@@ -116,6 +123,8 @@ fn unstaged_line_stats(
     // Only the old side is a blob, so `CommitStatsScratch` does not fit.
     let mut index_blob = Vec::new();
     let mut worktree = Vec::new();
+    // Retain attribute caches and reusable filter processes across all files.
+    let mut pipeline = repo.filter_pipeline(None).ok();
 
     for entry in entries.iter() {
         // Untracked is in neither index lane; conflicted has no single before.
@@ -134,6 +143,7 @@ fn unstaged_line_stats(
             entry,
             &mut index_blob,
             &mut worktree,
+            pipeline.as_mut(),
         );
         out.insert(entry.path.clone(), stats);
     }
@@ -148,15 +158,13 @@ fn unstaged_entry_line_stats(
     entry: &FileStatus,
     index_blob: &mut Vec<u8>,
     worktree: &mut Vec<u8>,
+    pipeline: Option<&mut (
+        gix::filter::Pipeline<'_>,
+        gix::worktree::IndexPersistedOrInMemory,
+    )>,
 ) -> LineStats {
-    use gix::bstr::ByteSlice;
-
-    let Some(rel) = entry.path.to_str() else {
-        return LineStats::UNKNOWN;
-    };
-    let index_id = index
-        .entry_by_path(rel.as_bytes().as_bstr())
-        .map(|found| found.id);
+    let rel = gix::path::into_bstr(entry.path.as_path());
+    let index_id = index.entry_by_path(rel.as_ref()).map(|found| found.id);
 
     if !read_commit_stats_blob(repo, index_id, index_blob) {
         return LineStats::UNKNOWN;
@@ -164,7 +172,7 @@ fn unstaged_entry_line_stats(
 
     worktree.clear();
     if entry.kind != FileStatusKind::Deleted
-        && !read_worktree_git_bytes(gix_repo, repo, &entry.path, worktree)
+        && !read_worktree_git_bytes(gix_repo, pipeline, &entry.path, worktree)
     {
         return LineStats::UNKNOWN;
     }
@@ -176,7 +184,10 @@ fn unstaged_entry_line_stats(
 /// cap or unreadable; binary is left to `line_stats_from_bytes`.
 fn read_worktree_git_bytes(
     gix_repo: &super::GixRepo,
-    repo: &gix::Repository,
+    pipeline: Option<&mut (
+        gix::filter::Pipeline<'_>,
+        gix::worktree::IndexPersistedOrInMemory,
+    )>,
     relative: &std::path::Path,
     out: &mut Vec<u8>,
 ) -> bool {
@@ -187,16 +198,23 @@ fn read_worktree_git_bytes(
         // Vanished between the status walk and here; empty diffs as a deletion.
         return true;
     };
+    if metadata.file_type().is_symlink() {
+        let Ok(target) = std::fs::read_link(&full) else {
+            return false;
+        };
+        out.extend_from_slice(gix::path::into_bstr(target).as_ref());
+        return true;
+    }
     if !metadata.is_file() || metadata.len() > WORKTREE_MAX_BYTES {
         return false;
     }
-    let Ok((mut pipeline, index)) = repo.filter_pipeline(None) else {
+    let Some((pipeline, index)) = pipeline else {
         return false;
     };
     let Ok(file) = std::fs::File::open(&full) else {
         return false;
     };
-    let Ok(converted) = pipeline.convert_to_git(file, relative, &index) else {
+    let Ok(converted) = pipeline.convert_to_git(file, relative, index) else {
         return false;
     };
 
@@ -215,6 +233,82 @@ fn read_worktree_git_bytes(
 mod tests {
     use super::*;
     use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
+
+    #[cfg(unix)]
+    #[test]
+    fn unstaged_non_utf8_paths_and_symlinks_have_counts() {
+        use std::os::unix::{ffi::OsStringExt, fs::symlink};
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        let path = PathBuf::from(std::ffi::OsString::from_vec(b"file-\xff.txt".to_vec()));
+        std::fs::write(dir.join(&path), "before\n").unwrap();
+        symlink("missing-before", dir.join("link")).unwrap();
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        std::fs::write(dir.join(&path), "after\n").unwrap();
+        std::fs::remove_file(dir.join("link")).unwrap();
+        symlink("missing-after", dir.join("link")).unwrap();
+        let stats = open_repo(dir)
+            .uncommitted_line_stats_impl(&CancellationToken::new())
+            .unwrap();
+        let expected = LineStats {
+            additions: Some(1),
+            deletions: Some(1),
+        };
+        assert_eq!(stats.unstaged.get(&path), Some(&expected));
+        assert_eq!(
+            stats.unstaged.get(std::path::Path::new("link")),
+            Some(&expected)
+        );
+    }
+
+    #[test]
+    fn shared_pipeline_applies_each_files_attributes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, ".gitattributes", "*.txt text eol=crlf\nraw/* -text\n");
+        write_file(dir, "a.txt", "base\n");
+        write_file(dir, "nested/b.txt", "base\n");
+        write_file(dir, "raw/c.txt", "base\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        for path in ["a.txt", "nested/b.txt", "raw/c.txt"] {
+            write_file(dir, path, "base\r\nadded\r\n");
+        }
+        let repo = open_repo(dir);
+        let token = CancellationToken::new();
+        let entries = repo.worktree_status_cancellable_impl(&token).unwrap();
+        let stats = repo.line_stats_for_entries_impl(&entries, &token).unwrap();
+        for path in ["a.txt", "nested/b.txt"] {
+            assert_eq!(
+                stats.unstaged.get(std::path::Path::new(path)),
+                Some(&LineStats {
+                    additions: Some(1),
+                    deletions: Some(0)
+                })
+            );
+        }
+        assert_eq!(
+            stats.unstaged.get(std::path::Path::new("raw/c.txt")),
+            Some(&LineStats {
+                additions: Some(2),
+                deletions: Some(1)
+            })
+        );
+        // The supplied snapshot bounds the scan; it must not rediscover other changes.
+        let status = gitcomet_core::domain::RepoStatus {
+            unstaged: std::sync::Arc::new(entries[..1].to_vec()),
+            staged: Default::default(),
+        };
+        let subset =
+            gitcomet_core::services::GitRepository::uncommitted_line_stats_for_status_cancellable(
+                &repo, &status, &token,
+            )
+            .unwrap();
+        assert_eq!(subset.unstaged.len(), 1);
+    }
 
     fn lines(prefix: &str, count: usize) -> String {
         (0..count)

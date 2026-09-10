@@ -161,8 +161,7 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
         )
         .child(gpui::div().flex_1().min_w(px(0.0)))
         .when(
-            detail == DirectoryRowDetail::WithStat
-                && (additions.is_some() || deletions.is_some()),
+            detail == DirectoryRowDetail::WithStat && (additions.is_some() || deletions.is_some()),
             |row| {
                 row.child(gpui::div().flex_none().child(components::diff_stat(
                     theme,

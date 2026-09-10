@@ -226,9 +226,11 @@ fn status_select_all_can_be_reduced_to_a_range_and_then_nothing(cx: &mut gpui::T
     cx.simulate_keystrokes("space ctrl-u");
     draw_and_drain_test_window(cx);
     assert_eq!(preview(cx, &view), before);
+    assert!(selected(cx, &view, DiffArea::Staged).is_empty());
+    assert!(selected(cx, &view, DiffArea::Unstaged).is_empty());
     assert!(
-        cx.debug_bounds("stage_selected_button").is_none(),
-        "the preview must not contribute a selected file in another section"
+        cx.debug_bounds("stage_selected_button").is_some(),
+        "the empty staged selection must not suppress the unstaged preview's action"
     );
     cx.update(|_window, app| {
         let root = view.read(app);

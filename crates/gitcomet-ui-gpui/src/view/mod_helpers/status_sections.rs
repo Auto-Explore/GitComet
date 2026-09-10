@@ -194,6 +194,9 @@ pub(crate) fn status_section_rev(repo: &RepoState, section: StatusSection) -> u6
 /// its line-stats lane. Counts arrive without `status_section_rev` moving, so a
 /// cache keyed on that alone keeps serving pre-stats rows.
 pub(crate) fn status_section_content_rev(repo: &RepoState, section: StatusSection) -> u64 {
+    if !status_section_has_line_stats(section) {
+        return status_section_rev(repo, section);
+    }
     gitcomet_state::model::mix_status_cache_revs([
         status_section_rev(repo, section),
         repo.line_stats_rev(section.diff_area()),
@@ -325,6 +328,7 @@ pub(crate) fn reconcile_status_multi_selection(
     selection: &mut StatusMultiSelection,
     status: &gitcomet_core::domain::RepoStatus,
 ) {
+    let had_selection = !selection.is_empty();
     let mut untracked_paths: FxHashSet<&std::path::Path> =
         FxHashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
     let mut unstaged_paths: FxHashSet<&std::path::Path> =
@@ -378,12 +382,16 @@ pub(crate) fn reconcile_status_multi_selection(
         selection.staged_anchor_index = None;
         selection.staged_anchor_order_rev = None;
     }
+    if had_selection && selection.is_empty() {
+        selection.explicit_section = None;
+    }
 }
 
 pub(crate) fn reconcile_status_multi_selection_with_repo(
     selection: &mut StatusMultiSelection,
     repo: &RepoState,
 ) {
+    let had_selection = !selection.is_empty();
     if let Some(worktree) = repo.worktree_status_entries() {
         let mut untracked_paths: FxHashSet<&std::path::Path> =
             FxHashSet::with_capacity_and_hasher(worktree.len(), Default::default());
@@ -440,5 +448,8 @@ pub(crate) fn reconcile_status_multi_selection_with_repo(
             selection.staged_anchor_index = None;
             selection.staged_anchor_order_rev = None;
         }
+    }
+    if had_selection && selection.is_empty() {
+        selection.explicit_section = None;
     }
 }

@@ -155,7 +155,7 @@ impl FileTree {
         out: &mut Flatten,
     ) -> SubtreeTotals {
         let mut totals = SubtreeTotals::default();
-        for entry in self.emit_order(node_ix) {
+        for entry in self.emit_order(node_ix).iter().copied() {
             match entry {
                 TreeEntry::File(ordinal) => {
                     if !hidden {
@@ -225,20 +225,20 @@ impl FileTree {
     /// one. Edit-size and file-type sorts interleave instead: grouping
     /// directories first would float a folder holding a three-line change above
     /// a root file with nine hundred, and would split a type group in two.
-    fn emit_order(&self, node_ix: usize) -> Vec<TreeEntry> {
+    fn emit_order(&self, node_ix: usize) -> std::borrow::Cow<'_, [TreeEntry]> {
         let entries = &self.nodes[node_ix].entries;
         match self.sort {
             CommitFileSort::EditSizeAscending
             | CommitFileSort::EditSizeDescending
             | CommitFileSort::FileTypeAscending
-            | CommitFileSort::FileTypeDescending => entries.clone(),
+            | CommitFileSort::FileTypeDescending => std::borrow::Cow::Borrowed(entries),
             CommitFileSort::PathAscending | CommitFileSort::PathDescending => {
                 let dirs_first = self.sort == CommitFileSort::PathAscending;
                 let is_dir = |entry: &TreeEntry| matches!(entry, TreeEntry::Dir(_));
                 let mut ordered = Vec::with_capacity(entries.len());
                 ordered.extend(entries.iter().filter(|e| is_dir(e) == dirs_first).copied());
                 ordered.extend(entries.iter().filter(|e| is_dir(e) != dirs_first).copied());
-                ordered
+                std::borrow::Cow::Owned(ordered)
             }
         }
     }

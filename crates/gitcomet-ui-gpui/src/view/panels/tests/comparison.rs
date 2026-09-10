@@ -652,6 +652,83 @@ mod worktree_uncommitted {
     }
 
     #[gpui::test]
+    fn worktree_projection_changes_refresh_inline_navigation(cx: &mut gpui::TestAppContext) {
+        let (view, cx) =
+            draw_sorted_worktree_inline_diff(cx, RepoId(101), 2, crate::view::FileListLayout::Flat);
+        draw_and_drain_test_window(cx);
+        assert!(cx.debug_bounds("diff_prev_file").is_none());
+        assert!(cx.debug_bounds("diff_next_file").is_some());
+        cx.update(|_window, app| {
+            view.read(app).details_pane.clone().update(app, |pane, cx| {
+                pane.set_file_list_sort(
+                    crate::view::rows::FileListId::WorktreeFiles,
+                    crate::view::rows::CommitFileSort::PathAscending,
+                    cx,
+                );
+            });
+        });
+        draw_and_drain_test_window(cx);
+        assert!(cx.debug_bounds("diff_prev_file").is_some());
+        assert!(cx.debug_bounds("diff_next_file").is_none());
+        for (filter, has_previous) in [
+            (crate::view::rows::CommitFileFilter::Added, false),
+            (crate::view::rows::CommitFileFilter::All, true),
+        ] {
+            cx.update(|_window, app| {
+                view.read(app).details_pane.clone().update(app, |pane, cx| {
+                    pane.set_file_list_filter(
+                        crate::view::rows::FileListId::WorktreeFiles,
+                        filter,
+                        cx,
+                    );
+                });
+            });
+            draw_and_drain_test_window(cx);
+            assert_eq!(cx.debug_bounds("diff_prev_file").is_some(), has_previous);
+        }
+    }
+
+    #[gpui::test]
+    fn worktree_filters_fit_the_measured_width(cx: &mut gpui::TestAppContext) {
+        let cx = draw_worktree(
+            cx,
+            RepoId(102),
+            vec![file("gone.txt", FileStatusKind::Deleted)],
+            vec![file("edited.rs", FileStatusKind::Modified)],
+            true,
+        );
+        cx.update(|window, app| {
+            let view = window
+                .root::<crate::view::GitCometView>()
+                .flatten()
+                .expect("root view");
+            view.update(app, |view, cx| {
+                view.details_width = px(300.0);
+                view.details_render_width = px(300.0);
+                cx.notify();
+            });
+        });
+        // The first frame measures the new viewport; the next uses its width.
+        for _ in 0..2 {
+            cx.update(|window, app| {
+                window.refresh();
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        }
+        let tabs = cx.debug_bounds("worktree_file_filter_tabs").unwrap();
+        assert!(
+            tabs.size.width <= px(300.0),
+            "test must render a narrow pane"
+        );
+        let last = cx.debug_bounds("worktree_file_filter_tab_4").unwrap();
+        assert!(
+            last.right() <= tabs.right(),
+            "last filter must fit: {last:?} in {tabs:?}"
+        );
+    }
+
+    #[gpui::test]
     fn a_selected_worktree_row_takes_over_the_details_pane(cx: &mut gpui::TestAppContext) {
         let cx = draw_worktree(
             cx,
@@ -768,4 +845,38 @@ mod worktree_uncommitted {
 
         assert!(cx.debug_bounds("worktree_uncommitted_body").is_some());
     }
+}
+
+#[gpui::test]
+fn range_filters_fit_the_measured_width(cx: &mut gpui::TestAppContext) {
+    let cx = draw_comparison(cx, RepoId(103), 2, 0, Files::Loaded(3));
+    cx.update(|window, app| {
+        let view = window
+            .root::<crate::view::GitCometView>()
+            .flatten()
+            .expect("root view");
+        view.update(app, |view, cx| {
+            view.details_width = px(300.0);
+            view.details_render_width = px(300.0);
+            cx.notify();
+        });
+    });
+    // The first frame measures the new viewport; the next uses its width.
+    for _ in 0..2 {
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+    let tabs = cx.debug_bounds("range_file_filter_tabs").unwrap();
+    assert!(
+        tabs.size.width <= px(300.0),
+        "test must render a narrow pane"
+    );
+    let last = cx.debug_bounds("range_file_filter_tab_4").unwrap();
+    assert!(
+        last.right() <= tabs.right(),
+        "last filter must fit: {last:?} in {tabs:?}"
+    );
 }

@@ -2197,10 +2197,7 @@ impl DetailsPaneView {
                                     collapsed,
                                     additions,
                                     deletions,
-                                    row_height: sidebar_list_row_height(
-                                        theme,
-                                        ui_scale_percent,
-                                    ),
+                                    row_height: sidebar_list_row_height(theme, ui_scale_percent),
                                     row_group: None,
                                     detail: crate::view::rows::directory_row_detail_for_width(
                                         // No width probe on this list.
@@ -2553,10 +2550,7 @@ impl DetailsPaneView {
                                     collapsed,
                                     additions,
                                     deletions,
-                                    row_height: sidebar_list_row_height(
-                                        theme,
-                                        ui_scale_percent,
-                                    ),
+                                    row_height: sidebar_list_row_height(theme, ui_scale_percent),
                                     row_group: None,
                                     detail: crate::view::rows::directory_row_detail_for_width(
                                         // No width probe on this list.
@@ -2813,10 +2807,7 @@ impl DetailsPaneView {
                                     collapsed,
                                     additions,
                                     deletions,
-                                    row_height: sidebar_list_row_height(
-                                        theme,
-                                        ui_scale_percent,
-                                    ),
+                                    row_height: sidebar_list_row_height(theme, ui_scale_percent),
                                     row_group: None,
                                     detail: crate::view::rows::directory_row_detail_for_width(
                                         // No width probe on this list.

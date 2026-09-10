@@ -2098,17 +2098,20 @@ impl MainPaneView {
             .unwrap_or(ChangeTrackingView::Combined)
     }
 
-    /// `position` is an index into the drawn file order, not a display row: a
-    /// tree pads the list with directory rows and may be hiding the target.
-    pub(in crate::view) fn scroll_status_section_to_ix(
+    /// Resolve the path against the pane's current order, including when
+    /// navigation fell back to source order while its projection was unavailable.
+    pub(in crate::view) fn scroll_status_section_to_path(
         &mut self,
         section: StatusSection,
-        position: usize,
+        path: &std::path::Path,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    let Some(position) = pane.status_path_display_position(section, path) else {
+                        return;
+                    };
                     let ix = pane
                         .reveal_status_row(section, position, cx)
                         .unwrap_or(position);

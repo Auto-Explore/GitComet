@@ -499,7 +499,7 @@ fn status_section_action_selection(
 ) -> StatusSectionActionSelection {
     if let Some(selection) = selection {
         let paths = explicit_status_section_action_paths(selection, section);
-        if selection.explicit_section.is_some() || !paths.is_empty() {
+        if selection.explicit_section == Some(section) || !paths.is_empty() {
             return StatusSectionActionSelection {
                 paths,
                 from_explicit_selection: true,
@@ -1453,10 +1453,16 @@ impl DetailsPaneView {
             loaded_file_count == 0,
             cx,
         );
+        let worktree_filters_width = self
+            .worktree_filter_bounds_ref
+            .borrow()
+            .as_ref()
+            .map(|b| b.size.width)
+            .unwrap_or(Pixels::MAX);
         let worktree_filters = self.commit_file_filter_tabs(
             crate::view::rows::FileListId::WorktreeFiles,
             "worktree_file",
-            Pixels::MAX,
+            worktree_filters_width,
             worktree_counts,
             cx,
         );
@@ -1525,7 +1531,28 @@ impl DetailsPaneView {
                             )
                             .child(worktree_controls),
                     )
-                    .child(worktree_filters)
+                    .child({
+                        let bounds = std::rc::Rc::clone(&self.worktree_filter_bounds_ref);
+                        let pane = cx.weak_entity();
+                        div()
+                            .relative()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .on_children_prepainted(move |children, _window, app| {
+                                let next = children.first().copied();
+                                let mut measured = bounds.borrow_mut();
+                                if *measured != next {
+                                    *measured = next;
+                                    // Cached panes must be notified after prepaint.
+                                    let pane = pane.clone();
+                                    app.defer(move |app| {
+                                        let _ = pane.update(app, |_pane, cx| cx.notify());
+                                    });
+                                }
+                            })
+                            .child(visible_bounds_probe())
+                            .child(worktree_filters)
+                    })
                     .child(
                         div()
                             .flex()
@@ -1677,10 +1704,16 @@ impl DetailsPaneView {
             range_counts.all == 0,
             cx,
         );
+        let range_filters_width = self
+            .range_filter_bounds_ref
+            .borrow()
+            .as_ref()
+            .map(|b| b.size.width)
+            .unwrap_or(Pixels::MAX);
         let range_filters = self.commit_file_filter_tabs(
             crate::view::rows::FileListId::RangeFiles,
             "range_file",
-            Pixels::MAX,
+            range_filters_width,
             range_counts,
             cx,
         );
@@ -1786,7 +1819,28 @@ impl DetailsPaneView {
                                     )
                                     .child(range_controls),
                             )
-                            .child(range_filters)
+                            .child({
+                                let bounds = std::rc::Rc::clone(&self.range_filter_bounds_ref);
+                                let pane = cx.weak_entity();
+                                div()
+                                    .relative()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .on_children_prepainted(move |children, _window, app| {
+                                        let next = children.first().copied();
+                                        let mut measured = bounds.borrow_mut();
+                                        if *measured != next {
+                                            *measured = next;
+                                            // Cached panes must be notified after prepaint.
+                                            let pane = pane.clone();
+                                            app.defer(move |app| {
+                                                let _ = pane.update(app, |_pane, cx| cx.notify());
+                                            });
+                                        }
+                                    })
+                                    .child(visible_bounds_probe())
+                                    .child(range_filters)
+                            })
                             .child(files_body),
                     ),
             )
@@ -1817,9 +1871,8 @@ impl DetailsPaneView {
     ) -> Stateful<Div> {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
-        // `available_width` is the caller's: the worktree and range lists have
-        // their own bounds, so reading the commit list's here would size all
-        // three from one pane.
+        // Each caller supplies its measured filter width. Keep it explicit so
+        // worktree and range controls do not read the commit list's bounds.
         let labels = commit_file_filter_labels_for_width(
             available_width,
             counts,
@@ -4407,6 +4460,33 @@ mod tests {
     }
 
     #[test]
+    fn another_sections_selection_does_not_suppress_active_row_fallback() {
+        let repo = repo_with_status(RepoStatus {
+            unstaged: std::sync::Arc::new(vec![file_status("a.txt", FileStatusKind::Modified)]),
+            staged: std::sync::Arc::new(vec![file_status("b.txt", FileStatusKind::Modified)]),
+        });
+        let target = DiffTarget::WorkingTree {
+            path: "a.txt".into(),
+            area: DiffArea::Unstaged,
+        };
+        for staged in [vec!["b.txt".into()], Vec::new()] {
+            let selected = StatusMultiSelection {
+                explicit_section: Some(StatusSection::Staged),
+                staged,
+                ..Default::default()
+            };
+            let result = status_section_action_selection(
+                &repo,
+                Some(&target),
+                Some(&selected),
+                StatusSection::CombinedUnstaged,
+            );
+            assert_eq!(result.paths, vec![PathBuf::from("a.txt")]);
+            assert!(!result.from_explicit_selection);
+        }
+    }
+
+    #[test]
     fn status_section_action_selection_limits_active_row_to_matching_split_section() {
         let repo = repo_with_status(RepoStatus {
             unstaged: std::sync::Arc::new(vec![
@@ -4449,11 +4529,11 @@ mod tests {
             staged: Arc::new(vec![file_status("a.rs", FileStatusKind::Modified)]),
             unstaged: Arc::new(vec![file_status("a.rs", FileStatusKind::Modified)]),
         });
-        let selection = StatusMultiSelection {
-            explicit_section: Some(StatusSection::CombinedUnstaged),
-            ..Default::default()
-        };
         for section in [StatusSection::CombinedUnstaged, StatusSection::Staged] {
+            let selection = StatusMultiSelection {
+                explicit_section: Some(section),
+                ..Default::default()
+            };
             let target = DiffTarget::WorkingTree {
                 path: "a.rs".into(),
                 area: section.diff_area(),

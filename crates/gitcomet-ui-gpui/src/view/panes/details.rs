@@ -69,6 +69,10 @@ pub(in super::super) struct DetailsPaneView {
         std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
     pub(in super::super) commit_files_section_bounds_ref:
         std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
+    pub(in super::super) worktree_filter_bounds_ref:
+        std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
+    pub(in super::super) range_filter_bounds_ref:
+        std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
     pub(in super::super) status_section_resize: Option<StatusSectionResizeState>,
     status_section_focus_handles: [FocusHandle; 4],
 
@@ -476,6 +480,8 @@ impl DetailsPaneView {
             status_sections_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             change_tracking_stack_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             commit_files_section_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            worktree_filter_bounds_ref: Default::default(),
+            range_filter_bounds_ref: Default::default(),
             status_section_resize: None,
             status_section_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             untracked_scroll: UniformListScrollHandle::default(),
@@ -1041,11 +1047,11 @@ impl DetailsPaneView {
         &self,
         repo_id: RepoId,
         list: crate::view::rows::FileListId,
-    ) -> crate::view::rows::CollapsedDirs {
+    ) -> std::borrow::Cow<'_, crate::view::rows::CollapsedDirs> {
         self.file_list_collapsed
             .get(&(repo_id, list))
-            .cloned()
-            .unwrap_or_default()
+            .map(std::borrow::Cow::Borrowed)
+            .unwrap_or_else(|| std::borrow::Cow::Owned(Default::default()))
     }
 
     pub(in super::super) fn toggle_file_list_dir(
@@ -1564,6 +1570,7 @@ impl DetailsPaneView {
                     return;
                 }
                 self.list_sort.insert((repo_id, other), sort);
+                self.notify_commit_file_projection_dependents(cx);
                 cx.notify();
             }
         }
@@ -1600,6 +1607,7 @@ impl DetailsPaneView {
             return;
         }
         self.list_filter.insert((repo_id, list), filter);
+        self.notify_commit_file_projection_dependents(cx);
         cx.notify();
     }
 
@@ -1663,6 +1671,17 @@ impl DetailsPaneView {
         );
         cache[slot] = Some((key, Arc::clone(&ordered)));
         Some(ordered)
+    }
+
+    pub(in super::super) fn status_path_display_position(
+        &self,
+        section: StatusSection,
+        path: &std::path::Path,
+    ) -> Option<usize> {
+        let repo = self.active_repo()?;
+        let order = self.active_status_section_order(repo.id, section)?;
+        let entries = StatusSectionEntries::from_repo_with_order(repo, section, order)?;
+        entries.iter().position(|entry| entry.path == path)
     }
 
     /// Expand whatever hides the file at drawn-order `position`, and return its

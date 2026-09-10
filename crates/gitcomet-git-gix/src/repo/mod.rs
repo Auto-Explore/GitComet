@@ -606,6 +606,15 @@ impl GitRepository for GixRepo {
         self.uncommitted_line_stats_impl(cancellation)
     }
 
+    fn uncommitted_line_stats_for_status_cancellable(
+        &self,
+        status: &RepoStatus,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.line_stats_for_entries_impl(&status.unstaged, cancellation)
+    }
+
     fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
         self.commit_messages_impl(ids)
     }
