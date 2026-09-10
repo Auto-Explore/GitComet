@@ -18,6 +18,11 @@ Font sizes are saved separately and apply immediately across open windows:
 Use the minus/plus buttons or type a whole-number value. Reset affects only that
 font size. UI scale remains a separate multiplier for the whole window.
 
+The window title bar is the one exception to all three. It shares its row with
+the operating system's own window controls, which do not resize, so the bar, its
+buttons and the repository tabs hold a single size at every density, font size
+and UI scale.
+
 ## History context menu
 
 Right-click anywhere on a history row, including its branch and tag badges, to

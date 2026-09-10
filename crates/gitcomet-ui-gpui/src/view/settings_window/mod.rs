@@ -618,7 +618,7 @@ fn settings_window_traffic_light_position(_percent: u32) -> Point<Pixels> {
     point(px(9.0), px(9.0))
 }
 
-fn settings_window_traffic_lights_safe_inset(_percent: u32) -> Pixels {
+fn settings_window_traffic_lights_safe_inset() -> Pixels {
     px(SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET_PX)
 }
 

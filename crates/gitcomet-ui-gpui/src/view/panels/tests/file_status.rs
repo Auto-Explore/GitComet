@@ -5393,11 +5393,30 @@ fn a_preserved_press_does_not_blur_a_focused_input(cx: &mut gpui::TestAppContext
     );
 }
 
-/// Menu-opening chips across the chrome: click targets that stayed fixed pills
-/// while Comfortable grew everything around them.
+/// Menu-opening chips across the workspace: click targets that stayed fixed
+/// pills while Comfortable grew everything around them. The title bar is the
+/// deliberate exception -- it shares its row with OS window controls that never
+/// resize, so its own chips must not move.
 #[gpui::test]
 fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext) {
     use crate::appearance::{Appearance, UiDensity};
+
+    fn heights(
+        cx: &mut gpui::VisualTestContext,
+        selectors: &[&'static str],
+        density: UiDensity,
+    ) -> Vec<gpui::Pixels> {
+        selectors
+            .iter()
+            .map(|selector| {
+                cx.debug_bounds(selector)
+                    .unwrap_or_else(|| panic!("missing {selector} at {density:?} density"))
+                    .size
+                    .height
+            })
+            .collect()
+    }
+
     let _guard = lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
@@ -5416,10 +5435,12 @@ fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext)
         "sidebar_tab_files",
         "history_mode_header",
         "change_tracking_unstaged_header",
-        "app_menu",
-        "repo_picker_toggle",
     ];
+    // Lives in the title bar. The app-menu chip beside it is not rendered on
+    // macOS, where the OS supplies that menu.
+    let fixed_selectors = ["repo_picker_toggle"];
     let mut per_density: Vec<Vec<gpui::Pixels>> = Vec::new();
+    let mut fixed_per_density: Vec<Vec<gpui::Pixels>> = Vec::new();
 
     for density in UiDensity::ALL {
         cx.update(|_, app| {
@@ -5432,18 +5453,9 @@ fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext)
             });
         });
         draw_and_drain_test_window(cx);
+        per_density.push(heights(cx, &selectors, density));
 
-        per_density.push(
-            selectors
-                .into_iter()
-                .map(|selector| {
-                    cx.debug_bounds(selector)
-                        .unwrap_or_else(|| panic!("missing {selector} at {density:?} density"))
-                        .size
-                        .height
-                })
-                .collect(),
-        );
+        fixed_per_density.push(heights(cx, &fixed_selectors, density));
     }
 
     for (step, pair) in per_density.windows(2).enumerate() {
@@ -5454,6 +5466,18 @@ fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext)
                 UiDensity::ALL[step],
                 UiDensity::ALL[step + 1],
                 pair[1][ix]
+            );
+        }
+    }
+
+    for (step, pair) in fixed_per_density.windows(2).enumerate() {
+        for (ix, selector) in fixed_selectors.into_iter().enumerate() {
+            assert_eq!(
+                pair[1][ix],
+                pair[0][ix],
+                "{selector} sits in the title bar and must not move from {:?} to {:?}",
+                UiDensity::ALL[step],
+                UiDensity::ALL[step + 1],
             );
         }
     }

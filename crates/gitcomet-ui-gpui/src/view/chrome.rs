@@ -14,27 +14,34 @@ const MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
 #[cfg(test)]
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(CLIENT_SIDE_DECORATION_INSET_PX);
 
+/// Window chrome sits outside the appearance system. A title bar shares its row
+/// with the OS window controls, which do not resize, so the bar, its buttons and
+/// the repository tabs hold one size at every UI scale, density and font size.
+/// Chrome geometry is written in literal `px`; the shared components it borrows
+/// take this scale so they size themselves the same way.
+pub(in crate::view) const CHROME_SCALE_PERCENT: u32 = ui_scale::DEFAULT_UI_SCALE_PERCENT;
+
 pub(super) fn client_side_decoration_inset(ui_scale_percent: u32) -> Pixels {
     ui_scale::design_px_from_percent(CLIENT_SIDE_DECORATION_INSET_PX, ui_scale_percent)
 }
 
-pub(super) fn title_bar_height(scale: impl Into<ui_scale::UiScale>) -> Pixels {
-    scale.into().row_height(TITLE_BAR_HEIGHT_PX, 44.0)
+pub(super) fn title_bar_height() -> Pixels {
+    px(TITLE_BAR_HEIGHT_PX)
 }
 
-/// Clickable plate of a title-bar button. Floats inside the bar, so it takes
-/// the bar's density ramp and keeps its inset.
+/// Clickable plate of a title-bar button: the app menu and the repository
+/// switcher. Inset from the bar by the same amount at every setting.
 const TITLE_BAR_BUTTON_HEIGHT_PX: f32 = 26.0;
-const TITLE_BAR_BUTTON_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
+/// Width of those buttons, matched to the window controls' hitbox so a 16px
+/// glyph clears the same 8px on each side at both ends of the bar.
+const TITLE_BAR_BUTTON_WIDTH_PX: f32 = 32.0;
+const TITLE_BAR_ICON_SIZE_PX: f32 = 16.0;
 
-pub(super) fn title_bar_button_height(scale: impl Into<ui_scale::UiScale>) -> Pixels {
-    scale.into().row_height(
-        TITLE_BAR_BUTTON_HEIGHT_PX,
-        TITLE_BAR_BUTTON_COMFORTABLE_HEIGHT_PX,
-    )
+pub(super) fn title_bar_button_height() -> Pixels {
+    px(TITLE_BAR_BUTTON_HEIGHT_PX)
 }
 
-fn macos_traffic_lights_safe_inset(_ui_scale_percent: u32) -> Pixels {
+fn macos_traffic_lights_safe_inset() -> Pixels {
     px(MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX)
 }
 
@@ -137,15 +144,14 @@ pub(in crate::view) fn window_top_left_corner(window: &Window) -> Point<Pixels> 
 }
 
 pub(super) fn titlebar_control_button(
-    ui_scale_percent: u32,
     id: &'static str,
     icon_path: &'static str,
     idle_color: gpui::Rgba,
     hover_color: gpui::Rgba,
 ) -> gpui::Div {
-    let hitbox_width = ui_scale::design_px_from_percent(32.0, ui_scale_percent);
-    let visual_size = ui_scale::design_px_from_percent(26.0, ui_scale_percent);
-    let icon_size = ui_scale::design_px_from_percent(16.0, ui_scale_percent);
+    let hitbox_width = px(TITLE_BAR_BUTTON_WIDTH_PX);
+    let visual_size = px(TITLE_BAR_BUTTON_HEIGHT_PX);
+    let icon_size = px(TITLE_BAR_ICON_SIZE_PX);
 
     div()
         .h_full()
@@ -449,8 +455,6 @@ impl TitleBarView {
 impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = ui_scale::scaler(ui_scale_percent);
         let is_macos = cfg!(target_os = "macos");
         let workspace_actions_enabled = self.workspace_actions_enabled;
         let repo_tabs_enabled = workspace_actions_enabled
@@ -479,41 +483,34 @@ impl Render for TitleBarView {
         let bar_bg = title_bar_background(theme, window.is_window_active());
         let app_menu_focus_handle = self.app_menu_focus_handle.clone();
 
-        let menu_toggle = div()
-            .h_full()
-            .pl(scaled_px(2.0))
-            .flex()
-            .items_center()
-            .child(
-                components::Button::new("app_menu_btn", "")
-                    .start_slot(svg_icon(
-                        "icons/menu.svg",
-                        theme.colors.foreground.primary,
-                        scaled_px(16.0),
-                    ))
-                    .style(components::ButtonStyle::Transparent)
-                    .selected(app_menu_open)
-                    .selected_bg(app_menu_open_bg)
-                    .focus_handle(app_menu_focus_handle)
-                    .on_click(theme, cx, |this, _e, window, cx| {
-                        this.set_app_menu_open(true, cx);
-                        let anchor = window_top_left_corner(window);
-                        this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
-                    })
-                    // Sized to the window controls' 32px hitbox so the 16px glyph
-                    // clears the same 8px on each side. The button's intrinsic
-                    // `icon_pad_x` is narrower; a fixed width plus the centered
-                    // content is what actually matches the two ends of the bar.
-                    .h(title_bar_button_height(
-                        ui_scale::UiScale::from_percent(ui_scale_percent)
-                            .with_appearance(theme.metrics),
-                    ))
-                    .w(scaled_px(32.0))
-                    .rounded(px(theme.radii.control))
-                    .block_mouse_except_scroll()
-                    .debug_selector(|| "app_menu".to_string())
-                    .gitcomet_tooltip(theme, "Application menu".into()),
-            );
+        let menu_toggle = div().h_full().pl(px(2.0)).flex().items_center().child(
+            components::Button::new("app_menu_btn", "")
+                .start_slot(svg_icon(
+                    "icons/menu.svg",
+                    theme.colors.foreground.primary,
+                    px(TITLE_BAR_ICON_SIZE_PX),
+                ))
+                .style(components::ButtonStyle::Transparent)
+                .selected(app_menu_open)
+                .selected_bg(app_menu_open_bg)
+                .focus_handle(app_menu_focus_handle)
+                .unscaled()
+                .on_click(theme, cx, |this, _e, window, cx| {
+                    this.set_app_menu_open(true, cx);
+                    let anchor = window_top_left_corner(window);
+                    this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
+                })
+                // Sized to the window controls' 32px hitbox so the 16px glyph
+                // clears the same 8px on each side. The button's intrinsic
+                // `icon_pad_x` is narrower; a fixed width plus the centered
+                // content is what actually matches the two ends of the bar.
+                .h(title_bar_button_height())
+                .w(px(TITLE_BAR_BUTTON_WIDTH_PX))
+                .rounded(px(theme.radii.control))
+                .block_mouse_except_scroll()
+                .debug_selector(|| "app_menu".to_string())
+                .gitcomet_tooltip(theme, "Application menu".into()),
+        );
 
         // Browser-style repository switcher: a bare chevron beside the app menu
         // (and the repo tabs) that opens the repository picker. Replaces the old
@@ -532,11 +529,8 @@ impl Render for TitleBarView {
                 div()
                     .id("repo_picker_btn")
                     .debug_selector(|| "repo_picker_toggle".to_string())
-                    .h(title_bar_button_height(
-                        ui_scale::UiScale::from_percent(ui_scale_percent)
-                            .with_appearance(theme.metrics),
-                    ))
-                    .w(scaled_px(32.0))
+                    .h(title_bar_button_height())
+                    .w(px(TITLE_BAR_BUTTON_WIDTH_PX))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -567,7 +561,7 @@ impl Render for TitleBarView {
                     .child(svg_icon(
                         "icons/chevron_down.svg",
                         theme.colors.foreground.primary,
-                        scaled_px(16.0),
+                        px(TITLE_BAR_ICON_SIZE_PX),
                     ))
                     .block_mouse_except_scroll()
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -658,7 +652,6 @@ impl Render for TitleBarView {
 
         let min_tooltip: SharedString = "Minimize window".into();
         let min = titlebar_control_button(
-            ui_scale_percent,
             "win_min_btn",
             "icons/generic_minimize.svg",
             theme.colors.foreground.secondary,
@@ -684,7 +677,6 @@ impl Render for TitleBarView {
             "Maximize window".into()
         };
         let max = titlebar_control_button(
-            ui_scale_percent,
             "win_max_btn",
             max_icon,
             theme.colors.foreground.secondary,
@@ -702,7 +694,6 @@ impl Render for TitleBarView {
 
         let close_tooltip: SharedString = "Close window".into();
         let close = titlebar_control_button(
-            ui_scale_percent,
             "win_close_btn",
             "icons/generic_close.svg",
             theme.colors.foreground.secondary,
@@ -724,10 +715,8 @@ impl Render for TitleBarView {
             .flex()
             .items_center()
             .h_full()
-            .gap(scaled_px(2.0))
-            .when(is_macos, |d| {
-                d.pl(macos_traffic_lights_safe_inset(ui_scale_percent))
-            })
+            .gap(px(2.0))
+            .when(is_macos, |d| d.pl(macos_traffic_lights_safe_inset()))
             .when(!is_macos && workspace_actions_enabled, |d| {
                 d.child(menu_toggle)
             })
@@ -762,7 +751,7 @@ impl Render for TitleBarView {
                     div()
                         .flex()
                         .flex_none()
-                        .w(scaled_px(REPO_TABS_TRAILING_DRAG_WIDTH_PX))
+                        .w(px(REPO_TABS_TRAILING_DRAG_WIDTH_PX))
                         .h_full(),
                 )
                 .into_any_element()
@@ -776,9 +765,7 @@ impl Render for TitleBarView {
             .relative()
             .flex()
             .items_center()
-            .h(title_bar_height(
-                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
-            ))
+            .h(title_bar_height())
             .w_full()
             .bg(bar_bg)
             .when_some(frame_rounding, |d, rounding| {
@@ -807,9 +794,9 @@ impl Render for TitleBarView {
                     .flex()
                     .items_center()
                     .h_full()
-                    .gap(scaled_px(4.0))
+                    .gap(px(4.0))
                     .when(!is_macos, |d| d.child(min).child(max).child(close))
-                    .pr(scaled_px(8.0)),
+                    .pr(px(8.0)),
             )
             .into_any_element()
     }
@@ -876,30 +863,16 @@ pub(crate) fn window_frame(
 mod tests {
     use super::*;
 
-    /// The app-menu and repo-picker plates float inside the bar, so they have to
-    /// grow with it and still clear its edges.
+    /// The bar and the plates that float inside it are deliberately outside the
+    /// appearance system, so neither may move when the user changes density or
+    /// font size -- only that the plate still clears the bar's edges.
     #[test]
-    fn title_bar_buttons_grow_with_the_bar_and_stay_inside_it() {
-        use crate::appearance::{Appearance, UiDensity};
-        let scale = |density| {
-            ui_scale::UiScale::from_percent(100).with_appearance(Appearance {
-                density,
-                ..Appearance::default()
-            })
-        };
-        let steps: Vec<_> = UiDensity::ALL.into_iter().map(scale).collect();
-
-        for at in &steps {
-            assert!(
-                title_bar_button_height(*at) < title_bar_height(*at),
-                "the plate must leave the bar an inset at {at:?}"
-            );
-        }
+    fn the_title_bar_and_its_buttons_hold_one_size() {
+        assert_eq!(title_bar_height(), px(TITLE_BAR_HEIGHT_PX));
+        assert_eq!(title_bar_button_height(), px(TITLE_BAR_BUTTON_HEIGHT_PX));
         assert!(
-            steps
-                .windows(2)
-                .all(|w| title_bar_button_height(w[1]) > title_bar_button_height(w[0])),
-            "the plate must grow at every density step"
+            title_bar_button_height() < title_bar_height(),
+            "the plate must leave the bar an inset"
         );
     }
 
@@ -909,7 +882,6 @@ mod tests {
         assert!(
             std::panic::catch_unwind(|| {
                 let _ = titlebar_control_button(
-                    ui_scale::DEFAULT_UI_SCALE_PERCENT,
                     "test_btn_1",
                     "icons/generic_minimize.svg",
                     theme.colors.foreground.secondary,
@@ -921,7 +893,6 @@ mod tests {
         assert!(
             std::panic::catch_unwind(|| {
                 let _ = titlebar_control_button(
-                    ui_scale::DEFAULT_UI_SCALE_PERCENT,
                     "test_btn_2",
                     "icons/generic_close.svg",
                     theme.colors.foreground.secondary,

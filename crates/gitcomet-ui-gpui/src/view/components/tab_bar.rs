@@ -1,6 +1,4 @@
 use super::tab::TAB_HEIGHT_PX;
-use crate::theme::AppTheme;
-use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Bounds, Div, Element, ElementId, GlobalElementId, InspectorElementId,
@@ -230,8 +228,7 @@ impl TabBar {
         self
     }
 
-    pub fn render(self, theme: AppTheme, ui_scale_percent: u32) -> Stateful<Div> {
-        let ui_scale = UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics);
+    pub fn render(self) -> Stateful<Div> {
         let Self {
             id,
             tabs,
@@ -254,7 +251,7 @@ impl TabBar {
             .flex()
             .items_end()
             .w_full()
-            .h(ui_scale.row_height(TAB_HEIGHT_PX, 40.0))
+            .h(px(TAB_HEIGHT_PX))
             .overflow_x_scroll()
             .scrollbar_width(px(0.0))
             .when_some(scroll.as_ref(), |this, scroll| {

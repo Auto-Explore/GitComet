@@ -51,6 +51,7 @@ pub struct Button {
     start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
     separate_end_slot: bool,
+    unscaled: bool,
 }
 
 impl Button {
@@ -73,6 +74,7 @@ impl Button {
             start_slot: None,
             end_slot: None,
             separate_end_slot: false,
+            unscaled: false,
         }
     }
 
@@ -165,6 +167,24 @@ impl Button {
         self
     }
 
+    /// Pins the button's geometry, ignoring the app's UI scale, density and
+    /// font size. For window chrome, which shares its row with OS controls that
+    /// never resize (see `chrome::CHROME_SCALE_PERCENT`).
+    pub fn unscaled(mut self) -> Self {
+        self.unscaled = true;
+        self
+    }
+
+    /// The scale a button sizes itself from: the app's, unless it has been
+    /// pinned by [`Self::unscaled`].
+    fn scale_for(unscaled: bool, app_scale: impl Into<UiScale>, theme: AppTheme) -> UiScale {
+        if unscaled {
+            UiScale::from_percent(crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
+        } else {
+            app_scale.into().with_appearance(theme.metrics)
+        }
+    }
+
     pub fn on_click<V: 'static>(
         self,
         theme: AppTheme,
@@ -229,8 +249,9 @@ impl Button {
             start_slot,
             end_slot,
             separate_end_slot,
+            unscaled,
         } = self;
-        let ui_scale = ui_scale.into().with_appearance(theme.metrics);
+        let ui_scale = Self::scale_for(unscaled, ui_scale, theme);
 
         let transparent = gpui::rgba(0x00000000);
         let outlined_border = if theme.is_dark {

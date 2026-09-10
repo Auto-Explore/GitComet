@@ -954,10 +954,13 @@ fn macos_app_menus(cx: &mut App) -> Vec<Menu> {
     )
 }
 
-#[cfg(target_os = "macos")]
+/// The menus as they look with a normal window open, so the tests that care
+/// about the external-editor item do not have to restate that half.
+#[cfg(all(test, target_os = "macos"))]
 fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec<Menu> {
     macos_app_menus_with_options(external_editor_configured, true)
 }
+
 
 #[cfg(target_os = "macos")]
 fn macos_app_menus_with_options(

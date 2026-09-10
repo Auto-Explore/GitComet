@@ -61,15 +61,12 @@ impl Render for SettingsWindowView {
             .flex()
             .items_center()
             .min_w(px(0.0))
-            .px(crate::ui_scale::design_px_from_percent(
-                12.0,
-                self.ui_scale_percent,
-            ))
+            // The header is a window title bar, so it holds one size at every
+            // UI scale, density and font size (see `chrome::CHROME_SCALE_PERCENT`).
+            .px(px(12.0))
             .window_control_area(WindowControlArea::Drag)
             .when(is_macos, |this| {
-                this.pl(settings_window_traffic_lights_safe_inset(
-                    self.ui_scale_percent,
-                ))
+                this.pl(settings_window_traffic_lights_safe_inset())
             })
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 if !chrome::should_handle_titlebar_double_click(e.click_count(), e.standard_click())
@@ -117,15 +114,14 @@ impl Render for SettingsWindowView {
             .child(
                 div()
                     .overflow_hidden()
-                    .text_size(theme.ui_text(13.0))
-                    .line_height(theme.ui_text(16.0))
+                    .text_size(px(13.0))
+                    .line_height(px(16.0))
                     .font_weight(FontWeight::BOLD)
                     .whitespace_nowrap()
                     .child(SETTINGS_WINDOW_TITLE),
             );
 
         let min = chrome::titlebar_control_button(
-            self.ui_scale_percent,
             "settings_window_min_btn",
             "icons/generic_minimize.svg",
             theme.colors.foreground.secondary,
@@ -145,7 +141,6 @@ impl Render for SettingsWindowView {
             "icons/generic_maximize.svg"
         };
         let max = chrome::titlebar_control_button(
-            self.ui_scale_percent,
             "settings_window_max_btn",
             max_icon,
             theme.colors.foreground.secondary,
@@ -161,7 +156,6 @@ impl Render for SettingsWindowView {
         }));
 
         let close = chrome::titlebar_control_button(
-            self.ui_scale_percent,
             "settings_window_close_btn",
             "icons/generic_close.svg",
             theme.colors.foreground.secondary,
@@ -179,10 +173,7 @@ impl Render for SettingsWindowView {
         let frame_rounding = chrome::client_frame_corner_rounding(theme, window);
         let header = div()
             .id("settings_window_header")
-            .h(chrome::title_bar_height(
-                ui_scale::UiScale::from_percent(self.ui_scale_percent)
-                    .with_appearance(self.theme.metrics),
-            ))
+            .h(chrome::title_bar_height())
             .w_full()
             .flex()
             .items_center()

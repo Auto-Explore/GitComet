@@ -138,10 +138,8 @@ fn builds_pure_components_without_panics() {
             let tab = components::Tab::new(("t", 1u64))
                 .selected(true)
                 .child(div().child("Repo"))
-                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
-            let _ = components::TabBar::new("tb")
-                .tab(tab)
-                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
+                .render(theme);
+            let _ = components::TabBar::new("tb").tab(tab).render();
         });
 
         assert_no_panic("view::window_frame", || {
@@ -215,7 +213,7 @@ impl gpui::Render for SmokeView {
                             .debug_selector(|| "smoke_selected_tab_content".to_string())
                             .child("One"),
                     )
-                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
+                    .render(theme)
                     .debug_selector(|| "smoke_selected_tab".to_string()),
             )
             .tab(
@@ -226,10 +224,10 @@ impl gpui::Render for SmokeView {
                             .debug_selector(|| "smoke_idle_tab_content".to_string())
                             .child("Two"),
                     )
-                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
+                    .render(theme)
                     .debug_selector(|| "smoke_idle_tab".to_string()),
             )
-            .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
+            .render();
 
         let content = div()
             .flex()
@@ -4184,6 +4182,71 @@ fn roomy_repo_tab_expands_to_show_its_full_repository_name(cx: &mut gpui::TestAp
         repo_tab_scroll(cx, &view).1,
         px(0.0),
         "expected the single naturally sized tab not to overflow the strip"
+    );
+}
+
+/// The window chrome is deliberately outside the UI scale: a title bar shares
+/// its row with the OS window controls, which do not resize, so the bar, its
+/// buttons and the repository tabs must not move when the workspace under them
+/// zooms.
+#[gpui::test]
+fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
+    cx: &mut gpui::TestAppContext,
+) {
+    fn height(cx: &mut gpui::VisualTestContext, selector: &'static str, at: u32) -> gpui::Pixels {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("missing {selector} at {at}% UI scale"))
+            .size
+            .height
+    }
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_fixed_chrome_{}",
+        std::process::id()
+    ));
+    let repo_id = restore_session_and_draw(cx, &store_for_test, view.clone(), vec![workdir])[0];
+
+    let fixed = [
+        "titlebar_drag",
+        "repo_picker_toggle",
+        repo_tab_selector(repo_id),
+        repo_tab_label_text_selector(repo_id),
+    ];
+    // Proves the zoom actually landed: without it every assertion below would
+    // also hold for a scale change that never took effect.
+    let zooms = "sidebar_tab_files";
+
+    let at_default =
+        fixed.map(|selector| height(cx, selector, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT));
+    let zooms_at_default = height(cx, zooms, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+
+    for percent in [80, 200] {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                crate::ui_scale::set_current(cx, percent);
+                this.apply_ui_scale_percent(percent, window, cx);
+            });
+        });
+        sync_view_for_tests(cx, &view);
+
+        for (ix, selector) in fixed.into_iter().enumerate() {
+            assert_eq!(
+                height(cx, selector, percent),
+                at_default[ix],
+                "{selector} sits in the title bar and must not move at {percent}% UI scale"
+            );
+        }
+    }
+
+    assert!(
+        height(cx, zooms, 200) > zooms_at_default,
+        "the workspace under the title bar must still zoom"
     );
 }
 

@@ -1,10 +1,10 @@
 use crate::theme::AppTheme;
-use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{AnyElement, Div, ElementId, IntoElement, Pixels, Stateful, Window, div, point, px};
 
 /// Tab height inside the title bar; the difference to the bar height is the
-/// uncovered title chrome above a browser-style repository tab.
+/// uncovered title chrome above a browser-style repository tab. Fixed like the
+/// rest of the window chrome (see `chrome::CHROME_SCALE_PERCENT`).
 pub(super) const TAB_HEIGHT_PX: f32 = 34.0;
 
 /// Paints the selected tab as one continuous browser-style silhouette. The
@@ -159,6 +159,12 @@ impl Tab {
     /// Tabs shrink no further than this before the strip scrolls. Public so
     /// tests can pin the floor without restating the number.
     pub const MIN_WIDTH_PX: f32 = 126.0;
+    /// Vertical room a tab gives its children: its height less the insets that
+    /// fuse it to the bar and its top border. Nothing lays out against it --
+    /// it exists so the strip's own tests can pin what has to fit in there.
+    #[cfg(test)]
+    pub const CONTENT_HEIGHT_PX: f32 =
+        TAB_HEIGHT_PX - Self::TAB_TOP_PADDING_PX - Self::TAB_BOTTOM_FUSE_PAD_PX - 1.0;
 
     /// Overlay an idle tab picks up on hover. Exposed so anything painted on
     /// top of a tab (the label fade) can flatten it into a matching color.
@@ -179,15 +185,6 @@ impl Tab {
             border.blue + (text.blue - border.blue) * amount,
             border.alpha + (text.alpha - border.alpha) * amount,
         )
-    }
-
-    /// Vertical room a tab gives its children: its height less the insets that
-    /// fuse it to the bar and its top border.
-    pub fn content_height(ui_scale: impl Into<UiScale>) -> Pixels {
-        let ui_scale = ui_scale.into();
-        ui_scale.row_height(TAB_HEIGHT_PX, 40.0)
-            - ui_scale.px(Self::TAB_TOP_PADDING_PX + Self::TAB_BOTTOM_FUSE_PAD_PX)
-            - px(1.0)
     }
 
     pub fn new(id: impl Into<ElementId>) -> Self {
@@ -227,13 +224,11 @@ impl Tab {
     pub fn natural_width(
         content_width: gpui::Pixels,
         horizontal_padding: gpui::Pixels,
-        ui_scale: impl Into<UiScale>,
     ) -> gpui::Pixels {
-        let ui_scale = ui_scale.into();
         let chrome = horizontal_padding * 2.0
             // Left and right borders are physical one-pixel rules.
             + px(2.0);
-        (content_width + chrome).max(ui_scale.px(Self::MIN_WIDTH_PX))
+        (content_width + chrome).max(px(Self::MIN_WIDTH_PX))
     }
 
     pub fn end_slot(mut self, slot: impl IntoElement) -> Self {
@@ -246,12 +241,10 @@ impl Tab {
         self
     }
 
-    pub fn render(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Stateful<Div> {
-        let ui_scale = ui_scale.into().with_appearance(theme.metrics);
-        let scaled_px = crate::ui_scale::scaler(ui_scale);
+    pub fn render(self, theme: AppTheme) -> Stateful<Div> {
         let horizontal_padding = self
             .horizontal_padding
-            .unwrap_or_else(|| scaled_px(Self::TAB_HORIZONTAL_PADDING_PX));
+            .unwrap_or_else(|| px(Self::TAB_HORIZONTAL_PADDING_PX));
         let text_color = if self.selected {
             theme.colors.foreground.primary
         } else {
@@ -263,15 +256,15 @@ impl Tab {
                 theme.colors.surface.chrome,
                 Self::outline_color(theme),
                 px(theme.radii.control),
-                scaled_px(Self::TAB_BOTTOM_CURVE_RADIUS_PX),
+                px(Self::TAB_BOTTOM_CURVE_RADIUS_PX),
             )
         });
 
         let end_slot = self.end_slot.map(|slot| {
             div()
                 .absolute()
-                .top(scaled_px(Self::TAB_TOP_PADDING_PX))
-                .bottom(scaled_px(Self::TAB_BOTTOM_FUSE_PAD_PX))
+                .top(px(Self::TAB_TOP_PADDING_PX))
+                .bottom(px(Self::TAB_BOTTOM_FUSE_PAD_PX))
                 .right(horizontal_padding)
                 .flex()
                 .items_center()
@@ -293,12 +286,12 @@ impl Tab {
         let mut base = self
             .div
             .group("tab")
-            .h(ui_scale.row_height(TAB_HEIGHT_PX, 40.0))
-            .min_w(scaled_px(Self::MIN_WIDTH_PX))
-            .mx(scaled_px(Self::HORIZONTAL_MARGIN_PX))
+            .h(px(TAB_HEIGHT_PX))
+            .min_w(px(Self::MIN_WIDTH_PX))
+            .mx(px(Self::HORIZONTAL_MARGIN_PX))
             .px(horizontal_padding)
-            .pt(scaled_px(Self::TAB_TOP_PADDING_PX))
-            .pb(scaled_px(Self::TAB_BOTTOM_FUSE_PAD_PX))
+            .pt(px(Self::TAB_TOP_PADDING_PX))
+            .pb(px(Self::TAB_BOTTOM_FUSE_PAD_PX))
             .relative()
             .flex()
             .items_center()
