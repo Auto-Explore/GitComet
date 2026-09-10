@@ -1409,7 +1409,7 @@ impl PopoverHost {
             return;
         }
         if self.popover.as_ref().is_some_and(popover_is_confirm_dialog) {
-            self.close_popover(cx);
+            self.close_popover_and_restore_focus(window, cx);
             return;
         }
         match self.popover.as_ref() {
@@ -2347,12 +2347,16 @@ impl PopoverHost {
         if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
             self.cherry_pick_mainline = None;
         }
-        self.menu_invoker_focus =
-            if matches!(&kind, PopoverKind::AppMenu | PopoverKind::AddRepoMenu) {
-                window.focused(cx)
-            } else {
-                None
-            };
+        self.menu_invoker_focus = if matches!(
+            &kind,
+            PopoverKind::AppMenu
+                | PopoverKind::AddRepoMenu
+                | PopoverKind::StageConflictMarkersConfirm { .. }
+        ) {
+            window.focused(cx)
+        } else {
+            None
+        };
         // The diff panel takes focus on any left press inside it, so its focus
         // state at open time is a faithful record of where the click landed.
         self.popover_opened_from_diff_panel = self

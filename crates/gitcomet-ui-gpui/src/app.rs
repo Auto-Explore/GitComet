@@ -796,6 +796,8 @@ fn install_global_diff_shortcut_fallback(cx: &mut App) {
                     || context.contains("Terminal")
                     || context.contains("ContextMenu")
                     || context.contains("PopoverPrompt")
+                    || (context.contains("StatusSection")
+                        && crate::view::is_status_section_shortcut(&event.keystroke))
             })
         {
             return;

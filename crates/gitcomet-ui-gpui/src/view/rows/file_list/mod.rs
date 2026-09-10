@@ -275,7 +275,7 @@ fn arc_path(path: PathBuf) -> Arc<Path> {
     Arc::from(path.as_path())
 }
 
-type DirLookup = FxHashMap<Arc<str>, usize>;
+type DirLookup = FxHashMap<Arc<std::ffi::OsStr>, usize>;
 
 /// Two-stage plan cache. The trie is keyed on the projection alone so a chevron
 /// click only re-runs the flatten, not the grouping.

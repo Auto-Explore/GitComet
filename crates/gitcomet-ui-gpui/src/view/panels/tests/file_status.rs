@@ -5748,6 +5748,72 @@ fn status_folder_paths_do_not_capture_a_name_prefixed_sibling(cx: &mut gpui::Tes
     );
 }
 
+/// Folder actions must use the original path even when display labels collide.
+#[cfg(unix)]
+#[gpui::test]
+fn status_folder_actions_keep_non_utf8_directory_paths(cx: &mut gpui::TestAppContext) {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(642);
+    let paths = [
+        std::path::PathBuf::from(OsStr::from_bytes(b"bad\xff/nested/a.rs")),
+        std::path::PathBuf::from(OsStr::from_bytes(b"bad\xfe/nested/b.rs")),
+    ];
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = repo_with_unstaged_paths(repo_id, &[]);
+            let entries = Arc::new(
+                paths
+                    .iter()
+                    .map(|path| gitcomet_core::domain::FileStatus {
+                        path: path.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    })
+                    .collect(),
+            );
+            repo.worktree_status = Loadable::Ready(Arc::clone(&entries));
+            repo.staged_status = Loadable::Ready(entries);
+            repo.staged_status_rev = 1;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            this.details_pane.update(cx, |pane, cx| {
+                pane.set_file_list_layout(crate::view::FileListLayout::Tree, cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let repo = pane.active_repo().expect("repo");
+        for section in [StatusSection::CombinedUnstaged, StatusSection::Staged] {
+            let plan = pane.status_file_plan(repo, section);
+            let keys: Vec<_> = (0..plan.row_len())
+                .filter_map(|ix| match plan.row_at(crate::view::rows::RowIx(ix)) {
+                    Some(crate::view::rows::FileListRow::Directory { key, .. }) => Some(key),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(keys.len(), 2, "each raw directory needs its own action");
+            for path in &paths {
+                let key = keys
+                    .iter()
+                    .find(|key| key.as_ref() == path.parent().unwrap())
+                    .expect("folder action retains the raw path");
+                assert_eq!(
+                    pane.status_folder_subtree_paths(repo_id, section, key),
+                    vec![path.clone()],
+                );
+            }
+        }
+    });
+}
+
 /// Counts arrive on their own effect, after the list is drawn and without
 /// `worktree_status_rev` moving. Keyed on the status rev alone, the cache would
 /// keep serving pre-stats rows until some unrelated change shifted the key.

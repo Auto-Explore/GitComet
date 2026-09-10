@@ -69,6 +69,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_files_section_bounds_ref:
         std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
     pub(in super::super) status_section_resize: Option<StatusSectionResizeState>,
+    status_section_focus_handles: [FocusHandle; 4],
 
     pub(in super::super) untracked_scroll: UniformListScrollHandle,
     pub(in super::super) unstaged_scroll: UniformListScrollHandle,
@@ -474,6 +475,7 @@ impl DetailsPaneView {
             change_tracking_stack_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             commit_files_section_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             status_section_resize: None,
+            status_section_focus_handles: std::array::from_fn(|_| cx.focus_handle()),
             untracked_scroll: UniformListScrollHandle::default(),
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
@@ -1633,7 +1635,6 @@ impl DetailsPaneView {
         repo: &RepoState,
         section: StatusSection,
     ) -> Option<Arc<[usize]>> {
-        let base = StatusSectionEntries::source_order_indexes(repo, section)?;
         let sort = self.status_file_sort_for(section);
         let key = crate::view::rows::file_list_projection_key(
             repo.id.0,
@@ -1648,6 +1649,7 @@ impl DetailsPaneView {
         {
             return Some(Arc::clone(indexes));
         }
+        let base = StatusSectionEntries::source_order_indexes(repo, section)?;
         let entries = match section {
             StatusSection::Staged => repo.staged_status_entries()?,
             _ => repo.worktree_status_entries()?,
@@ -1975,7 +1977,7 @@ impl DetailsPaneView {
                 return false;
             };
 
-            if selection.is_empty() {
+            if selection.is_empty() && selection.explicit_section.is_none() {
                 last_status.remove(repo_id);
                 return false;
             }
@@ -1993,7 +1995,7 @@ impl DetailsPaneView {
                 reconcile_status_multi_selection_with_repo(selection, repo);
             }
 
-            if selection.is_empty() {
+            if selection.is_empty() && selection.explicit_section.is_none() {
                 last_status.remove(repo_id);
                 return false;
             }
@@ -2293,6 +2295,45 @@ impl DetailsPaneView {
         let _ = self.root_view.update(cx, |root, cx| {
             root.schedule_ui_settings_persist(cx);
         });
+    }
+
+    pub(in crate::view) fn status_section_focus_handle(
+        &self,
+        section: StatusSection,
+    ) -> &FocusHandle {
+        &self.status_section_focus_handles[Self::status_section_alignment_key(section) as usize]
+    }
+
+    pub(in crate::view) fn focus_status_section(
+        &self,
+        section: StatusSection,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        window.focus(self.status_section_focus_handle(section), cx);
+    }
+
+    pub(in super::super) fn status_section_container(
+        &self,
+        section: StatusSection,
+        cx: &gpui::Context<Self>,
+    ) -> gpui::Div {
+        div()
+            .key_context("StatusSection")
+            .track_focus(self.status_section_focus_handle(section))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _event, window, cx| {
+                    this.focus_status_section(section, window, cx);
+                }),
+            )
+            .on_key_down(
+                cx.listener(move |this, event: &gpui::KeyDownEvent, window, cx| {
+                    if this.handle_status_section_shortcut(section, &event.keystroke, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
     }
 
     pub(in super::super) fn focus_diff_panel(

@@ -213,8 +213,8 @@ pub(in super::super) struct PopoverHost {
     /// opens; drafts are intentionally session-local.
     cherry_pick_mainline: Option<usize>,
     context_menu_focus_handle: FocusHandle,
-    /// Focus held by the App/Add Repository menu invoker, restored when that
-    /// menu is dismissed without replacing it with another prompt.
+    /// Focus held by the App/Add Repository menu or staging confirmation invoker,
+    /// restored when dismissed without replacing it with another prompt.
     menu_invoker_focus: Option<FocusHandle>,
     /// Whether the open popover was invoked from inside the diff panel.
     ///

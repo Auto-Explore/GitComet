@@ -226,6 +226,8 @@ pub(crate) fn status_section_is_loading(repo: &RepoState, section: StatusSection
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StatusMultiSelection {
+    /// An explicit empty selection must not fall back to the previewed file.
+    pub(crate) explicit_section: Option<StatusSection>,
     pub(crate) untracked: Vec<std::path::PathBuf>,
     pub(crate) untracked_anchor: Option<std::path::PathBuf>,
     pub(crate) unstaged: Vec<std::path::PathBuf>,
@@ -239,6 +241,46 @@ pub(crate) struct StatusMultiSelection {
 }
 
 impl StatusMultiSelection {
+    pub(crate) fn select_all(
+        &mut self,
+        section: StatusSection,
+        paths: Vec<std::path::PathBuf>,
+        order_rev: u64,
+    ) {
+        let previous_anchor = match section {
+            StatusSection::CombinedUnstaged | StatusSection::Unstaged => &self.unstaged_anchor,
+            StatusSection::Untracked => &self.untracked_anchor,
+            StatusSection::Staged => &self.staged_anchor,
+        };
+        let anchor_index = previous_anchor
+            .as_ref()
+            .and_then(|anchor| paths.iter().position(|path| path == anchor))
+            .or_else(|| (!paths.is_empty()).then_some(0));
+        let anchor = anchor_index.map(|ix| paths[ix].clone());
+        *self = Self {
+            explicit_section: Some(section),
+            ..Default::default()
+        };
+        match section {
+            StatusSection::CombinedUnstaged | StatusSection::Unstaged => {
+                self.unstaged = paths;
+                self.unstaged_anchor = anchor;
+                self.unstaged_anchor_index = anchor_index;
+                self.unstaged_anchor_order_rev = Some(order_rev);
+            }
+            StatusSection::Untracked => {
+                self.untracked = paths;
+                self.untracked_anchor = anchor;
+            }
+            StatusSection::Staged => {
+                self.staged = paths;
+                self.staged_anchor = anchor;
+                self.staged_anchor_index = anchor_index;
+                self.staged_anchor_order_rev = Some(order_rev);
+            }
+        }
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.untracked.is_empty() && self.unstaged.is_empty() && self.staged.is_empty()
     }

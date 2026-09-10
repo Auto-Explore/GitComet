@@ -367,11 +367,9 @@ impl MainPaneView {
             return (None, None);
         };
 
-        let (has_prev, has_next) = if let Some(inline) = self.active_inline_submodule_diff() {
-            (
-                inline.selected_ix > 0,
-                inline.selected_ix + 1 < inline.entries.len(),
-            )
+        let inline_neighbors = self.inline_diff_file_neighbors(repo_id, cx);
+        let (has_prev, has_next) = if let Some((prev_ix, next_ix)) = inline_neighbors {
+            (prev_ix.is_some(), next_ix.is_some())
         } else {
             let commit_file_source_indices = self
                 .root_view
@@ -427,6 +425,7 @@ impl MainPaneView {
                     cx.notify();
                 }
             })
+            .debug_selector(move || id.to_string())
             .gitcomet_tooltip(theme, SharedString::from(tooltip))
             .into_any_element()
         };

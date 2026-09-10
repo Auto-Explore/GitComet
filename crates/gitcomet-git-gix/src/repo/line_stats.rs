@@ -18,7 +18,7 @@ impl super::GixRepo {
     ) -> Result<UncommittedLineStats> {
         cancellation.check_cancelled()?;
         let repo = self.repo();
-        let staged = staged_line_stats(&repo)?;
+        let staged = staged_line_stats(&repo, cancellation)?;
         cancellation.check_cancelled()?;
         let unstaged = unstaged_line_stats(self, &repo, cancellation)?;
         Ok(UncommittedLineStats { staged, unstaged })
@@ -27,7 +27,10 @@ impl super::GixRepo {
 
 /// HEAD tree vs index. The walk hands us both blob ids, so this costs two
 /// object reads per changed file and no worktree traversal.
-fn staged_line_stats(repo: &gix::Repository) -> Result<FxHashMap<PathBuf, LineStats>> {
+fn staged_line_stats(
+    repo: &gix::Repository,
+    cancellation: &CancellationToken,
+) -> Result<FxHashMap<PathBuf, LineStats>> {
     let mut out = FxHashMap::default();
     // `tree_index_status` wants a tree; an unborn HEAD measures against the
     // empty tree.
@@ -40,13 +43,14 @@ fn staged_line_stats(repo: &gix::Repository) -> Result<FxHashMap<PathBuf, LineSt
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
     let mut scratch = CommitStatsScratch::default();
 
-    repo.tree_index_status(
+    let result = repo.tree_index_status(
         &head_tree_id,
         &index,
         None,
         gix::status::tree_index::TrackRenames::AsConfigured,
         |change, _, _| {
             use gix::diff::index::ChangeRef;
+            cancellation.check_cancelled()?;
             let (location, old_id, new_id) = match change {
                 ChangeRef::Addition { location, id, .. } => (location, None, Some(id.into_owned())),
                 ChangeRef::Deletion { location, id, .. } => (location, Some(id.into_owned()), None),
@@ -79,8 +83,10 @@ fn staged_line_stats(repo: &gix::Repository) -> Result<FxHashMap<PathBuf, LineSt
             );
             Ok::<_, Error>(std::ops::ControlFlow::Continue(()))
         },
-    )
-    .map_err(|e| {
+    );
+    // The walk wraps callback errors; preserve cancellation as its own error kind.
+    cancellation.check_cancelled()?;
+    result.map_err(|e| {
         Error::new(ErrorKind::Backend(format!(
             "gix tree/index line stats: {e}"
         )))
@@ -319,7 +325,6 @@ mod tests {
         );
     }
 
-    /// No HEAD to diff against, so the empty tree stands in.
     /// A repo that closed mid-scan must not keep this running.
     #[test]
     fn a_cancelled_token_stops_the_scan() {
@@ -346,6 +351,26 @@ mod tests {
             open_repo(workdir)
                 .uncommitted_line_stats_impl(&CancellationToken::new())
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn staged_walk_preserves_cancellation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        write_file(tmp.path(), "a.txt", &lines("staged", 3));
+        git_success(tmp.path(), &["add", "."]);
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let repo = open_repo(tmp.path()).repo();
+        let err = staged_line_stats(&repo, &cancellation).expect_err("cancelled staged walk");
+        assert!(matches!(err.kind(), ErrorKind::Cancelled), "{err:?}");
+        assert_eq!(
+            staged_line_stats(&repo, &CancellationToken::new())
+                .expect("uncancelled staged walk")
+                .len(),
+            1
         );
     }
 

@@ -506,6 +506,7 @@ mod worktree_uncommitted {
                 repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
                 repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));
                 repo.history_state.worktree_selection = Some(worktree_path.clone());
+                repo.diff_state.diff_target = Some(target.clone());
                 repo.diff_state.inline_submodule_diff =
                     Some(gitcomet_state::model::InlineSubmoduleDiffState {
                         origin: gitcomet_state::model::ForeignDiffOrigin::Worktree {
@@ -599,6 +600,8 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 2, crate::view::FileListLayout::Flat);
 
+        assert!(cx.debug_bounds("diff_prev_file").is_none());
+        assert!(cx.debug_bounds("diff_next_file").is_some());
         assert!(
             navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the first drawn row should move"
@@ -618,6 +621,8 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 0, crate::view::FileListLayout::Flat);
 
+        assert!(cx.debug_bounds("diff_prev_file").is_some());
+        assert!(cx.debug_bounds("diff_next_file").is_none());
         assert!(
             !navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the last drawn row must not jump back up the list"
@@ -633,6 +638,8 @@ mod worktree_uncommitted {
         let (view, cx) =
             draw_sorted_worktree_inline_diff(cx, repo_id, 2, crate::view::FileListLayout::Tree);
 
+        assert!(cx.debug_bounds("diff_prev_file").is_none());
+        assert!(cx.debug_bounds("diff_next_file").is_some());
         assert!(
             navigate_worktree_inline_diff(cx, &view, repo_id, 1),
             "next-file from the first drawn row should move in tree layout too"

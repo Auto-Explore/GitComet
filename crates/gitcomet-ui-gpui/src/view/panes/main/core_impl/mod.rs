@@ -209,6 +209,12 @@ impl MainPaneView {
                 0
             };
             status_rev.hash(&mut hasher);
+            // Edit-size sorting can change file neighbors without a status change.
+            let line_stats_rev = match repo.diff_state.diff_target.as_ref() {
+                Some(DiffTarget::WorkingTree { area, .. }) => repo.line_stats_rev(*area),
+                _ => 0,
+            };
+            line_stats_rev.hash(&mut hasher);
             let commit_details_rev = if matches!(
                 repo.diff_state.diff_target,
                 Some(DiffTarget::Commit { path: Some(_), .. })
@@ -1968,6 +1974,25 @@ impl MainPaneView {
             })
             .ok()
             .flatten()
+    }
+
+    /// Whether acting on this file will consume the singleton row selection.
+    /// Empty or unrelated selections must survive a shortcut in the diff pane.
+    pub(in crate::view) fn status_single_selection_for_shortcut(
+        &self,
+        repo_id: RepoId,
+        area: DiffArea,
+        path: &std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.root_view
+            .update(cx, |root, cx| {
+                root.details_pane
+                    .read(cx)
+                    .status_selected_paths_for_area(repo_id, area)
+                    == std::slice::from_ref(path)
+            })
+            .unwrap_or(false)
     }
 
     /// Drop the row selection a shortcut has just acted on.

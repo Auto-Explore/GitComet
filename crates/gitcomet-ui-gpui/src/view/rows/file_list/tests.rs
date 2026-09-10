@@ -436,6 +436,46 @@ fn a_non_utf8_path_component_still_forms_its_own_directory() {
         "expected `a` and the lossy child to be separate folders, got {dirs:?}"
     );
     assert_eq!(plan.ordered().len(), 2, "both files are still present");
+    let Some(FileListRow::Directory { key, chain, .. }) = plan.row_at(RowIx(1)) else {
+        panic!("expected the non-UTF-8 directory");
+    };
+    assert_eq!(key.as_ref(), owned[0].parent().unwrap());
+    assert_eq!(chain.last().unwrap().as_ref(), key.as_ref());
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_directories_with_identical_labels_keep_distinct_keys() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let paths = [
+        PathBuf::from(OsStr::from_bytes(b"bad\xff/nested/a.rs")),
+        PathBuf::from(OsStr::from_bytes(b"bad\xfe/nested/b.rs")),
+    ];
+    let tree = FileTree::build(
+        paths.iter().map(|path| FileTreeItem::new(path)),
+        CommitFileSort::PathAscending,
+    );
+    let plan = tree.flatten(&CollapsedDirs::default());
+    assert_eq!(
+        dir_labels(&plan),
+        ["bad\u{fffd}/nested", "bad\u{fffd}/nested"]
+    );
+    let mut collapsed = CollapsedDirs::default();
+    for (row, path) in [(0, &paths[0]), (2, &paths[1])] {
+        let Some(FileListRow::Directory { key, chain, .. }) = plan.row_at(RowIx(row)) else {
+            panic!("expected a separate directory for {path:?}");
+        };
+        assert_eq!(key.as_ref(), path.parent().unwrap());
+        assert_eq!(chain[0].as_ref(), path.parent().unwrap().parent().unwrap());
+        if row == 0 {
+            collapsed.collapse(key, &chain);
+        }
+    }
+    let plan = tree.flatten(&collapsed);
+    assert!(plan.row_ix_for_ordinal(FileOrdinal(0)).is_none());
+    assert!(plan.row_ix_for_ordinal(FileOrdinal(1)).is_some());
 }
 
 /// Every worktree in one scan shares a `worktree_dirty_rev`, so without the

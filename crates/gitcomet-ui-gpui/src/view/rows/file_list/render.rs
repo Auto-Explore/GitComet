@@ -126,7 +126,7 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
 
     gpui::div()
         .id(id)
-        // So a caller can absolutely position an action over the numbers.
+        // So a caller can position a trailing action at the row's right edge.
         .relative()
         .when_some(row_group, |row, group| row.group(group))
         .h(scaled(row_height_px))
@@ -169,7 +169,6 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
         )
         .child(
             gpui::div()
-                .flex_1()
                 .min_w(px(0.0))
                 .text_sm()
                 .line_height(scaled(18.0))
@@ -180,6 +179,7 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
                 .child(label.clone()),
         )
         .children(kind_badges(counts, theme, ui_scale_percent))
+        .child(gpui::div().flex_1().min_w(px(0.0)))
         .when(
             detail == DirectoryRowDetail::BadgesAndStat
                 && (additions.is_some() || deletions.is_some()),

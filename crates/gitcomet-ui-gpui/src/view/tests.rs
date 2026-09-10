@@ -33,6 +33,31 @@ fn selected_sidebar_branch_colors_come_from_theme_interaction_tokens() {
 }
 
 #[test]
+fn status_section_shortcuts_leave_modified_app_and_text_chords_alone() {
+    for chord in ["ctrl-a", "secondary-a", "ctrl-s", "secondary-u", "space"] {
+        assert!(
+            is_status_section_shortcut(&gpui::Keystroke::parse(chord).unwrap()),
+            "{chord}"
+        );
+    }
+    for chord in [
+        "a",
+        "s",
+        "ctrl-shift-a",
+        "secondary-shift-a",
+        "alt-a",
+        "alt-space",
+        "f4",
+        "secondary-f",
+    ] {
+        assert!(
+            !is_status_section_shortcut(&gpui::Keystroke::parse(chord).unwrap()),
+            "{chord}"
+        );
+    }
+}
+
+#[test]
 fn recent_repository_shortcut_is_not_a_diff_select_all_candidate() {
     let recent = gpui::Keystroke::parse("secondary-shift-a").expect("valid shortcut");
     let select_all = gpui::Keystroke::parse("secondary-a").expect("valid shortcut");
@@ -1359,6 +1384,7 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
     };
 
     let mut selection = StatusMultiSelection {
+        explicit_section: Some(StatusSection::CombinedUnstaged),
         untracked: vec![],
         untracked_anchor: None,
         unstaged: vec![a.clone(), b.clone()],

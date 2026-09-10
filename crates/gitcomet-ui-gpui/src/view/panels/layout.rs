@@ -475,7 +475,7 @@ fn status_section_action_selection(
 ) -> StatusSectionActionSelection {
     if let Some(selection) = selection {
         let paths = explicit_status_section_action_paths(selection, section);
-        if !paths.is_empty() {
+        if selection.explicit_section.is_some() || !paths.is_empty() {
             return StatusSectionActionSelection {
                 paths,
                 from_explicit_selection: true,
@@ -492,6 +492,68 @@ fn status_section_action_selection(
 }
 
 impl DetailsPaneView {
+    pub(in crate::view) fn handle_status_section_shortcut(
+        &mut self,
+        section: StatusSection,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if !is_status_section_shortcut(keystroke)
+            || !self.status_section_focus_handle(section).is_focused(window)
+        {
+            return false;
+        }
+        let Some(repo) = self.active_repo() else {
+            return true;
+        };
+        let repo_id = repo.id;
+        let area = section.diff_area();
+        let loading = match area {
+            DiffArea::Unstaged => repo.worktree_status_is_loading(),
+            DiffArea::Staged => repo.staged_status_is_loading(),
+        };
+        if loading || StatusSectionEntries::from_repo(repo, section).is_none() {
+            return true;
+        }
+        if keystroke.key == "a" {
+            let paths = self.status_display_order_paths(repo_id, section);
+            let order_rev = self.status_anchor_order_rev(repo, section);
+            self.status_multi_selection
+                .entry(repo_id)
+                .or_default()
+                .select_all(section, paths, order_rev);
+            cx.notify();
+            return true;
+        }
+        if repo.local_actions_in_flight > 0
+            || (keystroke.key == "s" && area != DiffArea::Unstaged)
+            || (keystroke.key == "u" && area != DiffArea::Staged)
+        {
+            return true;
+        }
+        let paths = self.status_section_action_selection(repo_id, section).paths;
+        // Empty path lists mean "all" to the backend, never "none".
+        if paths.is_empty() {
+            return true;
+        }
+        match area {
+            DiffArea::Unstaged => {
+                self.stage_all_with_conflict_confirmation(repo_id, paths, window, cx)
+            }
+            DiffArea::Staged => {
+                self.clear_status_multi_selection(repo_id);
+                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                self.store.dispatch(Msg::UnstagePaths {
+                    repo_id,
+                    paths: paths.into(),
+                });
+                cx.notify();
+            }
+        }
+        true
+    }
+
     fn status_section_action_selection(
         &self,
         repo_id: RepoId,
@@ -3246,7 +3308,8 @@ impl DetailsPaneView {
             );
             (top_height, (total_height - top_height).max(section_min_h))
         });
-        let unstaged_section = div()
+        let unstaged_section = self
+            .status_section_container(StatusSection::CombinedUnstaged, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3267,7 +3330,8 @@ impl DetailsPaneView {
                     .child(unstaged_body),
             );
 
-        let untracked_section = div()
+        let untracked_section = self
+            .status_section_container(StatusSection::Untracked, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3288,7 +3352,8 @@ impl DetailsPaneView {
                     .child(untracked_body),
             );
 
-        let split_unstaged_section = div()
+        let split_unstaged_section = self
+            .status_section_container(StatusSection::Unstaged, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3309,7 +3374,8 @@ impl DetailsPaneView {
                     .child(split_unstaged_body),
             );
 
-        let staged_section = div()
+        let staged_section = self
+            .status_section_container(StatusSection::Staged, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -4239,6 +4305,28 @@ mod tests {
             }
         );
         assert!(unstaged.paths.is_empty());
+    }
+
+    #[test]
+    fn status_explicit_empty_selection_does_not_fall_back_to_the_preview() {
+        let repo = repo_with_status(RepoStatus {
+            staged: Arc::new(vec![file_status("a.rs", FileStatusKind::Modified)]),
+            unstaged: Arc::new(vec![file_status("a.rs", FileStatusKind::Modified)]),
+        });
+        let selection = StatusMultiSelection {
+            explicit_section: Some(StatusSection::CombinedUnstaged),
+            ..Default::default()
+        };
+        for section in [StatusSection::CombinedUnstaged, StatusSection::Staged] {
+            let target = DiffTarget::WorkingTree {
+                path: "a.rs".into(),
+                area: section.diff_area(),
+            };
+            let action =
+                status_section_action_selection(&repo, Some(&target), Some(&selection), section);
+            assert!(action.paths.is_empty());
+            assert!(action.from_explicit_selection);
+        }
     }
 
     #[test]

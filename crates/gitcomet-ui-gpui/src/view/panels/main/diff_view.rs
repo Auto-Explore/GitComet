@@ -407,17 +407,22 @@ impl MainPaneView {
                 return true;
             }
 
+            let consumes_selection =
+                self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
             if self.confirm_stage_conflict_markers(
                 repo_id,
                 area,
                 vec![path.clone()],
-                false,
+                consumes_selection,
                 window,
                 cx,
             ) {
                 return true;
             }
 
+            if consumes_selection {
+                self.clear_status_selection_for_shortcut(repo_id, cx);
+            }
             match (status_ready, area) {
                 (true, DiffArea::Unstaged) => {
                     self.store.dispatch(Msg::StagePath {
@@ -542,17 +547,22 @@ impl MainPaneView {
                         return true;
                     }
 
+                    let consumes_selection =
+                        self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
                     if self.confirm_stage_conflict_markers(
                         repo_id,
                         area,
                         vec![path.clone()],
-                        false,
+                        consumes_selection,
                         window,
                         cx,
                     ) {
                         return true;
                     }
 
+                    if consumes_selection {
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                    }
                     if status_ready {
                         self.store.dispatch(Msg::StagePath {
                             repo_id,
@@ -611,6 +621,9 @@ impl MainPaneView {
                         return true;
                     }
 
+                    if self.status_single_selection_for_shortcut(repo_id, area, &path, cx) {
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                    }
                     if status_ready {
                         self.store.dispatch(Msg::UnstagePath {
                             repo_id,

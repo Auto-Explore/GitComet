@@ -295,6 +295,38 @@ impl MainPaneView {
             .flatten()
     }
 
+    /// Both the toolbar and its actions use these neighbors in display order.
+    pub(super) fn inline_diff_file_neighbors(
+        &self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<(Option<usize>, Option<usize>)> {
+        let inline = self.active_inline_submodule_diff()?;
+        let selected_ix = inline.selected_ix;
+        let entries_len = inline.entries.len();
+        // Worktree rows can be sorted or grouped into a tree; submodule rows
+        // follow source order.
+        let worktree_path = matches!(
+            inline.origin,
+            gitcomet_state::model::ForeignDiffOrigin::Worktree { .. }
+        )
+        .then(|| inline.submodule_repo_path.clone());
+        let drawn_order = worktree_path.and_then(|path| {
+            self.root_view
+                .update(cx, |root, cx| {
+                    root.details_pane
+                        .read(cx)
+                        .active_worktree_file_source_indices(repo_id, &path)
+                })
+                .ok()
+                .flatten()
+        });
+        Some((
+            adjacent_inline_diff_ix(selected_ix, entries_len, drawn_order.as_deref(), -1),
+            adjacent_inline_diff_ix(selected_ix, entries_len, drawn_order.as_deref(), 1),
+        ))
+    }
+
     fn try_select_adjacent_diff_file_inner(
         &mut self,
         repo_id: RepoId,
@@ -303,33 +335,12 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        if let Some(inline) = self.active_inline_submodule_diff() {
-            let selected_ix = inline.selected_ix;
-            let entries_len = inline.entries.len();
-            // A worktree's file list is sortable and can be drawn as a tree, so
-            // its rows are not in entry order; a submodule summary's list is
-            // neither, and steps through the entries as they come.
-            let worktree_path = matches!(
-                inline.origin,
-                gitcomet_state::model::ForeignDiffOrigin::Worktree { .. }
-            )
-            .then(|| inline.submodule_repo_path.clone());
-            let drawn_order = worktree_path.and_then(|path| {
-                self.root_view
-                    .update(cx, |root, cx| {
-                        root.details_pane
-                            .read(cx)
-                            .active_worktree_file_source_indices(repo_id, &path)
-                    })
-                    .ok()
-                    .flatten()
-            });
-            let Some(next_ix) = adjacent_inline_diff_ix(
-                selected_ix,
-                entries_len,
-                drawn_order.as_deref(),
-                direction,
-            ) else {
+        if let Some((prev_ix, next_ix)) = self.inline_diff_file_neighbors(repo_id, cx) {
+            let Some(next_ix) = (match direction {
+                d if d < 0 => prev_ix,
+                d if d > 0 => next_ix,
+                _ => None,
+            }) else {
                 return false;
             };
             if focus_diff_panel {

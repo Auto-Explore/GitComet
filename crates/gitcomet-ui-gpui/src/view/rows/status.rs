@@ -183,6 +183,7 @@ pub(super) fn apply_status_multi_selection_click(
     trust_clicked_index: bool,
     entries: Option<&[std::path::PathBuf]>,
 ) {
+    selection.explicit_section = Some(section);
     match section {
         StatusSection::CombinedUnstaged | StatusSection::Unstaged => {
             selection.untracked.clear();
@@ -405,7 +406,11 @@ fn render_status_rows_for_section(
         .iter()
         .map(std::path::PathBuf::as_path)
         .collect();
-    let multi_select_active = !selected_paths.is_empty();
+    let multi_select_active = this
+        .status_multi_selection
+        .get(&repo.id)
+        .is_some_and(|selection| selection.explicit_section.is_some())
+        || !selected_paths.is_empty();
     let submodule_statuses = submodule_status_lookup(repo);
     let theme = this.theme;
     let ui_scale = this.ui_scale();
@@ -450,7 +455,6 @@ fn render_status_rows_for_section(
                         );
                     let action = status_folder_action(
                         theme,
-                        ui_scale,
                         ix,
                         section,
                         repo_id,
@@ -605,16 +609,14 @@ struct StatusRowCtx {
     line_stats: Option<gitcomet_core::domain::LineStats>,
 }
 
-/// Stage/Unstage a whole folder, revealed on hover over the trailing numbers.
+/// Stage/Unstage a whole folder, revealed at the row's right edge on hover.
 ///
 /// Acts on the subtree alone, ignoring any multi-selection: clicking Stage on
 /// `src/` and having it stage files in `docs/` would be a surprise. Passes
 /// explicit paths, not a directory pathspec — `unstage_impl` filters conflicted
 /// paths by exact match, and a directory would slip past it.
-#[allow(clippy::too_many_arguments)]
 fn status_folder_action(
     theme: AppTheme,
-    ui_scale: crate::ui_scale::UiScale,
     ix: usize,
     section: StatusSection,
     repo_id: RepoId,
@@ -681,7 +683,6 @@ fn status_folder_action(
         .items_center()
         .invisible()
         .group_hover(row_group, |d| d.visible())
-        .pr(ui_scale.px(8.0))
         .child(button)
         .into_any_element()
 }
@@ -966,11 +967,15 @@ fn status_row(
         )
         .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
             let modifiers = _e.modifiers();
+            this.focus_status_section(section, window, cx);
+            let modifies_selection = modifiers.shift || modifiers.control || modifiers.platform;
             let target = DiffTarget::WorkingTree {
                 path: (*path_for_row).clone(),
                 area,
             };
             let should_unselect = _e.standard_click()
+                && this.status_selected_paths_for_area(repo_id, area)
+                    == std::slice::from_ref(path_for_row.as_ref())
                 && this.active_repo().is_some_and(|repo| {
                     repo.id == repo_id && repo.diff_state.diff_target.as_ref() == Some(&target)
                 });
@@ -989,16 +994,19 @@ fn status_row(
                 modifiers,
                 entries.as_deref(),
             );
+            if modifies_selection {
+                cx.notify();
+                return;
+            }
             if should_unselect {
+                this.clear_status_multi_selection(repo_id);
                 this.store.dispatch(Msg::ClearDiffSelection { repo_id });
             } else if is_conflicted && area == DiffArea::Unstaged {
-                this.focus_diff_panel(window, cx);
                 this.store.dispatch(Msg::SelectConflictDiff {
                     repo_id,
                     path: (*path_for_row).clone(),
                 });
             } else {
-                this.focus_diff_panel(window, cx);
                 this.store.dispatch(Msg::SelectDiff { repo_id, target });
             }
             cx.notify();
@@ -1202,6 +1210,80 @@ mod tests {
             Some(SubmoduleStatus::NotInitialized)
         );
         assert_eq!(lookup.get(std::path::Path::new("vendor/other")), None);
+    }
+
+    #[test]
+    fn status_select_all_preserves_the_anchor_and_supports_range_replacement() {
+        for section in [
+            StatusSection::CombinedUnstaged,
+            StatusSection::Untracked,
+            StatusSection::Unstaged,
+            StatusSection::Staged,
+        ] {
+            let mut selection = StatusMultiSelection::default();
+            apply_status_multi_selection_click(
+                &mut selection,
+                section,
+                pb("b"),
+                Some(1),
+                gpui::Modifiers::default(),
+                Some(1),
+                true,
+                None,
+            );
+            let order = vec![pb("d"), pb("c"), pb("b"), pb("a")];
+            selection.select_all(section, order.clone(), 2);
+            assert_eq!(
+                selection.selected_paths_for_area(section.diff_area()),
+                &order
+            );
+            apply_status_multi_selection_click(
+                &mut selection,
+                section,
+                pb("d"),
+                Some(0),
+                gpui::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+                Some(2),
+                true,
+                Some(&order),
+            );
+            assert_eq!(
+                selection.selected_paths_for_area(section.diff_area()),
+                &order[..3]
+            );
+            for (ix, path) in order[..3].iter().enumerate() {
+                apply_status_multi_selection_click(
+                    &mut selection,
+                    section,
+                    path.clone(),
+                    Some(ix),
+                    gpui::Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                    Some(2),
+                    true,
+                    None,
+                );
+            }
+            assert!(selection.is_empty());
+            assert_eq!(selection.explicit_section, Some(section));
+        }
+    }
+
+    #[test]
+    fn status_select_all_switches_sections_and_uses_the_first_file_without_an_anchor() {
+        let mut selection = StatusMultiSelection::default();
+        selection.select_all(StatusSection::Untracked, vec![pb("new")], 1);
+        selection.select_all(StatusSection::Staged, vec![pb("z"), pb("a")], 2);
+        assert!(selection.untracked.is_empty());
+        assert!(selection.untracked_anchor.is_none());
+        assert_eq!(selection.staged_anchor, Some(pb("z")));
+        assert_eq!(selection.staged_anchor_index, Some(0));
+        assert_eq!(selection.explicit_section, Some(StatusSection::Staged));
     }
 
     #[test]

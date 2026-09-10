@@ -94,10 +94,8 @@ impl FileTree {
             let mut components = item.path.components().peekable();
             let mut prefix = PathBuf::new();
             while let Some(component) = components.next() {
-                // Lossy, not skipped: dropping a component would register
-                // every deeper node under a path missing a segment.
-                let segment = component.as_os_str().to_string_lossy();
-                let segment = segment.as_ref();
+                // Directory identities must retain the bytes used by folder actions.
+                let segment = component.as_os_str();
                 prefix.push(segment);
                 if components.peek().is_none() {
                     break;
@@ -110,14 +108,16 @@ impl FileTree {
         tree
     }
 
-    fn child_dir(&mut self, parent: usize, segment: &str, path: &Path) -> usize {
+    fn child_dir(&mut self, parent: usize, segment: &std::ffi::OsStr, path: &Path) -> usize {
         if let Some(existing) = self.nodes[parent].dirs.get(segment) {
             return *existing;
         }
-        let key: Arc<str> = Arc::from(segment);
+        let key = Arc::from(segment);
         let child = self.nodes.len();
-        self.nodes
-            .push(DirNode::new(Arc::clone(&key), Arc::from(path)));
+        self.nodes.push(DirNode::new(
+            Arc::from(segment.to_string_lossy().as_ref()),
+            Arc::from(path),
+        ));
         self.nodes[parent].dirs.insert(key, child);
         self.nodes[parent]
             .entries
