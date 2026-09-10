@@ -8,7 +8,7 @@ use gpui::prelude::*;
 use gpui::{
     AbsoluteLength, App, AvailableSpace, Bounds, Context, Element, ElementId, FontWeight,
     GlobalElementId, HighlightStyle, InspectorElementId, IntoElement, LayoutId, Pixels, Rgba,
-    SharedString, TextAlign, WeakEntity, Window, div, point, px, rems, size,
+    SharedString, TextAlign, WeakEntity, Window, div, point, px, size,
 };
 use palette::IntoColor;
 use rustc_hash::FxHasher;
@@ -61,14 +61,16 @@ pub struct TruncatedText {
     path_alignment_group: Option<PathTruncationAlignmentGroup>,
     id: Option<ElementId>,
     text_color: Option<Rgba>,
-    text_size: Option<AbsoluteLength>,
+    text_size: AbsoluteLength,
     font_weight: Option<FontWeight>,
     font_family: Option<SharedString>,
     flex: TruncatedTextFlex,
 }
 
 impl TruncatedText {
-    pub fn new(text: impl Into<SharedString>) -> Self {
+    /// `text_size` is required, not inherited: the line is shaped in a deferred
+    /// closure that never sees the wrapping div's text style.
+    pub fn new(text: impl Into<SharedString>, text_size: impl Into<AbsoluteLength>) -> Self {
         Self {
             text: text.into(),
             profile: TextTruncationProfile::End,
@@ -79,15 +81,15 @@ impl TruncatedText {
             path_alignment_group: None,
             id: None,
             text_color: None,
-            text_size: None,
+            text_size: text_size.into(),
             font_weight: None,
             font_family: None,
             flex: TruncatedTextFlex::default(),
         }
     }
 
-    pub fn path(text: impl Into<SharedString>) -> Self {
-        Self::new(text).profile(TextTruncationProfile::Path)
+    pub fn path(text: impl Into<SharedString>, text_size: impl Into<AbsoluteLength>) -> Self {
+        Self::new(text, text_size).profile(TextTruncationProfile::Path)
     }
 
     pub fn id(mut self, id: impl Into<ElementId>) -> Self {
@@ -124,16 +126,6 @@ impl TruncatedText {
         self
     }
 
-    pub fn text_size(mut self, text_size: impl Into<AbsoluteLength>) -> Self {
-        self.text_size = Some(text_size.into());
-        self
-    }
-
-    pub fn text_sm(mut self) -> Self {
-        self.text_size = Some(rems(0.875).into());
-        self
-    }
-
     pub fn font_family(mut self, font_family: impl Into<SharedString>) -> Self {
         self.font_family = Some(font_family.into());
         self
@@ -160,9 +152,10 @@ impl TruncatedText {
 
     pub(crate) fn aligned_path(
         text: impl Into<SharedString>,
+        text_size: impl Into<AbsoluteLength>,
         path_alignment_group: PathTruncationAlignmentGroup,
     ) -> Self {
-        Self::path(text).path_alignment_group(path_alignment_group)
+        Self::path(text, text_size).path_alignment_group(path_alignment_group)
     }
 
     pub fn render<V: 'static>(self, cx: &Context<V>) -> impl IntoElement {
@@ -256,7 +249,7 @@ struct TruncatedTextElement {
     owner_view_id: EntityId,
     path_alignment_group: Option<PathTruncationAlignmentGroup>,
     text_color: Option<Rgba>,
-    text_size: Option<AbsoluteLength>,
+    text_size: AbsoluteLength,
     font_weight: Option<FontWeight>,
     font_family: Option<SharedString>,
 }
@@ -304,9 +297,7 @@ impl Element for TruncatedTextElement {
                 if let Some(text_color) = text_color {
                     base_style.color = text_color.into_color();
                 }
-                if let Some(text_size) = text_size {
-                    base_style.font_size = text_size;
-                }
+                base_style.font_size = text_size;
                 if let Some(font_weight) = font_weight {
                     base_style.font_weight = font_weight;
                 }
@@ -450,7 +441,7 @@ mod tests {
                         .text_size(self.font_size)
                         .line_height(self.line_height)
                         .child(
-                            TruncatedText::path(PATH_A)
+                            TruncatedText::path(PATH_A, self.font_size)
                                 .path_alignment_group(group.clone())
                                 .render(cx),
                         ),
@@ -461,12 +452,58 @@ mod tests {
                         .text_size(self.font_size)
                         .line_height(self.line_height)
                         .child(
-                            TruncatedText::path(PATH_B)
+                            TruncatedText::path(PATH_B, self.font_size)
                                 .path_alignment_group(group)
                                 .render(cx),
                         ),
                 )
         }
+    }
+
+    struct SizedTextBlock;
+
+    impl Render for SizedTextBlock {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .flex_col()
+                .text_size(px(28.0))
+                .child(
+                    div()
+                        .debug_selector(|| "sized_small".to_string())
+                        .child(TruncatedText::new("label", px(11.0)).render(cx)),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "sized_large".to_string())
+                        .child(TruncatedText::new("label", px(22.0)).render(cx)),
+                )
+        }
+    }
+
+    /// Two labels under one ancestor: their boxes differ only if the
+    /// constructed size reached the shaping.
+    #[gpui::test]
+    fn the_constructed_size_drives_the_line_box_not_the_ancestor(cx: &mut gpui::TestAppContext) {
+        let _guard = crate::test_support::lock_visual_test();
+        let (_view, cx) = cx.add_window_view(|_window, _cx| SizedTextBlock);
+        crate::view::test_support::redraw(cx);
+
+        let small = cx
+            .debug_bounds("sized_small")
+            .expect("expected the small label")
+            .size
+            .height;
+        let large = cx
+            .debug_bounds("sized_large")
+            .expect("expected the large label")
+            .size
+            .height;
+
+        assert!(
+            small < large,
+            "the constructed size must reach the shaped line; \
+             two labels under one ancestor measured {small:?} and {large:?}"
+        );
     }
 
     #[test]

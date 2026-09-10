@@ -96,11 +96,13 @@ pub(super) fn split_conflict_row_canvas(
         },
         move |bounds, prepaint, window, cx| {
             let gutter_style = canvas_text::diff_text_style(window);
-            let line_metrics = line_metrics(window);
+            let line_metrics = line_metrics(window, theme);
             let y = center_text_y(bounds, line_metrics.line_height);
             let pad = px_2(window);
             let gap = pad;
-            let line_no_w = conflict_line_no_width(ui_scale_percent);
+            let line_no_w = conflict_line_no_width(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            );
             let clip_bounds = window.content_mask().bounds;
             let left_gutter =
                 sticky_gutter_bounds(prepaint.left_col, clip_bounds, pad, gap, line_no_w);
@@ -296,10 +298,10 @@ pub(super) fn split_conflict_row_canvas(
             }
         },
     )
-    .h(conflict_row_height(ui_scale_percent))
+    .h(theme.editor_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
-    .text_xs()
+    .text_size(theme.editor_font_size(ui_scale_percent))
     .whitespace_nowrap()
     .into_any_element()
 }
@@ -345,11 +347,13 @@ pub(super) fn single_column_conflict_canvas(
         move |bounds, _window, _cx| bounds,
         move |bounds, _prepaint, window, cx| {
             let gutter_style = canvas_text::diff_text_style(window);
-            let line_metrics = line_metrics(window);
+            let line_metrics = line_metrics(window, theme);
             let y = center_text_y(bounds, line_metrics.line_height);
             let pad = px_2(window);
             let gap = pad;
-            let line_no_w = conflict_line_no_width(ui_scale_percent);
+            let line_no_w = conflict_line_no_width(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            );
             let clip_bounds = window.content_mask().bounds;
             let gutter_bounds = sticky_gutter_bounds(bounds, clip_bounds, pad, gap, line_no_w);
 
@@ -596,10 +600,10 @@ pub(super) fn single_column_conflict_canvas(
             }
         },
     )
-    .h(conflict_row_height(ui_scale_percent))
+    .h(theme.editor_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
-    .text_xs()
+    .text_size(theme.editor_font_size(ui_scale_percent))
     .whitespace_nowrap()
     .into_any_element()
 }

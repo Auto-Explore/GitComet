@@ -232,8 +232,6 @@ const HISTORY_ROW_HEIGHT_PX: f32 = 28.0;
 /// Widest a worktree row's badge may grow before its branch label truncates.
 /// Matches the sidebar's branch-row worktree pill.
 const HISTORY_WORKTREE_BADGE_MAX_W_PX: f32 = 200.0;
-/// Matches the history table's ref chips so the badge sits on the same rhythm.
-const HISTORY_WORKTREE_BADGE_HEIGHT_PX: f32 = 18.0;
 
 fn history_worktree_node_color_ix(
     graph_rows: Option<&[history_graph::GraphRow]>,
@@ -270,7 +268,7 @@ fn history_message_border(ui_scale: ui_scale::UiScale, color: gpui::Rgba) -> imp
 }
 
 pub(in crate::view) fn history_row_height(ui_scale: ui_scale::UiScale) -> Pixels {
-    ui_scale.px(HISTORY_ROW_HEIGHT_PX)
+    ui_scale.row_height(HISTORY_ROW_HEIGHT_PX, 36.0)
 }
 
 fn history_scope_shows_graph_color_marker(scope: gitcomet_core::domain::LogScope) -> bool {
@@ -486,7 +484,7 @@ fn worktree_uncommitted_history_row(
     summary: &gitcomet_core::domain::WorktreeDirtySummary,
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
-    let scaled_px = |value| ui_scale.px(value);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
     let band_node = super::history_graph_paint::band_node_for(
         graph_row,
@@ -558,7 +556,7 @@ fn worktree_uncommitted_history_row(
             .child(svg_icon(icon_path, color, scaled_px(12.0)))
             .child(
                 div()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(count.to_string()),
             )
@@ -602,7 +600,7 @@ fn worktree_uncommitted_history_row(
         theme,
         badge_label,
         scaled_px(9.0),
-        scaled_px(HISTORY_WORKTREE_BADGE_HEIGHT_PX),
+        super::sidebar::worktree_badge_height(ui_scale),
         scaled_px(HISTORY_WORKTREE_BADGE_MAX_W_PX),
         scaled_px(6.0),
     )
@@ -653,7 +651,7 @@ fn worktree_uncommitted_history_row(
             div()
                 .w(col_branch)
                 .flex_none()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .line_clamp(1)
                 .whitespace_nowrap()
                 .child(div()),
@@ -687,7 +685,7 @@ fn worktree_uncommitted_history_row(
             summary = summary.child(
                 div()
                     .flex_shrink_0()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(label_color)
                     .line_clamp(1)
                     .whitespace_nowrap()
@@ -742,7 +740,7 @@ fn working_tree_summary_history_row(
     counts: (usize, usize, usize),
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
-    let scaled_px = |value| ui_scale.px(value);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
     // The connector washes with its lane, like every other node in the graph;
     // the label still follows the row's relation to the selection.
@@ -759,7 +757,7 @@ fn working_tree_summary_history_row(
             .child(svg_icon(icon_path, color, scaled_px(12.0)))
             .child(
                 div()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(count.to_string()),
             )
@@ -806,8 +804,7 @@ fn working_tree_summary_history_row(
         |_, _, _| (),
         move |bounds, _, window, cx| {
             use gpui::{PathBuilder, point};
-            let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
-            let scaled_px = |value| px(value * design_scale_factor);
+            let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
             let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
             let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
             let node_x = margin_x + col_gap * 0.0;
@@ -865,7 +862,7 @@ fn working_tree_summary_history_row(
             div()
                 .w(col_branch)
                 .flex_none()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .line_clamp(1)
                 .whitespace_nowrap()
@@ -903,7 +900,7 @@ fn working_tree_summary_history_row(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(label_color)
                     .line_clamp(1)
                     .whitespace_nowrap()
@@ -925,7 +922,7 @@ fn working_tree_summary_history_row(
                     .flex()
                     .justify_end()
                     .px(cell_pad_x)
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .font_family(UI_MONOSPACE_FONT_FAMILY)
                     .text_color(theme.colors.foreground.secondary)
                     .whitespace_nowrap()

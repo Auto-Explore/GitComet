@@ -15,12 +15,6 @@ const MAX_CACHED_LINE_NUMBER: usize = 16_384;
 /// Design units, not device pixels: read it through [`conflict_line_no_width`].
 pub(in crate::view) const CONFLICT_DIFF_LINE_NO_WIDTH_PX: f32 = 38.0;
 
-/// Design height of one conflict source/output row. The resolver's text is
-/// shaped from `window.rem_size()`, which UI scale changes, so the row box has
-/// to follow it -- a flat 20px row holds a 41px line box at 200% and the text
-/// spills into the row below. Mirrors `diff_canvas::DIFF_ROW_HEIGHT_PX`.
-pub(in crate::view) const CONFLICT_ROW_HEIGHT_PX: f32 = 20.0;
-
 /// Design width of the accent/marker bar a conflict row paints at its left edge
 /// to flag the active conflict. Mirrors `diff_canvas::DIFF_CHANGE_BAR_WIDTH_PX`.
 pub(in crate::view) const CONFLICT_ROW_ACCENT_BAR_WIDTH_PX: f32 = 3.0;
@@ -37,13 +31,13 @@ pub(in crate::view) fn conflict_scaled_px(value: f32, ui_scale_percent: u32) -> 
 }
 
 #[inline]
-pub(in crate::view) fn conflict_row_height(ui_scale_percent: u32) -> Pixels {
-    conflict_scaled_px(CONFLICT_ROW_HEIGHT_PX, ui_scale_percent)
-}
-
-#[inline]
-pub(in crate::view) fn conflict_line_no_width(ui_scale_percent: u32) -> Pixels {
-    conflict_scaled_px(CONFLICT_DIFF_LINE_NO_WIDTH_PX, ui_scale_percent)
+pub(in crate::view) fn conflict_line_no_width(scale: impl Into<ui_scale::UiScale>) -> Pixels {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
+    conflict_scaled_px(
+        CONFLICT_DIFF_LINE_NO_WIDTH_PX * scale.appearance.editor_font_size_px as f32 / 13.0,
+        ui_scale_percent,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1848,17 +1842,20 @@ mod tests {
     fn conflict_row_geometry_scales_with_ui_scale() {
         for percent in [80, 100, 150, 200] {
             let factor = percent as f32 / 100.0;
-            let height: f32 = conflict_row_height(percent).into();
+            let height: f32 = AppTheme::gitcomet_dark().editor_row_height(percent).into();
             let line_no: f32 = conflict_line_no_width(percent).into();
+            let base = crate::appearance::Appearance::default().editor_line_height();
             assert!(
-                (height - CONFLICT_ROW_HEIGHT_PX * factor).abs() < 0.01,
+                (height - base * factor).abs() < 0.01,
                 "row height at {percent}% should be {}, got {height}",
-                CONFLICT_ROW_HEIGHT_PX * factor,
+                base * factor,
             );
+            // Also measured at the editor font, so anchor it at 100%.
+            let line_no_base: f32 = conflict_line_no_width(100).into();
             assert!(
-                (line_no - CONFLICT_DIFF_LINE_NO_WIDTH_PX * factor).abs() < 0.01,
+                (line_no - line_no_base * factor).abs() < 0.01,
                 "line-number width at {percent}% should be {}, got {line_no}",
-                CONFLICT_DIFF_LINE_NO_WIDTH_PX * factor,
+                line_no_base * factor,
             );
         }
 
@@ -1866,7 +1863,7 @@ mod tests {
         // onto the same geometry.
         let heights = crate::ui_scale::UI_SCALE_PRESETS
             .iter()
-            .map(|percent| f32::from(conflict_row_height(*percent)))
+            .map(|percent| f32::from(AppTheme::gitcomet_dark().editor_row_height(*percent)))
             .collect::<Vec<_>>();
         assert!(
             heights.windows(2).all(|pair| pair[0] < pair[1]),
@@ -1881,8 +1878,8 @@ mod tests {
     fn conflict_row_height_matches_the_diff_row_height() {
         for percent in crate::ui_scale::UI_SCALE_PRESETS.iter().copied() {
             assert_eq!(
-                conflict_row_height(percent),
-                crate::view::panes::main::diff_row_height_for_ui_scale(percent),
+                AppTheme::gitcomet_dark().editor_row_height(percent),
+                AppTheme::gitcomet_dark().editor_row_height(percent),
                 "conflict and diff rows disagree at {percent}%"
             );
         }

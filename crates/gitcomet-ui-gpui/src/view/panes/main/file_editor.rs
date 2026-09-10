@@ -1598,8 +1598,7 @@ impl MainPaneView {
         // gutter's rows and padding have to be too — a flat 20px row drifts a
         // whole line out of step every third line at 150%.
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let row_height =
-            ui_scale::design_px_from_percent(RESOLVED_OUTPUT_ROW_HEIGHT_PX, ui_scale_percent);
+        let row_height = self.theme.editor_row_height(ui_scale_percent);
         // Blame rides in the same gutter as the line numbers rather than in a
         // column of its own, so the editor keeps one scroll-synced strip.
         let blame_ctx = self.blame_render_ctx();
@@ -1611,8 +1610,11 @@ impl MainPaneView {
         };
         self.file_editor_blame = blame_ctx;
         self.file_editor_blame_width = blame_width;
-        let gutter_width =
-            file_editor_gutter_width(line_count, show_line_numbers, ui_scale_percent) + blame_width;
+        let gutter_width = file_editor_gutter_width(
+            line_count,
+            show_line_numbers,
+            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+        ) + blame_width;
         self.file_editor_gutter_row_height = row_height;
 
         // A wrapped line owns several rows in the buffer and must own the same
@@ -1847,7 +1849,7 @@ impl MainPaneView {
                                 .px_2()
                                 .flex()
                                 .justify_end()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.editor.line_number)
                                 .child(if is_continuation {
                                     String::new()
@@ -1976,8 +1978,10 @@ pub(in crate::view) fn file_editor_line_for_visual_row(
 pub(in crate::view) fn file_editor_gutter_width(
     line_count: usize,
     show_line_numbers: bool,
-    ui_scale_percent: u32,
+    scale: impl Into<ui_scale::UiScale>,
 ) -> Pixels {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
     if !show_line_numbers {
         return px(0.0);
     }
@@ -1985,5 +1989,5 @@ pub(in crate::view) fn file_editor_gutter_width(
     // clipped once the digits grow with the UI. The digit width itself is already
     // scaled by `resolved_output_line_no_width`.
     let padding = ui_scale::design_px_from_percent(8.0 + 8.0, ui_scale_percent);
-    rows::resolved_output_line_no_width(line_count, ui_scale_percent) + padding
+    rows::resolved_output_line_no_width(line_count, scale) + padding
 }

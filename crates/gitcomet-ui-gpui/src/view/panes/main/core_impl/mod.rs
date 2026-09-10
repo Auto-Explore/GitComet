@@ -566,19 +566,13 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_line_height(
-                Some(ui_scale::design_px_from_percent(20.0, next_percent)),
-                cx,
-            );
+            input.set_line_height(Some(self.theme.editor_row_height(next_percent)), cx);
         });
         // The editor's gutter sizes its rows from the same scale, so leaving
         // the buffer at the old line height would put the numbers out of step
         // with the code they label.
         self.file_editor_input.update(cx, |input, cx| {
-            input.set_line_height(
-                Some(ui_scale::design_px_from_percent(20.0, next_percent)),
-                cx,
-            );
+            input.set_line_height(Some(self.theme.editor_row_height(next_percent)), cx);
         });
         self.history_view.update(cx, |view, cx| {
             view.apply_ui_scale_percent(previous_percent, next_percent, cx);
@@ -587,6 +581,17 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
+        let row_height = self.theme.editor_row_height(ui_scale::current(cx).percent);
+        self.file_editor_gutter_row_height = row_height;
+        self.conflict_resolved_gutter_row_height = row_height;
+        self.file_editor_wrap_row_starts.clear();
+        self.diff_raw_input
+            .update(cx, |input, cx| input.set_line_height(Some(row_height), cx));
+        self.conflict_resolver_input
+            .update(cx, |input, cx| input.set_line_height(Some(row_height), cx));
+        self.file_editor_input
+            .update(cx, |input, cx| input.set_line_height(Some(row_height), cx));
+        self.clear_worktree_preview_segments_cache();
         self.diff_text_hitboxes.clear();
         self.diff_text_motion_targets.clear();
         self.diff_stage_gutter_cells.clear();

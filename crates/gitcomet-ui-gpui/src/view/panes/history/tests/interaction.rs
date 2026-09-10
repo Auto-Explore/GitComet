@@ -1068,18 +1068,14 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
                 .active_context_menu_invoker
                 .as_ref()
                 .map(|invoker| invoker.as_ref()),
-            Some("history_branch_chip_menu_1_tip_main"),
-            "a chip menu must pin the chip instead of the whole commit row"
+            Some("history_commit_menu_1_tip"),
+            "every chip opens the same commit-row menu"
         );
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchRefsMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                display_name: "main".to_string(),
-                targets: vec![
-                    BranchMenuTarget::local("main"),
-                    BranchMenuTarget::remote("origin", "main"),
-                ],
+                commit_id: commit_id.clone()
             })
         );
     });
@@ -1175,11 +1171,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                target: BranchMenuTarget::Local {
-                    name: "feature".to_string(),
-                },
+                commit_id: commit_id.clone()
             })
         );
     });
@@ -1210,10 +1204,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::TagRefMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone(),
-                name: "release".to_string()
+                commit_id: commit_id.clone()
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -1258,11 +1251,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                target: BranchMenuTarget::Local {
-                    name: "feature".to_string(),
-                },
+                commit_id: commit_id.clone()
             })
         );
     });
@@ -1289,10 +1280,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::TagRefMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone(),
-                name: "release".to_string()
+                commit_id: commit_id.clone()
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -1337,10 +1327,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::TagRefMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone(),
-                name: "release".to_string()
+                commit_id: commit_id.clone()
             })
         );
     });
@@ -1395,11 +1384,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
         .update(|_window, app| {
             assert_eq!(
                 crate::view::test_support::popover_kind(view.read(app), app),
-                Some(PopoverKind::BranchMenu {
+                Some(PopoverKind::CommitMenu {
                     repo_id,
-                    target: BranchMenuTarget::Local {
-                        name: "feature".to_string(),
-                    },
+                    commit_id: commit_id.clone()
                 })
             );
             assert_eq!(
@@ -1422,11 +1409,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                target: BranchMenuTarget::Local {
-                    name: "feature".to_string(),
-                },
+                commit_id: commit_id.clone()
             })
         );
         assert_eq!(
@@ -2159,11 +2144,9 @@ fn history_refs_hover_item_click_keeps_existing_history_selection(cx: &mut gpui:
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                target: BranchMenuTarget::Local {
-                    name: "feature".to_string(),
-                },
+                commit_id: hovered_commit.clone()
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -2318,11 +2301,9 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
         ));
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                target: BranchMenuTarget::Local {
-                    name: "feature".to_string(),
-                },
+                commit_id: CommitId("tip".into())
             })
         );
     });

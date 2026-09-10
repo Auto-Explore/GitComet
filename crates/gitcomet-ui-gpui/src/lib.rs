@@ -1,4 +1,5 @@
 mod app;
+mod appearance;
 mod assets;
 mod bundled_fonts;
 mod clipboard;

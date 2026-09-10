@@ -1043,6 +1043,7 @@ pub(in super::super) struct HistoryView {
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) ui_scale_percent: u32,
+    pub(in crate::view) appearance_metrics: crate::appearance::Appearance,
     pub(in super::super) date_time_format: DateTimeFormat,
     pub(in super::super) timezone: Timezone,
     pub(in super::super) show_timezone: bool,
@@ -1208,6 +1209,7 @@ impl HistoryView {
             state,
             theme,
             ui_scale_percent,
+            appearance_metrics: crate::appearance::current(cx),
             date_time_format,
             timezone,
             show_timezone,
@@ -1412,7 +1414,7 @@ impl HistoryView {
     }
 
     pub(in crate::view) fn ui_scale(&self) -> ui_scale::UiScale {
-        history_scale(self.ui_scale_percent)
+        history_scale(self.ui_scale_percent).with_appearance(self.appearance_metrics)
     }
 
     fn sync_history_column_widths_from_design(&mut self) {

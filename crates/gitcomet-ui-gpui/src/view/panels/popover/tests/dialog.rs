@@ -483,3 +483,44 @@ fn add_to_gitignore_prompt_submits_the_hand_edited_pattern(cx: &mut gpui::TestAp
         assert_popover_open(&view, app, false);
     });
 }
+
+/// Prompts share one rule, one detail line and one action row. Hand-rolling any
+/// of them is how the detail line ended up at two different sizes.
+#[test]
+fn prompts_use_the_shared_shell_pieces() {
+    let mut offenders = Vec::new();
+    let dir = std::path::Path::new("src/view/panels/popover");
+    for entry in std::fs::read_dir(dir).expect("read popover dir") {
+        let path = entry.expect("dir entry").path();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if !name.ends_with(".rs") || name == "mod.rs" {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("read source");
+        let compact: String = source.split_whitespace().collect::<Vec<_>>().join(" ");
+        for (pattern, helper) in [
+            (
+                "div() .border_t_1() .border_color(theme.colors.stroke.default)",
+                "popover_rule",
+            ),
+            (
+                "div() .px_2() .py_1() .flex() .items_center() .justify_between()",
+                "prompt_footer_row",
+            ),
+            (
+                ".px_2() .py_1() .text_size(theme.ui_text(14.0)) .text_color(theme.colors.foreground.secondary)",
+                "popover_detail",
+            ),
+        ] {
+            if compact.contains(pattern) {
+                offenders.push(format!("{name}: use `{helper}`"));
+            }
+        }
+    }
+
+    assert!(offenders.is_empty(), "{offenders:#?}");
+}

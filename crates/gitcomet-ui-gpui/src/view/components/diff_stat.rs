@@ -16,7 +16,7 @@ pub fn diff_stat(theme: AppTheme, scale: impl Into<UiScale>, added: usize, remov
             .min_w(part_min_w)
             .flex()
             .justify_end()
-            .text_xs()
+            .text_size(scale.ui_text(12.0))
             .text_color(color)
             .child(text)
     };

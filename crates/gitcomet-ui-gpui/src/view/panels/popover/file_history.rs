@@ -208,7 +208,7 @@ pub(super) fn panel(
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
     let width = super::LARGE_PICKER_WIDTH;
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
     // Only for the load-state arms below; the rows themselves come from the
     // cache, which resolves the repository and the marked commit itself.
     let repo = this.state.repos.iter().find(|r| r.id == repo_id);
@@ -234,17 +234,17 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(
                     div()
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
                         .font_weight(FontWeight::BOLD)
                         .child("File history"),
                 )
                 .child(
                     div()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .line_height(scaled_px(14.0))
                         .child(
-                            components::TruncatedText::path(title.clone())
+                            components::TruncatedText::path(title.clone(), theme.ui_text(12.0))
                                 .id(("file_history_title_path", repo_id.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .full_text_tooltip(this.tooltip_host.clone())
@@ -367,7 +367,7 @@ pub(super) fn panel(
             .py(scaled_px(4.0))
             .border_t_1()
             .border_color(theme.colors.stroke.default)
-            .text_xs()
+            .text_size(theme.ui_text(12.0))
             .text_color(theme.colors.foreground.secondary)
             .line_height(scaled_px(14.0))
             .child("Loading older commits…")
@@ -383,7 +383,7 @@ pub(super) fn panel(
             .flex_col()
             .w(width.preferred_px(ui_scale))
             .child(header)
-            .child(div().border_t_1().border_color(theme.colors.stroke.default))
+            .child(super::popover_rule(theme))
             .child(body)
             .children(footer),
     )

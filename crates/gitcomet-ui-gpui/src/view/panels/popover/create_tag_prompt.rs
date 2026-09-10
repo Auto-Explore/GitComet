@@ -49,7 +49,7 @@ fn annotated_toggle(
                 ))
             }),
     )
-    .child(div().text_sm().child("Annotated tag"))
+    .child(div().text_size(theme.ui_text(14.0)).child("Annotated tag"))
 }
 
 pub(super) fn panel(
@@ -68,16 +68,9 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(420.0))
-        .child(popover_title("Create tag"))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.foreground.secondary)
-                .child(format!("Target: {target}")),
-        )
+        .child(popover_title(theme, "Create tag"))
+        .child(super::popover_rule(theme))
+        .child(super::popover_detail(theme, format!("Target: {target}")))
         .child(
             div()
                 .px_2()
@@ -86,7 +79,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.create_tag_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
             annotated_toggle(
                 theme,
@@ -103,18 +96,18 @@ pub(super) fn panel(
             div()
                 .px_2()
                 .pb_1()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Annotated tags can be GPG signed and include a message"),
         )
         .when(annotated, |panel| {
             panel
-                .child(div().border_t_1().border_color(theme.colors.stroke.default))
+                .child(super::popover_rule(theme))
                 .child(
                     div()
                         .px_2()
                         .pt_1()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child("Annotation message"),
                 )
@@ -130,14 +123,9 @@ pub(super) fn panel(
                     ),
                 )
         })
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(
                     cancel_button("create_tag_cancel", "create_tag_cancel_hint", theme)
                         .focus_handle(this.create_tag_focus.cancel.clone())

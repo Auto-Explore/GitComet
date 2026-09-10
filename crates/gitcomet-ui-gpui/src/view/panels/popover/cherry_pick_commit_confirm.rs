@@ -119,13 +119,13 @@ pub(super) fn panel(
             .gap_1()
             .child(
                 div()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child("Mainline parent"),
             )
             .child(
                 div()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child("Choose the parent Git should treat as the merge's mainline."),
             )
@@ -144,17 +144,21 @@ pub(super) fn panel(
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().text_sm().child(format!("Parent {number}")))
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(theme.ui_text(14.0))
+                            .child(format!("Parent {number}")),
+                    )
+                    .child(
+                        div()
+                            .text_size(theme.ui_text(12.0))
                             .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                             .child(choice.short_id),
                     )
                     .when(!choice.refs.is_empty(), |line| {
                         line.child(div().flex_1()).child(
                             div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .whitespace_nowrap()
                                 .overflow_hidden()
                                 .child(choice.refs.join(", ")),
@@ -192,7 +196,7 @@ pub(super) fn panel(
                     .when_some(choice.summary, |row, summary| {
                         row.child(
                             div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .whitespace_nowrap()
                                 .overflow_hidden()
                                 .child(summary),

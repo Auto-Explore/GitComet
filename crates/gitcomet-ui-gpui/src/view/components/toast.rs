@@ -1,4 +1,5 @@
 use crate::theme::AppTheme;
+use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{Div, div, px};
 
@@ -9,7 +10,13 @@ pub enum ToastKind {
     Error,
 }
 
-pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div {
+pub fn toast(
+    theme: AppTheme,
+    ui_scale: impl Into<UiScale>,
+    kind: ToastKind,
+    message: impl IntoElement,
+) -> Div {
+    let ui_scale = ui_scale.into();
     let status = match kind {
         ToastKind::Success => theme.colors.status.success,
         ToastKind::Warning => theme.colors.status.warning,
@@ -34,25 +41,25 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div
     };
 
     div()
-        .min_w(px(360.0))
-        .max_w(px(900.0))
+        .min_w(ui_scale.px(360.0))
+        .max_w(ui_scale.px(900.0))
         .flex()
-        .gap(px(12.0))
+        .gap(ui_scale.px(12.0))
         .bg(bg)
         .border_1()
         .border_color(border)
         .rounded(px(theme.radii.popover))
         .overflow_hidden()
         .shadow(crate::theme::shadow_popover(theme))
-        .text_lg()
+        .text_size(theme.ui_text(18.0))
         .text_color(theme.colors.foreground.primary)
-        .child(div().w(px(5.0)).bg(accent).flex_shrink_0())
+        .child(div().w(ui_scale.px(5.0)).bg(accent).flex_shrink_0())
         .child(
             div()
                 .flex_1()
-                .pl(px(16.0))
-                .pr(px(48.0))
-                .py(px(12.0))
+                .pl(ui_scale.px(16.0))
+                .pr(ui_scale.px(48.0))
+                .py(ui_scale.px(12.0))
                 .child(message),
         )
 }

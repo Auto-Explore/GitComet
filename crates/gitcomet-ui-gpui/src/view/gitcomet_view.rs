@@ -839,6 +839,8 @@ impl GitCometView {
 
         let mut ui_session = session::load();
         let mut ui_preferences = UiPreferences::from_session(&ui_session);
+        crate::appearance::initialize(&ui_session, cx);
+        ui_preferences.appearance.metrics = crate::appearance::current(cx);
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         // The application-wide scale may already have been initialized by
         // another window. Keep the shared runtime preferences aligned with the
@@ -864,7 +866,9 @@ impl GitCometView {
         let restored_sidebar_collapsed = ui_preferences.window.sidebar_collapsed;
         let _ = crate::theme::ensure_user_themes_dir_exists();
         let theme_mode = ui_preferences.appearance.theme_mode.clone();
-        let initial_theme = theme_mode.resolve_theme(window.appearance());
+        let initial_theme = theme_mode
+            .resolve_theme(window.appearance())
+            .with_appearance(crate::appearance::current(cx));
         let date_time_format = ui_preferences.appearance.date_time_format;
         let timezone = ui_preferences.appearance.timezone;
         let show_timezone = ui_preferences.appearance.show_timezone;
@@ -1471,6 +1475,7 @@ impl GitCometView {
     }
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
+        let theme = theme.with_appearance(crate::appearance::current(cx));
         self.theme = theme;
         for session in self.terminal_sessions.values() {
             for instance in &session.instances {
@@ -1519,6 +1524,17 @@ impl GitCometView {
     }
 
     pub(super) fn notify_font_preferences_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        let metrics = crate::appearance::current(cx);
+        self.set_theme(self.theme.with_appearance(metrics), cx);
+        self.update_ui_preferences(cx, move |prefs| prefs.appearance.metrics = metrics);
+        self.details_pane
+            .update(cx, |pane, _| pane.appearance_metrics = metrics);
+        self.main_pane.update(cx, |pane, cx| {
+            pane.history_view.update(cx, |history, cx| {
+                history.appearance_metrics = metrics;
+                cx.notify();
+            });
+        });
         for session in self.terminal_sessions.values() {
             for instance in &session.instances {
                 instance.viewport.update(cx, |viewport, cx| {

@@ -838,10 +838,9 @@ impl CommandPaletteView {
             }
         }
         let focus_range = ranges.first().map(|(range, _)| range.clone());
-        let mut text = components::TruncatedText::new(label.to_owned())
+        let mut text = components::TruncatedText::new(label.to_owned(), self.theme.ui_text(14.0))
             .profile(components::TextTruncationProfile::End)
-            .text_color(self.theme.colors.foreground.primary)
-            .text_sm();
+            .text_color(self.theme.colors.foreground.primary);
         if let Some(focus_range) = focus_range {
             text = text.focus_range(Some(focus_range));
         }
@@ -859,7 +858,7 @@ impl CommandPaletteView {
     ) -> Vec<AnyElement> {
         let theme = self.theme;
         let ui_scale = ui_scale::UiScale::current(cx);
-        let scaled_px = |value: f32| ui_scale.px(value);
+        let scaled_px = crate::ui_scale::scaler(ui_scale);
         let row_height = scaled_px(36.0);
         let hover_overlay = theme.hover_overlay();
         let selected_overlay = theme.active_overlay();
@@ -875,7 +874,7 @@ impl CommandPaletteView {
                             .flex()
                             .items_center()
                             .px(scaled_px(14.0))
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.colors.foreground.secondary)
                             .child(title)
@@ -974,7 +973,7 @@ impl Render for CommandPaletteView {
 
         let theme = self.theme;
         let ui_scale = ui_scale::UiScale::current(cx);
-        let scaled_px = |value: f32| ui_scale.px(value);
+        let scaled_px = crate::ui_scale::scaler(ui_scale);
         let palette_width = scaled_px(620.0);
         let top_offset = scaled_px(56.0);
         let input_height = scaled_px(48.0);
@@ -993,7 +992,7 @@ impl Render for CommandPaletteView {
                 .items_center()
                 .justify_center()
                 .px(scaled_px(12.0))
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("No matching commands")
                 .into_any_element()

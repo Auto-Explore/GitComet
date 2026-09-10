@@ -5,6 +5,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const STATUS_ROW_HEIGHT_PX: f32 = 24.0;
+/// Line box for the path label, in UI-font units so it tracks the font
+/// setting like the label's own size.
+const STATUS_ROW_LINE_HEIGHT_PX: f32 = 18.0;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -470,7 +473,8 @@ fn render_status_rows_for_section(
                             collapsed,
                             additions: subtree_additions,
                             deletions: subtree_deletions,
-                            row_height_px: STATUS_ROW_HEIGHT_PX,
+                            row_height: crate::ui_scale::UiScale::current(cx)
+                                .row_height(STATUS_ROW_HEIGHT_PX, 32.0),
                             row_group: Some(group),
                             detail,
                         })
@@ -709,7 +713,7 @@ fn status_row(
         line_stats,
     } = ctx;
     let ix = row_ix;
-    let scaled_px = |value: f32| ui_scale.px(value);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     // Untracked is in neither index lane, so the column would always be blank.
     let show_line_stats = crate::view::status_section_has_line_stats(section);
     let area = section.diff_area();
@@ -830,7 +834,19 @@ fn status_row(
 
             cx.notify();
         })
-        .gitcomet_tooltip(theme, stage_tooltip.clone());
+        .debug_selector(move || {
+            format!(
+                "status_stage_button_{}_{}_{}",
+                repo_id.0,
+                section.id_label(),
+                ix
+            )
+        })
+        .gitcomet_tooltip(theme, stage_tooltip.clone())
+        // Sits in the row rather than filling it, so the row keeps some air.
+        .h(components::in_row_control_height(
+            crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics),
+        ));
 
     // Mirrors the row's own `.bg()` ladder below, so the badge disc is always
     // the colour of the row it is punched out of.
@@ -863,13 +879,15 @@ fn status_row(
         .flex()
         .items_center()
         .gap(scaled_px(8.0))
+        // Tree rows indent instead of taking a flat left pad; the right pad is
+        // the same either way.
         .pl(if is_tree {
             crate::view::rows::file_row_indent_px(depth, ui_scale.percent())
         } else {
             scaled_px(8.0)
         })
         .pr(scaled_px(8.0))
-        .h(scaled_px(STATUS_ROW_HEIGHT_PX))
+        .h(crate::ui_scale::UiScale::current(cx).row_height(STATUS_ROW_HEIGHT_PX, 32.0))
         .w_full()
         .cursor(CursorStyle::PointingHand)
         // Resting fill: without a tint the row stays transparent and the panel
@@ -952,19 +970,24 @@ fn status_row(
         ))
         .child(
             div()
-                .text_sm()
-                .line_height(scaled_px(18.0))
+                .text_size(theme.ui_text(14.0))
+                .line_height(theme.ui_text(STATUS_ROW_LINE_HEIGHT_PX))
                 .flex_1()
                 .min_w(px(0.0))
                 .child(
                     match path_alignment_group {
                         Some(group) => components::TruncatedText::aligned_path(
                             path_display_for_label.clone(),
+                            theme.ui_text(14.0),
                             group,
                         ),
-                        None => components::TruncatedText::new(path_display_for_label.clone()),
+                        // A tree row's label is a bare file name, so there is no
+                        // path to align against.
+                        None => components::TruncatedText::new(
+                            path_display_for_label.clone(),
+                            theme.ui_text(14.0),
+                        ),
                     }
-                    .text_sm()
                     .id(("status_row_path", ix))
                     .full_text_tooltip(tooltip_host)
                     .render(cx),

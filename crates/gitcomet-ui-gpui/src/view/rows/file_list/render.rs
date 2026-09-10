@@ -67,9 +67,12 @@ pub(in crate::view) struct DirectoryRowProps<'a> {
     pub(in crate::view) collapsed: bool,
     pub(in crate::view) additions: Option<u64>,
     pub(in crate::view) deletions: Option<u64>,
-    /// Must equal the list's file-row height: `uniform_list` measures row 0 and
-    /// applies that height to every row.
-    pub(in crate::view) row_height_px: f32,
+    /// Already resolved, and it must equal the list's file-row height:
+    /// `uniform_list` measures row 0 and applies that height to every row.
+    /// Resolved rather than a design number because row height is density- and
+    /// font-dependent now, and a folder row that recomputed it from a bare
+    /// design px would drift from the file rows it sits among.
+    pub(in crate::view) row_height: gpui::Pixels,
     /// Hover group for the trailing overlay; `None` on lists that cannot stage.
     pub(in crate::view) row_group: Option<SharedString>,
     /// From [`directory_row_detail_for_width`].
@@ -95,7 +98,7 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
         collapsed,
         additions,
         deletions,
-        row_height_px,
+        row_height,
         row_group,
         detail,
     } = props;
@@ -107,7 +110,7 @@ pub(in crate::view) fn directory_row(props: DirectoryRowProps<'_>) -> Stateful<D
         // So a caller can position a trailing action at the row's right edge.
         .relative()
         .when_some(row_group, |row, group| row.group(group))
-        .h(scaled(row_height_px))
+        .h(row_height)
         .flex()
         .items_center()
         .gap(scaled(4.0))

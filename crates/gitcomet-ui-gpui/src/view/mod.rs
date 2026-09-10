@@ -168,7 +168,7 @@ fn repo_activation_msg(
 mod app_model;
 mod branch_sidebar;
 mod caches;
-mod chrome;
+pub(crate) mod chrome;
 pub(crate) mod clone_progress;
 mod color;
 mod command_palette;

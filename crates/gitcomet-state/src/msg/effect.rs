@@ -489,6 +489,17 @@ pub enum Effect {
         repo_id: RepoId,
         reference: String,
     },
+    PushWithTags {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+        auth: Option<StagedGitAuth>,
+    },
+    PreviewTagPush {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+        cancellation: gitcomet_core::services::CancellationToken,
+        generation: u64,
+    },
     Push {
         repo_id: RepoId,
         auth: Option<StagedGitAuth>,

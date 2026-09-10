@@ -23,6 +23,12 @@ impl SettingsWindowView {
             repo_sidebar_pinned_branches: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
             ui_scale_percent: Some(self.ui_scale_percent),
+            ui_density: Some(self.appearance_metrics.density.key().to_string()),
+            ui_font_size_px: Some(self.appearance_metrics.ui_font_size_px),
+            editor_font_size_px: Some(self.appearance_metrics.editor_font_size_px),
+            markdown_preview_font_size_px: Some(
+                self.appearance_metrics.markdown_preview_font_size_px,
+            ),
             ui_font_family: Some(self.ui_font_family.clone()),
             editor_font_family: Some(self.editor_font_family.clone()),
             use_font_ligatures: Some(self.use_font_ligatures),
@@ -524,7 +530,9 @@ impl SettingsWindowView {
         }
 
         self.theme_mode = mode.clone();
-        self.theme = mode.resolve_theme(window.appearance());
+        self.theme = mode
+            .resolve_theme(window.appearance())
+            .with_appearance(self.appearance_metrics);
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, root_window, cx| {
@@ -1010,5 +1018,47 @@ impl SettingsWindowView {
             view.set_remote_prune_preference(enabled, cx);
         });
         cx.notify();
+    }
+}
+
+impl SettingsWindowView {
+    fn publish_appearance(&mut self, cx: &mut gpui::Context<Self>) {
+        self.theme = self.theme.with_appearance(self.appearance_metrics);
+        cx.set_global(self.appearance_metrics);
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, |view, _window, cx| {
+            view.notify_font_preferences_changed(cx);
+        });
+        cx.refresh_windows();
+        cx.notify();
+    }
+
+    pub(super) fn set_font_size(
+        &mut self,
+        role: FontRole,
+        value: u32,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !role.range().contains(&value) {
+            return;
+        }
+        self.font_size_inputs[role.index()].update(cx, |input, cx| {
+            if input.text() != value.to_string() {
+                input.set_text(value.to_string(), cx);
+            }
+        });
+        if self.appearance_metrics.size(role) == value {
+            return;
+        }
+        self.appearance_metrics.set_size(role, value);
+        self.publish_appearance(cx);
+    }
+
+    pub(super) fn set_density(&mut self, density: UiDensity, cx: &mut gpui::Context<Self>) {
+        if self.appearance_metrics.density == density {
+            return;
+        }
+        self.appearance_metrics.density = density;
+        self.publish_appearance(cx);
     }
 }

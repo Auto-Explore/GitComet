@@ -80,9 +80,8 @@ pub(super) fn panel(
     };
     let worktree_note = worktree_note(this, repo_id, &name, &operation);
 
-    let mut source_text = components::TruncatedText::new(source_label)
+    let mut source_text = components::TruncatedText::new(source_label, theme.ui_text(14.0))
         .id("branch_exists_target_text")
-        .text_sm()
         .text_color(theme.colors.foreground.secondary);
     if show_full_text_tooltip {
         source_text = source_text.full_text_tooltip(this.tooltip_host.clone());
@@ -110,7 +109,7 @@ pub(super) fn panel(
                 .debug_selector(|| "branch_exists_worktree_note".to_string())
                 .px_2()
                 .pb_1()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(SharedString::from(note)),
         );

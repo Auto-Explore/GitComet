@@ -32,8 +32,7 @@ pub(super) fn paint_history_graph(
 
     let lane = |color_ix| lane_wash_color(theme, color_ix, row_ix, selected_lane);
 
-    let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
-    let scaled_px = |value| px(value * design_scale_factor);
+    let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
     let stroke_width = scaled_px(1.6);
     let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
     let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
@@ -567,8 +566,7 @@ pub(super) fn paint_history_graph_band(
         return;
     }
 
-    let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
-    let scaled_px = |value| px(value * design_scale_factor);
+    let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
     let stroke_width = scaled_px(1.6);
     let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
     let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
@@ -813,8 +811,7 @@ pub(super) fn paint_icon_node(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
-    let scaled_px = |value| px(value * design_scale_factor);
+    let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
     let diameter = scaled_px(16.0);
     let glyph = scaled_px(10.5);
 
@@ -847,8 +844,7 @@ pub(super) fn paint_ring_icon_node(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
-    let scaled_px = |value| px(value * design_scale_factor);
+    let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
     let diameter = scaled_px(16.0);
     let ring_width = scaled_px(1.5);
     let glyph = scaled_px(10.5);

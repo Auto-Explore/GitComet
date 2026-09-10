@@ -1,6 +1,25 @@
 use super::*;
 
+/// The settings window's scale, carrying the appearance so anything sized
+/// through it follows the UI zoom and the density selection.
+const SETTINGS_TOGGLE_TRACK_WIDTH_PX: f32 = 28.0;
+const SETTINGS_TOGGLE_TRACK_COMFORTABLE_WIDTH_PX: f32 = 36.0;
+const SETTINGS_TOGGLE_TRACK_HEIGHT_PX: f32 = 16.0;
+const SETTINGS_TOGGLE_TRACK_COMFORTABLE_HEIGHT_PX: f32 = 20.0;
+const SETTINGS_TOGGLE_TRACK_INSET_PX: f32 = 2.0;
+const SETTINGS_TOGGLE_KNOB_SIZE_PX: f32 = 12.0;
+const SETTINGS_TOGGLE_KNOB_COMFORTABLE_SIZE_PX: f32 = 16.0;
+const SETTINGS_LICENSE_ROW_HEIGHT_PX: f32 = 24.0;
+const SETTINGS_LICENSE_ROW_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
+pub(super) const SETTINGS_LICENSE_NAME_COLUMN_PX: f32 = 200.0;
+pub(super) const SETTINGS_LICENSE_VERSION_COLUMN_PX: f32 = 90.0;
+const SETTINGS_NAV_COLUMN_WIDTH_PX: f32 = 200.0;
+
 impl SettingsWindowView {
+    fn row_scale(&self, theme: AppTheme) -> crate::ui_scale::UiScale {
+        crate::ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(theme.metrics)
+    }
+
     pub(super) fn option_row(
         &self,
         id: impl Into<SharedString>,
@@ -9,6 +28,7 @@ impl SettingsWindowView {
         selected: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let ui_scale = self.row_scale(theme);
         let id: SharedString = id.into();
         let debug_id = id.clone();
         let text_color = if selected {
@@ -55,10 +75,10 @@ impl SettingsWindowView {
             })
             .child(
                 div()
-                    .w(px(16.0))
+                    .w(ui_scale.px(16.0))
                     // Match the label's line box so the check mark centers on
                     // the first text line instead of hugging the row's top.
-                    .h(px(20.0))
+                    .h(ui_scale.px(20.0))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -80,15 +100,15 @@ impl SettingsWindowView {
                     .gap_0p5()
                     .child(
                         div()
-                            .text_sm()
-                            .line_height(px(20.0))
+                            .text_size(theme.ui_text(14.0))
+                            .line_height(theme.ui_text(20.0))
                             .text_color(text_color)
                             .child(label.into()),
                     )
                     .when_some(detail, |this, detail| {
                         this.child(
                             div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .line_clamp(1)
                                 .whitespace_nowrap()
@@ -122,6 +142,7 @@ impl SettingsWindowView {
         selected: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let ui_scale = self.row_scale(theme);
         let id: SharedString = id.into();
         let debug_id = id.clone();
         let text_color = if selected {
@@ -140,9 +161,9 @@ impl SettingsWindowView {
             .id(id)
             .debug_selector(move || debug_id.to_string())
             .w_full()
-            .min_h(px(SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX))
+            .min_h(ui_scale.px(SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX))
             .px_2()
-            .py(px(2.0))
+            .py(ui_scale.px(2.0))
             .flex()
             .items_center()
             .gap_2()
@@ -169,7 +190,7 @@ impl SettingsWindowView {
             })
             .child(
                 div()
-                    .w(px(16.0))
+                    .w(ui_scale.px(16.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -190,7 +211,7 @@ impl SettingsWindowView {
                     .gap_2()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .text_color(text_color)
                             .line_clamp(1)
                             .whitespace_nowrap()
@@ -201,7 +222,7 @@ impl SettingsWindowView {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .whitespace_nowrap()
@@ -219,7 +240,7 @@ impl SettingsWindowView {
             .min_h(px(0.0))
             .px_2()
             .py_1()
-            .text_sm()
+            .text_size(theme.ui_text(14.0))
             .text_color(theme.colors.foreground.secondary)
             .child(message)
             .into_any_element()
@@ -332,7 +353,7 @@ impl SettingsWindowView {
                     .overflow_hidden()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
@@ -347,7 +368,7 @@ impl SettingsWindowView {
                     .items_center()
                     .justify_end()
                     .gap_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .overflow_hidden()
                     .child(
@@ -377,6 +398,7 @@ impl SettingsWindowView {
         enabled: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let ui_scale = self.row_scale(theme);
         let label_debug_id = format!("{id}_label");
         let value_debug_id = format!("{id}_value");
         div()
@@ -404,7 +426,7 @@ impl SettingsWindowView {
                     .overflow_hidden()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
@@ -421,12 +443,18 @@ impl SettingsWindowView {
                         // Toggle-switch visual; the whole row stays the click
                         // target, so this carries no handlers of its own.
                         div()
-                            .w(px(28.0))
-                            .h(px(16.0))
+                            .w(ui_scale.row_height(
+                                SETTINGS_TOGGLE_TRACK_WIDTH_PX,
+                                SETTINGS_TOGGLE_TRACK_COMFORTABLE_WIDTH_PX,
+                            ))
+                            .h(ui_scale.row_height(
+                                SETTINGS_TOGGLE_TRACK_HEIGHT_PX,
+                                SETTINGS_TOGGLE_TRACK_COMFORTABLE_HEIGHT_PX,
+                            ))
                             .rounded(px(theme.radii.pill))
                             .flex()
                             .items_center()
-                            .p(px(2.0))
+                            .p(ui_scale.px(SETTINGS_TOGGLE_TRACK_INSET_PX))
                             .when(enabled, |track| {
                                 track.justify_end().bg(theme.colors.accent.foreground)
                             })
@@ -438,7 +466,10 @@ impl SettingsWindowView {
                             })
                             .child(
                                 div()
-                                    .size(px(12.0))
+                                    .size(ui_scale.row_height(
+                                        SETTINGS_TOGGLE_KNOB_SIZE_PX,
+                                        SETTINGS_TOGGLE_KNOB_COMFORTABLE_SIZE_PX,
+                                    ))
                                     .rounded(px(theme.radii.pill))
                                     .bg(gpui::rgba(0xFFFFFFF2)),
                             ),
@@ -476,7 +507,7 @@ impl SettingsWindowView {
                     .overflow_hidden()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
@@ -494,7 +525,7 @@ impl SettingsWindowView {
                     .child(
                         div()
                             .min_w(px(0.0))
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .font_family(UI_MONOSPACE_FONT_FAMILY)
                             .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
@@ -535,7 +566,7 @@ impl SettingsWindowView {
                 div()
                     .debug_selector(move || label_debug_id.clone())
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .child(label),
             )
             .child(
@@ -546,7 +577,7 @@ impl SettingsWindowView {
                     .flex()
                     .items_start()
                     .gap_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.accent.foreground)
                     .child(div().flex_1().min_w(px(0.0)).child(value))
                     .child(div().flex_shrink_0().child(svg_icon(
@@ -595,7 +626,7 @@ impl SettingsWindowView {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .child(svg_icon(
                                 "icons/warning.svg",
                                 theme.colors.status.warning.foreground,
@@ -607,7 +638,7 @@ impl SettingsWindowView {
                         div()
                             .w_full()
                             .min_w(px(0.0))
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .text_color(theme.colors.foreground.secondary)
                             .child(message),
                     )
@@ -664,7 +695,7 @@ impl SettingsWindowView {
                     .overflow_hidden()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
@@ -684,7 +715,7 @@ impl SettingsWindowView {
                     .child(
                         div()
                             .min_w(px(0.0))
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .font_family(UI_MONOSPACE_FONT_FAMILY)
                             .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
@@ -695,7 +726,7 @@ impl SettingsWindowView {
                     .child(
                         div()
                             .min_w(px(0.0))
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(git_icon_color)
                             .line_clamp(1)
                             .whitespace_nowrap()
@@ -756,12 +787,16 @@ impl SettingsWindowView {
         row: crate::view::open_source_licenses_data::OpenSourceLicenseRow,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let ui_scale = self.row_scale(theme);
         div()
             .id(("settings_window_open_source_license_row", ix))
             .w_full()
             .px_2()
             .py_1()
-            .h(px(24.0))
+            .h(ui_scale.row_height(
+                SETTINGS_LICENSE_ROW_HEIGHT_PX,
+                SETTINGS_LICENSE_ROW_COMFORTABLE_HEIGHT_PX,
+            ))
             .flex()
             .items_center()
             .rounded(px(theme.radii.row))
@@ -773,8 +808,8 @@ impl SettingsWindowView {
                     .gap_2()
                     .child(
                         div()
-                            .w(px(200.0))
-                            .text_sm()
+                            .w(ui_scale.px(SETTINGS_LICENSE_NAME_COLUMN_PX))
+                            .text_size(theme.ui_text(14.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
@@ -782,8 +817,8 @@ impl SettingsWindowView {
                     )
                     .child(
                         div()
-                            .w(px(90.0))
-                            .text_xs()
+                            .w(ui_scale.px(SETTINGS_LICENSE_VERSION_COLUMN_PX))
+                            .text_size(theme.ui_text(12.0))
                             .font_family(UI_MONOSPACE_FONT_FAMILY)
                             .text_color(theme.colors.foreground.secondary)
                             .whitespace_nowrap()
@@ -793,7 +828,7 @@ impl SettingsWindowView {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .font_family(UI_MONOSPACE_FONT_FAMILY)
                             .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
@@ -1215,7 +1250,7 @@ impl SettingsWindowView {
                 div()
                     .px_2()
                     .pb_2()
-                    .text_lg()
+                    .text_size(theme.ui_text(18.0))
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.colors.foreground.primary)
                     .child(title),
@@ -1228,14 +1263,15 @@ impl SettingsWindowView {
         title: &'static str,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let ui_scale = self.row_scale(theme);
         div()
             .id(id)
             .debug_selector(move || id.to_string())
             .w_full()
             .px_2()
-            .pt(px(24.0))
+            .pt(ui_scale.px(24.0))
             .pb_2()
-            .text_sm()
+            .text_size(theme.ui_text(14.0))
             .font_weight(FontWeight::BOLD)
             .text_color(theme.colors.foreground.primary)
             .child(title)
@@ -1280,7 +1316,7 @@ impl SettingsWindowView {
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .when(selected, |d| d.font_weight(FontWeight::MEDIUM))
                     .text_color(theme.colors.foreground.primary)
                     .line_clamp(1)
@@ -1327,7 +1363,7 @@ impl SettingsWindowView {
                 div()
                     .px_2()
                     .py_1()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child("No matching settings"),
             );
@@ -1337,7 +1373,7 @@ impl SettingsWindowView {
             .id("settings_window_nav")
             .debug_selector(|| "settings_window_nav".to_string())
             .flex_none()
-            .w(px(200.0))
+            .w(self.row_scale(theme).px(SETTINGS_NAV_COLUMN_WIDTH_PX))
             .h_full()
             .min_h(px(0.0))
             .flex()

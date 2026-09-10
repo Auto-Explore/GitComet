@@ -4,6 +4,11 @@ use super::*;
 /// pane collapse toggles, the zoom control and the branding strip on one shared
 /// centerline, so every saved pixel goes to the content area.
 const BOTTOM_STATUS_BAR_HEIGHT_PX: f32 = 26.0;
+/// The bar and its chips are chrome like the title bar, so they take the
+/// density ramp.
+const BOTTOM_STATUS_BAR_COMFORTABLE_HEIGHT_PX: f32 = 34.0;
+const BOTTOM_STATUS_BAR_ITEM_HEIGHT_PX: f32 = 18.0;
+const BOTTOM_STATUS_BAR_ITEM_COMFORTABLE_HEIGHT_PX: f32 = 26.0;
 const PANE_TOGGLE_ICON_SIZE_PX: f32 = 16.0;
 
 fn pro_launch_label(today: jiff::civil::Date) -> SharedString {
@@ -41,14 +46,18 @@ fn status_bar_chip(
     id: &'static str,
     hover_color: gpui::Rgba,
     ui_scale_percent: u32,
+    metrics: crate::appearance::Appearance,
 ) -> gpui::Stateful<gpui::Div> {
-    let scaled_px = |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
     div()
         .id(id)
         .group(id)
         .debug_selector(move || id.to_string())
-        .h(scaled_px(18.0))
+        .h(scaled_px(metrics.row_height(
+            BOTTOM_STATUS_BAR_ITEM_HEIGHT_PX,
+            BOTTOM_STATUS_BAR_ITEM_COMFORTABLE_HEIGHT_PX,
+        )))
         .px(scaled_px(4.0))
         .flex()
         .items_center()
@@ -176,8 +185,7 @@ impl Render for BottomStatusBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let zoom_picker_invoker: SharedString = "ui_scale_picker".into();
         let zoom_picker_active = self
             .active_context_menu_invoker
@@ -313,7 +321,7 @@ impl Render for BottomStatusBarView {
                             theme.colors.accent.foreground,
                             if theme.is_dark { 0.24 } else { 0.16 },
                         ))
-                        .text_size(scaled_px(9.0))
+                        .text_size(theme.ui_text(9.0))
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme.colors.accent.foreground)
                         .child(active_hook_count.to_string()),
@@ -349,6 +357,7 @@ impl Render for BottomStatusBarView {
             "bottom_status_bar_discord",
             theme.colors.accent.foreground,
             ui_scale_percent,
+            theme.metrics,
         )
         .child(
             gpui::svg()
@@ -371,9 +380,10 @@ impl Render for BottomStatusBarView {
             "bottom_status_bar_free_badge",
             theme.colors.accent.foreground,
             ui_scale_percent,
+            theme.metrics,
         )
-        .text_size(scaled_px(11.0))
-        .line_height(scaled_px(12.0))
+        .text_size(theme.ui_text(11.0))
+        .line_height(scaled_px(theme.metrics.ui_text(12.0)))
         .font_weight(FontWeight::NORMAL)
         .text_color(with_alpha(
             theme.colors.foreground.primary,
@@ -390,9 +400,10 @@ impl Render for BottomStatusBarView {
             "bottom_status_bar_pro_link",
             theme.colors.accent.foreground,
             ui_scale_percent,
+            theme.metrics,
         )
-        .text_size(scaled_px(11.0))
-        .line_height(scaled_px(12.0))
+        .text_size(theme.ui_text(11.0))
+        .line_height(scaled_px(theme.metrics.ui_text(12.0)))
         .text_color(theme.colors.foreground.secondary)
         .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
             cx.stop_propagation();
@@ -428,8 +439,8 @@ impl Render for BottomStatusBarView {
             .child(
                 div()
                     .debug_selector(|| "bottom_status_bar_brand".to_string())
-                    .text_size(scaled_px(11.0))
-                    .line_height(scaled_px(12.0))
+                    .text_size(theme.ui_text(11.0))
+                    .line_height(scaled_px(theme.metrics.ui_text(12.0)))
                     .child("GitComet"),
             )
             .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
@@ -445,8 +456,8 @@ impl Render for BottomStatusBarView {
             .flex()
             .items_center()
             .cursor(CursorStyle::PointingHand)
-            .text_size(scaled_px(11.0))
-            .line_height(scaled_px(12.0))
+            .text_size(theme.ui_text(11.0))
+            .line_height(scaled_px(theme.metrics.ui_text(12.0)))
             .text_color(theme.colors.foreground.secondary)
             .hover(move |s| s.text_color(theme.colors.accent.foreground))
             .active(move |s| s.text_color(theme.colors.accent.foreground))
@@ -460,7 +471,10 @@ impl Render for BottomStatusBarView {
         div()
             .id("bottom_status_bar")
             .w_full()
-            .h(scaled_px(BOTTOM_STATUS_BAR_HEIGHT_PX))
+            .h(scaled_px(theme.metrics.row_height(
+                BOTTOM_STATUS_BAR_HEIGHT_PX,
+                BOTTOM_STATUS_BAR_COMFORTABLE_HEIGHT_PX,
+            )))
             .flex_none()
             .flex()
             .items_center()

@@ -1,4 +1,7 @@
 use super::*;
+
+const TOOLTIP_CURSOR_OFFSET_X_PX: f32 = 11.0;
+const TOOLTIP_CURSOR_OFFSET_Y_PX: f32 = 17.0;
 #[cfg(test)]
 use std::cell::RefCell;
 
@@ -93,17 +96,24 @@ impl Render for TooltipBubbleView {
             value.replace(Some(self.text.clone()));
         });
 
-        div().pl(px(11.0)).pt(px(17.0)).child(
-            div()
-                .px_2()
-                .py_1()
-                .bg(self.theme.colors.tooltip.background)
-                .rounded(px(self.theme.radii.row))
-                .shadow(crate::theme::shadow_popover(self.theme))
-                .text_xs()
-                .text_color(self.theme.colors.tooltip.foreground)
-                .child(self.text.clone()),
-        )
+        // Offset from the cursor hotspot, scaled so the bubble clears a
+        // larger pointer.
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
+        div()
+            .pl(scaled_px(TOOLTIP_CURSOR_OFFSET_X_PX))
+            .pt(scaled_px(TOOLTIP_CURSOR_OFFSET_Y_PX))
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .bg(self.theme.colors.tooltip.background)
+                    .rounded(px(self.theme.radii.row))
+                    .shadow(crate::theme::shadow_popover(self.theme))
+                    .text_size(self.theme.ui_text(12.0))
+                    .text_color(self.theme.colors.tooltip.foreground)
+                    .child(self.text.clone()),
+            )
     }
 }
 
@@ -190,6 +200,10 @@ impl GitCometView {
                             repo_sidebar_pinned_branches: Some(repo_sidebar_pinned_branches),
                             theme_mode: Some(this.theme_mode.key().to_string()),
                             ui_scale_percent: Some(this.ui_scale_percent),
+                            ui_density: Some(crate::appearance::current(cx).density.key().to_string()),
+                            ui_font_size_px: Some(crate::appearance::current(cx).ui_font_size_px),
+                            editor_font_size_px: Some(crate::appearance::current(cx).editor_font_size_px),
+                            markdown_preview_font_size_px: Some(crate::appearance::current(cx).markdown_preview_font_size_px),
                             ui_font_family: Some(font_preferences.ui_font_family),
                             editor_font_family: Some(font_preferences.editor_font_family),
                             use_font_ligatures: Some(font_preferences.use_font_ligatures),

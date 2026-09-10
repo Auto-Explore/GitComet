@@ -4,6 +4,11 @@ use super::state::*;
 use super::wrap::*;
 use super::*;
 
+/// Rows in the input's own context menu. It is a menu like any other, so its
+/// rows take the density ramp.
+const TEXT_INPUT_MENU_ROW_HEIGHT_PX: f32 = 24.0;
+const TEXT_INPUT_MENU_ROW_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
+
 /// The single replaced span between two texts, as `(old_range, new_range)`.
 ///
 /// Both ranges share a start and land on character boundaries, so the pair is
@@ -93,6 +98,9 @@ impl TextInput {
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
             line_height_override: None,
+            appearance_metrics: crate::appearance::current(cx),
+            editor_font: false,
+            editor_line_height: px(20.0),
             vertical_padding_override: None,
             highlight: HighlightState::new(),
             layout: LayoutState::new(),
@@ -630,9 +638,22 @@ impl TextInput {
         cx.notify();
     }
 
+    pub(crate) fn set_editor_font(&mut self, cx: &mut Context<Self>) {
+        self.editor_font = true;
+        cx.notify();
+    }
+
     pub(super) fn effective_line_height(&self, window: &Window) -> Pixels {
-        self.line_height_override
-            .unwrap_or_else(|| window.line_height())
+        if self.editor_font {
+            return self.editor_line_height;
+        }
+        let line_height = self
+            .line_height_override
+            .unwrap_or_else(|| window.line_height());
+        line_height.max(crate::ui_scale::design_px_from_window(
+            self.appearance_metrics.ui_text(20.0),
+            window,
+        ))
     }
 
     /// The explicit line height set by `set_line_height`, if any. Tests use it to
@@ -2965,7 +2986,10 @@ impl TextInput {
             // root, and building one per render with `format!` would allocate a
             // string that never changes.
             .id(ElementId::from(label))
-            .h(px(24.0))
+            .h(px(self.appearance_metrics.row_height(
+                TEXT_INPUT_MENU_ROW_HEIGHT_PX,
+                TEXT_INPUT_MENU_ROW_COMFORTABLE_HEIGHT_PX,
+            )))
             .w_full()
             .px_2()
             .rounded(px(2.0))
@@ -2973,11 +2997,11 @@ impl TextInput {
             .items_center()
             .justify_between()
             .gap_2()
-            .text_sm()
+            .text_size(gpui::rems(self.appearance_metrics.ui_text(14.0) / 16.0))
             .child(label)
             .child(
                 div()
-                    .text_xs()
+                    .text_size(gpui::rems(self.appearance_metrics.ui_text(12.0) / 16.0))
                     .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                     .text_color(self.style.placeholder)
                     .child(shortcut),

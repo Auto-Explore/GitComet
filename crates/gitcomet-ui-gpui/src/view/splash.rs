@@ -21,6 +21,24 @@ static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new()
 /// `panel` radius the floating dialogs and splash cards keep. The right edge is
 /// square because the card runs flush to the window edge. The corner caps
 /// derive from this, so both move together.
+/// Splash geometry. The headline is display type but still goes through the
+/// UI font, so sizing text up reaches this screen too.
+const SPLASH_CARD_MAX_WIDTH_PX: f32 = 560.0;
+const SPLASH_BODY_MAX_WIDTH_PX: f32 = 440.0;
+const SPLASH_DETAIL_MAX_WIDTH_PX: f32 = 460.0;
+const SPLASH_HERO_MAX_WIDTH_PX: f32 = 700.0;
+const SPLASH_SUBHEAD_MAX_WIDTH_PX: f32 = 500.0;
+const SPLASH_HEADLINE_SIZE_PX: f32 = 50.0;
+const SPLASH_HEADLINE_LINE_HEIGHT_PX: f32 = 44.0;
+/// Hairline guides off the hero card's corners and the nodes capping them:
+/// lengths and offsets have to move together.
+const SPLASH_GUIDE_TOP_LENGTH_PX: f32 = 224.0;
+const SPLASH_GUIDE_BOTTOM_LENGTH_PX: f32 = 214.0;
+const SPLASH_NODE_SIZE_PX: f32 = 7.0;
+const SPLASH_NODE_OFFSET_PX: f32 = 4.0;
+const SPLASH_CTA_HEIGHT_PX: f32 = 36.0;
+const SPLASH_CTA_COMFORTABLE_HEIGHT_PX: f32 = 44.0;
+
 fn main_content_card_radius(theme: AppTheme) -> f32 {
     theme.radii.control
 }
@@ -163,8 +181,7 @@ impl GitCometView {
     }
 
     fn git_unavailable_status_icon(theme: AppTheme, ui_scale_percent: u32) -> AnyElement {
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         div()
             .id("git_unavailable_status_icon")
             .debug_selector(|| "git_unavailable_status_icon".to_string())
@@ -256,14 +273,14 @@ impl GitCometView {
     }
 
     fn splash_cta_button(
+        theme: AppTheme,
         id: &'static str,
         label: &'static str,
         icon_path: &'static str,
         colors: SplashCtaButtonColors,
         ui_scale_percent: u32,
     ) -> gpui::Stateful<gpui::Div> {
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let focus_ring = gpui::rgba(0x79d0ffeb);
         let SplashCtaButtonColors {
             icon: icon_color,
@@ -286,7 +303,13 @@ impl GitCometView {
             .id(id)
             .debug_selector(move || id.to_string())
             .tab_index(0)
-            .h(scaled_px(36.0))
+            // Larger than a toolbar control by design, but still a button.
+            .h(crate::ui_scale::design_px_from_percent(
+                theme
+                    .metrics
+                    .row_height(SPLASH_CTA_HEIGHT_PX, SPLASH_CTA_COMFORTABLE_HEIGHT_PX),
+                ui_scale_percent,
+            ))
             .px(scaled_px(16.0))
             .flex()
             .items_center()
@@ -296,7 +319,7 @@ impl GitCometView {
             .border_1()
             .border_color(border)
             .bg(bg)
-            .text_size(scaled_px(13.0))
+            .text_size(theme.ui_text(13.0))
             .font_weight(FontWeight::BOLD)
             .text_color(text_color)
             .cursor(CursorStyle::PointingHand)
@@ -314,6 +337,7 @@ impl GitCometView {
         content: impl IntoElement,
         theme: AppTheme,
     ) -> AnyElement {
+        let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
         let border_glow = with_alpha(
             theme.colors.stroke.default,
             if theme.is_dark { 0.86 } else { 0.74 },
@@ -337,7 +361,7 @@ impl GitCometView {
                 div()
                     .relative()
                     .w_full()
-                    .max_w(px(560.0))
+                    .max_w(scaled_px(SPLASH_CARD_MAX_WIDTH_PX))
                     .bg(with_alpha(
                         theme.colors.surface.panel,
                         if theme.is_dark { 0.96 } else { 0.98 },
@@ -369,6 +393,7 @@ impl GitCometView {
         let settings_tooltip: SharedString = "Open settings".into();
 
         Self::splash_cta_button(
+            self.theme,
             "git_unavailable_open_settings",
             "Open Settings",
             "icons/cog.svg",
@@ -401,6 +426,7 @@ impl GitCometView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
         let detail_bg = with_alpha(
             theme.colors.surface.canvas,
             if theme.is_dark { 0.36 } else { 0.82 },
@@ -422,17 +448,17 @@ impl GitCometView {
             ))
             .child(
                 div()
-                    .text_lg()
+                    .text_size(theme.ui_text(18.0))
                     .font_weight(FontWeight::BOLD)
                     .text_center()
                     .child("Git executable unavailable"),
             )
             .child(
                 div()
-                    .max_w(px(440.0))
+                    .max_w(scaled_px(SPLASH_BODY_MAX_WIDTH_PX))
                     .text_center()
-                    .text_sm()
-                    .line_height(px(22.0))
+                    .text_size(self.theme.ui_text(14.0))
+                    .line_height(self.theme.ui_text(22.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(
                         "GitComet cannot open, refresh, or run repository actions until a Git executable is configured.",
@@ -442,15 +468,15 @@ impl GitCometView {
                 div()
                     .id("git_unavailable_detail")
                     .w_full()
-                    .max_w(px(460.0))
+                    .max_w(scaled_px(SPLASH_DETAIL_MAX_WIDTH_PX))
                     .rounded(px(theme.radii.panel))
                     .border_1()
                     .border_color(detail_border)
                     .bg(detail_bg)
                     .px_3()
                     .py_2()
-                    .text_xs()
-                    .line_height(px(18.0))
+                    .text_size(self.theme.ui_text(12.0))
+                    .line_height(self.theme.ui_text(18.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(self.git_runtime_unavailable_detail_content()),
             )
@@ -473,6 +499,7 @@ impl GitCometView {
 
     fn git_unavailable_overlay(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
         let theme = self.theme;
+        let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
         let border_glow = with_alpha(
             theme.colors.stroke.default,
             if theme.is_dark { 0.86 } else { 0.74 },
@@ -503,7 +530,7 @@ impl GitCometView {
                     .child(
                         div()
                             .w_full()
-                            .max_w(px(560.0))
+                            .max_w(scaled_px(SPLASH_CARD_MAX_WIDTH_PX))
                             .bg(with_alpha(
                                 theme.colors.surface.panel,
                                 if theme.is_dark { 0.96 } else { 0.98 },
@@ -528,8 +555,7 @@ impl GitCometView {
     pub(super) fn startup_repository_loading_screen(&mut self) -> AnyElement {
         let theme = self.theme;
         let ui_scale_percent = self.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
         self.interstitial_shell(
             "repository_loading_screen",
@@ -541,13 +567,13 @@ impl GitCometView {
                 .child(Self::interstitial_logo(theme, scaled_px(84.0)))
                 .child(
                     div()
-                        .text_lg()
+                        .text_size(theme.ui_text(18.0))
                         .font_weight(FontWeight::BOLD)
                         .child("Loading repository session"),
                 )
                 .child(
                     div()
-                        .text_sm()
+                        .text_size(self.theme.ui_text(14.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child("GitComet is opening your workspace."),
                 )
@@ -557,7 +583,7 @@ impl GitCometView {
                         .flex()
                         .items_center()
                         .gap_1()
-                        .text_sm()
+                        .text_size(self.theme.ui_text(14.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(svg_spinner(
                             ("repository_loading_spinner", 0u64),
@@ -575,6 +601,8 @@ impl GitCometView {
             return self.git_unavailable_splash(cx);
         }
 
+        let ui_scale_percent = self.ui_scale_percent;
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let hero_text = gpui::rgba(0xf6f7fbff);
         let hero_muted = gpui::rgba(0xa8b1c6ff);
         let hero_proof = gpui::rgba(0xffffffbd);
@@ -625,6 +653,7 @@ impl GitCometView {
         let clone_tooltip: SharedString = "Clone repository".into();
 
         let open_button = Self::splash_cta_button(
+            self.theme,
             "splash_open_repo",
             "Open Repository",
             "icons/folder.svg",
@@ -642,6 +671,7 @@ impl GitCometView {
             let last_bounds_for_click = Rc::clone(&last_bounds);
 
             let button = Self::splash_cta_button(
+                self.theme,
                 "splash_clone_repo",
                 "Clone Repository",
                 "icons/cloud.svg",
@@ -667,11 +697,11 @@ impl GitCometView {
         let open_repo_fallback = if self.open_repo_panel {
             div()
                 .w_full()
-                .pt(px(12.0))
+                .pt(scaled_px(12.0))
                 .child(
                     div()
-                        .pb(px(8.0))
-                        .text_size(px(11.0))
+                        .pb(scaled_px(8.0))
+                        .text_size(self.theme.ui_text(11.0))
                         .text_color(hero_muted)
                         .text_center()
                         .child(
@@ -689,8 +719,8 @@ impl GitCometView {
                 .text_center()
                 .font_family("Noto Serif")
                 .font_weight(FontWeight::BOLD)
-                .text_size(px(50.0))
-                .line_height(px(44.0))
+                .text_size(self.theme.ui_text(SPLASH_HEADLINE_SIZE_PX))
+                .line_height(self.theme.ui_text(SPLASH_HEADLINE_LINE_HEIGHT_PX))
                 .text_color(hero_text)
                 .whitespace_nowrap()
                 .child(text)
@@ -708,17 +738,17 @@ impl GitCometView {
             .overflow_hidden()
             .bg(gpui::rgba(0x02050fff))
             .px_4()
-            .pt(px(52.0))
-            .pb(px(24.0))
+            .pt(scaled_px(52.0))
+            .pb(scaled_px(24.0))
             .child(self.interstitial_backdrop())
             .child(
                 div().relative().w_full().flex().justify_center().child(
                     div()
                         .relative()
                         .w_full()
-                        .max_w(px(700.0))
-                        .px(px(48.0))
-                        .py(px(36.0))
+                        .max_w(scaled_px(SPLASH_HERO_MAX_WIDTH_PX))
+                        .px(scaled_px(48.0))
+                        .py(scaled_px(36.0))
                         .border_1()
                         .border_color(panel_border)
                         .bg(gpui::linear_gradient(
@@ -738,12 +768,12 @@ impl GitCometView {
                                 .flex()
                                 .flex_col()
                                 .items_center()
-                                .gap(px(12.0))
+                                .gap(scaled_px(12.0))
                                 .child(
                                     div()
                                         .id("splash_headline")
                                         .debug_selector(|| "splash_headline".to_string())
-                                        .max_w(px(560.0))
+                                        .max_w(scaled_px(SPLASH_CARD_MAX_WIDTH_PX))
                                         .flex()
                                         .flex_col()
                                         .items_center()
@@ -752,11 +782,11 @@ impl GitCometView {
                                 )
                                 .child(
                                     div()
-                                        .max_w(px(500.0))
-                                        .pt(px(2.0))
+                                        .max_w(scaled_px(SPLASH_SUBHEAD_MAX_WIDTH_PX))
+                                        .pt(scaled_px(2.0))
                                         .text_center()
-                                        .text_size(px(14.0))
-                                        .line_height(px(22.0))
+                                        .text_size(self.theme.ui_text(14.0))
+                                        .line_height(self.theme.ui_text(22.0))
                                         .text_color(hero_muted)
                                         .child(
                                             "GitComet is built for teams that want fast Git operations with local-first privacy, familiar workflows, and open source freedom.",
@@ -764,11 +794,11 @@ impl GitCometView {
                                 )
                                 .child(
                                     div()
-                                        .pt(px(4.0))
+                                        .pt(scaled_px(4.0))
                                         .flex()
                                         .flex_wrap()
                                         .justify_center()
-                                        .gap(px(10.0))
+                                        .gap(scaled_px(10.0))
                                         .child(
                                             div()
                                                 .id("splash_open_repo_action")
@@ -793,8 +823,8 @@ impl GitCometView {
                                 .child(open_repo_fallback)
                                 .child(
                                     div()
-                                        .pt(px(2.0))
-                                        .text_size(px(12.0))
+                                        .pt(scaled_px(2.0))
+                                        .text_size(self.theme.ui_text(12.0))
                                         .text_color(hero_proof)
                                         .text_center()
                                         .child("Available for Linux, Windows and macOS."),
@@ -803,10 +833,10 @@ impl GitCometView {
                         .child(
                             div()
                                 .absolute()
-                                .top(px(-224.0))
+                                .top(-scaled_px(SPLASH_GUIDE_TOP_LENGTH_PX))
                                 .left(px(-1.0))
                                 .w(px(1.0))
-                                .h(px(224.0))
+                                .h(scaled_px(SPLASH_GUIDE_TOP_LENGTH_PX))
                                 .bg(gpui::linear_gradient(
                                     180.0,
                                     gpui::linear_color_stop(guide_fade, 0.0),
@@ -816,10 +846,10 @@ impl GitCometView {
                         .child(
                             div()
                                 .absolute()
-                                .top(px(-224.0))
+                                .top(-scaled_px(SPLASH_GUIDE_TOP_LENGTH_PX))
                                 .right(px(-1.0))
                                 .w(px(1.0))
-                                .h(px(224.0))
+                                .h(scaled_px(SPLASH_GUIDE_TOP_LENGTH_PX))
                                 .bg(gpui::linear_gradient(
                                     180.0,
                                     gpui::linear_color_stop(guide_fade, 0.0),
@@ -829,10 +859,10 @@ impl GitCometView {
                         .child(
                             div()
                                 .absolute()
-                                .bottom(px(-214.0))
+                                .bottom(-scaled_px(SPLASH_GUIDE_BOTTOM_LENGTH_PX))
                                 .left(px(-1.0))
                                 .w(px(1.0))
-                                .h(px(214.0))
+                                .h(scaled_px(SPLASH_GUIDE_BOTTOM_LENGTH_PX))
                                 .bg(gpui::linear_gradient(
                                     180.0,
                                     gpui::linear_color_stop(guide_edge, 0.0),
@@ -842,10 +872,10 @@ impl GitCometView {
                         .child(
                             div()
                                 .absolute()
-                                .bottom(px(-214.0))
+                                .bottom(-scaled_px(SPLASH_GUIDE_BOTTOM_LENGTH_PX))
                                 .right(px(-1.0))
                                 .w(px(1.0))
-                                .h(px(214.0))
+                                .h(scaled_px(SPLASH_GUIDE_BOTTOM_LENGTH_PX))
                                 .bg(gpui::linear_gradient(
                                     180.0,
                                     gpui::linear_color_stop(guide_edge, 0.0),
@@ -855,33 +885,33 @@ impl GitCometView {
                         .child(
                             div()
                                 .absolute()
-                                .top(px(-4.0))
-                                .left(px(-4.0))
-                                .size(px(7.0))
+                                .top(-scaled_px(SPLASH_NODE_OFFSET_PX))
+                                .left(-scaled_px(SPLASH_NODE_OFFSET_PX))
+                                .size(scaled_px(SPLASH_NODE_SIZE_PX))
                                 .bg(node_color),
                         )
                         .child(
                             div()
                                 .absolute()
-                                .top(px(-4.0))
-                                .right(px(-4.0))
-                                .size(px(7.0))
+                                .top(-scaled_px(SPLASH_NODE_OFFSET_PX))
+                                .right(-scaled_px(SPLASH_NODE_OFFSET_PX))
+                                .size(scaled_px(SPLASH_NODE_SIZE_PX))
                                 .bg(node_color),
                         )
                         .child(
                             div()
                                 .absolute()
-                                .bottom(px(-4.0))
-                                .left(px(-4.0))
-                                .size(px(7.0))
+                                .bottom(-scaled_px(SPLASH_NODE_OFFSET_PX))
+                                .left(-scaled_px(SPLASH_NODE_OFFSET_PX))
+                                .size(scaled_px(SPLASH_NODE_SIZE_PX))
                                 .bg(node_color),
                         )
                         .child(
                             div()
                                 .absolute()
-                                .bottom(px(-4.0))
-                                .right(px(-4.0))
-                                .size(px(7.0))
+                                .bottom(-scaled_px(SPLASH_NODE_OFFSET_PX))
+                                .right(-scaled_px(SPLASH_NODE_OFFSET_PX))
+                                .size(scaled_px(SPLASH_NODE_SIZE_PX))
                                 .bg(node_color),
                         ),
                 ),
@@ -898,8 +928,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let active = self.sidebar_collapsed_popover;
         let icon_muted = theme.colors.foreground.secondary;
         let active_bg = theme.active_overlay();
@@ -980,8 +1009,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let panel = div()
             .id("collapsed_sidebar_popover")
             .debug_selector(|| "collapsed_sidebar_popover".to_string())
@@ -1035,7 +1063,7 @@ impl GitCometView {
             .left(self.sidebar_render_width)
             .ml(scaled_px(6.0))
             .top(scaled_px(4.0))
-            .bottom(scaled_px(4.0) + px(CONTENT_CARD_BOTTOM_MARGIN_PX))
+            .bottom(scaled_px(4.0) + scaled_px(CONTENT_CARD_BOTTOM_MARGIN_PX))
             .w(scaled_px(COLLAPSED_POPOVER_WIDTH_PX))
             .flex()
             .flex_col()
@@ -1059,6 +1087,8 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let ui_scale_percent = self.ui_scale_percent;
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
         if self.is_startup_repository_loading_screen_active() {
             return self.startup_repository_loading_screen();
@@ -1146,7 +1176,7 @@ impl GitCometView {
                                 .flex_row()
                                 // Kept minimal so the bottom bar's icons (pane
                                 // toggles + zoom) read as one row hugging the card.
-                                .mb(px(CONTENT_CARD_BOTTOM_MARGIN_PX))
+                                .mb(scaled_px(CONTENT_CARD_BOTTOM_MARGIN_PX))
                                 .relative()
                                 .rounded_tl(px(main_content_card_radius(theme)))
                                 .rounded_bl(px(main_content_card_radius(theme)))
@@ -1230,7 +1260,7 @@ impl GitCometView {
                             div()
                                 .absolute()
                                 .top_0()
-                                .bottom(px(CONTENT_CARD_BOTTOM_MARGIN_PX))
+                                .bottom(scaled_px(CONTENT_CARD_BOTTOM_MARGIN_PX))
                                 .left(
                                     (self.sidebar_render_width
                                         - self.pane_resize_handle_width() / 2.0)

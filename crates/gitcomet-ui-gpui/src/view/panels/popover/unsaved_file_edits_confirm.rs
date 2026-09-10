@@ -31,7 +31,7 @@ pub(super) fn panel(
             div()
                 .px_2()
                 .pb_1()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(
                     div()

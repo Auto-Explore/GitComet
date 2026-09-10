@@ -3,6 +3,18 @@ use super::message::InternalMsg;
 impl std::fmt::Debug for InternalMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InternalMsg::TagPushPreviewLoaded {
+                repo_id,
+                mode,
+                generation,
+                result,
+            } => f
+                .debug_struct("TagPushPreviewLoaded")
+                .field("repo_id", repo_id)
+                .field("mode", mode)
+                .field("generation", generation)
+                .field("result", result)
+                .finish(),
             InternalMsg::GitOperationStarted {
                 repo_id,
                 operation_id,

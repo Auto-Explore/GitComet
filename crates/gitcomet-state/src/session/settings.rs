@@ -11,6 +11,10 @@ pub struct UiSettings {
     pub repo_sidebar_pinned_branches: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
+    pub ui_density: Option<String>,
+    pub ui_font_size_px: Option<u32>,
+    pub editor_font_size_px: Option<u32>,
+    pub markdown_preview_font_size_px: Option<u32>,
     pub ui_font_family: Option<String>,
     pub editor_font_family: Option<String>,
     pub use_font_ligatures: Option<bool>,
@@ -100,6 +104,10 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         apply_setting!(settings, file, theme_mode);
         apply_setting!(settings, file, ui_scale_percent);
+        apply_setting!(settings, file, ui_density);
+        apply_setting!(settings, file, ui_font_size_px);
+        apply_setting!(settings, file, editor_font_size_px);
+        apply_setting!(settings, file, markdown_preview_font_size_px);
         apply_setting!(settings, file, ui_font_family);
         apply_setting!(settings, file, editor_font_family);
         apply_setting!(settings, file, use_font_ligatures);

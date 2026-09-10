@@ -1077,6 +1077,28 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::PushWithTags {
+            repo_id, request, ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::PushWithTags { request },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::PreviewTagPush {
+            repo_id,
+            request,
+            generation,
+            ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::TagPushPreviewLoaded {
+                repo_id,
+                mode: request.mode,
+                generation,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::Push { repo_id, .. } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -2553,6 +2575,37 @@ pub(super) fn schedule_effect(
         }
         Effect::SquashRef { repo_id, reference } => {
             repo_commands::schedule_squash_ref(executor, repos, msg_tx, repo_id, reference);
+        }
+        Effect::PushWithTags {
+            repo_id,
+            request,
+            auth,
+        } => {
+            repo_commands::schedule_push_with_tags(executor, repos, msg_tx, repo_id, request, auth)
+        }
+        Effect::PreviewTagPush {
+            repo_id,
+            request,
+            generation,
+            cancellation,
+        } => {
+            util::spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, tx| {
+                if cancellation.is_cancelled() {
+                    return;
+                }
+                let result = repo.preview_tag_push(&request, &cancellation);
+                if !cancellation.is_cancelled() {
+                    util::send_or_log(
+                        &tx,
+                        Msg::Internal(crate::msg::InternalMsg::TagPushPreviewLoaded {
+                            repo_id,
+                            mode: request.mode,
+                            generation,
+                            result,
+                        }),
+                    );
+                }
+            });
         }
         Effect::Push { repo_id, auth } => repo_commands::schedule_push(
             executor,

@@ -395,6 +395,20 @@ pub(super) fn squash_ref(repo_id: RepoId, reference: String) -> Vec<Effect> {
     vec![Effect::SquashRef { repo_id, reference }]
 }
 
+pub(super) fn push_with_tags(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    request: gitcomet_core::tag_push::TagPushRequest,
+) -> Vec<Effect> {
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
+    vec![Effect::PushWithTags {
+        repo_id,
+        request,
+        auth: None,
+    }]
+}
+
 pub(super) fn push(
     repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
@@ -1025,6 +1039,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::PullBranch { .. }
             | RepoCommandKind::MergeRef { .. }
             | RepoCommandKind::SquashRef { .. }
+            | RepoCommandKind::PushWithTags { .. }
             | RepoCommandKind::Push
             | RepoCommandKind::PushAfterCommit { .. }
             | RepoCommandKind::ForcePush
@@ -1141,7 +1156,8 @@ pub(super) fn repo_command_finished(
             repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
             repo_state.bump_ops_rev();
         }
-        RepoCommandKind::Push
+        RepoCommandKind::PushWithTags { .. }
+        | RepoCommandKind::Push
         | RepoCommandKind::PushAfterCommit { .. }
         | RepoCommandKind::ForcePush
         | RepoCommandKind::ForcePushWithLease { .. }
