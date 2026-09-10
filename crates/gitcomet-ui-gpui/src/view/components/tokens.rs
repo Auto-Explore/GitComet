@@ -25,7 +25,9 @@ pub const SPLIT_BUTTON_DIVIDER_HEIGHT_PX: f32 = 11.0;
 /// Trailing close/remove affordance shared by repository tabs and the picker
 /// rows that can drop an entry: a small hit box holding a danger-tinted X,
 /// whose plate is the danger colour at these alphas. Both live off the same
-/// tokens so the two buttons stay visually identical.
+/// tokens, so the two buttons read as one control -- but only the picker's
+/// takes the density ramp on top. The tab's sits in the window chrome, which
+/// holds `REMOVE_BUTTON_SIZE_PX` at every setting.
 pub const REMOVE_BUTTON_ICON: &str = "icons/repo_tab_close.svg";
 pub const REMOVE_BUTTON_SIZE_PX: f32 = 18.0;
 pub const REMOVE_BUTTON_ICON_SIZE_PX: f32 = 12.0;

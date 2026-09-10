@@ -99,7 +99,7 @@ const REPO_TAB_DRAG_SCROLL_MAX_STEP: Duration = Duration::from_millis(50);
 /// Shared label-row geometry. Keeping an explicit line box lets the text,
 /// status glyph, and close button all center on the same title-bar axis. Every
 /// size here is fixed: the strip lives in the title bar, which stays outside
-/// the appearance system (see `chrome::CHROME_SCALE_PERCENT`).
+/// the appearance system (see `chrome::chrome_scale`).
 const REPO_TAB_FONT_SIZE_PX: f32 = 15.0;
 const REPO_TAB_CONTENT_HEIGHT_PX: f32 = 18.0;
 const REPO_TAB_STATUS_SIZE_PX: f32 = components::REPOSITORY_BADGE_SIZE_PX;
@@ -109,6 +109,13 @@ pub(in crate::view) const REPO_TAB_SIDE_PADDING_PX: f32 = 14.0;
 const REPO_TAB_HOVER_BOX_X_OVERHANG_PX: f32 = 4.0;
 const REPO_TAB_HOVER_BOX_Y_OVERHANG_PX: f32 = 3.0;
 const REPO_TAB_HOVER_BOX_RADIUS_PX: f32 = 4.0;
+/// The label plate, overhang included, has to fit the tab it sits in, and it
+/// has to cover the close button it shares a hover surface with. Both sides are
+/// fixed, so the check belongs in the build rather than in a test run.
+const REPO_TAB_HOVER_BOX_HEIGHT_PX: f32 =
+    REPO_TAB_CONTENT_HEIGHT_PX + REPO_TAB_HOVER_BOX_Y_OVERHANG_PX * 2.0;
+const _: () = assert!(REPO_TAB_HOVER_BOX_HEIGHT_PX >= components::REMOVE_BUTTON_SIZE_PX);
+const _: () = assert!(REPO_TAB_HOVER_BOX_HEIGHT_PX < components::Tab::CONTENT_HEIGHT_PX);
 
 /// Returns the drag direction and its new high/low-water mark. A direction is
 /// established immediately, but reversing it requires deliberate travel away
@@ -834,7 +841,7 @@ impl Render for RepoTabsBarView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(REPO_TAB_STATUS_SIZE_PX))
+                .size(px(components::REMOVE_BUTTON_SIZE_PX))
                 .rounded(px(theme.radii.row))
                 // Fully cover any label ink beneath the button; the sibling
                 // ramp transitions into this exact background.
@@ -855,7 +862,7 @@ impl Render for RepoTabsBarView {
             let close_overlay = div()
                 .flex()
                 .items_center()
-                .h(px(REPO_TAB_STATUS_SIZE_PX))
+                .h(px(components::REMOVE_BUTTON_SIZE_PX))
                 .child(
                     components::trailing_fade(label_bg, px(REPO_TAB_CLOSE_FADE_WIDTH_PX))
                         .debug_selector(move || format!("repo_tab_close_fade_{}", repo_id.0)),
@@ -927,7 +934,7 @@ impl Render for RepoTabsBarView {
                             d.child(
                                 components::repository_initials_box(
                                     theme,
-                                    crate::view::chrome::CHROME_SCALE_PERCENT,
+                                    crate::view::chrome::chrome_scale(),
                                     initials.clone(),
                                     is_active,
                                 )
@@ -946,7 +953,7 @@ impl Render for RepoTabsBarView {
                             .child(label),
                         label_bg,
                     )
-                    .render(crate::view::chrome::CHROME_SCALE_PERCENT)
+                    .render(crate::view::chrome::chrome_scale())
                     .debug_selector(move || format!("repo_tab_label_{}", repo_id.0))
                     .flex_1(),
                 )
@@ -1343,8 +1350,7 @@ fn repo_tab_insert_before_for_drop(
 #[cfg(test)]
 mod tests {
     use super::{
-        REPO_TAB_CONTENT_HEIGHT_PX, REPO_TAB_HOVER_BOX_Y_OVERHANG_PX, REPO_TAB_STATUS_SIZE_PX,
-        RepoTabsBarView, components, repo_tab_close_button_fill, repo_tab_drag_direction,
+        RepoTabsBarView, repo_tab_close_button_fill, repo_tab_drag_direction,
         repo_tab_insert_before_for_drag_cursor, repo_tab_insert_before_for_drop,
     };
     use gitcomet_core::domain::RepoSpec;
@@ -1352,24 +1358,6 @@ mod tests {
     use gitcomet_state::msg::Msg;
     use gpui::{Bounds, point, px, size};
     use std::path::PathBuf;
-
-    /// The strip lives in the title bar, which is outside the appearance
-    /// system: the plate behind an idle tab's label, the close button that
-    /// overlays its right edge, and the tab around them all hold one size. The
-    /// plate plus its overhang still has to fit inside the tab.
-    #[test]
-    fn the_repository_tab_plate_fits_inside_the_tab_at_its_one_size() {
-        let plate = REPO_TAB_CONTENT_HEIGHT_PX + REPO_TAB_HOVER_BOX_Y_OVERHANG_PX * 2.0;
-
-        assert!(
-            plate >= REPO_TAB_STATUS_SIZE_PX,
-            "the plate must cover the close button it shares a hover surface with"
-        );
-        assert!(
-            plate < components::Tab::CONTENT_HEIGHT_PX - 2.0,
-            "plate {plate} must leave a gap inside the tab's content box"
-        );
-    }
 
     fn repo_state(path: &str) -> RepoState {
         RepoState::new_opening(

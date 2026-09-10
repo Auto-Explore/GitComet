@@ -245,6 +245,12 @@ fn settings_window_titlebar_options_match_platform_chrome_strategy() {
         Some(SETTINGS_WINDOW_TITLE.to_string()),
         "settings window titlebar should keep the OS-visible title"
     );
+    assert_eq!(
+        options.traffic_light_position,
+        cfg!(target_os = "macos").then_some(chrome::macos_traffic_light_position()),
+        "the settings header is the same fixed bar as the main window's, so the \
+         lights have to land in the same place"
+    );
 }
 
 #[test]

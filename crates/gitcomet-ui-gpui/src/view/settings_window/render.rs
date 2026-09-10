@@ -62,11 +62,11 @@ impl Render for SettingsWindowView {
             .items_center()
             .min_w(px(0.0))
             // The header is a window title bar, so it holds one size at every
-            // UI scale, density and font size (see `chrome::CHROME_SCALE_PERCENT`).
+            // UI scale, density and font size (see `chrome::chrome_scale`).
             .px(px(12.0))
             .window_control_area(WindowControlArea::Drag)
             .when(is_macos, |this| {
-                this.pl(settings_window_traffic_lights_safe_inset())
+                this.pl(chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET)
             })
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 if !chrome::should_handle_titlebar_double_click(e.click_count(), e.standard_click())
@@ -173,7 +173,7 @@ impl Render for SettingsWindowView {
         let frame_rounding = chrome::client_frame_corner_rounding(theme, window);
         let header = div()
             .id("settings_window_header")
-            .h(chrome::title_bar_height())
+            .h(chrome::TITLE_BAR_HEIGHT)
             .w_full()
             .flex()
             .items_center()
@@ -189,16 +189,7 @@ impl Render for SettingsWindowView {
             )
             .child(drag_region)
             .when(!is_macos, |this| {
-                this.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .pr_2()
-                        .child(min)
-                        .child(max)
-                        .child(close),
-                )
+                this.child(chrome::window_controls_cluster(Some((min, max, close))))
             });
 
         self.git_executable_input

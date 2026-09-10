@@ -32,15 +32,6 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
             disabled: push_disabled,
             action: Box::new(ContextMenuAction::Push { repo_id }),
         },
-        ContextMenuItem::Entry {
-            label: force_push_label.into(),
-            icon: Some("icons/warning.svg".into()),
-            shortcut: Some("F".into()),
-            disabled: force_push_disabled,
-            action: Box::new(ContextMenuAction::OpenPopover {
-                kind: PopoverKind::ForcePushConfirm { repo_id },
-            }),
-        },
     ]);
     for mode in gitcomet_core::tag_push::TagPushMode::ALL {
         let request = repo.and_then(|repo| super::super::tag_push::request(repo, mode));
@@ -70,5 +61,17 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
                 .insert(ix, super::super::tag_push::tooltip(request, preview).into());
         }
     }
+    // Last, and fenced off: the one entry here that rewrites published history
+    // should not sit under a cursor aimed at the ordinary pushes above it.
+    model.items.push(ContextMenuItem::Separator);
+    model.items.push(ContextMenuItem::Entry {
+        label: force_push_label.into(),
+        icon: Some("icons/warning.svg".into()),
+        shortcut: Some("F".into()),
+        disabled: force_push_disabled,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::ForcePushConfirm { repo_id },
+        }),
+    });
     model
 }

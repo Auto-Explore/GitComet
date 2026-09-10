@@ -23,7 +23,7 @@ const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
 const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
 const SETTINGS_WINDOW_TITLE: &str = "Settings: GitComet";
-const SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
+
 const MIN_GIT_MAJOR: u32 = 2;
 const MIN_GIT_MINOR: u32 = 50;
 const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
@@ -614,14 +614,6 @@ fn settings_window_default_size_for_percent(percent: u32) -> gpui::Size<Pixels> 
     )
 }
 
-fn settings_window_traffic_light_position(_percent: u32) -> Point<Pixels> {
-    point(px(9.0), px(9.0))
-}
-
-fn settings_window_traffic_lights_safe_inset() -> Pixels {
-    px(SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET_PX)
-}
-
 #[cfg(test)]
 fn settings_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
     settings_window_options_for_scale(bounds, ui_scale::DEFAULT_UI_SCALE_PERCENT)
@@ -634,7 +626,7 @@ fn settings_window_options_for_scale(
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(settings_window_min_size_for_percent(ui_scale_percent)),
-        titlebar: Some(settings_window_titlebar_options_for_scale(ui_scale_percent)),
+        titlebar: Some(settings_window_titlebar_options()),
         app_id: Some("gitcomet-settings".into()),
         window_decorations: Some(WindowDecorations::Client),
         window_background: crate::app::main_window_background_appearance(),
@@ -644,19 +636,14 @@ fn settings_window_options_for_scale(
     }
 }
 
-#[cfg(test)]
 fn settings_window_titlebar_options() -> TitlebarOptions {
-    settings_window_titlebar_options_for_scale(ui_scale::DEFAULT_UI_SCALE_PERCENT)
-}
-
-fn settings_window_titlebar_options_for_scale(ui_scale_percent: u32) -> TitlebarOptions {
     TitlebarOptions {
         title: Some(SETTINGS_WINDOW_TITLE.into()),
         // Windows needs a transparent native titlebar to avoid rendering its own
         // caption on top of the custom settings header.
         appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
         traffic_light_position: cfg!(target_os = "macos")
-            .then_some(settings_window_traffic_light_position(ui_scale_percent)),
+            .then_some(chrome::macos_traffic_light_position()),
     }
 }
 

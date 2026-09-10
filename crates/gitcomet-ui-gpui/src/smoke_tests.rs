@@ -4185,6 +4185,38 @@ fn roomy_repo_tab_expands_to_show_its_full_repository_name(cx: &mut gpui::TestAp
     );
 }
 
+/// AppKit paints the traffic lights straight over our bar, so the bar has to
+/// keep its own leading control out from under them. Nothing else measures the
+/// reserved inset against what actually gets painted.
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn the_title_bar_keeps_its_leading_control_clear_of_the_traffic_lights(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_traffic_lights_{}",
+        std::process::id()
+    ));
+    restore_session_and_draw(cx, &store_for_test, view.clone(), vec![workdir]);
+
+    let picker = cx
+        .debug_bounds("repo_picker_toggle")
+        .expect("expected repository picker bounds");
+
+    assert!(
+        picker.left() >= crate::view::chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET,
+        "the first control in the bar starts at {:?}, inside the {:?} reserved for the lights",
+        picker.left(),
+        crate::view::chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET
+    );
+}
+
 /// The window chrome is deliberately outside the UI scale: a title bar shares
 /// its row with the OS window controls, which do not resize, so the bar, its
 /// buttons and the repository tabs must not move when the workspace under them
@@ -4193,11 +4225,16 @@ fn roomy_repo_tab_expands_to_show_its_full_repository_name(cx: &mut gpui::TestAp
 fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
     cx: &mut gpui::TestAppContext,
 ) {
-    fn height(cx: &mut gpui::VisualTestContext, selector: &'static str, at: u32) -> gpui::Pixels {
+    // Width matters as much as height here: the scale parameter this change
+    // dropped from `Tab::natural_width` governs the strip's widths.
+    fn box_of(
+        cx: &mut gpui::VisualTestContext,
+        selector: &'static str,
+        at: u32,
+    ) -> gpui::Size<gpui::Pixels> {
         cx.debug_bounds(selector)
             .unwrap_or_else(|| panic!("missing {selector} at {at}% UI scale"))
             .size
-            .height
     }
 
     let _visual_guard = lock_visual_test();
@@ -4215,6 +4252,7 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
     let fixed = [
         "titlebar_drag",
         "repo_picker_toggle",
+        "add_repo_menu",
         repo_tab_selector(repo_id),
         repo_tab_label_text_selector(repo_id),
     ];
@@ -4222,9 +4260,9 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
     // also hold for a scale change that never took effect.
     let zooms = "sidebar_tab_files";
 
-    let at_default =
-        fixed.map(|selector| height(cx, selector, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT));
-    let zooms_at_default = height(cx, zooms, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+    let default_percent = crate::ui_scale::DEFAULT_UI_SCALE_PERCENT;
+    let at_default = fixed.map(|selector| box_of(cx, selector, default_percent));
+    let zooms_at_default = box_of(cx, zooms, default_percent).height;
 
     for percent in [80, 200] {
         cx.update(|window, app| {
@@ -4237,17 +4275,32 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
 
         for (ix, selector) in fixed.into_iter().enumerate() {
             assert_eq!(
-                height(cx, selector, percent),
+                box_of(cx, selector, percent),
                 at_default[ix],
                 "{selector} sits in the title bar and must not move at {percent}% UI scale"
             );
         }
+        // Absolute, not merely unchanged: the bar is mounted uncached in tests,
+        // so a bar that silently compressed would still "not move".
+        assert_eq!(
+            box_of(cx, "titlebar_drag", percent).height,
+            crate::view::chrome::TITLE_BAR_HEIGHT,
+            "the title bar must hold its own fixed height at {percent}% UI scale"
+        );
+        // Re-checked every step, so neither iteration can pass vacuously.
+        let zoomed = box_of(cx, zooms, percent).height;
+        if percent < default_percent {
+            assert!(
+                zoomed < zooms_at_default,
+                "the workspace under the title bar must shrink at {percent}%"
+            );
+        } else {
+            assert!(
+                zoomed > zooms_at_default,
+                "the workspace under the title bar must still zoom at {percent}%"
+            );
+        }
     }
-
-    assert!(
-        height(cx, zooms, 200) > zooms_at_default,
-        "the workspace under the title bar must still zoom"
-    );
 }
 
 #[gpui::test]

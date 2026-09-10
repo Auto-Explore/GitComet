@@ -107,6 +107,66 @@ fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
     cx.update(|_, app| assert!(view.read(app).popover_host.read(app).popover.is_none()));
 }
 
+/// Force push is the one entry in this menu that rewrites published history, so
+/// it sits last and behind a separator rather than among the ordinary pushes a
+/// cursor is aimed at.
+#[gpui::test]
+fn the_push_menu_keeps_force_push_last_and_fenced_off(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo = ref_repo();
+    let state = Arc::new(AppState {
+        active_repo: Some(repo.id),
+        repos: vec![repo],
+        ..Default::default()
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.state = state.clone();
+            this.popover_host.update(cx, |host, cx| {
+                host.state = state;
+                let model = host
+                    .context_menu_model(&PopoverKind::PushPicker, cx)
+                    .expect("expected a push menu");
+
+                let force_push = model.items.last().expect("expected a trailing entry");
+                assert!(
+                    matches!(
+                        force_push,
+                        ContextMenuItem::Entry { label, action, .. }
+                            if label.starts_with("Force push")
+                                && matches!(
+                                    action.as_ref(),
+                                    ContextMenuAction::OpenPopover {
+                                        kind: PopoverKind::ForcePushConfirm { .. }
+                                    }
+                                )
+                    ),
+                    "force push must be the last entry in the menu"
+                );
+                assert!(
+                    matches!(
+                        model.items[model.items.len() - 2],
+                        ContextMenuItem::Separator
+                    ),
+                    "force push must be fenced off from the pushes above it"
+                );
+                // The ordinary pushes stay above the fence, in their own group.
+                assert!(
+                    model.items.iter().rev().skip(2).any(|item| matches!(
+                        item,
+                        ContextMenuItem::Entry { action, .. }
+                            if matches!(action.as_ref(), ContextMenuAction::Push { .. })
+                    )),
+                    "the plain push action must stay above the separator"
+                );
+            });
+        });
+    });
+}
+
 #[gpui::test]
 fn tag_push_menu_keeps_actions_enabled_when_preview_is_unavailable_and_preserves_upstream_mode(
     cx: &mut gpui::TestAppContext,

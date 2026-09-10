@@ -4,7 +4,7 @@ use gpui::{AnyElement, Div, ElementId, IntoElement, Pixels, Stateful, Window, di
 
 /// Tab height inside the title bar; the difference to the bar height is the
 /// uncovered title chrome above a browser-style repository tab. Fixed like the
-/// rest of the window chrome (see `chrome::CHROME_SCALE_PERCENT`).
+/// rest of the window chrome (see `chrome::chrome_scale`).
 pub(super) const TAB_HEIGHT_PX: f32 = 34.0;
 
 /// Paints the selected tab as one continuous browser-style silhouette. The
@@ -160,9 +160,9 @@ impl Tab {
     /// tests can pin the floor without restating the number.
     pub const MIN_WIDTH_PX: f32 = 126.0;
     /// Vertical room a tab gives its children: its height less the insets that
-    /// fuse it to the bar and its top border. Nothing lays out against it --
-    /// it exists so the strip's own tests can pin what has to fit in there.
-    #[cfg(test)]
+    /// fuse it to the bar (`render` applies both as padding) and its top
+    /// border. Whatever the strip puts in a tab has to fit in here, so the
+    /// strip asserts against it at build time.
     pub const CONTENT_HEIGHT_PX: f32 =
         TAB_HEIGHT_PX - Self::TAB_TOP_PADDING_PX - Self::TAB_BOTTOM_FUSE_PAD_PX - 1.0;
 

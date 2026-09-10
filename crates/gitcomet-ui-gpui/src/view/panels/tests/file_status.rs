@@ -5436,9 +5436,23 @@ fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext)
         "history_mode_header",
         "change_tracking_unstaged_header",
     ];
-    // Lives in the title bar. The app-menu chip beside it is not rendered on
-    // macOS, where the OS supplies that menu.
-    let fixed_selectors = ["repo_picker_toggle"];
+    // Everything in the title bar. `add_repo_menu` and the app menu are the two
+    // `Button::unscaled()` call sites, and `add_repo_menu` is the one whose
+    // height actually comes from that pin -- the others carry explicit sizes.
+    let leak = |selector: String| -> &'static str { Box::leak(selector.into_boxed_str()) };
+    let tab_selector = leak(format!("repo_tab_{}", repo_id.0));
+    let plate_selector = leak(format!("repo_tab_hover_box_{}", repo_id.0));
+    let mut fixed_selectors = vec![
+        "repo_picker_toggle",
+        "add_repo_menu",
+        tab_selector,
+        plate_selector,
+    ];
+    // macOS supplies its own application menu and caption buttons.
+    if !cfg!(target_os = "macos") {
+        fixed_selectors.extend(["app_menu", "titlebar_win_close"]);
+    }
+
     let mut per_density: Vec<Vec<gpui::Pixels>> = Vec::new();
     let mut fixed_per_density: Vec<Vec<gpui::Pixels>> = Vec::new();
 
@@ -5454,8 +5468,21 @@ fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext)
         });
         draw_and_drain_test_window(cx);
         per_density.push(heights(cx, &selectors, density));
-
         fixed_per_density.push(heights(cx, &fixed_selectors, density));
+
+        // The plate behind the label and the tab around it are both fixed, so
+        // the plate has to stay inside its tab at every density.
+        let tab = cx
+            .debug_bounds(tab_selector)
+            .expect("expected repository tab bounds");
+        let plate = cx
+            .debug_bounds(plate_selector)
+            .expect("expected repository tab label plate bounds");
+
+        assert!(
+            plate.top() > tab.top() && plate.bottom() < tab.bottom(),
+            "{density:?}: the label plate {plate:?} must stay inside its tab {tab:?}"
+        );
     }
 
     for (step, pair) in per_density.windows(2).enumerate() {
@@ -5471,7 +5498,7 @@ fn comfortable_chrome_chips_grow_with_the_density(cx: &mut gpui::TestAppContext)
     }
 
     for (step, pair) in fixed_per_density.windows(2).enumerate() {
-        for (ix, selector) in fixed_selectors.into_iter().enumerate() {
+        for (ix, selector) in fixed_selectors.iter().enumerate() {
             assert_eq!(
                 pair[1][ix],
                 pair[0][ix],

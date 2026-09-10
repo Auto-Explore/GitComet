@@ -248,7 +248,7 @@ impl Render for GitCometView {
         if show_custom_window_chrome {
             body = body.child(stable_cached_fixed_height_view(
                 self.title_bar.clone(),
-                chrome::title_bar_height(),
+                chrome::TITLE_BAR_HEIGHT,
             ));
         }
 

@@ -12,7 +12,7 @@ use gpui::prelude::*;
 use gpui::{
     App, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Pixels, Render, ScrollHandle,
     SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, actions,
-    div, point,
+    div,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -534,10 +534,9 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
                         titlebar: Some(TitlebarOptions {
                             title: Some("GitComet — Diff".into()),
                             appears_transparent: false,
-                            traffic_light_position: Some(point(
-                                crate::ui_scale::design_px_from_percent(9.0, ui_scale_percent),
-                                crate::ui_scale::design_px_from_percent(9.0, ui_scale_percent),
-                            )),
+                            traffic_light_position: Some(
+                                crate::view::chrome::macos_traffic_light_position(),
+                            ),
                         }),
                         app_id: Some("gitcomet-diff".to_string()),
                         window_decorations: Some(WindowDecorations::Server),

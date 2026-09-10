@@ -645,7 +645,7 @@ impl PopoverHost {
         let is_right = matches!(anchor_corner, Anchor::TopRight | Anchor::BottomRight);
         let popover_border_color = theme.colors.stroke.default;
         let gap_y = if is_app_menu {
-            crate::view::chrome::title_bar_height()
+            crate::view::chrome::TITLE_BAR_HEIGHT
         } else if anchor_is_bounds {
             px(1.0)
         } else if is_right {

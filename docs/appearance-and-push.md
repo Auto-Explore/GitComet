@@ -18,10 +18,13 @@ Font sizes are saved separately and apply immediately across open windows:
 Use the minus/plus buttons or type a whole-number value. Reset affects only that
 font size. UI scale remains a separate multiplier for the whole window.
 
-The window title bar is the one exception to all three. It shares its row with
-the operating system's own window controls, which do not resize, so the bar, its
-buttons and the repository tabs hold a single size at every density, font size
-and UI scale.
+Window title bars are the one exception to all three. A title bar shares its row
+with the operating system's own window controls, which do not resize, so the
+bar, its buttons and the repository tabs hold a single size at every density,
+font size and UI scale. This applies to the Settings window's header too, and on
+macOS the traffic lights are centred on that same fixed bar. The window frame's
+resize border is not part of this and still follows the UI scale.
+
 
 ## History context menu
 

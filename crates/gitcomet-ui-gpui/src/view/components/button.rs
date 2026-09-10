@@ -51,7 +51,9 @@ pub struct Button {
     start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
     separate_end_slot: bool,
-    unscaled: bool,
+    /// Set when the caller pins the button's geometry instead of taking the
+    /// app's. See [`Button::unscaled`].
+    scale: Option<UiScale>,
 }
 
 impl Button {
@@ -74,7 +76,7 @@ impl Button {
             start_slot: None,
             end_slot: None,
             separate_end_slot: false,
-            unscaled: false,
+            scale: None,
         }
     }
 
@@ -167,22 +169,12 @@ impl Button {
         self
     }
 
-    /// Pins the button's geometry, ignoring the app's UI scale, density and
-    /// font size. For window chrome, which shares its row with OS controls that
-    /// never resize (see `chrome::CHROME_SCALE_PERCENT`).
+    /// Pins the button to the window chrome's fixed scale, ignoring the app's
+    /// UI scale, density and font size. For a button in a title bar, which
+    /// shares its row with OS controls that never resize.
     pub fn unscaled(mut self) -> Self {
-        self.unscaled = true;
+        self.scale = Some(crate::view::chrome::chrome_scale());
         self
-    }
-
-    /// The scale a button sizes itself from: the app's, unless it has been
-    /// pinned by [`Self::unscaled`].
-    fn scale_for(unscaled: bool, app_scale: impl Into<UiScale>, theme: AppTheme) -> UiScale {
-        if unscaled {
-            UiScale::from_percent(crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
-        } else {
-            app_scale.into().with_appearance(theme.metrics)
-        }
     }
 
     pub fn on_click<V: 'static>(
@@ -192,7 +184,7 @@ impl Button {
         f: impl Fn(&mut V, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
         let disabled = self.disabled;
-        let ui_scale = UiScale::current(cx);
+        let ui_scale = self.scale.unwrap_or_else(|| UiScale::current(cx));
 
         self.render(theme, ui_scale)
             .when(!disabled, |this| this.on_click(cx.listener(f)))
@@ -205,7 +197,7 @@ impl Button {
         f: impl Fn(&mut V, &ClickEvent, Bounds<Pixels>, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
         let disabled = self.disabled;
-        let ui_scale = UiScale::current(cx);
+        let ui_scale = self.scale.unwrap_or_else(|| UiScale::current(cx));
 
         let last_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
         let last_bounds_for_prepaint = Rc::clone(&last_bounds);
@@ -249,9 +241,9 @@ impl Button {
             start_slot,
             end_slot,
             separate_end_slot,
-            unscaled,
+            scale,
         } = self;
-        let ui_scale = Self::scale_for(unscaled, ui_scale, theme);
+        let ui_scale = scale.unwrap_or_else(|| ui_scale.into().with_appearance(theme.metrics));
 
         let transparent = gpui::rgba(0x00000000);
         let outlined_border = if theme.is_dark {
