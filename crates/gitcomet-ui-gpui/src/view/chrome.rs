@@ -1,5 +1,18 @@
+//! Window chrome: the title bars, their controls, and the frame around them.
+//!
+//! A title bar sits outside the appearance system. It shares its row with the OS
+//! window controls, which do not resize, so the bar, its buttons and the
+//! repository tabs hold one size at every UI scale, density and font size. Bar
+//! geometry is written in literal `px`; the shared components a bar borrows are
+//! handed [`chrome_scale`] so they size themselves the same way.
+//!
+//! That covers the bar and what it draws. The window *frame* around it --
+//! [`client_side_decoration_inset`] and the resize band derived from it -- is a
+//! pointer target on the window edge rather than something in the bar, and
+//! deliberately still follows the UI scale.
 use super::*;
 use crate::ui_scale;
+
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -10,20 +23,87 @@ pub(super) const TITLE_BAR_HEIGHT_PX: f32 = 38.0;
 /// grab target: every pixel here is width the tab strip can never use, so it
 /// narrows tabs before the bar is even full.
 const REPO_TABS_TRAILING_DRAG_WIDTH_PX: f32 = 24.0;
-const MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
+/// AppKit's own traffic-light buttons. Their frames cannot be read before the
+/// window exists, so the geometry is pinned here and the bar is laid out around
+/// it.
+const MACOS_TRAFFIC_LIGHT_BUTTON_HEIGHT_PX: f32 = 14.0;
+const MACOS_TRAFFIC_LIGHT_BUTTON_WIDTH_PX: f32 = 14.0;
+const MACOS_TRAFFIC_LIGHT_BUTTON_GAP_PX: f32 = 6.0;
+/// Distance from the window's leading edge to the close button.
+const MACOS_TRAFFIC_LIGHTS_LEADING_PX: f32 = 9.0;
+/// Breathing room between the zoom button and the first control we draw.
+const MACOS_TRAFFIC_LIGHTS_CLEARANCE_PX: f32 = 15.0;
+/// Leading padding a bar gives up to the lights AppKit paints over it. Derived,
+/// so the clearance is the only number anyone needs to reconsider.
+pub(crate) const MACOS_TRAFFIC_LIGHTS_SAFE_INSET: Pixels = px(MACOS_TRAFFIC_LIGHTS_LEADING_PX
+    + MACOS_TRAFFIC_LIGHT_BUTTON_WIDTH_PX * 3.0
+    + MACOS_TRAFFIC_LIGHT_BUTTON_GAP_PX * 2.0
+    + MACOS_TRAFFIC_LIGHTS_CLEARANCE_PX);
+const _: () = assert!(MACOS_TRAFFIC_LIGHTS_CLEARANCE_PX > 0.0);
+
 #[cfg(test)]
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(CLIENT_SIDE_DECORATION_INSET_PX);
+
+/// The scale a shared component is handed when it is drawn into a bar. One
+/// definition, so a component cannot end up pinned to a different baseline than
+/// the bar around it.
+pub(in crate::view) fn chrome_scale() -> ui_scale::UiScale {
+    ui_scale::UiScale::from_percent(ui_scale::DEFAULT_UI_SCALE_PERCENT)
+}
 
 pub(super) fn client_side_decoration_inset(ui_scale_percent: u32) -> Pixels {
     ui_scale::design_px_from_percent(CLIENT_SIDE_DECORATION_INSET_PX, ui_scale_percent)
 }
 
-pub(super) fn title_bar_height(ui_scale_percent: u32) -> Pixels {
-    ui_scale::design_px_from_percent(TITLE_BAR_HEIGHT_PX, ui_scale_percent)
+pub(crate) const TITLE_BAR_HEIGHT: Pixels = px(TITLE_BAR_HEIGHT_PX);
+
+/// Fallback size for text in a bar that does not set its own, so it cannot
+/// inherit the app root's rem-based size and grow with the UI scale.
+const TITLE_BAR_TEXT_SIZE_PX: f32 = 14.0;
+
+/// Geometry every control in a title bar shares -- the app menu and repository
+/// switcher at the leading edge, the min/max/close caption buttons at the
+/// trailing one. One set of numbers, so a 16px glyph clears the same 8px on
+/// each side at both ends of the bar.
+const TITLE_BAR_BUTTON_HEIGHT_PX: f32 = 26.0;
+const TITLE_BAR_BUTTON_WIDTH_PX: f32 = 32.0;
+const TITLE_BAR_ICON_SIZE_PX: f32 = 16.0;
+/// Spacing around the trailing caption cluster.
+const TITLE_BAR_CONTROL_GAP_PX: f32 = 4.0;
+const TITLE_BAR_CONTROL_TRAILING_PAD_PX: f32 = 8.0;
+
+pub(super) const TITLE_BAR_BUTTON_HEIGHT: Pixels = px(TITLE_BAR_BUTTON_HEIGHT_PX);
+/// The plate has to leave the bar an inset at both edges.
+const _: () = assert!(TITLE_BAR_BUTTON_HEIGHT_PX < TITLE_BAR_HEIGHT_PX);
+
+/// The trailing min/max/close cluster. Both title bars build it here: the
+/// buttons hold one size, so the spacing around them has to as well, and a
+/// single builder is what stops the two bars drifting apart. `controls` is
+/// `None` on macOS, where the OS draws the caption buttons itself.
+pub(super) fn window_controls_cluster<E: IntoElement>(controls: Option<(E, E, E)>) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .h_full()
+        .gap(px(TITLE_BAR_CONTROL_GAP_PX))
+        .when_some(controls, |cluster, (min, max, close)| {
+            cluster.child(min).child(max).child(close)
+        })
+        .pr(px(TITLE_BAR_CONTROL_TRAILING_PAD_PX))
 }
 
-fn macos_traffic_lights_safe_inset(_ui_scale_percent: u32) -> Pixels {
-    px(MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX)
+/// Where AppKit should put the traffic lights. Every GitComet window asks here,
+/// so the three of them agree.
+///
+/// AppKit centres the buttons in a container it sizes as
+/// `button_height + 2 * position.y` and pins to the top of the window, so the y
+/// inset is what puts them on our bar's midline -- and the bar is a fixed
+/// height, so this is one too.
+pub(crate) fn macos_traffic_light_position() -> Point<Pixels> {
+    point(
+        px(MACOS_TRAFFIC_LIGHTS_LEADING_PX),
+        px((TITLE_BAR_HEIGHT_PX - MACOS_TRAFFIC_LIGHT_BUTTON_HEIGHT_PX) / 2.0),
+    )
 }
 
 pub(super) struct TitleBarView {
@@ -125,15 +205,14 @@ pub(in crate::view) fn window_top_left_corner(window: &Window) -> Point<Pixels> 
 }
 
 pub(super) fn titlebar_control_button(
-    ui_scale_percent: u32,
     id: &'static str,
     icon_path: &'static str,
     idle_color: gpui::Rgba,
     hover_color: gpui::Rgba,
 ) -> gpui::Div {
-    let hitbox_width = ui_scale::design_px_from_percent(32.0, ui_scale_percent);
-    let visual_size = ui_scale::design_px_from_percent(26.0, ui_scale_percent);
-    let icon_size = ui_scale::design_px_from_percent(16.0, ui_scale_percent);
+    let hitbox_width = px(TITLE_BAR_BUTTON_WIDTH_PX);
+    let visual_size = px(TITLE_BAR_BUTTON_HEIGHT_PX);
+    let icon_size = px(TITLE_BAR_ICON_SIZE_PX);
 
     div()
         .h_full()
@@ -437,8 +516,6 @@ impl TitleBarView {
 impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
         let is_macos = cfg!(target_os = "macos");
         let workspace_actions_enabled = self.workspace_actions_enabled;
         let repo_tabs_enabled = workspace_actions_enabled
@@ -467,38 +544,32 @@ impl Render for TitleBarView {
         let bar_bg = title_bar_background(theme, window.is_window_active());
         let app_menu_focus_handle = self.app_menu_focus_handle.clone();
 
-        let menu_toggle = div()
-            .h_full()
-            .pl(scaled_px(2.0))
-            .flex()
-            .items_center()
-            .child(
-                components::Button::new("app_menu_btn", "")
-                    .start_slot(svg_icon(
-                        "icons/menu.svg",
-                        theme.colors.foreground.primary,
-                        scaled_px(16.0),
-                    ))
-                    .style(components::ButtonStyle::Transparent)
-                    .selected(app_menu_open)
-                    .selected_bg(app_menu_open_bg)
-                    .focus_handle(app_menu_focus_handle)
-                    .on_click(theme, cx, |this, _e, window, cx| {
-                        this.set_app_menu_open(true, cx);
-                        let anchor = window_top_left_corner(window);
-                        this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
-                    })
-                    // Sized to the window controls' 32px hitbox so the 16px glyph
-                    // clears the same 8px on each side. The button's intrinsic
-                    // `icon_pad_x` is narrower; a fixed width plus the centered
-                    // content is what actually matches the two ends of the bar.
-                    .h(scaled_px(26.0))
-                    .w(scaled_px(32.0))
-                    .rounded(px(theme.radii.control))
-                    .block_mouse_except_scroll()
-                    .debug_selector(|| "app_menu".to_string())
-                    .gitcomet_tooltip(theme, "Application menu".into()),
-            );
+        let menu_toggle = div().h_full().pl(px(2.0)).flex().items_center().child(
+            components::Button::new("app_menu_btn", "")
+                .start_slot(svg_icon(
+                    "icons/menu.svg",
+                    theme.colors.foreground.primary,
+                    px(TITLE_BAR_ICON_SIZE_PX),
+                ))
+                .style(components::ButtonStyle::Transparent)
+                .selected(app_menu_open)
+                .selected_bg(app_menu_open_bg)
+                .focus_handle(app_menu_focus_handle)
+                .unscaled()
+                .on_click(theme, cx, |this, _e, window, cx| {
+                    this.set_app_menu_open(true, cx);
+                    let anchor = window_top_left_corner(window);
+                    this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
+                })
+                // The button's intrinsic `icon_pad_x` is narrower than the
+                // shared hitbox, so state the size rather than inherit it.
+                .h(TITLE_BAR_BUTTON_HEIGHT)
+                .w(px(TITLE_BAR_BUTTON_WIDTH_PX))
+                .rounded(px(theme.radii.control))
+                .block_mouse_except_scroll()
+                .debug_selector(|| "app_menu".to_string())
+                .gitcomet_tooltip(theme, "Application menu".into()),
+        );
 
         // Browser-style repository switcher: a bare chevron beside the app menu
         // (and the repo tabs) that opens the repository picker. Replaces the old
@@ -517,8 +588,8 @@ impl Render for TitleBarView {
                 div()
                     .id("repo_picker_btn")
                     .debug_selector(|| "repo_picker_toggle".to_string())
-                    .h(scaled_px(26.0))
-                    .w(scaled_px(32.0))
+                    .h(TITLE_BAR_BUTTON_HEIGHT)
+                    .w(px(TITLE_BAR_BUTTON_WIDTH_PX))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -549,7 +620,7 @@ impl Render for TitleBarView {
                     .child(svg_icon(
                         "icons/chevron_down.svg",
                         theme.colors.foreground.primary,
-                        scaled_px(16.0),
+                        px(TITLE_BAR_ICON_SIZE_PX),
                     ))
                     .block_mouse_except_scroll()
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -640,7 +711,6 @@ impl Render for TitleBarView {
 
         let min_tooltip: SharedString = "Minimize window".into();
         let min = titlebar_control_button(
-            ui_scale_percent,
             "win_min_btn",
             "icons/generic_minimize.svg",
             theme.colors.foreground.secondary,
@@ -666,7 +736,6 @@ impl Render for TitleBarView {
             "Maximize window".into()
         };
         let max = titlebar_control_button(
-            ui_scale_percent,
             "win_max_btn",
             max_icon,
             theme.colors.foreground.secondary,
@@ -684,7 +753,6 @@ impl Render for TitleBarView {
 
         let close_tooltip: SharedString = "Close window".into();
         let close = titlebar_control_button(
-            ui_scale_percent,
             "win_close_btn",
             "icons/generic_close.svg",
             theme.colors.foreground.secondary,
@@ -706,10 +774,8 @@ impl Render for TitleBarView {
             .flex()
             .items_center()
             .h_full()
-            .gap(scaled_px(2.0))
-            .when(is_macos, |d| {
-                d.pl(macos_traffic_lights_safe_inset(ui_scale_percent))
-            })
+            .gap(px(2.0))
+            .when(is_macos, |d| d.pl(MACOS_TRAFFIC_LIGHTS_SAFE_INSET))
             .when(!is_macos && workspace_actions_enabled, |d| {
                 d.child(menu_toggle)
             })
@@ -744,7 +810,7 @@ impl Render for TitleBarView {
                     div()
                         .flex()
                         .flex_none()
-                        .w(scaled_px(REPO_TABS_TRAILING_DRAG_WIDTH_PX))
+                        .w(px(REPO_TABS_TRAILING_DRAG_WIDTH_PX))
                         .h_full(),
                 )
                 .into_any_element()
@@ -758,8 +824,9 @@ impl Render for TitleBarView {
             .relative()
             .flex()
             .items_center()
-            .h(title_bar_height(ui_scale_percent))
+            .h(TITLE_BAR_HEIGHT)
             .w_full()
+            .text_size(px(TITLE_BAR_TEXT_SIZE_PX))
             .bg(bar_bg)
             .when_some(frame_rounding, |d, rounding| {
                 d.when(rounding.top_left, |d| d.rounded_tl(rounding.radius))
@@ -782,15 +849,9 @@ impl Render for TitleBarView {
             .child(drag_surface)
             .child(leading)
             .child(middle)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .h_full()
-                    .gap(scaled_px(4.0))
-                    .when(!is_macos, |d| d.child(min).child(max).child(close))
-                    .pr(scaled_px(8.0)),
-            )
+            .child(window_controls_cluster(
+                (!is_macos).then_some((min, max, close)),
+            ))
             .into_any_element()
     }
 }
@@ -856,13 +917,103 @@ pub(crate) fn window_frame(
 mod tests {
     use super::*;
 
+    /// gpui's numbered spacing shorthands (`gap_1`, `pr_2`, `text_sm`, …) are
+    /// rem-based, and the rem size follows the UI scale -- so a single one of
+    /// them inside the chrome silently re-scales part of a bar that is supposed
+    /// to hold one size. This is how the settings header's caption cluster kept
+    /// growing after the rest of the bar was pinned. Needles are assembled at
+    /// runtime so this test does not match its own source.
+    #[test]
+    fn the_chrome_never_reaches_for_a_rem_based_size() {
+        const CHROME_SOURCES: [(&str, &str); 4] = [
+            ("view/chrome.rs", include_str!("chrome.rs")),
+            (
+                "view/panels/repo_tabs_bar.rs",
+                include_str!("panels/repo_tabs_bar.rs"),
+            ),
+            ("view/components/tab.rs", include_str!("components/tab.rs")),
+            (
+                "view/components/tab_bar.rs",
+                include_str!("components/tab_bar.rs"),
+            ),
+        ];
+        // Length-taking builders only: `border_*` and `rounded_*` are px, and
+        // `flex_1` is a grow factor, not a size.
+        const LENGTH: &[&str] = &[
+            "gap", "gap_x", "gap_y", "p", "px", "py", "pt", "pb", "pl", "pr", "m", "mx", "my",
+            "mt", "mb", "ml", "mr", "w", "h", "size", "top", "bottom", "left", "right", "min_w",
+            "min_h", "max_w", "max_h",
+        ];
+        // The `_0` step is px(0), so it is exempt.
+        const STEPS: &[&str] = &[
+            "0p5", "1", "1p5", "2", "2p5", "3", "3p5", "4", "5", "6", "8", "10", "12", "16", "20",
+            "24",
+        ];
+        const TEXT: &[&str] = &["xs", "sm", "base", "lg", "xl", "2xl", "3xl"];
+
+        let needles: Vec<String> = LENGTH
+            .iter()
+            .flat_map(|prefix| STEPS.iter().map(move |step| format!(".{prefix}_{step}(")))
+            .chain(TEXT.iter().map(|size| format!(".text_{size}(")))
+            .chain(std::iter::once(format!("{}(", "rems")))
+            .collect();
+
+        let mut offenders = Vec::new();
+        for (name, source) in CHROME_SOURCES {
+            for (ix, line) in source.lines().enumerate() {
+                for needle in &needles {
+                    if line.contains(needle.as_str()) {
+                        offenders.push(format!("{name}:{} uses {needle}", ix + 1));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "window chrome must size itself in fixed px: {offenders:#?}"
+        );
+    }
+
+    /// AppKit centres the traffic lights inside a container it sizes as
+    /// `button_height + 2 * position.y` and pins to the top of the window (gpui
+    /// `move_traffic_light`). So the y inset is the only thing that decides
+    /// whether the lights share a midline with our bar -- get it wrong and they
+    /// sit high in the bar with no other symptom.
+    #[test]
+    fn the_macos_traffic_lights_share_the_title_bars_midline() {
+        let position = macos_traffic_light_position();
+        let container = px(MACOS_TRAFFIC_LIGHT_BUTTON_HEIGHT_PX) + position.y * 2.0;
+
+        assert_eq!(
+            container, TITLE_BAR_HEIGHT,
+            "the container AppKit builds must be exactly the bar the lights sit in"
+        );
+    }
+
+    /// `chrome_scale` is what pins every shared component drawn into a bar, so
+    /// it has to be a genuine no-op on both axes -- if the app's defaults ever
+    /// move under it, the chrome moves with them.
+    #[test]
+    fn the_chrome_scale_is_the_identity_on_both_axes() {
+        let scale = chrome_scale();
+
+        assert_eq!(scale.px(20.0), px(20.0), "the chrome must not zoom");
+        assert_eq!(
+            scale.appearance,
+            crate::appearance::Appearance::default(),
+            "the chrome must not take density or font size"
+        );
+        assert_eq!(scale.row_height(24.0, 32.0), px(24.0));
+        assert_eq!(scale.ui_text(15.0), px(15.0));
+    }
+
     #[test]
     fn titlebar_buttons_do_not_double_set_hover_style() {
         let theme = AppTheme::gitcomet_dark();
         assert!(
             std::panic::catch_unwind(|| {
                 let _ = titlebar_control_button(
-                    ui_scale::DEFAULT_UI_SCALE_PERCENT,
                     "test_btn_1",
                     "icons/generic_minimize.svg",
                     theme.colors.foreground.secondary,
@@ -874,7 +1025,6 @@ mod tests {
         assert!(
             std::panic::catch_unwind(|| {
                 let _ = titlebar_control_button(
-                    ui_scale::DEFAULT_UI_SCALE_PERCENT,
                     "test_btn_2",
                     "icons/generic_close.svg",
                     theme.colors.foreground.secondary,

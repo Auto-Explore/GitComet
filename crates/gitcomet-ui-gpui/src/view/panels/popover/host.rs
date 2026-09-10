@@ -204,6 +204,14 @@ impl PopoverHost {
             let follow_hook_list = hook_activity_repo_id.is_some()
                 && scroll_is_near_bottom(&this.hook_activity_hooks_scroll, px(24.0));
 
+            let selected_action = this
+                .popover
+                .as_ref()
+                .and_then(|kind| this.context_menu_model(kind, cx))
+                .and_then(|model| {
+                    this.context_menu_selected_ix
+                        .and_then(|ix| context_menu::selection_key(&model, ix))
+                });
             let next_state = Arc::clone(&model.read(cx).state);
             let next_hook_activity_rev = hook_activity_repo_id.and_then(|repo_id| {
                 next_state
@@ -213,6 +221,30 @@ impl PopoverHost {
                     .map(|repo| repo.feedback.hook_activity_rev)
             });
             this.state = next_state;
+            if let Some(selected_action) = selected_action
+                && let Some(model) = this
+                    .popover
+                    .as_ref()
+                    .and_then(|kind| this.context_menu_model(kind, cx))
+            {
+                this.context_menu_selected_ix = model
+                    .items
+                    .iter()
+                    .enumerate()
+                    .find_map(|(ix, _)| {
+                        context_menu::selection_key(&model, ix)
+                            .filter(|key| *key == selected_action)
+                            .map(|_| ix)
+                    })
+                    .or_else(|| model.first_selectable());
+            }
+            this.sync_tag_push_previews(cx);
+            if matches!(
+                this.popover,
+                Some(PopoverKind::PushPicker | PopoverKind::PushSetUpstreamPrompt { .. })
+            ) {
+                cx.notify();
+            }
             if follow_hook_output
                 && previous_hook_activity_rev.is_some()
                 && next_hook_activity_rev != previous_hook_activity_rev
@@ -804,6 +836,9 @@ impl PopoverHost {
             pinned_branches_by_repo,
             collapsed_items_by_repo,
             branch_filter_query: String::new(),
+            tag_push_preview_key: None,
+            tag_push_cancellations: Vec::new(),
+            push_upstream_tag_mode: None,
             popover: None,
             popover_anchor: None,
             hook_activity_selected: None,
@@ -817,6 +852,9 @@ impl PopoverHost {
             prompt_tab_group_focus_handle,
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
+            context_menu_scroll: ScrollHandle::new(),
+            context_menu_scroll_anchors: Vec::new(),
+            expanded_history_ref: None,
             repo_picker_selected_index: None,
             repo_picker_search_query: String::new(),
             cached_recent_repos: Vec::new(),
@@ -1126,7 +1164,12 @@ impl PopoverHost {
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
         self.popover = None;
         self.popover_anchor = None;
+        self.cancel_tag_push_previews();
+        self.push_upstream_tag_mode = None;
+        self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));
+        self.context_menu_scroll_anchors.clear();
         self.context_menu_selected_ix = None;
+        self.expanded_history_ref = None;
         self.picker_row_menu = None;
         self.menu_invoker_focus = None;
         self.notify_fingerprint = 0;
@@ -2062,6 +2105,7 @@ impl PopoverHost {
         if is_configured {
             *remote = selected;
         }
+        self.sync_tag_push_previews(cx);
         self.push_upstream_remote_menu_open = false;
         self.push_upstream_remote_selected_index = None;
         cx.notify();
@@ -2080,8 +2124,28 @@ impl PopoverHost {
         let branch = self
             .push_upstream_branch_input
             .read_with(cx, |i, _| i.text().trim().to_string());
-        let Some(message) = upstream_prompt_submission(&kind, remote, branch) else {
-            return;
+        let message = if let Some(mode) = self.push_upstream_tag_mode {
+            let PopoverKind::PushSetUpstreamPrompt { repo_id, .. } = &kind else {
+                return;
+            };
+            let Some(repo) = self.state.repos.iter().find(|repo| repo.id == *repo_id) else {
+                return;
+            };
+            let Some(mut request) = tag_push::request(repo, mode) else {
+                return;
+            };
+            request.remote = remote;
+            request.branch = branch;
+            request.set_upstream = true;
+            Msg::PushWithTags {
+                repo_id: *repo_id,
+                request,
+            }
+        } else {
+            let Some(message) = upstream_prompt_submission(&kind, remote, branch) else {
+                return;
+            };
+            message
         };
         self.store.dispatch(message);
         self.close_popover(cx);
@@ -2273,7 +2337,7 @@ impl PopoverHost {
 
     pub(super) fn request_lazy_popover_repo_data(&self, kind: &PopoverKind) {
         let repo_id = match kind {
-            PopoverKind::TagMenu { repo_id, .. } | PopoverKind::TagRefMenu { repo_id, .. } => {
+            PopoverKind::CommitMenu { repo_id, .. } | PopoverKind::TagMenu { repo_id, .. } => {
                 Some(*repo_id)
             }
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => Some(*repo_id),
@@ -2347,12 +2411,20 @@ impl PopoverHost {
         if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
             self.cherry_pick_mainline = None;
         }
-        self.menu_invoker_focus =
-            if matches!(&kind, PopoverKind::AppMenu | PopoverKind::AddRepoMenu) {
-                window.focused(cx)
-            } else {
-                None
-            };
+        self.menu_invoker_focus = if matches!(
+            &kind,
+            PopoverKind::AppMenu
+                | PopoverKind::AddRepoMenu
+                | PopoverKind::CommitMenu { .. }
+                | PopoverKind::PushPicker
+        ) {
+            window
+                .focused(cx)
+                .filter(|focus| *focus != self.context_menu_focus_handle)
+                .or_else(|| self.menu_invoker_focus.clone())
+        } else {
+            None
+        };
         // The diff panel takes focus on any left press inside it, so its focus
         // state at open time is a faithful record of where the click landed.
         self.popover_opened_from_diff_panel = self
@@ -2389,7 +2461,12 @@ impl PopoverHost {
         }
 
         self.popover_anchor = Some(anchor);
+        self.cancel_tag_push_previews();
+        self.push_upstream_tag_mode = None;
+        self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));
+        self.context_menu_scroll_anchors.clear();
         self.context_menu_selected_ix = None;
+        self.expanded_history_ref = None;
         self.repo_picker_selected_index = None;
         self.repo_picker_search_query.clear();
         // Belongs with the reset above, not with the RepoPicker arm below: every
@@ -2422,6 +2499,7 @@ impl PopoverHost {
                 .as_ref()
                 .and_then(|kind| self.context_menu_model(kind, cx))
                 .and_then(|m| m.first_selectable());
+            self.sync_tag_push_previews(cx);
             window.focus(&self.context_menu_focus_handle, cx);
         } else {
             match &kind {

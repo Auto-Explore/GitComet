@@ -13,6 +13,11 @@ use palette::IntoColor;
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::rc::Rc;
+
+/// The "Enter" hint pill on a picker's selected row: follows the row's density
+/// ramp without filling it.
+const PICKER_HINT_PILL_HEIGHT_PX: f32 = 22.0;
+const PICKER_HINT_PILL_COMFORTABLE_HEIGHT_PX: f32 = 26.0;
 use std::sync::Arc;
 
 use super::{TextTruncationProfile, TruncatedText, TruncatedTextFlex};
@@ -250,7 +255,11 @@ pub fn picker_prompt_layout_ordered(
 /// `ScrollHandle::scroll_to_item` to find.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PickerPromptGeometry {
+    /// The scale the heights below were measured at, split so the struct stays
+    /// `Eq`. Both halves matter: the density changes row heights, and callers
+    /// compare this against the live scale to decide whether to rebuild.
     ui_scale_percent: u32,
+    appearance: crate::appearance::Appearance,
     /// Top edge of each displayed row, measured from the first row rather than
     /// from the scroll container: the list's own padding is a property of the
     /// container, which the spacers must not repeat. `pad` converts to scroll
@@ -280,6 +289,7 @@ impl PickerPromptGeometry {
         let row_count = layout.item_indices.len();
         let mut geometry = Self {
             ui_scale_percent: ui_scale.percent(),
+            appearance: ui_scale.appearance,
             tops: Vec::with_capacity(row_count),
             heights: Vec::with_capacity(row_count),
             header_heights: Vec::with_capacity(row_count),
@@ -324,7 +334,7 @@ impl PickerPromptGeometry {
     /// The scrollable height of the list: every row and header, plus the list's
     /// padding above and below them.
     pub fn ui_scale(&self) -> UiScale {
-        self.ui_scale_percent.into()
+        UiScale::from_percent(self.ui_scale_percent).with_appearance(self.appearance)
     }
 
     pub fn total_height(&self) -> Pixels {
@@ -686,7 +696,7 @@ impl PickerPrompt {
         let padded_query_row = self.padded_query_row;
         let select_on_mouse_down = self.select_on_mouse_down;
         let ui_scale = ui_scale.into();
-        let scaled_px = |value| ui_scale.px(value);
+        let scaled_px = crate::ui_scale::scaler(ui_scale);
 
         // Reuse the caller's layout when it supplied one; otherwise filter here.
         // A picker that folds sections away resolves its own layout with
@@ -781,8 +791,8 @@ impl PickerPrompt {
                     .flex()
                     .items_center()
                     .px(scaled_px(ROW_PAD_X_PX))
-                    .text_sm()
-                    .line_height(scaled_px(18.0))
+                    .text_size(theme.ui_text(14.0))
+                    .line_height(scaled_px(theme.metrics.ui_text(18.0)))
                     .text_color(theme.colors.foreground.secondary)
                     .child(self.empty_text),
             );
@@ -925,7 +935,10 @@ impl PickerPrompt {
                                 div()
                                     .flex_shrink_0()
                                     .min_w(scaled_px(34.0))
-                                    .h(scaled_px(22.0))
+                                    .h(ui_scale.row_height(
+                                        PICKER_HINT_PILL_HEIGHT_PX,
+                                        PICKER_HINT_PILL_COMFORTABLE_HEIGHT_PX,
+                                    ))
                                     .px(scaled_px(6.0))
                                     .flex()
                                     .items_center()
@@ -938,7 +951,7 @@ impl PickerPrompt {
                                     .font_family(
                                         crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
                                     )
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(hint),
                             )
@@ -1437,7 +1450,7 @@ fn section_header_row(
     header: &PickerPromptHeader,
     on_toggle: Option<Rc<OnToggleSectionFn>>,
 ) -> Div {
-    let scaled_px = |value| ui_scale.px(value);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let label = header.label.clone();
     let collapsed = header.collapsed;
 
@@ -1448,7 +1461,7 @@ fn section_header_row(
         .items_center()
         .gap(scaled_px(4.0))
         .px(scaled_px(ROW_PAD_X_PX))
-        .text_xs()
+        .text_size(theme.ui_text(12.0))
         .text_color(theme.colors.foreground.secondary)
         .whitespace_nowrap()
         .overflow_hidden();
@@ -1629,10 +1642,9 @@ fn picker_item_line<V: 'static>(
             TruncatedTextFlex::Fixed
         };
 
-        let mut text = TruncatedText::new(part.text.clone())
+        let mut text = TruncatedText::new(part.text.clone(), role.text_size)
             .profile(part.profile)
             .flex(flex)
-            .text_size(role.text_size)
             .text_color(if part.dim {
                 role.dim_color
             } else {
@@ -1674,7 +1686,7 @@ fn remove_row_button<V: 'static>(
     on_remove: Arc<OnRemoveFn<V>>,
     cx: &gpui::Context<V>,
 ) -> impl IntoElement {
-    let scaled_px = |value| ui_scale.px(value);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let tooltip_for_move = tooltip.clone();
     let host_for_move = tooltip_host.clone();
     let host_for_hover = tooltip_host;
@@ -1686,7 +1698,11 @@ fn remove_row_button<V: 'static>(
         .flex()
         .items_center()
         .justify_center()
-        .size(scaled_px(super::REMOVE_BUTTON_SIZE_PX))
+        .size(
+            ui_scale
+                .with_appearance(theme.metrics)
+                .row_height(super::REMOVE_BUTTON_SIZE_PX, 32.0),
+        )
         .rounded(px(theme.radii.row))
         .cursor(CursorStyle::PointingHand)
         .when(!always_visible, |button| {
@@ -2250,6 +2266,44 @@ mod tests {
                 + single * 2.0
                 + section_header_height(ui_scale, false)
         );
+    }
+
+    /// The geometry caches are keyed on this, so a scale it cannot round-trip
+    /// means every render rebuilds the whole table.
+    #[test]
+    fn geometry_reports_the_scale_it_was_built_at() {
+        let items = [PickerPromptItem::plain("only")];
+        let layout = picker_prompt_layout(&items, "");
+
+        for density in crate::appearance::UiDensity::ALL {
+            for percent in [100, 150] {
+                let scale =
+                    UiScale::from_percent(percent).with_appearance(crate::appearance::Appearance {
+                        density,
+                        ..crate::appearance::Appearance::default()
+                    });
+
+                let geometry = PickerPromptGeometry::new(&items, &layout, scale);
+
+                assert_eq!(
+                    geometry.ui_scale(),
+                    scale,
+                    "geometry built at {percent}% {density:?} must compare equal to it"
+                );
+            }
+        }
+    }
+
+    /// Why the round-trip matters: Comfortable changes the heights.
+    #[test]
+    fn comfortable_density_makes_picker_rows_taller() {
+        let compact = UiScale::from_percent(100);
+        let comfortable = compact.with_appearance(crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Comfortable,
+            ..crate::appearance::Appearance::default()
+        });
+
+        assert!(row_height(comfortable, false) > row_height(compact, false));
     }
 
     #[test]

@@ -238,7 +238,7 @@ pub(super) fn panel(
             .flex()
             .items_center()
             .gap_1()
-            .text_sm()
+            .text_size(theme.ui_text(14.0))
             .text_color(theme.colors.foreground.secondary)
             .child(crate::view::icons::svg_icon(
                 "icons/cloud.svg",
@@ -252,12 +252,15 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(320.0))
-        .child(popover_title(if configure_only {
-            "Set new upstream"
-        } else {
-            "Set upstream and push"
-        }))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(popover_title(
+            theme,
+            if configure_only {
+                "Set new upstream"
+            } else {
+                "Set upstream and push"
+            },
+        ))
+        .child(super::popover_rule(theme))
         .child(input_label(theme, "Remote"))
         .child(remote_control)
         .child(input_label(theme, "Remote branch"))
@@ -269,13 +272,9 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.push_upstream_branch_input.clone()),
         )
+        .child(super::tag_push::prompt_summary(this, cx))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(
                     cancel_button("push_upstream_cancel", "push_upstream_cancel_hint", theme)
                         .focus_handle(this.push_upstream_focus.cancel.clone())

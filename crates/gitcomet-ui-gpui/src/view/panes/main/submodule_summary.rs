@@ -56,6 +56,13 @@ fn restored_scroll_top(
     top
 }
 
+/// Height of one changed-file row. The list windows on it, so it has to be the
+/// number the row itself lays out at -- density and UI font size move both, and
+/// layout snaps the result to whole pixels.
+fn summary_change_row_height(scale: crate::ui_scale::UiScale) -> gpui::Pixels {
+    px(f32::from(scale.row_height(28.0, 32.0)).round())
+}
+
 impl SummaryRows {
     fn new(summary: Arc<SubmoduleDiffSummary>) -> Self {
         let mut rows = vec![SummaryRow::Header];
@@ -110,7 +117,7 @@ pub(in crate::view) struct SubmoduleSummaryCache {
     presentation: Arc<SummaryRows>,
     submodule_repo_path: Arc<std::path::PathBuf>,
     pub(in crate::view) scroll: gpui::ListState,
-    ui_scale_percent: u32,
+    row_height: gpui::Pixels,
     #[cfg(test)]
     pub(in crate::view) rendered_rows: usize,
     /// Counts trips through the rebuild path, so a test can prove a redraw
@@ -201,7 +208,7 @@ impl MainPaneView {
                 })
             });
         let scale = crate::ui_scale::UiScale::current(cx);
-        let ui_scale_percent = scale.percent();
+        let row_height = summary_change_row_height(scale);
         let same_target = self
             .submodule_summary_cache
             .as_ref()
@@ -229,7 +236,7 @@ impl MainPaneView {
             });
             let scroll =
                 gpui::ListState::new(presentation.rows.len(), gpui::ListAlignment::Top, px(280.0))
-                    .with_uniform_item_height(scale.px(28.0));
+                    .with_uniform_item_height(row_height);
             if let Some((top, previous_rows)) = previous {
                 scroll.scroll_to(restored_scroll_top(top, &previous_rows, &presentation));
             }
@@ -242,7 +249,7 @@ impl MainPaneView {
                 presentation,
                 submodule_repo_path,
                 scroll,
-                ui_scale_percent,
+                row_height,
                 #[cfg(test)]
                 rendered_rows: 0,
                 #[cfg(test)]
@@ -255,13 +262,13 @@ impl MainPaneView {
             .expect("summary cached");
         cache.submodules_rev = submodules_rev;
         cache.status = status;
-        if cache.ui_scale_percent != ui_scale_percent {
+        if cache.row_height != row_height {
             let top = cache.scroll.logical_scroll_top();
             cache
                 .scroll
-                .reset_with_uniform_height(cache.presentation.rows.len(), scale.px(28.0));
+                .reset_with_uniform_height(cache.presentation.rows.len(), row_height);
             cache.scroll.scroll_to(top);
-            cache.ui_scale_percent = ui_scale_percent;
+            cache.row_height = row_height;
         }
         #[cfg(test)]
         {
@@ -339,7 +346,7 @@ impl MainPaneView {
                 summary_range_surface(theme, summary.ranges[slot].kind, selected_area)
                     .px_2()
                     .py_1()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child("No inner changes.")
                     .into_any_element()
@@ -348,7 +355,7 @@ impl MainPaneView {
                 .px_2()
                 .pt_2()
                 .pb_1()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(match section {
                     ChangeSection::LiveStaged => "Uncommitted inner staged",
@@ -437,6 +444,7 @@ impl MainPaneView {
                 || (summary_status.is_none() && !summary.checkout_available));
         let open_path = Arc::clone(submodule_repo_path);
         let summary_path = summary.path.clone();
+        let scale = crate::ui_scale::UiScale::current(cx);
         let status_badge = |status: SubmoduleStatus| {
             let (label, color) = match status {
                 SubmoduleStatus::UpToDate => ("Loaded", theme.colors.status.success.foreground),
@@ -461,12 +469,12 @@ impl MainPaneView {
 
             div()
                 .px_1p5()
-                .h(px(20.0))
+                .h(scale.px(20.0))
                 .rounded(px(theme.radii.row))
                 .border_1()
                 .border_color(with_alpha(color, if theme.is_dark { 0.45 } else { 0.32 }))
                 .bg(with_alpha(color, if theme.is_dark { 0.14 } else { 0.10 }))
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(color)
                 .child(label)
         };
@@ -507,7 +515,7 @@ impl MainPaneView {
                             ))
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .font_weight(FontWeight::BOLD)
                                     .child(summary.path.display().to_string()),
                             )
@@ -640,13 +648,13 @@ impl MainPaneView {
                     .gap_2()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .text_color(theme.colors.foreground.secondary)
                             .child(submodule_range_label(range.kind)),
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                             .text_color(if changed {
                                 theme.colors.foreground.primary
@@ -667,7 +675,7 @@ impl MainPaneView {
                     .gap_1()
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(theme.colors.foreground.secondary)
                             .child("Hashes"),
                     )
@@ -683,7 +691,7 @@ impl MainPaneView {
             section = section.child(
                 div()
                     .px_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(reason.clone()),
             );
@@ -693,7 +701,7 @@ impl MainPaneView {
                 div()
                     .px_2()
                     .pt_1()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child("Changes between hashes"),
             )
@@ -752,7 +760,9 @@ impl MainPaneView {
         let mut row = div()
             .id(("submodule_change", row_ix))
             .debug_selector(move || format!("submodule_change_{row_ix}"))
-            .h(crate::ui_scale::UiScale::current(cx).px(28.0))
+            .h(summary_change_row_height(
+                crate::ui_scale::UiScale::current(cx),
+            ))
             .px_2()
             .py_1()
             .rounded(px(theme.radii.row))
@@ -764,20 +774,20 @@ impl MainPaneView {
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .line_clamp(1)
                     .child(change_path.display().to_string()),
             )
             .child(
                 div()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                     .text_color(theme.colors.status.success.foreground)
                     .child(additions),
             )
             .child(
                 div()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                     .text_color(theme.colors.status.danger.foreground)
                     .child(deletions),

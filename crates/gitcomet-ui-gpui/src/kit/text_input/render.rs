@@ -9,6 +9,14 @@ impl Render for TextInput {
         let entity_id = cx.entity().entity_id();
         let chromeless = self.chromeless;
         let multiline = self.multiline;
+        self.appearance_metrics = crate::appearance::current(cx);
+        self.editor_line_height = crate::ui_scale::design_px_from_window(
+            crate::appearance::current(cx).editor_line_height(),
+            window,
+        );
+        if self.editor_font {
+            self.line_height_override = Some(self.editor_line_height);
+        }
         let leading_icon = self.leading_icon;
         // Content-width layout: the wrappers below size to the widest line so an
         // outer `overflow_scroll` container can scroll the field horizontally
@@ -165,10 +173,18 @@ impl Render for TextInput {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
             .line_height(self.effective_line_height(window))
-            .text_size(crate::ui_scale::design_px_from_window(13.0, window))
+            .text_size(if self.editor_font {
+                crate::appearance::editor_size(window, cx)
+            } else {
+                crate::ui_scale::design_px_from_window(
+                    crate::appearance::current(cx).ui_text(13.0),
+                    window,
+                )
+            })
             .when(!multiline && !chromeless, |d| {
                 d.h(crate::ui_scale::design_px_from_window(
-                    SINGLE_LINE_INPUT_HEIGHT_PX,
+                    self.appearance_metrics
+                        .row_height(SINGLE_LINE_INPUT_HEIGHT_PX, 32.0),
                     window,
                 ))
             })

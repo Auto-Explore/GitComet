@@ -245,6 +245,12 @@ fn settings_window_titlebar_options_match_platform_chrome_strategy() {
         Some(SETTINGS_WINDOW_TITLE.to_string()),
         "settings window titlebar should keep the OS-visible title"
     );
+    assert_eq!(
+        options.traffic_light_position,
+        cfg!(target_os = "macos").then_some(chrome::macos_traffic_light_position()),
+        "the settings header is the same fixed bar as the main window's, so the \
+         lights have to land in the same place"
+    );
 }
 
 #[test]
@@ -503,6 +509,68 @@ fn expanded_diff_content_mode_section_renders_before_scroll_sync_row(
             && diff_mode_container.bottom() <= scroll_sync_row.top(),
         "expected the diff mode selector to expand directly below the diff mode row"
     );
+}
+
+/// The general card orders the typography controls font pickers -> ligatures ->
+/// sizes, and the size rows carry no presets popover.
+#[gpui::test]
+fn general_card_puts_ligatures_between_the_font_pickers_and_the_sizes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.run_until_parked();
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1600.0)));
+    settings_cx.run_until_parked();
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let mut bounds = |selector: &'static str| {
+        settings_cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("expected `{selector}` in the general card"))
+    };
+    let ui_font = bounds("settings_window_ui_font");
+    let editor_font = bounds("settings_window_editor_font");
+    let ligatures = bounds("settings_window_use_font_ligatures");
+    let sizes = bounds("settings_window_appearance_controls");
+
+    assert!(
+        ui_font.bottom() <= editor_font.top()
+            && editor_font.bottom() <= ligatures.top()
+            && ligatures.bottom() <= sizes.top(),
+        "expected UI font -> editor font -> ligatures -> sizes, got \
+         {ui_font:?} {editor_font:?} {ligatures:?} {sizes:?}"
+    );
+
+    for presets in [
+        "font_size_0_presets",
+        "font_size_1_presets",
+        "font_size_2_presets",
+    ] {
+        assert!(
+            settings_cx.debug_bounds(presets).is_none(),
+            "the font size rows must not offer a presets popover"
+        );
+    }
 }
 
 #[gpui::test]
@@ -3033,4 +3101,124 @@ fn ui_font_dropdown_wheel_scrolls_inner_list_before_outer_window(cx: &mut gpui::
         outer_after_boundary_handoff > outer_before_boundary_handoff + px(0.5),
         "expected wheel scrolling to bubble to the outer settings page once the UI font list reaches its boundary"
     );
+}
+
+#[gpui::test]
+fn appearance_sizes_apply_live_to_every_main_window_and_keep_ui_scale_independent(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = lock_visual_test();
+    let (first_store, first_events) = AppStore::new(Arc::new(TestBackend));
+    let (first, first_cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new(first_store, first_events, None, window, cx)
+    });
+    first_cx.update(|_, app| open_settings_window(app));
+    first_cx.run_until_parked();
+    let settings = first_cx.update(|_, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .unwrap()
+    });
+    // A second window participates in the same application-wide preferences.
+    let (second_store, second_events) = AppStore::new(Arc::new(TestBackend));
+    let (second, second_cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new(second_store, second_events, None, window, cx)
+    });
+    let before_rem = second_cx.update(|window, _| window.rem_size());
+    settings
+        .update(second_cx, |settings, _, cx| {
+            settings.set_density(UiDensity::Comfortable, cx);
+            settings.set_font_size(FontRole::Ui, 20, cx);
+            settings.set_font_size(FontRole::Editor, 26, cx);
+            settings.set_font_size(FontRole::Markdown, 18, cx);
+        })
+        .unwrap();
+    second_cx.run_until_parked();
+    second_cx.update(|window, app| {
+        assert_eq!(
+            window.rem_size(),
+            before_rem,
+            "font sizes must not rescale panel geometry"
+        );
+        let metrics = crate::appearance::current(app);
+        for view in [&first, &second] {
+            let view = view.read(app);
+            assert_eq!(view.theme.metrics, metrics);
+            assert_eq!(view.theme.metrics.ui_font_size_px, 20);
+            assert_eq!(view.theme.metrics.editor_font_size_px, 26);
+            assert_eq!(view.theme.metrics.markdown_preview_font_size_px, 18);
+            assert_eq!(
+                view.main_pane
+                    .read(app)
+                    .file_editor_input
+                    .read(app)
+                    .line_height_override(),
+                Some(view.theme.editor_row_height(view.ui_scale_percent))
+            );
+        }
+    });
+    settings
+        .update(second_cx, |settings, _, cx| {
+            settings.set_font_size(FontRole::Ui, 0, cx);
+            settings.set_font_size(FontRole::Editor, 99, cx);
+            assert_eq!(settings.appearance_metrics.ui_font_size_px, 20);
+            assert_eq!(settings.appearance_metrics.editor_font_size_px, 26);
+            settings.set_font_size(FontRole::Ui, FontRole::Ui.default_size(), cx);
+            assert_eq!(settings.appearance_metrics.editor_font_size_px, 26);
+            assert_eq!(
+                settings.appearance_metrics.markdown_preview_font_size_px,
+                18
+            );
+            settings.font_size_inputs[FontRole::Ui.index()]
+                .update(cx, |input, cx| input.set_text("invalid", cx));
+            settings.set_font_size(FontRole::Ui, FontRole::Ui.default_size(), cx);
+            assert_eq!(
+                settings.font_size_inputs[FontRole::Ui.index()]
+                    .read(cx)
+                    .text(),
+                "14",
+                "Reset must repair an invalid draft even at the default size"
+            );
+        })
+        .unwrap();
+}
+
+#[test]
+fn density_and_font_geometry_remain_independent_across_scales() {
+    for percent in [80, 100, 125, 200] {
+        for density in UiDensity::ALL {
+            for ui_size in [10, 14, 24] {
+                for editor_size in [8, 13, 32] {
+                    let metrics = Appearance {
+                        density,
+                        ui_font_size_px: ui_size,
+                        editor_font_size_px: editor_size,
+                        markdown_preview_font_size_px: 18,
+                    };
+                    let theme = AppTheme::gitcomet_dark().with_appearance(metrics);
+                    let scale = ui_scale::UiScale::from_percent(percent).with_appearance(metrics);
+                    assert!(
+                        components::control_height(scale)
+                            >= scale.px(if density == UiDensity::Comfortable {
+                                32.0
+                            } else {
+                                22.0
+                            })
+                    );
+                    assert_eq!(
+                        theme.editor_font_size(percent),
+                        scale.px(editor_size as f32)
+                    );
+                    assert!(theme.editor_row_height(percent) > theme.editor_font_size(percent));
+                    assert_eq!(theme.markdown_px(13.0, percent), scale.px(18.0));
+                    let gutter = crate::view::rows::resolved_output_line_no_width(1234, scale);
+                    assert!(
+                        gutter >= scale.px(4.0 * editor_size as f32 * 0.6),
+                        "gutter must hold every digit at the selected editor size"
+                    );
+                }
+            }
+        }
+    }
 }

@@ -34,17 +34,13 @@ pub(super) fn panel(
             .flex()
             .flex_col()
             .w(scaled_px(420.0))
-            .child(popover_title("Squash commits"))
-            .child(div().border_t_1().border_color(theme.colors.stroke.default))
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .text_sm()
-                    .text_color(theme.colors.foreground.secondary)
-                    .child("The selected commits are no longer squashable."),
-            )
-            .child(div().border_t_1().border_color(theme.colors.stroke.default))
+            .child(popover_title(theme, "Squash commits"))
+            .child(super::popover_rule(theme))
+            .child(super::popover_detail(
+                theme,
+                "The selected commits are no longer squashable.",
+            ))
+            .child(super::popover_rule(theme))
             .child(
                 div()
                     .px_2()
@@ -86,16 +82,9 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(420.0))
-        .child(popover_title(format!("Squash {count} commits")))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .text_color(theme.colors.foreground.secondary)
-                .child(summary),
-        )
+        .child(popover_title(theme, format!("Squash {count} commits")))
+        .child(super::popover_rule(theme))
+        .child(super::popover_detail(theme, summary))
         .child(
             div()
                 .px_2()
@@ -106,7 +95,7 @@ pub(super) fn panel(
                 .gap_1()
                 .child(
                     div()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child("Commit message"),
                 )
@@ -127,7 +116,7 @@ pub(super) fn panel(
                 .gap_1()
                 .child(
                     div()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child("Description"),
                 )
@@ -146,19 +135,14 @@ pub(super) fn panel(
                 div()
                     .px_2()
                     .pb_1()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(hint),
             )
         })
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(cancel_button(this, cx))
                 .child(
                     components::Button::new("squash_go", "Squash")

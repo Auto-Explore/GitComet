@@ -396,7 +396,7 @@ impl Render for IRebaseDragPreview {
             .border_color(with_alpha(theme.colors.accent.foreground, 0.6))
             .child(
                 div()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child("⠿"),
             )
@@ -420,7 +420,7 @@ impl Render for IRebaseDragPreview {
                     .rounded(px(theme.radii.row))
                     .border_1()
                     .border_color(outlined_border)
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.primary)
                     .child(self.action.to_todo_str())
                     .child(crate::view::icons::svg_icon(
@@ -432,7 +432,7 @@ impl Render for IRebaseDragPreview {
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(theme.colors.foreground.secondary)
                     .font_family("monospace")
                     .child(self.sha.clone()),
@@ -440,7 +440,7 @@ impl Render for IRebaseDragPreview {
             .child(
                 div()
                     .flex_1()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.primary)
                     .overflow_x_hidden()
                     .whitespace_nowrap()
@@ -685,6 +685,7 @@ impl MainPaneView {
     ) -> gpui::AnyElement {
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         let selected_commit_id = self
             .active_repo()
             .and_then(|r| r.history_state.selected_commit.as_ref())
@@ -889,7 +890,7 @@ impl MainPaneView {
         let gripper = div()
             .id(("gripper", ix))
             .cursor(gpui::CursorStyle::PointingHand)
-            .text_xs()
+            .text_size(theme.ui_text(12.0))
             .text_color(if is_dropped {
                 with_alpha(theme.colors.foreground.secondary, 0.7)
             } else {
@@ -932,7 +933,7 @@ impl MainPaneView {
                         .top_0()
                         .left_0()
                         .right_0()
-                        .h(px(2.0))
+                        .h(scaled_px(2.0))
                         .bg(accent),
                 )
             })
@@ -943,7 +944,7 @@ impl MainPaneView {
                         .bottom_0()
                         .left_0()
                         .right_0()
-                        .h(px(2.0))
+                        .h(scaled_px(2.0))
                         .bg(accent),
                 )
             })
@@ -951,16 +952,16 @@ impl MainPaneView {
             .when(!folded_shas.is_empty(), |d| {
                 d.child(
                     div()
-                        .pl(px(20.0))
+                        .pl(scaled_px(20.0))
                         .flex()
                         .items_center()
                         .gap_1()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(crate::view::icons::svg_icon(
                             "icons/squash_arrow.svg",
                             with_alpha(theme.colors.accent.foreground, 0.7),
-                            px(12.0),
+                            scaled_px(12.0),
                         ))
                         .child(format!("squashed {}", folded_shas.join(", "))),
                 )
@@ -976,7 +977,7 @@ impl MainPaneView {
                             crate::view::icons::svg_icon(
                                 "icons/squash_arrow.svg",
                                 with_alpha(theme.colors.accent.foreground, 0.7),
-                                px(14.0),
+                                scaled_px(14.0),
                             ),
                         ))
                     })
@@ -985,8 +986,8 @@ impl MainPaneView {
                         d.child(
                             div()
                                 .flex_shrink_0()
-                                .w(px(4.0))
-                                .h(px(22.0))
+                                .w(scaled_px(4.0))
+                                .h(scaled_px(22.0))
                                 .rounded(px(2.0))
                                 .bg(color),
                         )
@@ -994,7 +995,7 @@ impl MainPaneView {
                     .child(
                         div()
                             .flex_shrink_0()
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(if is_dropped {
                                 with_alpha(theme.colors.foreground.secondary, 0.7)
                             } else {
@@ -1006,7 +1007,7 @@ impl MainPaneView {
                     .child(
                         div()
                             .flex_1()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .text_color(row_text_color)
                             .when(is_autosquash_eligible, |d| {
                                 d.text_color(theme.colors.accent.foreground)
@@ -1196,21 +1197,21 @@ impl MainPaneView {
             Loadable::NotLoaded => div()
                 .px_2()
                 .py_2()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Preparing…")
                 .into_any_element(),
             Loadable::Loading => div()
                 .px_2()
                 .py_2()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Loading commits…")
                 .into_any_element(),
             Loadable::Error(e) => div()
                 .px_2()
                 .py_2()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(format!("Error: {e}"))
                 .into_any_element(),
@@ -1232,7 +1233,7 @@ impl MainPaneView {
                     .justify_center()
                     .px_2()
                     .py_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(match editor_mode {
                         ICommitEditorMode::Rebase => "No commits to rebase.".to_string(),
@@ -1301,7 +1302,7 @@ impl MainPaneView {
             Loadable::Ready(_) => div()
                 .px_2()
                 .py_2()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Loading commits…")
                 .into_any_element(),
@@ -1343,13 +1344,13 @@ impl MainPaneView {
                     .justify_between()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .font_weight(FontWeight::BOLD)
                             .child(header_title),
                     )
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(theme.colors.foreground.secondary)
                             .child(header_detail),
                     ),
@@ -1374,7 +1375,7 @@ impl MainPaneView {
                                 |left| {
                                     left.child(
                                         div()
-                                            .text_xs()
+                                            .text_size(theme.ui_text(12.0))
                                             .text_color(theme.colors.foreground.secondary)
                                             .child("Auto Squash"),
                                     )

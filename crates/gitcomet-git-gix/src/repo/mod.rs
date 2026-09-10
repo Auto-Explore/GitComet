@@ -1,3 +1,4 @@
+mod tag_push;
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
@@ -944,6 +945,21 @@ impl GitRepository for GixRepo {
 
     fn pull_with_output_prune(&self, mode: PullMode, prune: bool) -> Result<CommandOutput> {
         self.pull_with_output_prune_impl(mode, prune)
+    }
+
+    fn push_with_tags(
+        &self,
+        request: &gitcomet_core::tag_push::TagPushRequest,
+    ) -> Result<CommandOutput> {
+        self.push_with_tags_impl(request)
+    }
+
+    fn preview_tag_push(
+        &self,
+        request: &gitcomet_core::tag_push::TagPushRequest,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::tag_push::TagPushPreview> {
+        self.preview_tag_push_impl(request, cancellation)
     }
 
     fn push(&self) -> Result<()> {

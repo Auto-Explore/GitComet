@@ -14,6 +14,7 @@ pub(super) struct WindowPreferences {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct AppearancePreferences {
+    pub(super) metrics: crate::appearance::Appearance,
     pub(super) theme_mode: ThemeMode,
     pub(super) ui_scale_percent: u32,
     pub(super) date_time_format: DateTimeFormat,
@@ -24,6 +25,7 @@ pub(super) struct AppearancePreferences {
 impl Default for AppearancePreferences {
     fn default() -> Self {
         Self {
+            metrics: crate::appearance::Appearance::default(),
             theme_mode: ThemeMode::default(),
             ui_scale_percent: 100,
             date_time_format: DateTimeFormat::YmdHm,
@@ -234,6 +236,7 @@ impl UiPreferences {
                 sidebar_collapsed: session.sidebar_collapsed.unwrap_or(false),
             },
             appearance: AppearancePreferences {
+                metrics: crate::appearance::Appearance::from_session(session),
                 theme_mode: session
                     .theme_mode
                     .as_deref()

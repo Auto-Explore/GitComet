@@ -6,6 +6,7 @@ mod context_menu;
 mod diff_stat;
 mod interactive_row;
 mod modal;
+mod panel_tab;
 mod picker_prompt;
 mod repository_badge;
 mod resize_grip;
@@ -25,7 +26,9 @@ pub use avatar::{
 };
 pub use button::{Button, ButtonStyle};
 pub use commit_link_menu::{CommitLinkMenu, LinkTarget, MessageLink};
-pub use containers::{ScrollContainer, empty_state, empty_state_message, split_columns_header};
+pub use containers::{
+    ScrollContainer, content_header_bar, empty_state, empty_state_message, split_columns_header,
+};
 #[cfg(test)]
 pub use containers::{panel, pill};
 pub use context_menu::{
@@ -37,6 +40,7 @@ pub use interactive_row::{
     InteractiveRowExt, InteractiveRowState, InteractiveRowStyle, light_theme_selection_outline,
 };
 pub use modal::{modal_scrim, modal_surface, popover_surface};
+pub use panel_tab::{panel_tab, panel_tab_close};
 /// Public field type of [`PickerPromptLayout::headers`], carried out of the
 /// private module with it so a caller can name what that field hands them
 /// instead of only ever binding it through an inferred closure argument.

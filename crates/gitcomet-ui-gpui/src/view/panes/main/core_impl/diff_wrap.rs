@@ -4,6 +4,20 @@ pub(super) fn line_ranges_intersect(a: &Range<usize>, b: &Range<usize>) -> bool 
     a.start < b.end && b.start < a.end
 }
 
+/// Shared wrap width for the two split columns: the narrower of their usable
+/// text widths, with the annotation column charged to the left one only.
+pub(super) fn split_wrap_text_width(
+    left_w: Pixels,
+    right_w: Pixels,
+    annotation_width: Pixels,
+    text_start: Pixels,
+    pad: Pixels,
+) -> Pixels {
+    let left = left_w - annotation_width - text_start - pad;
+    let right = right_w - text_start - pad;
+    left.min(right).max(px(0.0))
+}
+
 pub(super) fn diff_wrap_columns_for_width(width: Pixels, char_width: Pixels) -> usize {
     let char_width = f32::from(char_width.max(px(1.0)));
     ((f32::from(width.max(px(0.0))) / char_width).floor() as usize).max(1)
@@ -341,16 +355,25 @@ impl MainPaneView {
         // Measured in the editor font the rows are painted in, not in the
         // ambient UI font that is still current while this element tree is
         // being built. See `diff_text_wrap_char_width`.
-        let char_width =
-            rows::diff_canvas_text_wrap_char_width(window, self.diff_wrap_measure_font_family(cx));
+        let char_width = rows::diff_canvas_text_wrap_char_width(
+            window,
+            self.diff_wrap_measure_font_family(cx),
+            self.theme.metrics.editor_font_size_px,
+        );
         let pad = rows::diff_canvas_row_horizontal_padding(ui_scale_percent);
         let inline_text_start = if self.diff_show_line_numbers {
-            rows::diff_canvas_inline_text_start(ui_scale_percent)
+            rows::diff_canvas_inline_text_start(
+                ui_scale::UiScale::from_percent(ui_scale_percent)
+                    .with_appearance(self.theme.metrics),
+            )
         } else {
             pad
         };
         let single_text_start = if self.diff_show_line_numbers {
-            rows::diff_canvas_single_column_text_start(ui_scale_percent)
+            rows::diff_canvas_single_column_text_start(
+                ui_scale::UiScale::from_percent(ui_scale_percent)
+                    .with_appearance(self.theme.metrics),
+            )
         } else {
             pad
         };
@@ -368,10 +391,12 @@ impl MainPaneView {
 
         let (left_w, right_w) =
             crate::view::diff_split_column_widths(content_width, self.diff_split_ratio);
-        // The annotation column narrows the left split column; subtract it from
-        // the shared wrap width so wrapped text stays within the left column.
+        // Both columns wrap at one width so their rows stay aligned, so take the
+        // narrower of the two. Annotation sits inside the left column only:
+        // charging it to whichever column happens to be narrower can leave no
+        // room at all and wrap every line to one character.
         let split_text_width =
-            left_w.min(right_w).max(px(0.0)) - annotation_width - single_text_start - pad;
+            split_wrap_text_width(left_w, right_w, annotation_width, single_text_start, pad);
         let split_columns = diff_wrap_columns_for_width(split_text_width, char_width);
         (inline_columns, split_columns)
     }
@@ -390,11 +415,17 @@ impl MainPaneView {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let vertical_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
         let content_width = (self.main_pane_content_width(cx) - vertical_gutter).max(px(0.0));
-        let char_width =
-            rows::diff_canvas_text_wrap_char_width(window, self.diff_wrap_measure_font_family(cx));
+        let char_width = rows::diff_canvas_text_wrap_char_width(
+            window,
+            self.diff_wrap_measure_font_family(cx),
+            self.theme.metrics.editor_font_size_px,
+        );
         let pad = rows::diff_canvas_row_horizontal_padding(ui_scale_percent);
         let text_start = if self.diff_show_line_numbers {
-            rows::diff_canvas_single_column_text_start(ui_scale_percent)
+            rows::diff_canvas_single_column_text_start(
+                ui_scale::UiScale::from_percent(ui_scale_percent)
+                    .with_appearance(self.theme.metrics),
+            )
         } else {
             pad
         };
@@ -624,5 +655,54 @@ impl MainPaneView {
                 None => (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges()),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Annotation lives inside the left split column. Charging it to whichever
+    /// column is narrower left no room at all and wrapped every line to one
+    /// character.
+    #[test]
+    fn annotation_only_narrows_the_left_split_column() {
+        let (text_start, pad) = (px(40.0), px(8.0));
+        let (left, right) = (px(650.0), px(440.0));
+        let annotation = px(375.0);
+
+        let width = split_wrap_text_width(left, right, annotation, text_start, pad);
+
+        assert_eq!(width, left - annotation - text_start - pad);
+        assert!(
+            diff_wrap_columns_for_width(width, px(7.8)) > 20,
+            "a real annotate column must still leave a readable wrap width"
+        );
+    }
+
+    /// Whichever column ends up narrower once annotation is charged is the one
+    /// that decides, so wrapped rows never overflow either column.
+    #[test]
+    fn the_shared_wrap_width_is_the_narrower_usable_column() {
+        let (text_start, pad) = (px(40.0), px(8.0));
+
+        assert_eq!(
+            split_wrap_text_width(px(900.0), px(300.0), px(0.0), text_start, pad),
+            px(300.0) - text_start - pad
+        );
+        assert_eq!(
+            split_wrap_text_width(px(400.0), px(900.0), px(100.0), text_start, pad),
+            px(400.0) - px(100.0) - text_start - pad
+        );
+    }
+
+    /// A pane too narrow to hold the annotation column must still wrap at one
+    /// column rather than at a negative width.
+    #[test]
+    fn a_column_narrower_than_its_chrome_never_wraps_below_one() {
+        let width = split_wrap_text_width(px(80.0), px(80.0), px(375.0), px(40.0), px(8.0));
+
+        assert_eq!(width, px(0.0));
+        assert_eq!(diff_wrap_columns_for_width(width, px(7.8)), 1);
     }
 }

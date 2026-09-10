@@ -42,6 +42,8 @@ impl Render for GitCometView {
             self.ui_window_size_last_seen = self.last_window_size;
             self.schedule_ui_settings_persist(cx);
         }
+        let ui_scale_percent = self.ui_scale_percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
 
         if self
             .pending_branch_exists_prompt
@@ -220,6 +222,7 @@ impl Render for GitCometView {
             .flex()
             .flex_col()
             .size_full()
+            .text_size(theme.ui_text(16.0))
             .font(gpui::Font {
                 family: crate::font_preferences::applied_ui_font_family(
                     &font_preferences.ui_font_family,
@@ -245,7 +248,7 @@ impl Render for GitCometView {
         if show_custom_window_chrome {
             body = body.child(stable_cached_fixed_height_view(
                 self.title_bar.clone(),
-                chrome::title_bar_height(self.ui_scale_percent),
+                chrome::TITLE_BAR_HEIGHT,
             ));
         }
 
@@ -307,13 +310,13 @@ impl Render for GitCometView {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .font_weight(FontWeight::BOLD)
                                     .child("GitComet recovered from program crash"),
                             )
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         "Would you like to contribute by reporting issue to GitComet GitHub repository?",
@@ -321,7 +324,7 @@ impl Render for GitCometView {
                             )
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(format!("Summary: {summary}")),
                             )
@@ -389,10 +392,15 @@ impl Render for GitCometView {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_sm().font_weight(FontWeight::BOLD).child(title))
                 .child(
                     div()
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
+                        .font_weight(FontWeight::BOLD)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_size(theme.ui_text(14.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(subtitle),
                 )
@@ -403,7 +411,7 @@ impl Render for GitCometView {
                 .when(is_host_verification, |this| {
                     this.child(
                         div()
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(theme.colors.foreground.secondary)
                             .child("Use Cancel if you do not trust this host."),
                     )
@@ -413,12 +421,12 @@ impl Render for GitCometView {
                         restrict_scroll_to_vertical_axis(
                             div()
                                 .id("auth_prompt_reason_scroll")
-                                .max_h(px(96.0))
+                                .max_h(scaled_px(96.0))
                                 .overflow_y_scroll(),
                         )
                         .child(
                             div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(prompt.reason.clone()),
                         ),
@@ -500,7 +508,7 @@ impl Render for GitCometView {
                     .relative()
                     .px_2()
                     .py_1()
-                    .pr(px(40.0))
+                    .pr(scaled_px(40.0))
                     .bg(if theme.is_dark {
                         with_alpha(theme.colors.status.danger.foreground, 0.15)
                     } else {
@@ -517,7 +525,7 @@ impl Render for GitCometView {
                         restrict_scroll_to_vertical_axis(
                             div()
                                 .id("repo_error_banner_scroll")
-                                .max_h(px(140.0))
+                                .max_h(scaled_px(140.0))
                                 .overflow_y_scroll(),
                         )
                         .child(
@@ -535,12 +543,18 @@ impl Render for GitCometView {
                         this.child(
                             div()
                                 .mt_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child("Scroll for full output"),
                         )
                     })
-                    .child(div().absolute().top(px(6.0)).right(px(6.0)).child(dismiss)),
+                    .child(
+                        div()
+                            .absolute()
+                            .top(scaled_px(6.0))
+                            .right(scaled_px(6.0))
+                            .child(dismiss),
+                    ),
             );
         }
 

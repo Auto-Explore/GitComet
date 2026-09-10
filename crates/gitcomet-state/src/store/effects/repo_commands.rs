@@ -43,6 +43,13 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         }
         RepoCommandKind::MergeRef { reference } => format!("{reference} → current branch"),
         RepoCommandKind::SquashRef { reference } => reference.clone(),
+        RepoCommandKind::PushWithTags { request } => format!(
+            "{} → {}/{} · {}",
+            request.local_branch,
+            request.remote,
+            request.branch,
+            request.mode.flag()
+        ),
         RepoCommandKind::Push | RepoCommandKind::ForcePush => {
             "Current branch → configured upstream".to_string()
         }
@@ -926,6 +933,33 @@ pub(super) fn schedule_squash_ref(
             reference: command_reference,
         },
         move |repo| repo.squash_ref_with_output(&reference),
+    );
+}
+
+pub(super) fn schedule_push_with_tags(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    request: gitcomet_core::tag_push::TagPushRequest,
+    auth: Option<StagedGitAuth>,
+) {
+    schedule_repo_command_with_context(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PushWithTags {
+            request: request.clone(),
+        },
+        Some(format!(
+            "{} → {}/{} · {}",
+            request.local_branch,
+            request.remote,
+            request.branch,
+            request.mode.flag()
+        )),
+        move |repo| run_with_git_auth(auth, || repo.push_with_tags(&request)),
     );
 }
 

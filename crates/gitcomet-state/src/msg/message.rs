@@ -755,6 +755,15 @@ pub enum Msg {
         repo_id: RepoId,
         reference: String,
     },
+    PushWithTags {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+    },
+    PreviewTagPush {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+        cancellation: gitcomet_core::services::CancellationToken,
+    },
     Push {
         repo_id: RepoId,
     },
@@ -1036,6 +1045,12 @@ pub enum Msg {
 }
 
 pub enum InternalMsg {
+    TagPushPreviewLoaded {
+        repo_id: RepoId,
+        mode: gitcomet_core::tag_push::TagPushMode,
+        generation: u64,
+        result: gitcomet_core::services::Result<gitcomet_core::tag_push::TagPushPreview>,
+    },
     GitOperationStarted {
         repo_id: RepoId,
         operation_id: GitOperationId,

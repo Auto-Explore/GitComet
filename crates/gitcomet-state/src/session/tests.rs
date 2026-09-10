@@ -2876,3 +2876,56 @@ fn persist_ui_settings_round_trips_file_browser_follow_selected_commit() {
         Some(false)
     );
 }
+
+/// The layer stores density as an opaque string, so a value this build has never
+/// heard of must survive a write/read cycle intact rather than being dropped or
+/// normalised — that is what lets a newer build's choice come back.
+#[test]
+fn an_unknown_density_survives_the_session_round_trip() {
+    let path = unique_session_test_dir("density_forward_compat").join("session.json");
+
+    for density in ["compact", "comfortable", "spacious", "something-newer"] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                ui_density: Some(density.into()),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .unwrap();
+
+        assert_eq!(load_from_path(&path).ui_density.as_deref(), Some(density));
+    }
+}
+
+#[test]
+fn appearance_settings_round_trip_and_partial_writes_preserve_independent_sizes() {
+    let path = unique_session_test_dir("appearance").join("session.json");
+    let default = load_from_path(&path);
+    assert_eq!(default.ui_density, None);
+    assert_eq!(default.ui_font_size_px, None);
+    persist_ui_settings_to_path(
+        UiSettings {
+            ui_density: Some("comfortable".into()),
+            ui_font_size_px: Some(18),
+            editor_font_size_px: Some(15),
+            markdown_preview_font_size_px: Some(22),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            editor_font_size_px: Some(17),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.ui_density.as_deref(), Some("comfortable"));
+    assert_eq!(loaded.ui_font_size_px, Some(18));
+    assert_eq!(loaded.editor_font_size_px, Some(17));
+    assert_eq!(loaded.markdown_preview_font_size_px, Some(22));
+}

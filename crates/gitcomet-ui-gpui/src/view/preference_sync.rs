@@ -51,7 +51,7 @@ impl GitCometView {
     }
 
     pub(super) fn ui_scale(&self) -> ui_scale::UiScale {
-        ui_scale::UiScale::from_percent(self.ui_scale_percent)
+        ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(self.theme.metrics)
     }
 
     pub(in crate::view) fn update_ui_preferences(

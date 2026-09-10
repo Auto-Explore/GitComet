@@ -1490,6 +1490,14 @@ pub struct RepoNavigationState {
 }
 
 #[derive(Clone, Debug)]
+pub struct TagPushPreviewState {
+    pub request: gitcomet_core::tag_push::TagPushRequest,
+    pub generation: u64,
+    pub cancellation: gitcomet_core::services::CancellationToken,
+    pub result: Loadable<Arc<gitcomet_core::tag_push::TagPushPreview>>,
+}
+
+#[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
@@ -1555,6 +1563,7 @@ pub struct RepoState {
     /// Commit whose full message the history hover card is showing, and the
     /// message once it arrives. A single slot: only one card is ever open, and
     /// the view keeps its own small cache of recently fetched messages.
+    pub tag_push_previews: [Option<TagPushPreviewState>; 2],
     pub hover_commit_message: Option<(CommitId, Loadable<Arc<str>>)>,
     pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
     pub interactive_cherry_pick_setup: Option<InteractiveCherryPickSetup>,
@@ -1653,6 +1662,7 @@ impl RepoState {
             rebase_in_progress: Loadable::NotLoaded,
             sequencer_state: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
+            tag_push_previews: [None, None],
             hover_commit_message: None,
             interactive_rebase_setup: None,
             interactive_cherry_pick_setup: None,

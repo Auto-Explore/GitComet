@@ -3298,7 +3298,7 @@ fn full_chrome_layout_caches_the_pane_subviews() {
 
     assert!(
         normalized_root.contains(
-            "stable_cached_fixed_height_view(self.title_bar.clone(),chrome::title_bar_height("
+            "stable_cached_fixed_height_view(self.title_bar.clone(),chrome::TITLE_BAR_HEIGHT"
         ),
         "expected the title bar (hosting the repo tabs bar) to stay behind the stable cache boundary"
     );
@@ -5020,6 +5020,79 @@ fn active_branch_locate_button_expands_scrolls_and_selects_like_its_row(
     store.replace_snapshot_for_test(Arc::new(teardown_state));
     sync_view_snapshot(cx, &view);
     cx.run_until_parked();
+}
+
+/// The two sidebar lists swap in place, so a row in one must be exactly as tall
+/// as a row in the other -- at either density.
+#[gpui::test]
+fn the_file_explorer_and_the_branch_tree_share_one_row_height(cx: &mut gpui::TestAppContext) {
+    use crate::appearance::{Appearance, UiDensity};
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let base = {
+        let mut state = view_state_with_active_ready_repo(RepoId(1));
+        state.repos[0].head_branch = Loadable::Ready("main".to_string());
+        state.repos[0].branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+            name: "main".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        }]));
+        state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![FileEntry {
+            name: "a.rs".to_string(),
+            path: Arc::new(PathBuf::from("a.rs")),
+            kind: FileEntryKind::File,
+            depth: 0,
+        }]));
+        state.repos[0].file_browser.bump_rev();
+        state
+    };
+
+    let mut height_of = |mode, selectors: &[&'static str], density| {
+        cx.update(|_window, app| {
+            app.set_global(Appearance {
+                density,
+                ..Appearance::default()
+            });
+        });
+        let mut state = base.clone();
+        state.sidebar_mode = mode;
+        store.replace_snapshot_for_test(Arc::new(state));
+        sync_view_snapshot(cx, &view);
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| this.notify_font_preferences_changed(cx));
+        });
+        cx.run_until_parked();
+        selectors
+            .iter()
+            .find_map(|selector| cx.debug_bounds(selector))
+            .unwrap_or_else(|| panic!("missing {selectors:?} in {mode:?} at {density:?}"))
+            .size
+            .height
+    };
+
+    for density in UiDensity::ALL {
+        let file_row = height_of(
+            gitcomet_state::model::SidebarMode::Files,
+            &["file_browser_row_0"],
+            density,
+        );
+        // The branch may sit under a section header, so it is not always row zero.
+        let branch_row = height_of(
+            gitcomet_state::model::SidebarMode::Branches,
+            &["branch_row_1_0", "branch_row_1_1", "branch_row_1_2"],
+            density,
+        );
+
+        assert_eq!(
+            file_row, branch_row,
+            "a file row and a branch row must match at {density:?} density"
+        );
+    }
 }
 
 #[gpui::test]

@@ -5,6 +5,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const STATUS_ROW_HEIGHT_PX: f32 = 24.0;
+/// Line box for the path label, in UI-font units so it tracks the font
+/// setting like the label's own size.
+const STATUS_ROW_LINE_HEIGHT_PX: f32 = 18.0;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -504,7 +507,7 @@ fn status_row(
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
-    let scaled_px = |value: f32| ui_scale.px(value);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let area = section.diff_area();
     let (icon, color) = if is_submodule {
         let color = match submodule_status {
@@ -630,7 +633,19 @@ fn status_row(
 
             cx.notify();
         })
-        .gitcomet_tooltip(theme, stage_tooltip.clone());
+        .debug_selector(move || {
+            format!(
+                "status_stage_button_{}_{}_{}",
+                repo_id.0,
+                section.id_label(),
+                ix
+            )
+        })
+        .gitcomet_tooltip(theme, stage_tooltip.clone())
+        // Sits in the row rather than filling it, so the row keeps some air.
+        .h(components::in_row_control_height(
+            crate::ui_scale::UiScale::current(cx).with_appearance(theme.metrics),
+        ));
 
     let path_display_for_label = path_display.clone();
 
@@ -643,7 +658,7 @@ fn status_row(
         .items_center()
         .gap(scaled_px(8.0))
         .px(scaled_px(8.0))
-        .h(scaled_px(STATUS_ROW_HEIGHT_PX))
+        .h(crate::ui_scale::UiScale::current(cx).row_height(STATUS_ROW_HEIGHT_PX, 32.0))
         .w_full()
         .cursor(CursorStyle::PointingHand)
         .when(selected, |s| {
@@ -703,13 +718,14 @@ fn status_row(
         )
         .child(
             div()
-                .text_sm()
-                .line_height(scaled_px(18.0))
+                .text_size(theme.ui_text(14.0))
+                .line_height(theme.ui_text(STATUS_ROW_LINE_HEIGHT_PX))
                 .flex_1()
                 .min_w(px(0.0))
                 .child(
                     components::TruncatedText::aligned_path(
                         path_display_for_label.clone(),
+                        theme.ui_text(14.0),
                         path_alignment_group,
                     )
                     .id(("status_row_path", ix))

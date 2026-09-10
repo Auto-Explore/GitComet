@@ -32,6 +32,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) theme: AppTheme,
     pub(in super::super) change_tracking_view: ChangeTrackingView,
     pub(in super::super) ui_scale_percent: u32,
+    pub(in crate::view) appearance_metrics: crate::appearance::Appearance,
     pub(in super::super) date_time_format: crate::view::date_time::DateTimeFormat,
     pub(in super::super) timezone: crate::view::date_time::Timezone,
     pub(in super::super) show_timezone: bool,
@@ -407,6 +408,7 @@ impl DetailsPaneView {
             theme,
             change_tracking_view,
             ui_scale_percent,
+            appearance_metrics: crate::appearance::current(cx),
             date_time_format,
             timezone,
             show_timezone,
@@ -514,6 +516,7 @@ impl DetailsPaneView {
 
     pub(in crate::view) fn ui_scale(&self) -> ui_scale::UiScale {
         ui_scale::UiScale::from_percent(self.ui_scale_percent)
+            .with_appearance(self.appearance_metrics)
     }
 
     /// The "Stage all" buttons: drop the row selection, then stage — but confirm

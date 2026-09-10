@@ -39,6 +39,7 @@ fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
         | Effect::FetchAll { auth, .. }
         | Effect::Pull { auth, .. }
         | Effect::PullBranch { auth, .. }
+        | Effect::PushWithTags { auth, .. }
         | Effect::Push { auth, .. }
         | Effect::PushAfterCommit { auth, .. }
         | Effect::ForcePush { auth, .. }
@@ -1144,4 +1145,140 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
 
     let non_replayable_effects = replay_case(RepoCommandKind::StageHunk);
     assert!(non_replayable_effects.is_empty());
+}
+
+#[test]
+fn tag_push_auth_retry_preserves_mode_destination_and_upstream_choice() {
+    use gitcomet_core::tag_push::{TagPushMode, TagPushRequest};
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+    for mode in TagPushMode::ALL {
+        let repo_id = RepoId(1);
+        let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/tag-push-auth");
+        let request = TagPushRequest {
+            mode,
+            remote: "publish".into(),
+            branch: "releases/stable".into(),
+            local_branch: "main".into(),
+            head: gitcomet_core::domain::CommitId("1234567".into()),
+            set_upstream: true,
+        };
+        state.auth_prompt = Some(AuthPromptState {
+            kind: AuthPromptKind::UsernamePassword,
+            reason: "auth required".into(),
+            operation: AuthRetryOperation::RepoCommand {
+                repo_id,
+                command: RepoCommandKind::PushWithTags {
+                    request: request.clone(),
+                },
+            },
+        });
+        let effects = reduce(
+            &mut repos,
+            &AtomicU64::new(1),
+            &mut state,
+            Msg::SubmitAuthPrompt {
+                username: Some("alice".into()),
+                secret: "test-token".into(),
+            },
+        );
+        assert!(
+            matches!(effects.as_slice(), [Effect::PushWithTags { request: retry, .. }] if retry == &request)
+        );
+        assert_eq!(effect_git_auth(&effects[0]).unwrap().secret, "test-token");
+        assert_eq!(state.repos[0].push_in_flight, 1);
+        assert!(state.auth_prompt.is_none());
+    }
+    clear_staged_git_auth();
+}
+
+#[test]
+fn tag_push_preview_discards_stale_results_and_does_not_start_auth_or_mark_push_in_flight() {
+    use gitcomet_core::services::CancellationToken;
+    use gitcomet_core::tag_push::{TagPushMode, TagPushPreview, TagPushRequest};
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/tag-preview");
+    let id_alloc = AtomicU64::new(1);
+    let mut request = TagPushRequest {
+        mode: TagPushMode::All,
+        remote: "origin".into(),
+        branch: "main".into(),
+        local_branch: "main".into(),
+        head: gitcomet_core::domain::CommitId("1234567".into()),
+        set_upstream: true,
+    };
+    let old_token = CancellationToken::new();
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PreviewTagPush {
+            repo_id,
+            request: request.clone(),
+            cancellation: old_token.clone(),
+        },
+    );
+    let [
+        Effect::PreviewTagPush {
+            generation: old_generation,
+            ..
+        },
+    ] = effects.as_slice()
+    else {
+        panic!("preview expected")
+    };
+    let old_generation = *old_generation;
+    request.remote = "publish".into();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PreviewTagPush {
+            repo_id,
+            request,
+            cancellation: CancellationToken::new(),
+        },
+    );
+    assert!(old_token.is_cancelled());
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::TagPushPreviewLoaded {
+            repo_id,
+            mode: TagPushMode::All,
+            generation: old_generation,
+            result: Ok(TagPushPreview::default()),
+        }),
+    );
+    assert!(
+        state.repos[0].tag_push_previews[1]
+            .as_ref()
+            .unwrap()
+            .result
+            .is_loading()
+    );
+    let generation = state.repos[0].tag_push_previews[1]
+        .as_ref()
+        .unwrap()
+        .generation;
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::TagPushPreviewLoaded {
+            repo_id,
+            mode: TagPushMode::All,
+            generation,
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("authentication required".into()),
+            )),
+        }),
+    );
+    assert!(matches!(
+        &state.repos[0].tag_push_previews[1].as_ref().unwrap().result,
+        crate::model::Loadable::Error(_)
+    ));
+    assert!(state.auth_prompt.is_none());
+    assert_eq!(state.repos[0].push_in_flight, 0);
 }

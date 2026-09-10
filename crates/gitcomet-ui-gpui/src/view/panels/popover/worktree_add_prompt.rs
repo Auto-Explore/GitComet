@@ -9,7 +9,7 @@ pub(super) fn panel(
     let theme = this.theme;
     let can_submit = this.can_submit_worktree_add(cx);
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
     let ref_row = if let Some(search) = this.branch_picker_search_input.clone() {
         let is_focused = search
@@ -70,8 +70,8 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(popover_title("Add worktree"))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(popover_title(theme, "Add worktree"))
+        .child(super::popover_rule(theme))
         .child(input_label(theme, "Worktree folder"))
         .child(
             div()
@@ -128,19 +128,14 @@ pub(super) fn panel(
             div()
                 .px_2()
                 .py_1()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Branch / commit (optional)"),
         )
         .child(ref_row)
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(
                     cancel_button("worktree_add_cancel", "worktree_add_cancel_hint", theme)
                         .focus_handle(this.worktree_focus.cancel.clone())

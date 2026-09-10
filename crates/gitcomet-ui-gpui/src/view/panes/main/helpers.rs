@@ -8,13 +8,8 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::cell::RefCell;
 use std::collections::HashSet;
 
-const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
 const DIFF_FILE_HEADER_HEIGHT_PX: f32 = 28.0;
 const DIFF_HUNK_HEADER_HEIGHT_PX: f32 = 24.0;
-/// Height of one resolved-output gutter row. The row space navigation scrolls
-/// through is measured in these, so anything computing an output scroll offset
-/// by hand has to agree with what the gutter actually lays out.
-pub(in crate::view) const RESOLVED_OUTPUT_ROW_HEIGHT_PX: f32 = 20.0;
 
 /// Frames a sideways search reveal waits for its row to paint before giving up.
 pub(in crate::view) const DIFF_SEARCH_HORIZONTAL_REVEAL_ATTEMPTS: u8 = 4;
@@ -92,23 +87,25 @@ pub(in crate::view) fn reveal_scroll_x(
 }
 
 #[inline]
-fn scaled_diff_px(value: f32, ui_scale_percent: u32) -> Pixels {
-    crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+pub(in crate::view) fn diff_file_header_height_for_ui_scale(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> Pixels {
+    crate::ui_scale::design_px_from_percent(
+        theme.metrics.row_height(DIFF_FILE_HEADER_HEIGHT_PX, 32.0),
+        ui_scale_percent,
+    )
 }
 
 #[inline]
-pub(in crate::view) fn diff_row_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
-    scaled_diff_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
-}
-
-#[inline]
-pub(in crate::view) fn diff_file_header_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
-    scaled_diff_px(DIFF_FILE_HEADER_HEIGHT_PX, ui_scale_percent)
-}
-
-#[inline]
-pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
-    scaled_diff_px(DIFF_HUNK_HEADER_HEIGHT_PX, ui_scale_percent)
+pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> Pixels {
+    crate::ui_scale::design_px_from_percent(
+        DIFF_HUNK_HEADER_HEIGHT_PX.max(theme.metrics.editor_line_height() + 4.0),
+        ui_scale_percent,
+    )
 }
 
 /// Heuristic highlights for the rows overlapping `byte_range`.

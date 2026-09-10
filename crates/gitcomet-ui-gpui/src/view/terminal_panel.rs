@@ -30,11 +30,12 @@ fn retry_close_action(action: UnsavedFileEditsAction, cx: &mut gpui::App) {
 }
 
 const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
-const TERMINAL_FONT_SCALE: f32 = 0.92;
 const TERMINAL_LINE_HEIGHT_SCALE: f32 = 1.15;
 const TERMINAL_MIN_GRID_ROWS: u16 = 2;
 const TERMINAL_MIN_GRID_COLS: u16 = 8;
 const TERMINAL_CARET_WIDTH_RATIO: f32 = 0.12;
+/// Close affordance on a terminal tab. Smaller than a control by design, but it
+/// still follows the density ramp so the target grows with the tab.
 const TERMINAL_CARET_MIN_WIDTH_PX: f32 = 2.0;
 const TERMINAL_CARET_MAX_WIDTH_PX: f32 = 3.0;
 const TERMINAL_CARET_VERTICAL_INSET_PX: f32 = 1.0;
@@ -1234,6 +1235,8 @@ impl GitCometView {
         let clear_repo = active_repo;
         let close_repo = active_repo;
         let repo_id = active_repo;
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
+        let control_height = components::control_height(ui_scale);
 
         let icon_btn = move |id: &'static str, icon: &'static str, tip: &'static str| {
             div()
@@ -1241,11 +1244,15 @@ impl GitCometView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(22.0))
+                .size(control_height)
                 .rounded(px(theme.radii.row))
                 .cursor(CursorStyle::PointingHand)
                 .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                .child(svg_icon(icon, theme.colors.foreground.primary, px(14.0)))
+                .child(svg_icon(
+                    icon,
+                    theme.colors.foreground.primary,
+                    ui_scale.px(14.0),
+                ))
                 .gitcomet_tooltip(theme, tip.into())
         };
 
@@ -1254,7 +1261,7 @@ impl GitCometView {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(2.0))
+            .gap(ui_scale.px(2.0))
             .flex_1()
             .min_w(px(0.0))
             .overflow_x_scroll()
@@ -1273,51 +1280,36 @@ impl GitCometView {
                 theme.colors.foreground.secondary
             };
 
-            let close = div()
-                .id(("terminal_tab_close", i))
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(14.0))
-                .rounded(px(theme.radii.row))
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(with_alpha(theme.colors.status.danger.foreground, 0.18)))
-                .child(svg_icon("icons/generic_close.svg", text_color, px(10.0)))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
-                        this.request_close_terminal_tab(repo_id, i, window, cx);
-                    }),
-                );
+            let close =
+                components::panel_tab_close(("terminal_tab_close", i), theme, ui_scale, text_color)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.request_close_terminal_tab(repo_id, i, window, cx);
+                        }),
+                    );
 
-            let tab = div()
-                .id(("terminal_tab", i))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(3.0))
-                .rounded(px(theme.radii.row))
-                .bg(tab_bg)
-                .text_color(text_color)
-                .text_size(px(12.0))
-                .flex_none()
-                .cursor(CursorStyle::PointingHand)
-                .when(!is_active, |d| {
-                    d.hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                })
-                .child(svg_icon("icons/terminal.svg", text_color, px(12.0)))
-                .child(title.clone())
-                .child(close)
-                .gitcomet_tooltip(theme, title.clone())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
-                        this.select_terminal_tab(repo_id, i, window, cx);
-                    }),
-                );
+            let tab = components::panel_tab(
+                ("terminal_tab", i),
+                theme,
+                ui_scale,
+                "icons/terminal.svg",
+                title.clone(),
+                tab_bg,
+                text_color,
+            )
+            .when(!is_active, |d| {
+                d.hover(move |s| s.bg(theme.colors.interaction.hover_background))
+            })
+            .child(close)
+            .gitcomet_tooltip(theme, title.clone())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+                    this.select_terminal_tab(repo_id, i, window, cx);
+                }),
+            );
 
             tabs_row = tabs_row.child(tab);
         }
@@ -1328,14 +1320,14 @@ impl GitCometView {
             .flex_none()
             .items_center()
             .justify_center()
-            .size(px(20.0))
+            .size(control_height)
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
             .hover(move |s| s.bg(theme.colors.interaction.hover_background))
             .child(svg_icon(
                 "icons/plus.svg",
                 theme.colors.foreground.primary,
-                px(12.0),
+                ui_scale.px(12.0),
             ))
             .gitcomet_tooltip(theme, "New terminal".into())
             .on_mouse_down(
@@ -1351,9 +1343,9 @@ impl GitCometView {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(2.0))
-            .px(px(4.0))
-            .py(px(4.0))
+            .gap(ui_scale.px(2.0))
+            .px(ui_scale.px(4.0))
+            .py(ui_scale.px(4.0))
             .bg(theme.colors.surface.panel)
             .border_b_1()
             .border_color(theme.colors.stroke.subtle)
@@ -1368,20 +1360,20 @@ impl GitCometView {
                         .flex_none()
                         .flex_row()
                         .items_center()
-                        .gap(px(4.0))
-                        .px(px(6.0))
-                        .py(px(2.0))
+                        .gap(ui_scale.px(4.0))
+                        .px(ui_scale.px(6.0))
+                        .h(control_height)
                         .rounded(px(theme.radii.row))
                         .bg(with_alpha(theme.colors.accent.foreground, 0.15))
                         .child(
                             div()
-                                .size(px(6.0))
-                                .rounded(px(3.0))
+                                .size(ui_scale.px(6.0))
+                                .rounded(ui_scale.px(3.0))
                                 .bg(theme.colors.accent.foreground),
                         )
                         .child(
                             div()
-                                .text_size(px(11.0))
+                                .text_size(theme.ui_text(11.0))
                                 .text_color(theme.colors.foreground.primary)
                                 .child("Keyboard captured"),
                         )

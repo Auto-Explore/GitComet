@@ -1,4 +1,5 @@
 use super::*;
+use crate::appearance::{Appearance, FontRole, UiDensity};
 use crate::ui_scale;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
@@ -22,7 +23,7 @@ const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
 const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
 const SETTINGS_WINDOW_TITLE: &str = "Settings: GitComet";
-const SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
+
 const MIN_GIT_MAJOR: u32 = 2;
 const MIN_GIT_MINOR: u32 = 50;
 const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
@@ -392,7 +393,8 @@ impl SettingsCategory {
         match self {
             Self::General => {
                 "general theme date format ui scale ui font editor font ligatures \
-                 external code editor date timezone appearance"
+                 external code editor date timezone appearance density compact comfortable spacious \
+                 font size markdown preview"
             }
             Self::SecurityPrivacy => {
                 "security privacy allowed remote protocols https http ssh git file ftp ftps \
@@ -475,6 +477,9 @@ pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
     ui_scale_percent: u32,
+    appearance_metrics: Appearance,
+    font_size_inputs: [Entity<components::TextInput>; 3],
+    _font_size_subscriptions: Vec<gpui::Subscription>,
     ui_font_family: String,
     editor_font_family: String,
     use_font_ligatures: bool,
@@ -609,14 +614,6 @@ fn settings_window_default_size_for_percent(percent: u32) -> gpui::Size<Pixels> 
     )
 }
 
-fn settings_window_traffic_light_position(_percent: u32) -> Point<Pixels> {
-    point(px(9.0), px(9.0))
-}
-
-fn settings_window_traffic_lights_safe_inset(_percent: u32) -> Pixels {
-    px(SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET_PX)
-}
-
 #[cfg(test)]
 fn settings_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
     settings_window_options_for_scale(bounds, ui_scale::DEFAULT_UI_SCALE_PERCENT)
@@ -629,7 +626,7 @@ fn settings_window_options_for_scale(
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(settings_window_min_size_for_percent(ui_scale_percent)),
-        titlebar: Some(settings_window_titlebar_options_for_scale(ui_scale_percent)),
+        titlebar: Some(settings_window_titlebar_options()),
         app_id: Some("gitcomet-settings".into()),
         window_decorations: Some(WindowDecorations::Client),
         window_background: crate::app::main_window_background_appearance(),
@@ -639,19 +636,14 @@ fn settings_window_options_for_scale(
     }
 }
 
-#[cfg(test)]
 fn settings_window_titlebar_options() -> TitlebarOptions {
-    settings_window_titlebar_options_for_scale(ui_scale::DEFAULT_UI_SCALE_PERCENT)
-}
-
-fn settings_window_titlebar_options_for_scale(ui_scale_percent: u32) -> TitlebarOptions {
     TitlebarOptions {
         title: Some(SETTINGS_WINDOW_TITLE.into()),
         // Windows needs a transparent native titlebar to avoid rendering its own
         // caption on top of the custom settings header.
         appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
         traffic_light_position: cfg!(target_os = "macos")
-            .then_some(settings_window_traffic_light_position(ui_scale_percent)),
+            .then_some(chrome::macos_traffic_light_position()),
     }
 }
 
@@ -880,6 +872,7 @@ impl SettingsWindowView {
 
         let ui_session = session::load();
         let ui_preferences = UiPreferences::from_session(&ui_session);
+        crate::appearance::initialize(&ui_session, cx);
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
@@ -959,7 +952,10 @@ impl SettingsWindowView {
                     if !this.theme_mode.is_automatic() {
                         return;
                     }
-                    this.theme = this.theme_mode.resolve_theme(window.appearance());
+                    this.theme = this
+                        .theme_mode
+                        .resolve_theme(window.appearance())
+                        .with_appearance(this.appearance_metrics);
                     cx.notify();
                 });
             })
@@ -1107,9 +1103,36 @@ impl SettingsWindowView {
             },
         );
 
+        let appearance_metrics = crate::appearance::current(cx);
+        let font_size_inputs = FontRole::ALL.map(|role| {
+            cx.new(|cx| {
+                let mut input =
+                    components::TextInput::new(components::TextInputOptions::default(), window, cx);
+                input.set_text(appearance_metrics.size(role).to_string(), cx);
+                input.set_theme(theme, cx);
+                input
+            })
+        });
+        let font_size_subscriptions = FontRole::ALL
+            .into_iter()
+            .map(|role| {
+                cx.observe(&font_size_inputs[role.index()], move |this, input, cx| {
+                    let text = input.read(cx).text().to_string();
+                    if let Ok(value) = text.trim().parse::<u32>()
+                        && role.range().contains(&value)
+                    {
+                        this.set_font_size(role, value, cx);
+                    }
+                })
+            })
+            .collect();
+
         Self {
             theme_mode,
-            theme,
+            appearance_metrics,
+            font_size_inputs,
+            _font_size_subscriptions: font_size_subscriptions,
+            theme: theme.with_appearance(appearance_metrics),
             ui_scale_percent: ui_scale.percent,
             ui_font_family: font_preferences.ui_font_family,
             editor_font_family: font_preferences.editor_font_family,

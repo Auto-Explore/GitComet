@@ -13,8 +13,6 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 
-pub(super) const DIFF_FONT_SCALE: f32 = 0.80;
-
 pub(super) type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 
 #[derive(Clone, Copy, Debug)]
@@ -29,18 +27,20 @@ pub(super) fn diff_text_style(window: &Window) -> TextStyle {
     style
 }
 
-pub(super) fn line_metrics(window: &Window) -> LineMetrics {
-    line_metrics_scaled(window, 1.0)
+pub(super) fn line_metrics(window: &Window, theme: AppTheme) -> LineMetrics {
+    line_metrics_scaled(window, theme, 1.0)
 }
 
 /// Metrics at `extra_scale` times the base diff font size (1.0 = the regular
 /// row text; the annotation "when" column uses a slightly smaller scale).
-pub(super) fn line_metrics_scaled(window: &Window, extra_scale: f32) -> LineMetrics {
-    let style = diff_text_style(window);
-    let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE * extra_scale;
-    let line_height = style
-        .line_height
-        .to_pixels(font_size.into(), window.rem_size());
+pub(super) fn line_metrics_scaled(
+    window: &Window,
+    theme: AppTheme,
+    extra_scale: f32,
+) -> LineMetrics {
+    let percent = crate::ui_scale::UiScale::from_window(window).percent();
+    let font_size = theme.editor_font_size(percent) * extra_scale;
+    let line_height = theme.editor_row_height(percent) * extra_scale;
     LineMetrics {
         font_size,
         line_height,

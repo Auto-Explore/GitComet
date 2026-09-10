@@ -11,6 +11,10 @@ use std::rc::Rc;
 
 use super::{control_height, control_pad_x, control_pad_y, icon_pad_x};
 
+/// Gap between a button's icon and its label.
+const CONTENT_GAP_PX: f32 = 4.0;
+const CONTENT_GAP_COMFORTABLE_PX: f32 = 6.0;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ButtonStyle {
     Filled,
@@ -47,6 +51,9 @@ pub struct Button {
     start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
     separate_end_slot: bool,
+    /// Set when the caller pins the button's geometry instead of taking the
+    /// app's. See [`Button::unscaled`].
+    scale: Option<UiScale>,
 }
 
 impl Button {
@@ -69,6 +76,7 @@ impl Button {
             start_slot: None,
             end_slot: None,
             separate_end_slot: false,
+            scale: None,
         }
     }
 
@@ -161,6 +169,14 @@ impl Button {
         self
     }
 
+    /// Pins the button to the window chrome's fixed scale, ignoring the app's
+    /// UI scale, density and font size. For a button in a title bar, which
+    /// shares its row with OS controls that never resize.
+    pub fn unscaled(mut self) -> Self {
+        self.scale = Some(crate::view::chrome::chrome_scale());
+        self
+    }
+
     pub fn on_click<V: 'static>(
         self,
         theme: AppTheme,
@@ -168,7 +184,7 @@ impl Button {
         f: impl Fn(&mut V, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
         let disabled = self.disabled;
-        let ui_scale = UiScale::current(cx);
+        let ui_scale = self.scale.unwrap_or_else(|| UiScale::current(cx));
 
         self.render(theme, ui_scale)
             .when(!disabled, |this| this.on_click(cx.listener(f)))
@@ -181,7 +197,7 @@ impl Button {
         f: impl Fn(&mut V, &ClickEvent, Bounds<Pixels>, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
         let disabled = self.disabled;
-        let ui_scale = UiScale::current(cx);
+        let ui_scale = self.scale.unwrap_or_else(|| UiScale::current(cx));
 
         let last_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
         let last_bounds_for_prepaint = Rc::clone(&last_bounds);
@@ -225,8 +241,9 @@ impl Button {
             start_slot,
             end_slot,
             separate_end_slot,
+            scale,
         } = self;
-        let ui_scale = ui_scale.into();
+        let ui_scale = scale.unwrap_or_else(|| ui_scale.into().with_appearance(theme.metrics));
 
         let transparent = gpui::rgba(0x00000000);
         let outlined_border = if theme.is_dark {
@@ -369,7 +386,9 @@ impl Button {
         let control_pad_x = control_pad_x(ui_scale);
         let control_pad_y = control_pad_y(ui_scale);
         let icon_pad_x = icon_pad_x(ui_scale);
-        let content_gap = ui_scale.px(4.0);
+        let content_gap = ui_scale.px(ui_scale
+            .appearance
+            .ramp(CONTENT_GAP_PX, CONTENT_GAP_COMFORTABLE_PX));
         let separated_slot_pad = ui_scale.px(6.0);
 
         let mut leading = div().flex().items_center().gap(content_gap);
@@ -407,6 +426,7 @@ impl Button {
         let mut base = div()
             .id(id.clone())
             .h(control_height)
+            .when(icon_only, |d| d.min_w(control_height))
             .px(if icon_only { icon_pad_x } else { control_pad_x })
             .py(control_pad_y)
             .flex()
@@ -422,7 +442,7 @@ impl Button {
                 d.rounded_tr(control_radius).rounded_br(control_radius)
             })
             .bg(bg)
-            .text_sm()
+            .text_size(ui_scale.ui_text(14.0))
             .text_color(text)
             .cursor(CursorStyle::PointingHand)
             .child(inner);

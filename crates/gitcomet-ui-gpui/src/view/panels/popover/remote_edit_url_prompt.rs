@@ -19,16 +19,12 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(popover_title(format!("Edit remote URL ({kind_label})")))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.foreground.secondary)
-                .child(format!("Remote: {name}")),
-        )
+        .child(popover_title(
+            theme,
+            format!("Edit remote URL ({kind_label})"),
+        ))
+        .child(super::popover_rule(theme))
+        .child(super::popover_detail(theme, format!("Remote: {name}")))
         .child(
             div()
                 .px_2()
@@ -37,14 +33,9 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.remote_url_edit_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(
                     cancel_button(
                         "edit_remote_url_cancel",

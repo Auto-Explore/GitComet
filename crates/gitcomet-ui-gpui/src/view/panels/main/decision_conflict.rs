@@ -52,6 +52,8 @@ impl MainPaneView {
         file: &gitcomet_state::model::ConflictFile,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let restore = decision_restore_availability(file);
         let restore_summary = decision_restore_sources_summary(restore);
 
@@ -177,17 +179,22 @@ impl MainPaneView {
                 )
             })
             .when(show_external_mergetool_actions(self.view_mode), |d| {
-                d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.stroke.default))
-                    .child(
-                        components::Button::new("decision_mergetool", "External Mergetool")
-                            .style(components::ButtonStyle::Outlined)
-                            .on_click(theme, cx, move |this, _e, _w, _cx| {
-                                this.store.dispatch(Msg::LaunchMergetool {
-                                    repo_id,
-                                    path: mergetool_path.clone(),
-                                });
-                            }),
-                    )
+                d.child(
+                    div()
+                        .w(px(1.0))
+                        .h(scaled_px(16.0))
+                        .bg(theme.colors.stroke.default),
+                )
+                .child(
+                    components::Button::new("decision_mergetool", "External Mergetool")
+                        .style(components::ButtonStyle::Outlined)
+                        .on_click(theme, cx, move |this, _e, _w, _cx| {
+                            this.store.dispatch(Msg::LaunchMergetool {
+                                repo_id,
+                                path: mergetool_path.clone(),
+                            });
+                        }),
+                )
             });
 
         div()
@@ -205,7 +212,7 @@ impl MainPaneView {
             .child(
                 div().flex().items_center().gap_2().child(
                     div()
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme.colors.foreground.primary)
                         .child(title),
@@ -228,14 +235,14 @@ impl MainPaneView {
                     .bg(theme.colors.surface.canvas)
                     .child(
                         div()
-                            .text_lg()
+                            .text_size(theme.ui_text(18.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.colors.status.warning.foreground)
                             .child("Both sides deleted this file"),
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .text_color(theme.colors.foreground.secondary)
                             .text_center()
                             .child(
@@ -246,7 +253,7 @@ impl MainPaneView {
                     .when_some(restore_summary, |d, summary| {
                         d.child(
                             div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(summary),
                         )

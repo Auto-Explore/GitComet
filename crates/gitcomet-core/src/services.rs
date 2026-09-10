@@ -1075,6 +1075,23 @@ pub trait GitRepository: Send + Sync {
     fn fetch_all(&self) -> Result<()>;
     fn pull(&self, mode: PullMode) -> Result<()>;
     fn push(&self) -> Result<()>;
+
+    fn push_with_tags(&self, _request: &crate::tag_push::TagPushRequest) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pushing with tags is not implemented for this backend",
+        )))
+    }
+
+    fn preview_tag_push(
+        &self,
+        _request: &crate::tag_push::TagPushRequest,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::tag_push::TagPushPreview> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "tag push preview is not implemented for this backend",
+        )))
+    }
+
     fn push_force(&self) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "force push is not implemented for this backend",

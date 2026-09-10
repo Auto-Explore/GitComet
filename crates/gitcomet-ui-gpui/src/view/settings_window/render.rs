@@ -2,7 +2,20 @@ use super::*;
 
 impl Render for SettingsWindowView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let metrics = crate::appearance::current(cx);
+        if self.appearance_metrics != metrics {
+            self.appearance_metrics = metrics;
+            for role in FontRole::ALL {
+                self.font_size_inputs[role.index()].update(cx, |input, cx| {
+                    input.set_text(metrics.size(role).to_string(), cx)
+                });
+            }
+        }
+        self.theme = self.theme.with_appearance(metrics);
         let theme = self.theme;
+        for input in &self.font_size_inputs {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
         self.terminal_external_program_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.terminal_external_args_input
@@ -48,12 +61,12 @@ impl Render for SettingsWindowView {
             .flex()
             .items_center()
             .min_w(px(0.0))
+            // The header is a window title bar, so it holds one size at every
+            // UI scale, density and font size (see `chrome::chrome_scale`).
             .px(px(12.0))
             .window_control_area(WindowControlArea::Drag)
             .when(is_macos, |this| {
-                this.pl(settings_window_traffic_lights_safe_inset(
-                    self.ui_scale_percent,
-                ))
+                this.pl(chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET)
             })
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 if !chrome::should_handle_titlebar_double_click(e.click_count(), e.standard_click())
@@ -109,7 +122,6 @@ impl Render for SettingsWindowView {
             );
 
         let min = chrome::titlebar_control_button(
-            self.ui_scale_percent,
             "settings_window_min_btn",
             "icons/generic_minimize.svg",
             theme.colors.foreground.secondary,
@@ -129,7 +141,6 @@ impl Render for SettingsWindowView {
             "icons/generic_maximize.svg"
         };
         let max = chrome::titlebar_control_button(
-            self.ui_scale_percent,
             "settings_window_max_btn",
             max_icon,
             theme.colors.foreground.secondary,
@@ -145,7 +156,6 @@ impl Render for SettingsWindowView {
         }));
 
         let close = chrome::titlebar_control_button(
-            self.ui_scale_percent,
             "settings_window_close_btn",
             "icons/generic_close.svg",
             theme.colors.foreground.secondary,
@@ -163,7 +173,7 @@ impl Render for SettingsWindowView {
         let frame_rounding = chrome::client_frame_corner_rounding(theme, window);
         let header = div()
             .id("settings_window_header")
-            .h(chrome::title_bar_height(self.ui_scale_percent))
+            .h(chrome::TITLE_BAR_HEIGHT)
             .w_full()
             .flex()
             .items_center()
@@ -179,16 +189,7 @@ impl Render for SettingsWindowView {
             )
             .child(drag_region)
             .when(!is_macos, |this| {
-                this.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .pr_2()
-                        .child(min)
-                        .child(max)
-                        .child(close),
-                )
+                this.child(chrome::window_controls_cluster(Some((min, max, close))))
             });
 
         self.git_executable_input
@@ -279,7 +280,6 @@ impl Render for SettingsWindowView {
                             self.use_font_ligatures,
                             theme,
                         )
-                        .border_color(no_separator)
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_use_font_ligatures(!this.use_font_ligatures, cx);
                         }));
@@ -700,7 +700,7 @@ impl Render for SettingsWindowView {
                                 div()
                                     .px_2()
                                     .pb_1()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child("Shortcut: Ctrl/Cmd +, -, and 0."),
                             ),
@@ -740,7 +740,7 @@ impl Render for SettingsWindowView {
                                 div()
                                     .px_2()
                                     .pb_1()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(self.font_options_hint(self.ui_font_family.as_str())),
                             )
@@ -789,7 +789,7 @@ impl Render for SettingsWindowView {
                                 div()
                                     .px_2()
                                     .pb_1()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         self.font_options_hint(self.editor_font_family.as_str()),
@@ -808,6 +808,7 @@ impl Render for SettingsWindowView {
                     }
 
                     general_card = general_card.child(font_ligatures_row);
+                    general_card = general_card.child(self.appearance_controls(cx));
 
                     general_card = general_card
                         .child(self.subsection_heading(
@@ -897,7 +898,7 @@ impl Render for SettingsWindowView {
                                 div()
                                     .px_2()
                                     .pt_1()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child("Custom editor executable"),
                             )
@@ -922,7 +923,7 @@ impl Render for SettingsWindowView {
                                 div()
                                     .px_2()
                                     .pt_1()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child("Arguments"),
                             )
@@ -1027,7 +1028,7 @@ impl Render for SettingsWindowView {
                                 div()
                                     .px_2()
                                     .pb_1()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         "System default is best effort. Use a custom launcher for predictable cross-platform behavior.",
@@ -1085,7 +1086,7 @@ impl Render for SettingsWindowView {
                                     div()
                                         .px_2()
                                         .pt_1()
-                                        .text_xs()
+                                        .text_size(theme.ui_text(12.0))
                                         .text_color(theme.colors.foreground.secondary)
                                         .child("Program"),
                                 )
@@ -1122,7 +1123,7 @@ impl Render for SettingsWindowView {
                                     div()
                                         .px_2()
                                         .pt_1()
-                                        .text_xs()
+                                        .text_size(theme.ui_text(12.0))
                                         .text_color(theme.colors.foreground.secondary)
                                         .child("Arguments"),
                                 )
@@ -1138,7 +1139,7 @@ impl Render for SettingsWindowView {
                                     div()
                                         .px_2()
                                         .pb_1()
-                                        .text_xs()
+                                        .text_size(theme.ui_text(12.0))
                                         .text_color(theme.colors.foreground.secondary)
                                         .child("One argument per line. Use {cwd} and {repo_name} placeholders."),
                                 )
@@ -1190,7 +1191,7 @@ impl Render for SettingsWindowView {
                                 div()
                                     .px_2()
                                     .pb_1()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         "Choose what the action bar terminal button opens. Global shortcuts for each can be configured separately.",
@@ -1246,7 +1247,7 @@ impl Render for SettingsWindowView {
                             div()
                                 .px_2()
                                 .pt_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(if status.is_error {
                                     theme.colors.status.danger.foreground
                                 } else {
@@ -1267,7 +1268,7 @@ impl Render for SettingsWindowView {
                                 .px_2()
                                 .pt_1()
                                 .pb_3()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(
                                     "Only selected built-in URL protocols may be passed to Git. Custom remote helpers stay blocked. Local paths and SCP-style SSH locations remain available.",
@@ -1317,7 +1318,7 @@ impl Render for SettingsWindowView {
                                 .px_2()
                                 .pt_1()
                                 .pb_3()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(
                                     "Repository-controlled HTTP/HTTPS images can act as tracking pixels and reveal that you opened a document. Safe relative images from the repository continue to load in every mode.",
@@ -1368,7 +1369,7 @@ impl Render for SettingsWindowView {
                                 .id("settings_window_update_check_environment_note")
                                 .px_2()
                                 .pb_3()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(
                                     "Disabled by GITCOMET_NO_UPDATE_CHECK. Remove the environment variable and restart GitComet to change this setting.",
@@ -1597,7 +1598,7 @@ impl Render for SettingsWindowView {
                                 div()
                                     .px_2()
                                     .pb_1()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         "Applies when opening repositories that do not already have a saved history mode.",
@@ -1694,7 +1695,7 @@ impl Render for SettingsWindowView {
                                 div()
                                     .px_2()
                                     .pb_1()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child("Columns may auto-hide in narrow windows."),
                             )
@@ -1799,7 +1800,7 @@ impl Render for SettingsWindowView {
                             div()
                                 .px_2()
                                 .pb_2()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(
                                     "Also applies to the fetch performed by Pull and Pull into current. Local branches whose fetched upstream was deleted are unlinked, but local branches and tags are never deleted.",
@@ -1877,7 +1878,7 @@ impl Render for SettingsWindowView {
                                 .id("settings_window_git_executable_scope_note")
                                 .px_2()
                                 .pb_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(git_executable_scope_note()),
                         )
@@ -1939,7 +1940,7 @@ impl Render for SettingsWindowView {
                             div()
                                 .px_2()
                                 .pt_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child("Custom Git executable"),
                         )
@@ -1965,7 +1966,7 @@ impl Render for SettingsWindowView {
                             div()
                                 .px_2()
                                 .pb_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(
                                     "Press Enter after editing the path to apply it immediately.",
@@ -1982,7 +1983,7 @@ impl Render for SettingsWindowView {
                                 .id("settings_window_git_runtime_detail")
                                 .px_2()
                                 .pb_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(detail),
                         );
@@ -2176,7 +2177,7 @@ impl Render for SettingsWindowView {
                                 .cursor(CursorStyle::PointingHand)
                                 .hover(move |s| s.bg(theme.colors.interaction.hover_background))
                                 .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .text_color(theme.colors.accent.foreground)
                                 .child("< Settings")
                                 .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
@@ -2185,13 +2186,13 @@ impl Render for SettingsWindowView {
                         )
                         .child(
                             div()
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child("/"),
                         )
                         .child(
                             div()
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .font_weight(FontWeight::BOLD)
                                 .child("Open source licenses"),
                         );
@@ -2200,7 +2201,7 @@ impl Render for SettingsWindowView {
                         div()
                             .px_2()
                             .py_1()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .text_color(theme.colors.foreground.secondary)
                             .child("No dependency licenses found.")
                             .into_any_element()
@@ -2266,7 +2267,7 @@ impl Render for SettingsWindowView {
                             div()
                                 .px_2()
                                 .pb_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(format!("{} third-party crates listed", rows.len())),
                         )
@@ -2278,13 +2279,27 @@ impl Render for SettingsWindowView {
                                 })
                                 .px_2()
                                 .py_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().w(px(200.0)).child("Crate"))
-                                .child(div().w(px(90.0)).child("Version"))
+                                .child(
+                                    div()
+                                        .w(crate::ui_scale::design_px_from_percent(
+                                            super::rows::SETTINGS_LICENSE_NAME_COLUMN_PX,
+                                            self.ui_scale_percent,
+                                        ))
+                                        .child("Crate"),
+                                )
+                                .child(
+                                    div()
+                                        .w(crate::ui_scale::design_px_from_percent(
+                                            super::rows::SETTINGS_LICENSE_VERSION_COLUMN_PX,
+                                            self.ui_scale_percent,
+                                        ))
+                                        .child("Version"),
+                                )
                                 .child(div().flex_1().min_w(px(0.0)).child("License")),
                         )
                         .child(list_container);
@@ -2316,6 +2331,7 @@ impl Render for SettingsWindowView {
                 d.when(rounding.bottom_left, |d| d.rounded_bl(rounding.radius))
                     .when(rounding.bottom_right, |d| d.rounded_br(rounding.radius))
             })
+            .text_size(theme.ui_text(16.0))
             .font(gpui::Font {
                 family: crate::font_preferences::applied_ui_font_family(&self.ui_font_family)
                     .into(),
@@ -2397,5 +2413,89 @@ impl Render for SettingsWindowView {
             body.into_any_element(),
             self.ui_scale_percent,
         ))
+    }
+}
+
+impl SettingsWindowView {
+    fn appearance_controls(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let mut density = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .child(div().flex_1().child("UI density"));
+        for value in UiDensity::ALL {
+            density = density.child(
+                components::Button::new(format!("settings_density_{}", value.key()), value.label())
+                    .selected(self.appearance_metrics.density == value)
+                    .on_click(theme, cx, move |this, _, _, cx| this.set_density(value, cx)),
+            );
+        }
+        let mut rows = div()
+            .debug_selector(|| "settings_window_appearance_controls".to_string())
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_2()
+            .child(density);
+        for role in FontRole::ALL {
+            let value = self.appearance_metrics.size(role);
+            let control = div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .child(div().flex_1().child(role.label()))
+                .child(
+                    components::Button::new(format!("font_size_{}_decrease", role.index()), "−")
+                        .disabled(value <= *role.range().start())
+                        .on_click(theme, cx, move |this, _, _, cx| {
+                            this.set_font_size(role, value.saturating_sub(1), cx)
+                        }),
+                )
+                .child(
+                    div()
+                        .w(ui_scale::design_px(56.0, cx))
+                        .child(self.font_size_inputs[role.index()].clone()),
+                )
+                .child("px")
+                .child(
+                    components::Button::new(format!("font_size_{}_increase", role.index()), "+")
+                        .disabled(value >= *role.range().end())
+                        .on_click(theme, cx, move |this, _, _, cx| {
+                            this.set_font_size(role, value + 1, cx)
+                        }),
+                )
+                .child(
+                    components::Button::new(format!("font_size_{}_reset", role.index()), "Reset")
+                        .on_click(theme, cx, move |this, _, _, cx| {
+                            this.set_font_size(role, role.default_size(), cx)
+                        }),
+                );
+            let valid = self.font_size_inputs[role.index()]
+                .read(cx)
+                .text()
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .is_some_and(|size| role.range().contains(&size));
+            rows = rows.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(control)
+                    .when(!valid, |row| {
+                        row.child(div().text_size(theme.ui_text(12.0)).child(format!(
+                            "Enter a whole number from {} to {}.",
+                            role.range().start(),
+                            role.range().end()
+                        )))
+                    }),
+            );
+        }
+        rows.child(div().text_size(theme.ui_text(12.0)).text_color(theme.colors.foreground.secondary)
+            .child("Font sizes are measured at 100% UI scale. Each text area can be adjusted independently."))
     }
 }
