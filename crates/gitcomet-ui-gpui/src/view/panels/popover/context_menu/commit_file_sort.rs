@@ -10,12 +10,15 @@ pub(super) fn model(
 }
 
 /// Status entries carry no `+/-` counts, so the edit-size modes have nothing to
-/// order by and are left out of their menus.
+/// order by and are left out of their menus. Path and file type read off the
+/// path alone, so they stay.
 fn sorts_for(list: crate::view::rows::FileListId) -> &'static [crate::view::rows::CommitFileSort] {
     use crate::view::rows::CommitFileSort;
-    const PATH_ONLY: [CommitFileSort; 2] = [
+    const WITHOUT_EDIT_SIZE: [CommitFileSort; 4] = [
         CommitFileSort::PathAscending,
         CommitFileSort::PathDescending,
+        CommitFileSort::FileTypeAscending,
+        CommitFileSort::FileTypeDescending,
     ];
     match list {
         // Untracked files are in neither index lane, so git reports no counts
@@ -23,7 +26,7 @@ fn sorts_for(list: crate::view::rows::FileListId) -> &'static [crate::view::rows
         crate::view::rows::FileListId::Status(section)
             if !crate::view::status_section_has_line_stats(section) =>
         {
-            &PATH_ONLY
+            &WITHOUT_EDIT_SIZE
         }
         _ => &CommitFileSort::ALL,
     }
@@ -130,9 +133,10 @@ mod tests {
     }
 
     /// Untracked files are in neither index lane, so git reports no counts for
-    /// them — an edit-size mode there would silently sort by path instead.
+    /// them — an edit-size mode there would silently sort by path instead. File
+    /// type reads off the path, so it survives the trim.
     #[test]
-    fn only_the_untracked_section_is_limited_to_path_sorts() {
+    fn the_untracked_section_drops_only_the_edit_size_sorts() {
         use crate::view::StatusSection;
         use crate::view::rows::{CommitFileSort, FileListId};
 
@@ -141,6 +145,8 @@ mod tests {
             vec![
                 CommitFileSort::PathAscending.label().to_string(),
                 CommitFileSort::PathDescending.label().to_string(),
+                CommitFileSort::FileTypeAscending.label().to_string(),
+                CommitFileSort::FileTypeDescending.label().to_string(),
             ]
         );
 

@@ -1093,7 +1093,6 @@ impl DetailsPaneView {
                             .get(*source_ix)
                             .map(|file| crate::view::rows::FileTreeItem {
                                 path: file.path.as_path(),
-                                kind: Some(file.kind),
                                 additions: file.additions,
                                 deletions: file.deletions,
                             })
@@ -1181,7 +1180,6 @@ impl DetailsPaneView {
                             .get(*source_ix)
                             .map(|file| crate::view::rows::FileTreeItem {
                                 path: file.path.as_path(),
-                                kind: Some(file.kind),
                                 additions: file.additions,
                                 deletions: file.deletions,
                             })
@@ -1883,7 +1881,6 @@ impl DetailsPaneView {
                                 .unwrap_or_default();
                             crate::view::rows::FileTreeItem {
                                 path: entry.path.as_path(),
-                                kind: Some(entry.kind),
                                 additions: stats.additions,
                                 deletions: stats.deletions,
                             }

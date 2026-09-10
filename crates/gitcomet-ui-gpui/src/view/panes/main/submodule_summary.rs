@@ -715,21 +715,12 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let submodule_repo_path = Arc::clone(submodule_repo_path);
-        let change_row_icon = |kind: FileStatusKind| match kind {
-            FileStatusKind::Untracked | FileStatusKind::Added => {
-                ("icons/plus.svg", theme.colors.status.success.foreground)
-            }
-            FileStatusKind::Modified => {
-                ("icons/pencil.svg", theme.colors.status.warning.foreground)
-            }
-            FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.status.danger.foreground),
-            FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent.foreground),
-            FileStatusKind::Conflicted => {
-                ("icons/warning.svg", theme.colors.status.danger.foreground)
-            }
-        };
-
-        let (icon, icon_color) = change_row_icon(change.kind);
+        let (icon, icon_color) = crate::view::rows::file_row_icon(&change.path, change.kind, &theme);
+        // The change kind rides the row wash and a badge on the icon's corner.
+        let tint = crate::view::rows::file_kind_row_tint(change.kind, &theme);
+        let badge = crate::view::rows::file_row_kind_badge(change.kind, &theme);
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+        let row_group: SharedString = format!("submodule_change_row_{row_ix}").into();
         let additions = change
             .additions
             .map(|value| format!("+{value}"))
@@ -752,14 +743,39 @@ impl MainPaneView {
         let mut row = div()
             .id(("submodule_change", row_ix))
             .debug_selector(move || format!("submodule_change_{row_ix}"))
+            // Only so the badge disc can follow the row's hover fill.
+            .group(row_group.clone())
             .h(crate::ui_scale::UiScale::current(cx).px(28.0))
             .px_2()
             .py_1()
             .rounded(px(theme.radii.row))
+            .when_some(tint, |row, tint| {
+                row.bg(crate::view::rows::tinted_row_bg(
+                    theme.colors.surface.canvas,
+                    Some(tint),
+                ))
+            })
             .flex()
             .items_center()
             .gap_2()
-            .child(crate::view::icons::svg_icon(icon, icon_color, px(12.0)))
+            .child(crate::view::rows::file_row_icon_slot(
+                icon,
+                icon_color,
+                badge,
+                crate::view::rows::FileRowBadgeDisc {
+                    resting: crate::view::rows::tinted_row_bg(theme.colors.surface.canvas, tint),
+                    hover: Some((
+                        row_group.clone(),
+                        crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.hover_background,
+                            tint,
+                        ),
+                    )),
+                },
+                12.0,
+                14.0,
+                ui_scale_percent,
+            ))
             .child(
                 div()
                     .flex_1()
@@ -786,7 +802,12 @@ impl MainPaneView {
         if let Some(target) = target {
             row = row
                 .cursor(CursorStyle::PointingHand)
-                .hover(move |row| row.bg(theme.colors.interaction.hover_background))
+                .hover(move |row| {
+                    row.bg(crate::view::rows::tinted_row_bg(
+                        theme.colors.interaction.hover_background,
+                        tint,
+                    ))
+                })
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
                     let selected_ix = inline_selected_ix.unwrap_or(0);
                     this.store.dispatch(Msg::OpenInlineSubmoduleDiff {

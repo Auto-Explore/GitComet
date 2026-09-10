@@ -439,7 +439,6 @@ fn render_status_rows_for_section(
                     collapsed,
                     chain,
                     subtree: _,
-                    counts,
                     additions: subtree_additions,
                     deletions: subtree_deletions,
                 } => {
@@ -449,7 +448,6 @@ fn render_status_rows_for_section(
                         crate::view::rows::directory_row_detail_for_width(
                             detail_width,
                             depth,
-                            counts,
                             subtree_additions.is_some() || subtree_deletions.is_some(),
                             this.ui_scale_percent,
                         );
@@ -470,7 +468,6 @@ fn render_status_rows_for_section(
                             label: &label,
                             depth,
                             collapsed,
-                            counts,
                             additions: subtree_additions,
                             deletions: subtree_deletions,
                             row_height_px: STATUS_ROW_HEIGHT_PX,
@@ -731,23 +728,16 @@ fn status_row(
             }
         };
         ("icons/box.svg", color)
+    } else if entry.kind == FileStatusKind::Untracked && area == DiffArea::Staged {
+        // An untracked path in the staged lane is an anomaly, not a file type
+        // worth naming -- keep flagging it.
+        ("icons/question.svg", theme.colors.status.warning.foreground)
     } else {
-        match entry.kind {
-            FileStatusKind::Untracked => match area {
-                DiffArea::Unstaged => ("icons/plus.svg", theme.colors.status.success.foreground),
-                DiffArea::Staged => ("icons/question.svg", theme.colors.status.warning.foreground),
-            },
-            FileStatusKind::Modified => {
-                ("icons/pencil.svg", theme.colors.status.warning.foreground)
-            }
-            FileStatusKind::Added => ("icons/plus.svg", theme.colors.status.success.foreground),
-            FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.status.danger.foreground),
-            FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent.foreground),
-            FileStatusKind::Conflicted => {
-                ("icons/warning.svg", theme.colors.status.danger.foreground)
-            }
-        }
+        crate::view::rows::file_row_icon(&entry.path, entry.kind, &theme)
     };
+    // The change kind rides the row wash and a badge on the icon's corner.
+    let tint = crate::view::rows::file_kind_row_tint(entry.kind, &theme);
+    let badge = crate::view::rows::file_row_kind_badge(entry.kind, &theme);
 
     let path = Arc::new(entry.path.clone());
     let path_for_stage = Arc::clone(&path);
@@ -842,6 +832,27 @@ fn status_row(
         })
         .gitcomet_tooltip(theme, stage_tooltip.clone());
 
+    // Mirrors the row's own `.bg()` ladder below, so the badge disc is always
+    // the colour of the row it is punched out of.
+    let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
+    let badge_disc = crate::view::rows::FileRowBadgeDisc {
+        resting: if context_menu_active {
+            tinted(theme.colors.interaction.pressed_background)
+        } else if selected {
+            tinted(theme.colors.interaction.hover_background)
+        } else {
+            tinted(theme.colors.surface.canvas)
+        },
+        hover: Some((
+            row_group.clone(),
+            tinted(if context_menu_active {
+                theme.colors.interaction.pressed_background
+            } else {
+                theme.colors.interaction.hover_background
+            }),
+        )),
+    };
+
     let path_display_for_label = path_display.clone();
 
     div()
@@ -861,8 +872,19 @@ fn status_row(
         .h(scaled_px(STATUS_ROW_HEIGHT_PX))
         .w_full()
         .cursor(CursorStyle::PointingHand)
+        // Resting fill: without a tint the row stays transparent and the panel
+        // shows through, as before.
+        .when_some(tint, |s, tint| {
+            s.bg(crate::view::rows::tinted_row_bg(
+                theme.colors.surface.canvas,
+                Some(tint),
+            ))
+        })
         .when(selected, |s| {
-            s.bg(theme.colors.interaction.hover_background)
+            s.bg(crate::view::rows::tinted_row_bg(
+                theme.colors.interaction.hover_background,
+                tint,
+            ))
         })
         // Light themes keep selection legible with a ring: `hover_background`
         // alone is barely a shade off the panel it sits on, so a selected row
@@ -874,16 +896,27 @@ fn status_row(
             |s, outline| s.shadow(vec![outline]),
         )
         .when(context_menu_active, |s| {
-            s.bg(theme.colors.interaction.pressed_background)
+            s.bg(crate::view::rows::tinted_row_bg(
+                theme.colors.interaction.pressed_background,
+                tint,
+            ))
         })
         .hover(move |s| {
-            if context_menu_active {
-                s.bg(theme.colors.interaction.pressed_background)
-            } else {
-                s.bg(theme.colors.interaction.hover_background)
-            }
+            s.bg(crate::view::rows::tinted_row_bg(
+                if context_menu_active {
+                    theme.colors.interaction.pressed_background
+                } else {
+                    theme.colors.interaction.hover_background
+                },
+                tint,
+            ))
         })
-        .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+        .active(move |s| {
+            s.bg(crate::view::rows::tinted_row_bg(
+                theme.colors.interaction.pressed_background,
+                tint,
+            ))
+        })
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -908,14 +941,15 @@ fn status_row(
                 cx.notify();
             }),
         )
-        .child(
-            div()
-                .w(scaled_px(16.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(svg_icon(icon, color, scaled_px(14.0))),
-        )
+        .child(crate::view::rows::file_row_icon_slot(
+            icon,
+            color,
+            badge,
+            badge_disc,
+            14.0,
+            16.0,
+            ui_scale.percent(),
+        ))
         .child(
             div()
                 .text_sm()
@@ -1049,6 +1083,45 @@ mod tests {
             None,
         );
         assert_eq!(descending.as_ref(), &[0, 2, 1], "Zoo, Banana, apple");
+    }
+
+    /// The status sections carry their own copy of the comparator, so the
+    /// file-type grouping has to be proved here too, not just on the committed
+    /// list.
+    #[test]
+    fn status_file_type_sort_groups_by_extension() {
+        let entries = vec![
+            file_status("src/view.ts", FileStatusKind::Modified),
+            file_status("Makefile", FileStatusKind::Untracked),
+            file_status("src/main.rs", FileStatusKind::Modified),
+            file_status("Cargo.toml", FileStatusKind::Modified),
+            file_status("src/app.ts", FileStatusKind::Modified),
+        ];
+        let all: Vec<usize> = (0..entries.len()).collect();
+
+        let ascending = crate::view::rows::status_section_sorted_indexes(
+            &entries,
+            &all,
+            crate::view::rows::CommitFileSort::FileTypeAscending,
+            None,
+        );
+        assert_eq!(
+            ascending.as_ref(),
+            &[1, 2, 3, 4, 0],
+            "Makefile (no extension), rs, toml, then ts A-Z",
+        );
+
+        let descending = crate::view::rows::status_section_sorted_indexes(
+            &entries,
+            &all,
+            crate::view::rows::CommitFileSort::FileTypeDescending,
+            None,
+        );
+        assert_eq!(
+            descending.as_ref(),
+            &[4, 0, 3, 2, 1],
+            "groups reverse, paths inside a group stay A-Z",
+        );
     }
 
     /// Status entries have no edit counts, so the edit-size modes have nothing

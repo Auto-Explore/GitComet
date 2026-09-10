@@ -102,6 +102,10 @@ impl PopoverWidthSpec {
 
 const DEFAULT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 180.0, 380.0);
 const NARROW_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 220.0);
+/// The sort menu's labels name both what is ordered and which way ("File type:
+/// Descending"), which is wider than `NARROW` leaves room for -- at 220px the
+/// icon column and padding leave ~150px of ink and the longest label ellipsises.
+const SORT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 220.0, 300.0);
 const REBASE_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(110.0);
 const REBASE_AUTOSQUASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(190.0);
 const CHANGE_TRACKING_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 220.0, 320.0);
@@ -1007,9 +1011,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
+        PopoverKind::CommitFileSortMenu { .. } => Some(SORT_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
-        | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryAuthorFilter { .. } => Some(HISTORY_AUTHOR_FILTER_WIDTH),

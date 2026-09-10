@@ -60,8 +60,6 @@ pub(in crate::view) enum FileListRow {
         chain: DirChain,
         /// Into [`FileListPlan::ordered`]; the subtree's files in tree order.
         subtree: Range<usize>,
-        /// Replaces a bare total, which said how much changed but not what.
-        counts: crate::view::rows::CommitFileKindCounts,
         additions: Option<u64>,
         deletions: Option<u64>,
     },

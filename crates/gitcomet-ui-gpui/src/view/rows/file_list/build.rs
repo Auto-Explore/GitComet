@@ -1,11 +1,9 @@
 use super::*;
-use crate::view::rows::{CommitFileKindCounts, CommitFileSort};
-use gitcomet_core::domain::FileStatusKind;
+use crate::view::rows::CommitFileSort;
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::view) struct FileTreeItem<'a> {
     pub(in crate::view) path: &'a Path,
-    pub(in crate::view) kind: Option<FileStatusKind>,
     pub(in crate::view) additions: Option<u32>,
     pub(in crate::view) deletions: Option<u32>,
 }
@@ -16,7 +14,6 @@ impl<'a> FileTreeItem<'a> {
     pub(in crate::view) fn new(path: &'a Path) -> Self {
         Self {
             path,
-            kind: None,
             additions: None,
             deletions: None,
         }
@@ -62,7 +59,6 @@ impl DirNode {
 pub(in crate::view) struct FileTree {
     nodes: Vec<DirNode>,
     stats: Vec<Option<(u32, u32)>>,
-    kinds: Vec<Option<FileStatusKind>>,
     sort: CommitFileSort,
 }
 
@@ -75,13 +71,11 @@ impl FileTree {
         let mut tree = Self {
             nodes: vec![root],
             stats: Vec::new(),
-            kinds: Vec::new(),
             sort,
         };
 
         for item in items {
             let ordinal = tree.stats.len() as u32;
-            tree.kinds.push(item.kind);
             // Both sides or neither, the way the backend reports counts: half
             // a pair folded into a directory subtotal would state a zero
             // nobody measured.
@@ -172,7 +166,7 @@ impl FileTree {
                         });
                     }
                     out.ordered.push(ordinal as usize);
-                    totals.add_file(self.kinds[ordinal as usize], self.stats[ordinal as usize]);
+                    totals.add_file(self.stats[ordinal as usize]);
                 }
                 TreeEntry::Dir(child) => {
                     let (deepest, chain, label) = self.fold(child as usize);
@@ -189,7 +183,6 @@ impl FileTree {
                             collapsed: is_collapsed,
                             chain: Arc::clone(&chain),
                             subtree: 0..0,
-                            counts: CommitFileKindCounts::default(),
                             additions: None,
                             deletions: None,
                         });
@@ -211,14 +204,12 @@ impl FileTree {
                     if let Some(row_ix) = row_ix
                         && let FileListRow::Directory {
                             subtree,
-                            counts,
                             additions,
                             deletions,
                             ..
                         } = &mut out.rows[row_ix]
                     {
                         *subtree = start..end;
-                        *counts = child.counts;
                         if let Some((a, d)) = child.sums {
                             *additions = Some(a);
                             *deletions = Some(d);
@@ -230,15 +221,17 @@ impl FileTree {
         totals
     }
 
-    /// Directories before files under a path sort, mirrored for Z-A. Edit-size
-    /// sorts interleave instead: grouping directories first would float a folder
-    /// holding a three-line change above a root file with nine hundred.
+    /// Directories before files under a path sort, mirrored for the descending
+    /// one. Edit-size and file-type sorts interleave instead: grouping
+    /// directories first would float a folder holding a three-line change above
+    /// a root file with nine hundred, and would split a type group in two.
     fn emit_order(&self, node_ix: usize) -> Vec<TreeEntry> {
         let entries = &self.nodes[node_ix].entries;
         match self.sort {
-            CommitFileSort::EditSizeAscending | CommitFileSort::EditSizeDescending => {
-                entries.clone()
-            }
+            CommitFileSort::EditSizeAscending
+            | CommitFileSort::EditSizeDescending
+            | CommitFileSort::FileTypeAscending
+            | CommitFileSort::FileTypeDescending => entries.clone(),
             CommitFileSort::PathAscending | CommitFileSort::PathDescending => {
                 let dirs_first = self.sort == CommitFileSort::PathAscending;
                 let is_dir = |entry: &TreeEntry| matches!(entry, TreeEntry::Dir(_));
@@ -267,27 +260,16 @@ impl FileTree {
     }
 }
 
-/// What one subtree contributes to its parent: kind counts and `+/-` sums.
+/// What one subtree contributes to its parent: the `+/-` sums its folder row
+/// shows. Both sides or neither, so a half-known pair never states a zero
+/// nobody measured.
 #[derive(Clone, Copy, Default)]
 struct SubtreeTotals {
-    counts: CommitFileKindCounts,
     sums: Option<(u64, u64)>,
 }
 
 impl SubtreeTotals {
-    fn add_file(&mut self, kind: Option<FileStatusKind>, stats: Option<(u32, u32)>) {
-        self.counts.all += 1;
-        // Buckets match `build_commit_file_projection`, so a badge and the
-        // filter tabs above it cannot disagree.
-        match kind {
-            Some(FileStatusKind::Untracked | FileStatusKind::Added) => self.counts.added += 1,
-            Some(FileStatusKind::Modified | FileStatusKind::Conflicted) => {
-                self.counts.modified += 1
-            }
-            Some(FileStatusKind::Deleted) => self.counts.removed += 1,
-            Some(FileStatusKind::Renamed) => self.counts.renamed += 1,
-            None => {}
-        }
+    fn add_file(&mut self, stats: Option<(u32, u32)>) {
         if let Some((a, d)) = stats {
             let entry = self.sums.get_or_insert((0, 0));
             entry.0 += u64::from(a);
@@ -296,11 +278,6 @@ impl SubtreeTotals {
     }
 
     fn merge(&mut self, child: &Self) {
-        self.counts.all += child.counts.all;
-        self.counts.modified += child.counts.modified;
-        self.counts.added += child.counts.added;
-        self.counts.removed += child.counts.removed;
-        self.counts.renamed += child.counts.renamed;
         if let Some((a, d)) = child.sums {
             let entry = self.sums.get_or_insert((0, 0));
             entry.0 += a;

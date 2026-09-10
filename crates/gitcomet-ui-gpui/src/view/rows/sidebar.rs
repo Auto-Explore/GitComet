@@ -2133,7 +2133,6 @@ impl DetailsPaneView {
                         collapsed,
                         chain,
                         subtree: _,
-                        counts,
                         additions,
                         deletions,
                     } => {
@@ -2146,7 +2145,6 @@ impl DetailsPaneView {
                                     label: &label,
                                     depth,
                                     collapsed,
-                                    counts,
                                     additions,
                                     deletions,
                                     row_height_px: 24.0,
@@ -2155,7 +2153,6 @@ impl DetailsPaneView {
                                         // No width probe on this list.
                                         gpui::Pixels::MAX,
                                         depth,
-                                        counts,
                                         additions.is_some() || deletions.is_some(),
                                         ui_scale_percent,
                                     ),
@@ -2195,8 +2192,14 @@ impl DetailsPaneView {
                     presentation.label.clone()
                 };
                 let commit_id = details.id.clone();
-                let icon = Some(visuals.icon);
-                let color = visuals.color(&theme);
+                let (icon, color) = if f.is_submodule {
+                    (visuals.icon, visuals.color(&theme))
+                } else {
+                    crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
+                };
+                // The change kind rides the row wash and a badge on the icon's corner.
+                let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
+                let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
 
                 let context_menu_active = has_active_menu && {
                     let invoker: SharedString = format!(
@@ -2219,6 +2222,34 @@ impl DetailsPaneView {
                         } => t_commit_id == &commit_id && t_path == &f.path,
                         _ => false,
                     });
+                // Mirrors the row's own `.bg()` ladder, so the badge disc is
+                // always the colour of the row it is punched out of.
+                let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
+                let row_group: SharedString = format!("commit_file_row_{ix}").into();
+                let badge_disc = crate::view::rows::FileRowBadgeDisc {
+                    resting: if context_menu_active {
+                        tinted(theme.colors.interaction.pressed_background)
+                    } else if selected {
+                        crate::view::rows::tinted_row_overlay_bg(
+                            theme.colors.surface.canvas,
+                            with_alpha(
+                                theme.colors.accent.foreground,
+                                if theme.is_dark { 0.16 } else { 0.10 },
+                            ),
+                            tint,
+                        )
+                    } else {
+                        tinted(theme.colors.surface.canvas)
+                    },
+                    hover: Some((
+                        row_group.clone(),
+                        tinted(if context_menu_active {
+                            theme.colors.interaction.pressed_background
+                        } else {
+                            theme.colors.interaction.hover_background
+                        }),
+                    )),
+                };
                 let commit_id_for_click = commit_id.clone();
                 let commit_id_for_menu = commit_id.clone();
                 // One owned copy shared by both handlers instead of one each.
@@ -2228,6 +2259,8 @@ impl DetailsPaneView {
 
                 let mut row = div()
                     .id(("commit_file", ix))
+                    // Only so the badge disc can follow the row's hover fill.
+                    .group(row_group.clone())
                     .debug_selector(move || format!("commit_file_{}_{}", repo_id.0, ix))
                     .h(scaled_px(24.0))
                     .flex()
@@ -2241,24 +2274,37 @@ impl DetailsPaneView {
                     .pr(scaled_px(8.0))
                     .w_full()
                     .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| {
-                        if context_menu_active {
-                            s.bg(theme.colors.interaction.pressed_background)
-                        } else {
-                            s.bg(theme.colors.interaction.hover_background)
-                        }
+                    .when_some(tint, |s, tint| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.surface.canvas,
+                            Some(tint),
+                        ))
                     })
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .child(
-                        div()
-                            .w(scaled_px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when_some(icon, |this, icon| {
-                                this.child(svg_icon(icon, color, scaled_px(14.0)))
-                            }),
-                    )
+                    .hover(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            if context_menu_active {
+                                theme.colors.interaction.pressed_background
+                            } else {
+                                theme.colors.interaction.hover_background
+                            },
+                            tint,
+                        ))
+                    })
+                    .active(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.pressed_background,
+                            tint,
+                        ))
+                    })
+                    .child(crate::view::rows::file_row_icon_slot(
+                        icon,
+                        color,
+                        badge,
+                        badge_disc,
+                        14.0,
+                        16.0,
+                        ui_scale_percent,
+                    ))
                     .child(
                         div()
                             .flex_1()
@@ -2335,13 +2381,20 @@ impl DetailsPaneView {
                 );
 
                 if selected {
-                    row = row.bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.16 } else { 0.10 },
+                    row = row.bg(crate::view::rows::tinted_row_overlay_bg(
+                        theme.colors.surface.canvas,
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.16 } else { 0.10 },
+                        ),
+                        tint,
                     ));
                 }
                 if context_menu_active {
-                    row = row.bg(theme.colors.interaction.pressed_background);
+                    row = row.bg(crate::view::rows::tinted_row_bg(
+                        theme.colors.interaction.pressed_background,
+                        tint,
+                    ));
                 }
 
                 Some(row.into_any_element())
@@ -2428,7 +2481,6 @@ impl DetailsPaneView {
                         collapsed,
                         chain,
                         subtree: _,
-                        counts,
                         additions,
                         deletions,
                     } => {
@@ -2441,7 +2493,6 @@ impl DetailsPaneView {
                                     label: &label,
                                     depth,
                                     collapsed,
-                                    counts,
                                     additions,
                                     deletions,
                                     row_height_px: 24.0,
@@ -2450,7 +2501,6 @@ impl DetailsPaneView {
                                         // No width probe on this list.
                                         gpui::Pixels::MAX,
                                         depth,
-                                        counts,
                                         additions.is_some() || deletions.is_some(),
                                         ui_scale_percent,
                                     ),
@@ -2493,7 +2543,14 @@ impl DetailsPaneView {
                 } else {
                     presentation.label.clone()
                 };
-                let color = visuals.color(&theme);
+                let (icon, color) = if f.is_submodule {
+                    (visuals.icon, visuals.color(&theme))
+                } else {
+                    crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
+                };
+                // The change kind rides the row wash and a badge on the icon's corner.
+                let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
+                let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
                 let selected = selected_ix_now == Some(source_ix);
                 let tooltip = path_label.clone();
                 let ix_for_click = source_ix;
@@ -2501,8 +2558,31 @@ impl DetailsPaneView {
                 let worktree_path_for_click = worktree_path.clone();
                 let origin_for_click = origin.clone();
 
+                let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
+                let row_group: SharedString = format!("worktree_file_row_{ix}").into();
+                let badge_disc = crate::view::rows::FileRowBadgeDisc {
+                    resting: if selected {
+                        crate::view::rows::tinted_row_overlay_bg(
+                            theme.colors.surface.canvas,
+                            with_alpha(
+                                theme.colors.accent.foreground,
+                                if theme.is_dark { 0.16 } else { 0.10 },
+                            ),
+                            tint,
+                        )
+                    } else {
+                        tinted(theme.colors.surface.canvas)
+                    },
+                    hover: Some((
+                        row_group.clone(),
+                        tinted(theme.colors.interaction.hover_background),
+                    )),
+                };
+
                 let mut row = div()
                     .id(("worktree_file", ix))
+                    // Only so the badge disc can follow the row's hover fill.
+                    .group(row_group.clone())
                     .debug_selector(move || format!("worktree_file_{}_{}", repo_id.0, ix))
                     .h(scaled_px(24.0))
                     .flex()
@@ -2516,16 +2596,33 @@ impl DetailsPaneView {
                     .pr(scaled_px(8.0))
                     .w_full()
                     .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .child(
-                        div()
-                            .w(scaled_px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(svg_icon(visuals.icon, color, scaled_px(14.0))),
-                    )
+                    .when_some(tint, |s, tint| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.surface.canvas,
+                            Some(tint),
+                        ))
+                    })
+                    .hover(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.hover_background,
+                            tint,
+                        ))
+                    })
+                    .active(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.pressed_background,
+                            tint,
+                        ))
+                    })
+                    .child(crate::view::rows::file_row_icon_slot(
+                        icon,
+                        color,
+                        badge,
+                        badge_disc,
+                        14.0,
+                        16.0,
+                        ui_scale_percent,
+                    ))
                     .child(
                         div()
                             .flex_1()
@@ -2563,9 +2660,13 @@ impl DetailsPaneView {
                     .gitcomet_tooltip(theme, tooltip.clone());
 
                 if selected {
-                    row = row.bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.16 } else { 0.10 },
+                    row = row.bg(crate::view::rows::tinted_row_overlay_bg(
+                        theme.colors.surface.canvas,
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.16 } else { 0.10 },
+                        ),
+                        tint,
                     ));
                 }
 
@@ -2632,7 +2733,6 @@ impl DetailsPaneView {
                         collapsed,
                         chain,
                         subtree: _,
-                        counts,
                         additions,
                         deletions,
                     } => {
@@ -2645,7 +2745,6 @@ impl DetailsPaneView {
                                     label: &label,
                                     depth,
                                     collapsed,
-                                    counts,
                                     additions,
                                     deletions,
                                     row_height_px: 24.0,
@@ -2654,7 +2753,6 @@ impl DetailsPaneView {
                                         // No width probe on this list.
                                         gpui::Pixels::MAX,
                                         depth,
-                                        counts,
                                         additions.is_some() || deletions.is_some(),
                                         ui_scale_percent,
                                     ),
@@ -2692,8 +2790,14 @@ impl DetailsPaneView {
                 } else {
                     presentation.label.clone()
                 };
-                let icon = Some(visuals.icon);
-                let color = visuals.color(&theme);
+                let (icon, color) = if f.is_submodule {
+                    (visuals.icon, visuals.color(&theme))
+                } else {
+                    crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
+                };
+                // The change kind rides the row wash and a badge on the icon's corner.
+                let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
+                let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
                 let target = DiffTarget::CommitRange {
                     from_commit_id: from.clone(),
                     to_commit_id: to.clone(),
@@ -2703,8 +2807,31 @@ impl DetailsPaneView {
                 let target_for_click = target.clone();
                 let tooltip = path_label.clone();
 
+                let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
+                let row_group: SharedString = format!("range_file_row_{ix}").into();
+                let badge_disc = crate::view::rows::FileRowBadgeDisc {
+                    resting: if selected {
+                        crate::view::rows::tinted_row_overlay_bg(
+                            theme.colors.surface.canvas,
+                            with_alpha(
+                                theme.colors.accent.foreground,
+                                if theme.is_dark { 0.16 } else { 0.10 },
+                            ),
+                            tint,
+                        )
+                    } else {
+                        tinted(theme.colors.surface.canvas)
+                    },
+                    hover: Some((
+                        row_group.clone(),
+                        tinted(theme.colors.interaction.hover_background),
+                    )),
+                };
+
                 let mut row = div()
                     .id(("range_file", ix))
+                    // Only so the badge disc can follow the row's hover fill.
+                    .group(row_group.clone())
                     .debug_selector(move || format!("range_file_{}_{}", repo_id.0, ix))
                     .h(scaled_px(24.0))
                     .flex()
@@ -2718,18 +2845,33 @@ impl DetailsPaneView {
                     .pr(scaled_px(8.0))
                     .w_full()
                     .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .child(
-                        div()
-                            .w(scaled_px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when_some(icon, |this, icon| {
-                                this.child(svg_icon(icon, color, scaled_px(14.0)))
-                            }),
-                    )
+                    .when_some(tint, |s, tint| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.surface.canvas,
+                            Some(tint),
+                        ))
+                    })
+                    .hover(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.hover_background,
+                            tint,
+                        ))
+                    })
+                    .active(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.pressed_background,
+                            tint,
+                        ))
+                    })
+                    .child(crate::view::rows::file_row_icon_slot(
+                        icon,
+                        color,
+                        badge,
+                        badge_disc,
+                        14.0,
+                        16.0,
+                        ui_scale_percent,
+                    ))
                     .child(
                         div()
                             .flex_1()
@@ -2779,9 +2921,13 @@ impl DetailsPaneView {
                     .gitcomet_tooltip(theme, tooltip.clone());
 
                 if selected {
-                    row = row.bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.16 } else { 0.10 },
+                    row = row.bg(crate::view::rows::tinted_row_overlay_bg(
+                        theme.colors.surface.canvas,
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.16 } else { 0.10 },
+                        ),
+                        tint,
                     ));
                 }
 

@@ -297,7 +297,7 @@ use tooltip_host::TooltipHost;
 
 #[cfg(test)]
 pub(crate) use chrome::window_frame;
-use color::with_alpha;
+use color::{composite_over, with_alpha};
 use icons::{svg_icon, svg_spinner};
 
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;
