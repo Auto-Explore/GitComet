@@ -122,7 +122,7 @@ pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(ui_scale_percent: u3
 /// The previous shape tokenized the entire document and handed the result to
 /// `set_highlights` on every keystroke, which is the one thing this arm — the
 /// arm reached by the *largest* buffers — could least afford.
-pub(super) fn resolved_output_heuristic_highlights_for_range(
+pub(in crate::view) fn resolved_output_heuristic_highlights_for_range(
     theme: AppTheme,
     output_text: &Rope,
     language: rows::DiffSyntaxLanguage,
@@ -3404,7 +3404,17 @@ pub(crate) struct MainPaneView {
     pub(super) _file_editor_input_subscription: gpui::Subscription,
     /// Which repo/path the input currently holds, so a target change is one
     /// comparison rather than a reload every frame.
-    pub(in crate::view) file_editor_key: Option<(RepoId, std::path::PathBuf)>,
+    pub(in crate::view) file_editor_key: Option<gitcomet_core::filesystem::DocumentIdentity>,
+    pub(crate) filesystem_pauses:
+        std::collections::BTreeSet<gitcomet_core::filesystem::OperationId>,
+    pub(in crate::view) file_editor_disk_versions: FxHashMap<
+        gitcomet_core::filesystem::DocumentIdentity,
+        gitcomet_core::filesystem::DiskVersion,
+    >,
+    pub(in crate::view) file_editor_saves: std::collections::BTreeMap<
+        gitcomet_core::filesystem::OperationId,
+        (gitcomet_core::filesystem::DocumentIdentity, u64),
+    >,
     pub(in crate::view) file_editor_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_editor_loading: bool,
     /// Repo status revision the buffer was last read at. A clean buffer re-reads
@@ -3432,7 +3442,7 @@ pub(crate) struct MainPaneView {
     /// Keyed by repo *and* path: two repo tabs can hold the same relative path,
     /// and one must not restore over the other's buffer.
     pub(in crate::view) file_editor_stash:
-        FxHashMap<(RepoId, std::path::PathBuf), super::file_editor::StashedFileEdit>,
+        FxHashMap<gitcomet_core::filesystem::DocumentIdentity, super::file_editor::StashedFileEdit>,
     /// Bumped whenever the set of files with unsaved edits changes.
     ///
     /// That set lives here rather than in the store, so nothing outside this

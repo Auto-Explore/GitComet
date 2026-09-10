@@ -46,6 +46,7 @@ enum ClipboardBackend {
 }
 
 pub(crate) fn write_text<T: 'static>(cx: &mut gpui::Context<T>, text: String, source: CopySource) {
+    FILE_CLIPBOARD.with(|owned| owned.borrow_mut().take());
     let backend = clipboard_backend();
     write_copy_diagnostic(source, text.len(), backend);
 
@@ -55,6 +56,242 @@ pub(crate) fn write_text<T: 'static>(cx: &mut gpui::Context<T>, text: String, so
         }
         ClipboardBackend::X11 => write_text_to_x11(&text),
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FilePayload {
+    pub paths: Vec<std::path::PathBuf>,
+    pub intent: gitcomet_core::filesystem::TransferIntent,
+    pub ownership: u64,
+}
+
+thread_local! {
+    static FILE_CLIPBOARD: std::cell::RefCell<Option<(FilePayload, gpui::ClipboardItem)>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn write_files<T: 'static>(
+    cx: &mut gpui::Context<T>,
+    paths: Vec<std::path::PathBuf>,
+    intent: gitcomet_core::filesystem::TransferIntent,
+) {
+    write_files_owned(
+        cx,
+        paths,
+        intent,
+        gitcomet_core::filesystem::OperationId::allocate().0,
+    );
+}
+
+pub(crate) fn write_files_owned<T: 'static>(
+    cx: &mut gpui::Context<T>,
+    paths: Vec<std::path::PathBuf>,
+    intent: gitcomet_core::filesystem::TransferIntent,
+    ownership: u64,
+) {
+    let files = gpui::FileTransfer {
+        paths: gpui::ExternalPaths(paths.iter().cloned().collect()),
+        operation: if intent == gitcomet_core::filesystem::TransferIntent::Move {
+            gpui::FileTransferOperation::Move
+        } else {
+            gpui::FileTransferOperation::Copy
+        },
+        ownership,
+    };
+    let item = gpui::ClipboardItem {
+        entries: vec![gpui::ClipboardEntry::Files(files.clone())],
+    };
+    #[cfg(all(target_os = "linux", not(test)))]
+    if clipboard_backend() == ClipboardBackend::X11 {
+        if let Err(error) = gpui_platform::write_files_to_x11_clipboard(&files) {
+            eprintln!("Could not copy files: {error}");
+            return;
+        }
+    } else {
+        cx.write_to_clipboard(item.clone());
+    }
+    #[cfg(not(all(target_os = "linux", not(test))))]
+    cx.write_to_clipboard(item.clone());
+    FILE_CLIPBOARD.with(|owned| {
+        *owned.borrow_mut() = Some((
+            FilePayload {
+                paths,
+                intent,
+                ownership,
+            },
+            item,
+        ))
+    });
+    cx.refresh_windows();
+    if intent == gitcomet_core::filesystem::TransferIntent::Move
+        && crate::ui_runtime::current().uses_cursor_blink()
+    {
+        cx.spawn(async move |view, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(300))
+                    .await;
+                let active = view
+                    .update(cx, |_, cx| {
+                        let still_owned = read_files(cx).is_some_and(|p| p.ownership == ownership)
+                            || cx.file_transfer_is_active(ownership);
+                        cx.refresh_windows();
+                        still_owned
+                    })
+                    .unwrap_or(false);
+                if !active {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+}
+
+pub(crate) fn read_files<T: 'static>(cx: &gpui::Context<T>) -> Option<FilePayload> {
+    #[cfg(all(target_os = "linux", not(test)))]
+    let item = if clipboard_backend() == ClipboardBackend::X11 {
+        gpui_platform::read_files_from_x11_clipboard().map(|files| gpui::ClipboardItem {
+            entries: vec![gpui::ClipboardEntry::Files(files)],
+        })
+    } else {
+        cx.read_from_clipboard()
+    };
+    #[cfg(not(all(target_os = "linux", not(test))))]
+    let item = cx.read_from_clipboard();
+    FILE_CLIPBOARD.with(|owned| {
+        let mut owned = owned.borrow_mut();
+        if let Some((payload, written)) = owned.as_ref()
+            && item.as_ref() == Some(written)
+        {
+            return Some(payload.clone());
+        }
+        owned.take();
+        let item = item?;
+        let files = item.file_transfer()?;
+        Some(FilePayload {
+            paths: files.paths.paths().to_vec(),
+            intent: if files.operation == gpui::FileTransferOperation::Move {
+                gitcomet_core::filesystem::TransferIntent::Move
+            } else {
+                gitcomet_core::filesystem::TransferIntent::Copy
+            },
+            ownership: files.ownership,
+        })
+    })
+}
+
+/// Keeps the native owner alive across a paste and its conflict continuations.
+pub(crate) struct PasteReceipt {
+    native: Option<gpui::FilePaste>,
+    payload: FilePayload,
+    remaining: Vec<std::path::PathBuf>,
+    intent: gitcomet_core::filesystem::TransferIntent,
+}
+impl PasteReceipt {
+    pub(crate) fn from_drop(
+        paths: Vec<std::path::PathBuf>,
+        transfer: gpui::FileDropTransfer,
+        intent: gitcomet_core::filesystem::TransferIntent,
+    ) -> Self {
+        Self {
+            native: Some(transfer.completion),
+            remaining: paths.clone(),
+            payload: FilePayload {
+                paths,
+                intent,
+                ownership: 0,
+            },
+            intent,
+        }
+    }
+    pub(crate) fn completed(&mut self, paths: &[std::path::PathBuf]) {
+        self.remaining
+            .retain(|path| !paths.iter().any(|completed| path.starts_with(completed)));
+    }
+    pub(crate) fn finish<T: 'static>(self, cx: &mut gpui::Context<T>) {
+        let complete = self.remaining.is_empty();
+        let operation = complete.then_some(
+            if self.intent == gitcomet_core::filesystem::TransferIntent::Move {
+                gpui::FileTransferOperation::Move
+            } else {
+                gpui::FileTransferOperation::Copy
+            },
+        );
+        if let Some(native) = self.native {
+            native.complete(operation);
+        } else if complete
+            && self.intent == gitcomet_core::filesystem::TransferIntent::Move
+            && read_files(cx).as_ref() == Some(&self.payload)
+        {
+            write_text(cx, String::new(), CopySource::ContextMenu);
+        }
+    }
+}
+
+pub(crate) fn capture_paste<T: 'static>(
+    cx: &gpui::Context<T>,
+    paths: &[std::path::PathBuf],
+    intent: gitcomet_core::filesystem::TransferIntent,
+) -> Option<PasteReceipt> {
+    let payload = read_files(cx)?;
+    if payload.paths != paths {
+        return None;
+    }
+    let files = gpui::FileTransfer {
+        paths: gpui::ExternalPaths(payload.paths.iter().cloned().collect()),
+        operation: if payload.intent == gitcomet_core::filesystem::TransferIntent::Move {
+            gpui::FileTransferOperation::Move
+        } else {
+            gpui::FileTransferOperation::Copy
+        },
+        ownership: payload.ownership,
+    };
+    let native = cx.capture_file_paste(&files);
+    Some(PasteReceipt {
+        remaining: payload.paths.clone(),
+        native,
+        payload,
+        intent,
+    })
+}
+
+pub(crate) fn cancel_cut<T: 'static>(cx: &mut gpui::Context<T>) {
+    let current = read_files(cx);
+    if let Some(payload) = current
+        && payload.intent == gitcomet_core::filesystem::TransferIntent::Move
+        && payload.ownership != 0
+    {
+        write_files(
+            cx,
+            payload.paths,
+            gitcomet_core::filesystem::TransferIntent::Copy,
+        );
+    }
+}
+
+pub(crate) fn complete_file_move<T: 'static>(
+    cx: &mut gpui::Context<T>,
+    ownership: u64,
+    completed: &[std::path::PathBuf],
+) {
+    let Some(mut current) = read_files(cx).filter(|p| p.ownership == ownership && ownership != 0)
+    else {
+        return;
+    };
+    current
+        .paths
+        .retain(|path| !completed.iter().any(|done| path.starts_with(done)));
+    if current.paths.is_empty() {
+        FILE_CLIPBOARD.with(|owned| owned.borrow_mut().take());
+        write_text(cx, String::new(), CopySource::ContextMenu);
+    } else {
+        write_files_owned(cx, current.paths, current.intent, ownership);
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn snapshot<T: 'static>(cx: &gpui::Context<T>) -> Option<gpui::ClipboardItem> {
+    cx.read_from_clipboard()
 }
 
 pub(crate) fn read_text<T: 'static>(cx: &gpui::Context<T>) -> Option<String> {

@@ -302,6 +302,7 @@ pub(in super::super) struct PopoverHost {
     /// mid-edit cannot change the offered scopes under the user.
     gitignore_suggestions: Option<gitcomet_core::gitignore::GitignoreSuggestions>,
     /// The paths the dialog is about, for the "Ignore <file>" body text.
+    gitignore_explorer: bool,
     gitignore_paths: Vec<std::path::PathBuf>,
     squash_message_input: Entity<components::TextInput>,
     squash_description_input: Entity<components::TextInput>,

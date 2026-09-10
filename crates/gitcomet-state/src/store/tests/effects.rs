@@ -1767,6 +1767,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
     let _ = std::fs::create_dir_all(&base);
 
     let rel = PathBuf::from("dir/out.txt");
+    std::fs::create_dir(base.join("dir")).unwrap();
     let contents = "hello\nworld\n";
 
     let repo_id = RepoId(1);
@@ -1796,6 +1797,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         Effect::SaveWorktreeFile {
             repo_id,
             path: rel.clone(),
+            expected_contents: None,
             contents: contents.to_string(),
             stage: true,
         },
@@ -1854,6 +1856,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         Effect::SaveWorktreeFile {
             repo_id,
             path: escaped_path,
+            expected_contents: None,
             contents: "escape".to_string(),
             stage: false,
         },
@@ -5657,6 +5660,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::SaveWorktreeFile {
                 repo_id,
                 path: PathBuf::from("nested/new.txt"),
+                expected_contents: None,
                 contents: "content".to_string(),
                 stage: true,
             },

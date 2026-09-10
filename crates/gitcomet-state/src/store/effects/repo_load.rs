@@ -1340,15 +1340,19 @@ pub(super) fn schedule_load_submodules(
     );
 }
 
+pub(in crate::store::effects) mod explorer_listing;
+
 pub(super) fn schedule_load_file_browser(
     executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     source: gitcomet_core::domain::FileSource,
-    _cancellation: CancellationToken,
+    cancellation: CancellationToken,
+    options: explorer_listing::Options,
 ) {
     let source_for_err = source.clone();
+    let cancellation_for_err = cancellation.clone();
     spawn_with_repo_or_else(
         executor,
         repos,
@@ -1356,7 +1360,16 @@ pub(super) fn schedule_load_file_browser(
         msg_tx,
         move |repo, msg_tx| {
             let result = match &source {
-                gitcomet_core::domain::FileSource::WorkingDirectory => repo.list_worktree_files(),
+                gitcomet_core::domain::FileSource::WorkingDirectory => {
+                    repo.list_worktree_files().and_then(|entries| {
+                        explorer_listing::augment(
+                            &repo.spec().workdir,
+                            entries,
+                            options,
+                            &cancellation,
+                        )
+                    })
+                }
                 gitcomet_core::domain::FileSource::Commit(commit_id) => {
                     repo.list_tree_files_at_commit(commit_id)
                 }
@@ -1369,6 +1382,7 @@ pub(super) fn schedule_load_file_browser(
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                    cancellation: Some(cancellation),
                     repo_id,
                     source,
                     result,
@@ -1379,6 +1393,7 @@ pub(super) fn schedule_load_file_browser(
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                    cancellation: Some(cancellation_for_err),
                     repo_id,
                     source: source_for_err,
                     result: Err(missing_repo_error(repo_id)),

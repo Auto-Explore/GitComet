@@ -39,6 +39,11 @@ pub(in crate::view) enum AddRepoMenuAction {
 
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    Explorer {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        action: panes::ExplorerAction,
+    },
     AppMenu(AppMenuAction),
     AddRepoMenu(AddRepoMenuAction),
     SelectDiff {
@@ -296,6 +301,10 @@ pub(in crate::view) enum ContextMenuAction {
     DiscardWorktreeChangesSelectionOrPath {
         repo_id: RepoId,
         area: DiffArea,
+        path: std::path::PathBuf,
+    },
+    AddExplorerToGitignore {
+        repo_id: RepoId,
         path: std::path::PathBuf,
     },
     AddToGitignoreSelectionOrPath {

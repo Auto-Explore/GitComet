@@ -20,6 +20,8 @@ use crate::kit::TextInput;
 use crate::kit::TextInputOptions;
 use crate::view::components::InteractiveRowExt as _;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+pub(in crate::view) mod explorer_operations;
+pub(in crate::view) use explorer_operations::ExplorerAction;
 
 type FileBrowserRowsCache = std::cell::RefCell<
     Option<(
@@ -40,11 +42,18 @@ type FileBrowserRowsCache = std::cell::RefCell<
 /// its folder has neither.
 #[derive(Clone, Debug)]
 enum FileBrowserVisibleRow {
+    NameEntry {
+        depth: usize,
+    },
     /// Header of the unsaved-edits section. Click toggles the section.
-    UnsavedHeader { count: usize },
+    UnsavedHeader {
+        count: usize,
+    },
     /// A file with an unsaved editor buffer, shown by its full repo-relative
     /// path since it is out of its folder here.
-    UnsavedFile { path: Arc<PathBuf> },
+    UnsavedFile {
+        path: Arc<PathBuf>,
+    },
     Entry {
         entry_index: usize,
         depth: usize,
@@ -272,6 +281,12 @@ impl CollapsedSidebarSection {
 }
 
 pub(in super::super) struct SidebarPaneView {
+    explorer_focus: gpui::FocusHandle,
+    explorer_name_input: Entity<TextInput>,
+    explorer_name_edit: Option<explorer_operations::NameEdit>,
+    explorer_drop_target: Option<PathBuf>,
+    explorer_hover_task: Option<gpui::Task<()>>,
+    explorer_scroll_task: Option<gpui::Task<()>>,
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
@@ -594,6 +609,20 @@ impl SidebarPaneView {
             });
 
         let mut this = Self {
+            explorer_focus: cx.focus_handle(),
+            explorer_name_input: cx.new(|cx| {
+                TextInput::new_inert(
+                    TextInputOptions {
+                        placeholder: "Name".into(),
+                        ..Default::default()
+                    },
+                    cx,
+                )
+            }),
+            explorer_name_edit: None,
+            explorer_drop_target: None,
+            explorer_hover_task: None,
+            explorer_scroll_task: None,
             store,
             state,
             theme,
@@ -2409,7 +2438,45 @@ impl SidebarPaneView {
         let browsing_commit = self
             .active_repo()
             .is_some_and(|r| r.browsing_commit().is_some());
+        let toggles = self.active_repo().map(|repo| {
+            (
+                repo.id,
+                repo.file_browser.show_hidden,
+                repo.file_browser.show_ignored,
+            )
+        });
         div()
+            .id("explorer_focus_scope")
+            .track_focus(&self.explorer_focus)
+            .capture_key_down(cx.listener(Self::explorer_key_down))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    if let Some(repo_id) = this.active_repo_id() {
+                        window.focus(&this.explorer_focus, cx);
+                        this.open_popover_at(
+                            PopoverKind::FileBrowserFolderMenu {
+                                repo_id,
+                                path: PathBuf::new(),
+                            },
+                            event.position,
+                            window,
+                            cx,
+                        );
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .on_drop(
+                cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                    this.explorer_drop(paths.paths().to_vec(), None, true, window, cx)
+                }),
+            )
+            .on_drop(cx.listener(
+                |this, drag: &explorer_operations::ExplorerDrag, window, cx| {
+                    this.explorer_drop(drag.paths.clone(), None, false, window, cx)
+                },
+            ))
             .relative()
             .flex()
             .flex_col()
@@ -2426,6 +2493,36 @@ impl SidebarPaneView {
                 ))
             })
             .child(search_bar)
+            .when_some(toggles, |d, (repo_id, hidden, ignored)| {
+                d.child(
+                    div()
+                        .flex()
+                        .px_2()
+                        .gap_2()
+                        .child(
+                            components::Button::new("explorer_hidden", "Hidden")
+                                .selected(hidden)
+                                .on_click(theme, cx, move |this, _, _, _| {
+                                    this.store.dispatch(Msg::SetExplorerVisibility {
+                                        repo_id,
+                                        hidden: !hidden,
+                                        ignored,
+                                    });
+                                }),
+                        )
+                        .child(
+                            components::Button::new("explorer_ignored", "Ignored")
+                                .selected(ignored)
+                                .on_click(theme, cx, move |this, _, _, _| {
+                                    this.store.dispatch(Msg::SetExplorerVisibility {
+                                        repo_id,
+                                        hidden,
+                                        ignored: !ignored,
+                                    });
+                                }),
+                        ),
+                )
+            })
             .child(body)
             .into_any()
     }
@@ -2436,6 +2533,39 @@ impl SidebarPaneView {
         let Some(repo) = self.active_repo() else {
             return Rc::from(Vec::new());
         };
+        if let Some(edit) = &self.explorer_name_edit
+            && edit.repo_id == repo.id
+        {
+            let mut rows =
+                self.compute_file_browser_visible_rows(repo, self.unsaved_file_edit_paths(cx));
+            let relative = edit
+                .path
+                .strip_prefix(&repo.spec.workdir)
+                .unwrap_or(&edit.path);
+            let ix = if let Loadable::Ready(entries) = &repo.file_browser.entries {
+                rows.iter().position(|row| {
+                    row.entry_index()
+                        .is_some_and(|ix| entries[ix].path.as_path() == relative)
+                })
+            } else {
+                None
+            };
+            if edit.action == explorer_operations::ExplorerAction::Rename {
+                if let Some(ix) = ix {
+                    rows[ix] = FileBrowserVisibleRow::NameEntry {
+                        depth: relative.components().count().saturating_sub(1),
+                    };
+                }
+            } else {
+                rows.insert(
+                    ix.map_or(0, |i| i + 1),
+                    FileBrowserVisibleRow::NameEntry {
+                        depth: relative.components().count(),
+                    },
+                );
+            }
+            return rows.into();
+        }
 
         // Key on the repo id too: file_browser_rev is a per-repo counter, so two
         // repos can share a value and collide otherwise (stale rows for the wrong
@@ -2576,6 +2706,23 @@ impl SidebarPaneView {
         };
 
         let mut rows = self.unsaved_file_edit_rows(unsaved);
+        tree_rows.retain(|row| {
+            row.entry_index().is_none_or(|ix| {
+                let path = &entries[ix].path;
+                !path
+                    .components()
+                    .any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))
+                    && (repo.file_browser.show_hidden
+                        || repo
+                            .file_browser
+                            .revealed_paths
+                            .iter()
+                            .any(|revealed| revealed.starts_with(path.as_ref()))
+                        || !path
+                            .components()
+                            .any(|c| c.as_os_str().as_encoded_bytes().starts_with(b".")))
+            })
+        });
         rows.append(&mut tree_rows);
         rows
     }
@@ -2684,6 +2831,7 @@ impl SidebarPaneView {
             .unwrap_or_default();
 
         let visible_rows = this.file_browser_visible_rows(cx);
+        let file_clipboard = crate::clipboard::read_files(cx);
         let repo = this.active_repo();
         // The file the main pane is showing, so the tree can mark it. Read
         // whatever the target names — a diff of a file is still "this file is
@@ -2766,6 +2914,15 @@ impl SidebarPaneView {
                 let (entry_index, depth, is_directory, is_expanded) = match row {
                     // The pinned section shares the list with the tree but not
                     // its shape, so both rows are built here and return early.
+                    FileBrowserVisibleRow::NameEntry { depth } => {
+                        return this.explorer_name_entry(cx).map(|entry| {
+                            div()
+                                .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
+                                .pl(scaled_px(6.0 + INDENT_STEP_PX * *depth as f32))
+                                .child(entry)
+                                .into_any_element()
+                        });
+                    }
                     FileBrowserVisibleRow::UnsavedHeader { count } => {
                         return Some(
                             div()
@@ -2849,14 +3006,61 @@ impl SidebarPaneView {
                         && open_path
                             .as_ref()
                             .is_some_and(|open| open.as_path() == entry.path.as_path());
-                    let row_text_color = file_browser_row_label_color(theme, is_open_file);
+                    let selected = repo.is_some_and(|r| {
+                        r.file_browser.selection.paths.contains(entry.path.as_ref())
+                    });
+                    let focused = repo.is_some_and(|r| {
+                        r.file_browser.selection.focused.as_ref() == Some(entry.path.as_ref())
+                    });
+                    let cut = file_clipboard.as_ref().is_some_and(|payload| {
+                        payload.intent == gitcomet_core::filesystem::TransferIntent::Move
+                            && repo.is_some_and(|r| {
+                                payload.paths.iter().any(|p| {
+                                    r.spec.workdir.join(entry.path.as_ref()).starts_with(p)
+                                })
+                            })
+                    });
+                    let row_text_color = if cut && !selected {
+                        theme.colors.foreground.disabled
+                    } else {
+                        file_browser_row_label_color(theme, selected || is_open_file)
+                    };
                     // The pen marks the file wherever it sits in the tree, so a user
                     // who navigated to it rather than to the pinned section still
                     // sees that it is holding unsaved text.
                     let has_unsaved_edits =
                         !is_directory && unsaved_paths.contains(entry.path.as_ref());
+                    let status = repo
+                        .filter(|r| {
+                            r.file_browser.source
+                                == gitcomet_core::domain::FileSource::WorkingDirectory
+                        })
+                        .and_then(|r| {
+                            [DiffArea::Unstaged, DiffArea::Staged]
+                                .into_iter()
+                                .find_map(|area| {
+                                    r.status_entries_for_area(area)
+                                        .unwrap_or(&[])
+                                        .iter()
+                                        .find(|status| {
+                                            if is_directory {
+                                                status.path.starts_with(entry.path.as_path())
+                                            } else {
+                                                status.path == *entry.path
+                                            }
+                                        })
+                                        .map(|status| status.kind)
+                                })
+                        });
                     let row_state = components::InteractiveRowState::default()
-                        .selected(is_open_file, open_row_bg)
+                        .selected(
+                            selected
+                                || (is_open_file
+                                    && repo.is_some_and(|r| {
+                                        r.file_browser.selection.paths.is_empty()
+                                    })),
+                            open_row_bg,
+                        )
                         .open(context_menu_active);
 
                     let mut row_div = div()
@@ -2870,7 +3074,102 @@ impl SidebarPaneView {
                         .pl(left_pad)
                         .pr_2()
                         .gap(scaled_px(4.0))
-                        .interactive_row(row_style, row_state);
+                        .interactive_row(row_style, row_state)
+                        .when(focused, |row| {
+                            row.border_l_1()
+                                .border_color(theme.colors.accent.foreground)
+                        });
+
+                    let drop_path = (*entry.path).clone();
+                    let external_drop_path = drop_path.clone();
+                    let hover_path = drop_path.clone();
+                    let external_hover_path = drop_path.clone();
+                    let paths = if selected {
+                        this.explorer_sources(Some(entry.path.as_path()))
+                    } else {
+                        repo.map(|r| vec![r.spec.workdir.join(entry.path.as_ref())])
+                            .unwrap_or_default()
+                    };
+                    let native_root = this.root_view.clone();
+                    row_div = row_div
+                        .when(
+                            repo.is_some_and(|r| {
+                                r.file_browser.source
+                                    == gitcomet_core::domain::FileSource::WorkingDirectory
+                            }),
+                            |row| {
+                                row.on_drag(
+                                    explorer_operations::ExplorerDrag { paths },
+                                    |drag, _, _, cx| cx.new(|_| drag.clone()),
+                                )
+                                .external_drag_payload_async(
+                                    move |drag: &explorer_operations::ExplorerDrag, window, cx| {
+                                        let intent = if (cfg!(target_os = "macos")
+                                            && window.modifiers().alt)
+                                            || (!cfg!(target_os = "macos")
+                                                && window.modifiers().control)
+                                        {
+                                            gpui::FileTransferOperation::Copy
+                                        } else {
+                                            gpui::FileTransferOperation::Move
+                                        };
+                                        native_root
+                                            .update(cx, |root, cx| {
+                                                root.prepare_native_drag(
+                                                    drag.paths.clone(),
+                                                    intent,
+                                                    cx,
+                                                )
+                                            })
+                                            .unwrap_or_else(|_| gpui::Task::ready(None))
+                                    },
+                                )
+                            },
+                        )
+                        .on_drop(cx.listener(
+                            move |this, drag: &explorer_operations::ExplorerDrag, window, cx| {
+                                this.explorer_drop(
+                                    drag.paths.clone(),
+                                    Some(drop_path.clone()),
+                                    false,
+                                    window,
+                                    cx,
+                                )
+                            },
+                        ))
+                        .on_drop(cx.listener(
+                            move |this, paths: &gpui::ExternalPaths, window, cx| {
+                                this.explorer_drop(
+                                    paths.paths().to_vec(),
+                                    Some(external_drop_path.clone()),
+                                    true,
+                                    window,
+                                    cx,
+                                )
+                            },
+                        ))
+                        .on_drag_move(cx.listener(
+                            move |this,
+                                  event: &gpui::DragMoveEvent<
+                                explorer_operations::ExplorerDrag,
+                            >,
+                                  window,
+                                  cx| {
+                                this.explorer_hover(&hover_path, event.bounds, window, cx)
+                            },
+                        ))
+                        .on_drag_move(cx.listener(
+                            move |this,
+                                  event: &gpui::DragMoveEvent<gpui::ExternalPaths>,
+                                  window,
+                                  cx| {
+                                this.explorer_hover(&external_hover_path, event.bounds, window, cx)
+                            },
+                        ))
+                        .when(
+                            this.explorer_drop_target.as_ref() == Some(entry.path.as_ref()),
+                            |row| row.bg(with_alpha(theme.colors.accent.foreground, 0.22)),
+                        );
 
                     if is_directory {
                         let path = (*entry.path).clone();
@@ -2878,11 +3177,15 @@ impl SidebarPaneView {
                         row_div = row_div
                             .when(!expansion_frozen, |row| {
                                 row.on_click(cx.listener(
-                                    move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                                        store.dispatch(Msg::ToggleFileBrowserDir {
-                                            repo_id,
-                                            path: path.clone(),
-                                        });
+                                    move |this, e: &gpui::ClickEvent, window, cx| {
+                                        this.explorer_select(
+                                            path.clone(),
+                                            e.modifiers(),
+                                            false,
+                                            window,
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
                                     },
                                 ))
                             })
@@ -2890,6 +3193,13 @@ impl SidebarPaneView {
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
+                                    this.explorer_select(
+                                        menu_path.clone(),
+                                        e.modifiers,
+                                        true,
+                                        window,
+                                        cx,
+                                    );
                                     this.activate_context_menu_invoker(menu_invoker.clone(), cx);
                                     this.open_popover_at(
                                         PopoverKind::FileBrowserFolderMenu {
@@ -2909,30 +3219,48 @@ impl SidebarPaneView {
                             .map(|r| r.file_browser.source.clone())
                             .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
                         row_div = row_div
-                            .on_click(cx.listener(
-                                move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                                    // A file the editor is holding unsaved text for
-                                    // opens straight back into the editor. Opening
-                                    // the read-only view would show the text on
-                                    // disk, which is not what the user left here.
-                                    if has_unsaved_edits {
-                                        store.dispatch(Msg::OpenFileEditor {
-                                            repo_id,
-                                            path: path.clone(),
-                                        });
-                                    } else {
-                                        store.dispatch(Msg::OpenFileContent {
-                                            repo_id,
-                                            source: source.clone(),
-                                            path: path.clone(),
-                                        });
-                                    }
-                                },
-                            ))
+                            .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                                this.explorer_select(
+                                    path.clone(),
+                                    e.modifiers(),
+                                    false,
+                                    window,
+                                    cx,
+                                );
+                                cx.stop_propagation();
+                                let modifiers = e.modifiers();
+                                if modifiers.control || modifiers.platform || modifiers.shift {
+                                    return;
+                                }
+                                this.show_repository_canvas(cx);
+                                // A file the editor is holding unsaved text for
+                                // opens straight back into the editor. Opening
+                                // the read-only view would show the text on
+                                // disk, which is not what the user left here.
+                                if has_unsaved_edits {
+                                    store.dispatch(Msg::OpenFileEditor {
+                                        repo_id,
+                                        path: path.clone(),
+                                    });
+                                } else {
+                                    store.dispatch(Msg::OpenFileContent {
+                                        repo_id,
+                                        source: source.clone(),
+                                        path: path.clone(),
+                                    });
+                                }
+                            }))
                             .on_mouse_down(
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
+                                    this.explorer_select(
+                                        menu_path.clone(),
+                                        e.modifiers,
+                                        true,
+                                        window,
+                                        cx,
+                                    );
                                     this.activate_context_menu_invoker(menu_invoker.clone(), cx);
                                     this.open_popover_at(
                                         PopoverKind::FileBrowserFileMenu {
@@ -2948,8 +3276,29 @@ impl SidebarPaneView {
                     }
 
                     row_div
-                        .child(chevron_slot(is_directory && !expansion_frozen, is_expanded))
-                        .child(icon_slot(file_or_folder_icon_path(entry, is_expanded)))
+                        .child({
+                            let path = (*entry.path).clone();
+                            chevron_slot(is_directory && !expansion_frozen, is_expanded)
+                                .id(("explorer_chevron", ix))
+                                .when(is_directory && !expansion_frozen, |d| {
+                                    d.on_click(cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.store.dispatch(Msg::ToggleFileBrowserDir {
+                                            repo_id,
+                                            path: path.clone(),
+                                        });
+                                    }))
+                                })
+                        })
+                        .child(if cut {
+                            icon_slot_tinted(
+                                file_or_folder_icon_path(entry, is_expanded),
+                                icon_muted,
+                            )
+                        } else {
+                            icon_slot(file_or_folder_icon_path(entry, is_expanded))
+                        })
+                        .when(cut, |row| row.child(div().text_xs().child("✂")))
                         .child({
                             let highlight_ranges =
                                 file_search_highlight_ranges(&search_matchers, entry.name.as_ref());
@@ -2968,6 +3317,30 @@ impl SidebarPaneView {
                                 );
                             }
                             div().flex_1().min_w(px(0.0)).child(label.render(cx))
+                        })
+                        .when_some(status, |row, status| {
+                            use gitcomet_core::domain::FileStatusKind;
+                            let (label, color) = match status {
+                                FileStatusKind::Untracked => {
+                                    ("?", theme.colors.status.success.foreground)
+                                }
+                                FileStatusKind::Added => {
+                                    ("A", theme.colors.status.success.foreground)
+                                }
+                                FileStatusKind::Deleted => {
+                                    ("D", theme.colors.status.danger.foreground)
+                                }
+                                FileStatusKind::Conflicted => {
+                                    ("!", theme.colors.status.danger.foreground)
+                                }
+                                FileStatusKind::Renamed => {
+                                    ("R", theme.colors.status.warning.foreground)
+                                }
+                                FileStatusKind::Modified => {
+                                    ("M", theme.colors.status.warning.foreground)
+                                }
+                            };
+                            row.child(div().text_xs().text_color(color).child(label))
                         })
                         .when(has_unsaved_edits, |row| {
                             row.child(div().flex_none().flex().items_center().child(svg_icon(
@@ -3329,7 +3702,8 @@ fn unsaved_file_row(
         // section has unsaved text, and the read-only view would show the file
         // on disk instead of what the user was in the middle of writing.
         .on_click(
-            cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+            cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
+                this.show_repository_canvas(cx);
                 store.dispatch(Msg::OpenFileEditor {
                     repo_id,
                     path: open_path.clone(),

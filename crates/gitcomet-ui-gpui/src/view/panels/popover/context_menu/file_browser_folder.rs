@@ -46,6 +46,7 @@ pub(super) fn model(
         components::ContextMenuText::path_single_line(path.display().to_string()),
     ));
     items.push(ContextMenuItem::Separator);
+    super::explorer_operations::append(this, &mut items, repo_id, path, &source);
 
     items.push(ContextMenuItem::Entry {
         label: if is_expanded { "Collapse" } else { "Expand" }.into(),

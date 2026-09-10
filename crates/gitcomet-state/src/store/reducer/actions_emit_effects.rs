@@ -255,12 +255,14 @@ pub(super) fn save_worktree_file(
     repo_id: RepoId,
     path: PathBuf,
     contents: String,
+    expected_contents: Option<std::sync::Arc<[u8]>>,
     stage: bool,
 ) -> Vec<Effect> {
     vec![Effect::SaveWorktreeFile {
         repo_id,
         path,
         contents,
+        expected_contents,
         stage,
     }]
 }

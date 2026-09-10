@@ -15,6 +15,9 @@ test-support = []
 benchmarks = []
 
 [dependencies]
+sha2 = { workspace = true }
+filetime = { workspace = true }
+jiff = { workspace = true }
 memchr = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
@@ -23,5 +26,11 @@ strsim = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs"] }
+
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+gitcomet-filesystem-native = { path = "../gitcomet-filesystem-native" }

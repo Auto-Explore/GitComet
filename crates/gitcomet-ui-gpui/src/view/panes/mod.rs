@@ -21,6 +21,9 @@ pub(in crate::view) use history::{
 };
 pub(in crate::view) use main::MainPaneInit;
 pub(crate) use main::MainPaneView;
+pub(in crate::view) use main::read_worktree_file_for_editing;
 pub(super) use reflog::{ReflogPaneInit, ReflogPaneView};
+pub(in crate::view) use sidebar::ExplorerAction;
+pub(in crate::view) use sidebar::explorer_operations::ExplorerDrag;
 pub(in crate::view) use sidebar::file_browser_search_is_active;
 pub(super) use sidebar::{CollapsedSidebarSection, SidebarPaneView};

@@ -280,6 +280,7 @@ impl std::fmt::Debug for InternalMsg {
                 .field("result", result)
                 .finish(),
             InternalMsg::FileBrowserLoaded {
+                cancellation: _,
                 repo_id,
                 source,
                 result,

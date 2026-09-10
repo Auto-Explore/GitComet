@@ -63,6 +63,7 @@ impl MainPaneView {
             });
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
+            this.process_file_editor_saves(&next, cx);
             let next_fingerprint = Self::notify_fingerprint_for(&next);
             if next_fingerprint == this.notify_fingerprint {
                 this.state = next;
@@ -524,6 +525,9 @@ impl MainPaneView {
             file_editor_input,
             _file_editor_input_subscription: file_editor_subscription,
             file_editor_key: None,
+            filesystem_pauses: std::collections::BTreeSet::new(),
+            file_editor_disk_versions: FxHashMap::default(),
+            file_editor_saves: std::collections::BTreeMap::new(),
             file_editor_language: None,
             file_editor_loading: false,
             file_editor_loaded_status_rev: 0,

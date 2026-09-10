@@ -181,6 +181,44 @@ pub enum RepoWatchDegradedReason {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Msg {
+    OpenDocumentRepository {
+        path: PathBuf,
+        activate: bool,
+    },
+    RememberDocumentInRepository {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    FilesystemRequest(gitcomet_core::filesystem::Request),
+    FilesystemProgress(gitcomet_core::filesystem::Progress),
+    AcknowledgeFilesystemResults(Vec<gitcomet_core::filesystem::OperationId>),
+    FilesystemJournalUpdated {
+        undo: bool,
+        redo: bool,
+    },
+    FilesystemFinished(gitcomet_core::filesystem::OperationResult),
+    FilesystemPathsChanged(Vec<gitcomet_core::filesystem::PathChange>),
+    SelectExplorerPath {
+        repo_id: RepoId,
+        path: PathBuf,
+        visible: Vec<PathBuf>,
+        toggle: bool,
+        range: bool,
+        context_menu: bool,
+    },
+    FocusExplorerPath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    SelectAllExplorerPaths {
+        repo_id: RepoId,
+        visible: Vec<PathBuf>,
+    },
+    SetExplorerVisibility {
+        repo_id: RepoId,
+        hidden: bool,
+        ignored: bool,
+    },
     OpenRepo(PathBuf),
     /// Opens a repository candidate supplied by an external file-system drop.
     /// The candidate is not persisted until the backend has opened it
@@ -1219,6 +1257,7 @@ pub enum InternalMsg {
         result: Result<Vec<Submodule>, Error>,
     },
     FileBrowserLoaded {
+        cancellation: Option<gitcomet_core::services::CancellationToken>,
         repo_id: RepoId,
         source: FileSource,
         result: Result<Vec<FileEntry>, Error>,

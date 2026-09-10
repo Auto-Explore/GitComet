@@ -10,10 +10,11 @@ pub(in crate::view) mod diff_cache;
 pub(in crate::view) mod diff_search;
 mod diff_stage;
 mod diff_text;
-mod file_editor;
-mod helpers;
+pub(in crate::view) mod file_editor;
+pub(in crate::view) mod helpers;
 mod interactive_rebase;
 mod preview;
+pub(in crate::view) use preview::read_worktree_file_for_editing;
 pub(in crate::view) mod submodule_summary;
 
 #[cfg(feature = "benchmarks")]

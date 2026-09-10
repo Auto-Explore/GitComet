@@ -1832,6 +1832,11 @@ pub(super) fn reveal_file_browser_path(
     };
     // `ancestors()` yields the path itself first — skip it, a file is not a
     // directory to expand — and stops before the empty root component.
+    repo_state.file_browser.revealed_paths.insert(path.clone());
+    repo_state
+        .file_browser
+        .selection
+        .click(path.clone(), &[], false, false, false);
     for ancestor in path.ancestors().skip(1) {
         if ancestor.as_os_str().is_empty() {
             continue;
@@ -1845,7 +1850,14 @@ pub(super) fn reveal_file_browser_path(
         repo_state.file_browser.search_query.clear();
     }
     repo_state.file_browser.bump_rev();
-    Vec::new()
+    if repo_state.file_browser.source == gitcomet_core::domain::FileSource::WorkingDirectory
+        && !matches!(&repo_state.file_browser.entries, Loadable::Ready(entries) if entries.iter().any(|entry| entry.path.as_ref() == &path))
+    {
+        repo_state.file_browser.stale = true;
+        request_file_browser_load(repo_state).into_iter().collect()
+    } else {
+        Vec::new()
+    }
 }
 
 /// Whether a query actually filters the file tree, and so force-expands every
@@ -1914,6 +1926,10 @@ pub(super) fn toggle_file_browser_dir(
             repo_state.file_browser.expanded_dirs.insert(path);
         }
         repo_state.file_browser.bump_rev();
+        if repo_state.file_browser.show_ignored {
+            repo_state.file_browser.stale = true;
+            return request_file_browser_load(repo_state).into_iter().collect();
+        }
     }
     Vec::new()
 }
@@ -1986,6 +2002,10 @@ pub(super) fn set_file_browser_search(
     {
         repo_state.file_browser.search_query = query;
         repo_state.file_browser.bump_rev();
+        if repo_state.file_browser.show_ignored {
+            repo_state.file_browser.stale = true;
+            return request_file_browser_load(repo_state).into_iter().collect();
+        }
     }
     Vec::new()
 }

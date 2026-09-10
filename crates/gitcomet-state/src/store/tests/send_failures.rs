@@ -451,6 +451,7 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
     );
 
     let store = AppStore {
+        backend: Arc::new(FailingBackend),
         state: Arc::new(RwLock::new(Arc::new(AppState::default()))),
         msg_tx: msg_tx.clone(),
         public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
@@ -474,6 +475,7 @@ fn concurrent_last_app_store_drops_shutdown_worker_once() {
         super::worker_channel::StoreInstanceId::next(),
     );
     let store = AppStore {
+        backend: Arc::new(FailingBackend),
         state: Arc::new(RwLock::new(Arc::new(AppState::default()))),
         msg_tx: msg_tx.clone(),
         public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),

@@ -34,6 +34,7 @@ pub(super) struct RepoTaskToken {
     /// replacement to start at all — but stopping it must not disturb the
     /// repository's other loads, which share [`Self::cancellation`].
     log_cancellation: Arc<Mutex<CancellationToken>>,
+    file_browser_cancellation: Arc<Mutex<CancellationToken>>,
 }
 
 impl RepoTaskToken {
@@ -42,6 +43,7 @@ impl RepoTaskToken {
             load_epoch,
             cancellation: CancellationToken::new(),
             log_cancellation: Arc::new(Mutex::new(CancellationToken::new())),
+            file_browser_cancellation: Arc::new(Mutex::new(CancellationToken::new())),
         }
     }
 
@@ -58,9 +60,23 @@ impl RepoTaskToken {
         next
     }
 
+    fn take_over_file_browser(&self) -> CancellationToken {
+        let mut current = self
+            .file_browser_cancellation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        current.cancel();
+        *current = CancellationToken::new();
+        current.clone()
+    }
+
     /// Cancels every task running under this token, log walks included.
     pub(super) fn cancel(&self) {
         self.cancellation.cancel();
+        self.file_browser_cancellation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cancel();
         self.log_cancellation
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -244,7 +260,8 @@ fn log_load_context(
 fn effect_requires_available_git(effect: &Effect) -> bool {
     !matches!(
         effect,
-        Effect::PersistSession { .. }
+        Effect::Filesystem(_)
+            | Effect::PersistSession { .. }
             | Effect::PersistRecentRepo { .. }
             | Effect::PersistRepoHistoryMode { .. }
             | Effect::PersistRepoHistoryModesBatch { .. }
@@ -285,7 +302,8 @@ fn send_unavailable_git_effect_result(
     let send = |msg| util::send_or_log(msg_tx, msg);
 
     match effect {
-        Effect::PersistSession { .. }
+        Effect::Filesystem(_)
+        | Effect::PersistSession { .. }
         | Effect::PersistRecentRepo { .. }
         | Effect::PersistRepoHistoryMode { .. }
         | Effect::PersistRepoHistoryModesBatch { .. }
@@ -467,6 +485,7 @@ fn send_unavailable_git_effect_result(
         }
         Effect::LoadFileBrowser { repo_id, source } => {
             send(Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                cancellation: None,
                 repo_id,
                 source,
                 result: Err(git_unavailable_error(runtime)),
@@ -1392,6 +1411,17 @@ pub(super) fn schedule_effect(
     }
 
     match effect {
+        Effect::Filesystem(request) => {
+            super::executor::filesystem_executor().spawn(move || {
+                let result = gitcomet_core::filesystem::global()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .execute(request, |progress| {
+                        util::send_or_log(&msg_tx, Msg::FilesystemProgress(progress));
+                    });
+                util::send_or_log(&msg_tx, Msg::FilesystemFinished(result));
+            });
+        }
         Effect::PersistSession { repo_id, action } => {
             let Some(session_file_path) = session::default_session_file_path_for_effect() else {
                 return;
@@ -1766,13 +1796,27 @@ pub(super) fn schedule_effect(
             repo_id,
             path,
             contents,
+            expected_contents,
             stage,
         } => repo_commands::schedule_save_worktree_file(
-            executor, repos, msg_tx, repo_id, path, contents, stage,
+            super::executor::filesystem_executor(),
+            repos,
+            msg_tx,
+            repo_id,
+            repo_commands::SaveWorktreeFileRequest {
+                path,
+                contents,
+                expected_contents,
+                stage,
+            },
         ),
         Effect::AppendGitignorePatterns { repo_id, patterns } => {
             repo_commands::schedule_append_gitignore_patterns(
-                executor, repos, msg_tx, repo_id, patterns,
+                super::executor::filesystem_executor(),
+                repos,
+                msg_tx,
+                repo_id,
+                patterns,
             )
         }
         Effect::LoadFileHistory {
@@ -1860,9 +1904,29 @@ pub(super) fn schedule_effect(
             }
         }
         Effect::LoadFileBrowser { repo_id, source } => {
-            if let Some((msg_tx, cancellation)) =
-                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
-            {
+            if let Some(token) = ensure_repo_task_token(thread_state, repo_task_tokens, repo_id) {
+                let cancellation = token.take_over_file_browser();
+                let msg_tx =
+                    msg_tx.with_repo_load_guard(repo_id, token.load_epoch, cancellation.clone());
+                let options = {
+                    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                    state
+                        .repos
+                        .iter()
+                        .find(|r| r.id == repo_id)
+                        .map(|r| repo_load::explorer_listing::Options {
+                            ignored: r.file_browser.show_ignored,
+                            expanded: r
+                                .file_browser
+                                .expanded_dirs
+                                .iter()
+                                .map(|p| (**p).clone())
+                                .collect(),
+                            revealed: r.file_browser.revealed_paths.iter().cloned().collect(),
+                            search: !r.file_browser.search_query.trim().is_empty(),
+                        })
+                        .unwrap_or_default()
+                };
                 repo_load::schedule_load_file_browser(
                     repo_load_executor,
                     repos,
@@ -1870,6 +1934,7 @@ pub(super) fn schedule_effect(
                     repo_id,
                     source,
                     cancellation,
+                    options,
                 );
             }
         }

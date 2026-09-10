@@ -5058,7 +5058,8 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.file_editor_stash.insert(
-                    (RepoId(1), PathBuf::from("b.rs")),
+                    pane.document_identity(RepoId(1), std::path::Path::new("b.rs"))
+                        .unwrap(),
                     crate::view::panes::main::StashedFileEdit {
                         text: SharedString::from("edited\n"),
                         cursor: 0,
@@ -5232,7 +5233,8 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.file_editor_stash.insert(
-                    (RepoId(1), PathBuf::from("b.rs")),
+                    pane.document_identity(RepoId(1), std::path::Path::new("b.rs"))
+                        .unwrap(),
                     crate::view::panes::main::StashedFileEdit {
                         text: SharedString::from("edited\n"),
                         cursor: 0,
@@ -5426,4 +5428,179 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         collapsed_after.is_empty(),
         "right-clicking a branch group must not toggle it, got {collapsed_after:?}"
     );
+}
+
+#[gpui::test]
+fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        std::fs::write(directory.path().join(name), "saved").unwrap();
+    }
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].spec.workdir = directory.path().to_path_buf();
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(
+        ["a.txt", "b.txt", "c.txt"]
+            .into_iter()
+            .map(|name| FileEntry {
+                name: name.into(),
+                path: Arc::new(PathBuf::from(name)),
+                kind: FileEntryKind::File,
+                depth: 0,
+            })
+            .collect(),
+    ));
+    state.repos[0].file_browser.bump_rev();
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    let click = |cx: &mut gpui::VisualTestContext, index: usize, modifiers, button| {
+        let point = cx
+            .debug_bounds(
+                [
+                    "file_browser_row_0",
+                    "file_browser_row_1",
+                    "file_browser_row_2",
+                ][index],
+            )
+            .unwrap()
+            .center();
+        cx.simulate_mouse_down(point, button, modifiers);
+        cx.simulate_mouse_up(point, button, modifiers);
+    };
+    let primary = if cfg!(target_os = "macos") {
+        gpui::Modifiers {
+            platform: true,
+            ..Default::default()
+        }
+    } else {
+        gpui::Modifiers {
+            control: true,
+            ..Default::default()
+        }
+    };
+    click(cx, 0, primary, gpui::MouseButton::Left);
+    pump_until(cx, "first selection", || {
+        store.snapshot().repos[0].file_browser.selection.paths.len() == 1
+    });
+    sync_view_snapshot(cx, &view);
+    click(cx, 2, primary, gpui::MouseButton::Left);
+    pump_until(cx, "toggle selection", || {
+        store.snapshot().repos[0].file_browser.selection.paths.len() == 2
+    });
+    sync_view_snapshot(cx, &view);
+    click(
+        cx,
+        1,
+        gpui::Modifiers {
+            shift: true,
+            ..Default::default()
+        },
+        gpui::MouseButton::Left,
+    );
+    pump_until(cx, "range selection", || {
+        store.snapshot().repos[0]
+            .file_browser
+            .selection
+            .paths
+            .contains(Path::new("b.txt"))
+    });
+    sync_view_snapshot(cx, &view);
+    let selected = store.snapshot().repos[0]
+        .file_browser
+        .selection
+        .paths
+        .clone();
+    assert_eq!(
+        selected,
+        [PathBuf::from("b.txt"), PathBuf::from("c.txt")]
+            .into_iter()
+            .collect()
+    );
+    click(cx, 2, gpui::Modifiers::default(), gpui::MouseButton::Right);
+    test_support::redraw(cx);
+    assert_eq!(
+        store.snapshot().repos[0].file_browser.selection.paths,
+        selected
+    );
+    cx.simulate_keystrokes("escape");
+    sync_view_snapshot(cx, &view);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-home"
+    } else {
+        "ctrl-home"
+    });
+    pump_until(cx, "focused row", || {
+        store.snapshot().repos[0]
+            .file_browser
+            .selection
+            .focused
+            .as_deref()
+            == Some(Path::new("a.txt"))
+    });
+    assert_eq!(
+        store.snapshot().repos[0].file_browser.selection.paths,
+        selected
+    );
+    sync_view_snapshot(cx, &view);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    pump_until(cx, "select all", || {
+        store.snapshot().repos[0].file_browser.selection.paths.len() == 3
+    });
+    sync_view_snapshot(cx, &view);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-x"
+    } else {
+        "ctrl-x"
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.update(app, |_, cx| {
+            let files = crate::clipboard::read_files(cx).unwrap();
+            assert_eq!(
+                files.intent,
+                gitcomet_core::filesystem::TransferIntent::Move
+            );
+            assert_eq!(files.paths.len(), 3);
+        })
+    });
+    cx.simulate_keystrokes("escape");
+    cx.update(|_, app| {
+        view.update(app, |_, cx| {
+            assert_eq!(
+                crate::clipboard::read_files(cx).unwrap().intent,
+                gitcomet_core::filesystem::TransferIntent::Copy
+            )
+        })
+    });
+    // Repository navigation must restore the canvas even when its tab was
+    // already active underneath Documents.
+    cx.update(|_, app| {
+        view.update(app, |view, cx| {
+            view.documents_active = true;
+            assert!(view.activate_repo_path(directory.path(), cx));
+            assert!(!view.documents_active);
+        })
+    });
+    sync_view_snapshot(cx, &view);
+    click(cx, 0, gpui::Modifiers::default(), gpui::MouseButton::Left);
+    cx.update(|_, app| assert!(!view.read(app).documents_active));
+    cx.update(|_, app| {
+        view.update(app, |_, cx| {
+            crate::clipboard::write_text(
+                cx,
+                String::new(),
+                crate::clipboard::CopySource::ContextMenu,
+            )
+        })
+    });
 }

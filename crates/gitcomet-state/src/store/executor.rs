@@ -48,6 +48,12 @@ pub(super) struct TaskExecutor {
     _threads: Vec<thread::JoinHandle<()>>,
 }
 
+/// One submission queue across windows for disk writes and explorer mutations.
+pub(super) fn filesystem_executor() -> &'static TaskExecutor {
+    static EXECUTOR: std::sync::OnceLock<TaskExecutor> = std::sync::OnceLock::new();
+    EXECUTOR.get_or_init(|| TaskExecutor::new(1))
+}
+
 /// A panicking task must not take its worker thread with it. These pools are
 /// small — [`repo_load_worker_threads`] caps at two — so a thread lost to an
 /// unwind shrinks the pool for the rest of the process and can leave repo

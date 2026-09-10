@@ -628,6 +628,9 @@ pub(super) fn activate(
     entry: RepoPickerEntry,
     cx: &mut gpui::Context<PopoverHost>,
 ) {
+    let _ = this
+        .root_view
+        .update(cx, |root, cx| root.show_repository_canvas(cx));
     match entry {
         RepoPickerEntry::Open(repo_id) => {
             this.store.dispatch(Msg::SetActiveRepo { repo_id });

@@ -352,6 +352,9 @@ impl GitCometView {
         }
 
         self.state = next;
+        if !self.document_routing.pending.is_empty() {
+            self.finish_document_routing(cx);
+        }
         self.command_palette.update(cx, |palette, cx| {
             palette.set_has_active_repo(self.state.active_repo.is_some(), cx);
         });
@@ -412,6 +415,7 @@ impl GitCometView {
             self.window_handle,
             cx.weak_entity(),
             self.main_pane.downgrade(),
+            self.documents.downgrade(),
             self.view_mode,
             self.synced_repo_paths_for_state(),
         );

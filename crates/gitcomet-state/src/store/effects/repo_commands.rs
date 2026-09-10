@@ -297,15 +297,26 @@ pub(super) struct CheckSubmoduleAddTrustRequest {
     pub(super) remote_url_policy: RemoteUrlPolicy,
 }
 
+pub(super) struct SaveWorktreeFileRequest {
+    pub path: PathBuf,
+    pub contents: String,
+    pub expected_contents: Option<std::sync::Arc<[u8]>>,
+    pub stage: bool,
+}
+
 pub(super) fn schedule_save_worktree_file(
     executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
-    path: PathBuf,
-    contents: String,
-    stage: bool,
+    request: SaveWorktreeFileRequest,
 ) {
+    let SaveWorktreeFileRequest {
+        path,
+        contents,
+        expected_contents,
+        stage,
+    } = request;
     let command_path = path.clone();
     schedule_repo_command(
         executor,
@@ -317,12 +328,16 @@ pub(super) fn schedule_save_worktree_file(
             stage,
         },
         move |repo| {
+            let mut filesystem = gitcomet_core::filesystem::global()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let (relative_path, full) = resolve_worktree_save_target(&repo.spec().workdir, &path)?;
-            if let Some(parent) = full.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-            }
-            std::fs::write(&full, contents.as_bytes())
-                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            guarded_worktree_save(
+                &mut filesystem,
+                &full,
+                contents.as_bytes(),
+                expected_contents.as_deref(),
+            )?;
             if stage {
                 let path_ref: &Path = &relative_path;
                 repo.stage(&[path_ref])?;
@@ -339,6 +354,34 @@ pub(super) fn schedule_save_worktree_file(
             })
         },
     );
+}
+
+fn guarded_worktree_save(
+    filesystem: &mut gitcomet_core::filesystem::Filesystem,
+    path: &Path,
+    contents: &[u8],
+    expected_contents: Option<&[u8]>,
+) -> Result<(), Error> {
+    let io_error = |e: std::io::Error| Error::new(ErrorKind::Backend(e.to_string()));
+    let version = match gitcomet_core::filesystem::DiskVersion::read(path) {
+        Ok(version) => Some(version),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(io_error(error)),
+    };
+    let current = match std::fs::read(path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(io_error(error)),
+    };
+    if current.as_deref() != expected_contents {
+        return Err(Error::new(ErrorKind::Backend(
+            "The file changed on disk. Reload the conflict before saving; the current file was preserved.".into(),
+        )));
+    }
+    filesystem
+        .save(path, contents, version.as_ref(), false)
+        .map_err(io_error)?;
+    Ok(())
 }
 
 /// Append patterns to the repository-root `.gitignore`.
@@ -371,7 +414,15 @@ fn append_gitignore_patterns_in_workdir(
     workdir: &Path,
     patterns: &[String],
 ) -> Result<CommandOutput, Error> {
+    let mut filesystem = gitcomet_core::filesystem::global()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let (_, full) = resolve_worktree_save_target(workdir, Path::new(GITIGNORE_FILE_NAME))?;
+    let version = match gitcomet_core::filesystem::DiskVersion::read(&full) {
+        Ok(version) => Some(version),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(Error::new(ErrorKind::Io(error.kind()))),
+    };
 
     // Read bytes and convert explicitly: `read_to_string` would report a
     // Latin-1 `.gitignore` as a bare `InvalidData` I/O error, which tells
@@ -395,7 +446,9 @@ fn append_gitignore_patterns_in_workdir(
         });
     };
 
-    std::fs::write(&full, updated.as_bytes()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    filesystem
+        .save(&full, updated.as_bytes(), version.as_ref(), false)
+        .map_err(|error| Error::new(ErrorKind::Backend(error.to_string())))?;
 
     Ok(CommandOutput {
         command: format!("Update {GITIGNORE_FILE_NAME}"),
@@ -1621,6 +1674,41 @@ mod worktree_save_target_tests {
     use super::{append_gitignore_patterns_in_workdir, resolve_worktree_save_target};
     use gitcomet_core::error::ErrorKind;
     use std::path::Path;
+
+    #[test]
+    fn merge_save_preserves_external_edits_and_does_not_recreate_a_moved_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conflict.txt");
+        let mut filesystem = gitcomet_core::filesystem::Filesystem::default();
+        std::fs::write(&path, b"external edit").unwrap();
+        assert!(
+            super::guarded_worktree_save(&mut filesystem, &path, b"resolved", Some(b"markers"))
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"external edit");
+        std::fs::rename(&path, dir.path().join("renamed.txt")).unwrap();
+        assert!(
+            super::guarded_worktree_save(
+                &mut filesystem,
+                &path,
+                b"resolved",
+                Some(b"external edit")
+            )
+            .is_err()
+        );
+        assert!(!path.exists());
+        super::guarded_worktree_save(
+            &mut filesystem,
+            &dir.path().join("renamed.txt"),
+            b"resolved",
+            Some(b"external edit"),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join("renamed.txt")).unwrap(),
+            b"resolved"
+        );
+    }
 
     #[test]
     fn git_metadata_paths_are_refused() {

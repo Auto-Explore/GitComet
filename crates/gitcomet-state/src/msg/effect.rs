@@ -14,6 +14,7 @@ use super::RepoPathList;
 
 #[derive(Clone, Debug)]
 pub enum Effect {
+    Filesystem(gitcomet_core::filesystem::Request),
     PersistSession {
         repo_id: Option<RepoId>,
         action: &'static str,
@@ -255,6 +256,7 @@ pub enum Effect {
         repo_id: RepoId,
         path: PathBuf,
         contents: String,
+        expected_contents: Option<std::sync::Arc<[u8]>>,
         stage: bool,
     },
     AppendGitignorePatterns {

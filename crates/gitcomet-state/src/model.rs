@@ -407,6 +407,10 @@ pub struct PendingFileBrowserReopen {
 
 #[derive(Clone, Debug)]
 pub struct FileBrowserState {
+    pub selection: crate::explorer::Selection,
+    pub show_hidden: bool,
+    pub show_ignored: bool,
+    pub revealed_paths: FxHashSet<PathBuf>,
     /// Entered by "Start file browsing" and left by "Exit file browsing".
     /// Selecting the working-tree row changes the source without exiting.
     pub active: bool,
@@ -429,6 +433,10 @@ pub struct FileBrowserState {
 impl Default for FileBrowserState {
     fn default() -> Self {
         Self {
+            selection: crate::explorer::Selection::default(),
+            show_hidden: true,
+            show_ignored: false,
+            revealed_paths: FxHashSet::default(),
             active: false,
             source: FileSource::default(),
             entries: Loadable::NotLoaded,
@@ -651,6 +659,10 @@ impl<T: Clone + PartialEq> NavStack<T> {
 
 #[derive(Clone, Debug, Default)]
 pub struct AppState {
+    pub filesystem: FilesystemState,
+    /// Recent failed opens remain observable after their provisional tab is removed.
+    pub repository_open_failures:
+        std::collections::BTreeMap<PathBuf, (gitcomet_core::filesystem::OperationId, String)>,
     pub repos: Vec<RepoState>,
     pub active_repo: Option<RepoId>,
     pub clone: Option<CloneOpState>,
@@ -671,6 +683,18 @@ pub struct AppState {
     pub file_browser_settings: FileBrowserSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct FilesystemState {
+    pub pending: std::collections::BTreeMap<
+        gitcomet_core::filesystem::OperationId,
+        gitcomet_core::filesystem::Request,
+    >,
+    pub progress: Option<gitcomet_core::filesystem::Progress>,
+    pub completed: std::collections::VecDeque<gitcomet_core::filesystem::OperationResult>,
+    pub undo_available: bool,
+    pub redo_available: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

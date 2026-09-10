@@ -1320,6 +1320,16 @@ impl GitCometView {
         };
 
         let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
+        let documents_root = cx.weak_entity();
+        let documents = cx.new(|cx| {
+            documents::DocumentsView::new(
+                initial_theme,
+                documents_root,
+                store.clone(),
+                ui_model.clone(),
+                cx,
+            )
+        });
 
         let mut view = Self {
             state: Arc::clone(&initial_state),
@@ -1398,6 +1408,10 @@ impl GitCometView {
             open_repo_panel: false,
             open_repo_input,
             external_drag_paths: None,
+            file_operations: file_operations::FileOperationsUi::default(),
+            documents,
+            documents_active: false,
+            document_routing: documents::Routing::default(),
             external_drag_payload: None,
             external_drag_classification_seq: 0,
             external_drag_drop_pending: false,
@@ -1461,6 +1475,7 @@ impl GitCometView {
             view.window_handle,
             cx.weak_entity(),
             view.main_pane.downgrade(),
+            view.documents.downgrade(),
             view.view_mode,
             view.synced_repo_paths_for_state(),
         );
@@ -1469,6 +1484,8 @@ impl GitCometView {
     }
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
+        self.documents
+            .update(cx, |documents, cx| documents.set_theme(theme, cx));
         self.theme = theme;
         for session in self.terminal_sessions.values() {
             for instance in &session.instances {

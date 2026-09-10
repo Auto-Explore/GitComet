@@ -6,6 +6,8 @@ use tooltip::clear_visible_tooltip_text_for_test;
 
 impl Render for GitCometView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        self.process_native_transfers(window, cx);
+        self.process_filesystem_results(window, cx);
         #[cfg(test)]
         clear_visible_tooltip_text_for_test();
 
@@ -549,6 +551,26 @@ impl Render for GitCometView {
             .cursor(cursor)
             .text_color(theme.colors.foreground.primary);
         root = root.relative();
+        root = root.on_drop(
+            cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                if let Some(transfer) = window.take_file_drop() {
+                    transfer
+                        .completion
+                        .complete(Some(gpui::FileTransferOperation::Copy));
+                }
+                this.open_document_paths(paths.paths().to_vec(), cx);
+                cx.stop_propagation();
+            }),
+        );
+        root = root.on_drop(cx.listener(|this, drag: &panes::ExplorerDrag, window, cx| {
+            if let Some(transfer) = window.take_file_drop() {
+                transfer
+                    .completion
+                    .complete(Some(gpui::FileTransferOperation::Copy));
+            }
+            this.open_document_paths(drag.paths.clone(), cx);
+            cx.stop_propagation();
+        }));
         if external_repo_drop_enabled {
             root = root.on_drag_move(cx.listener(
                 |this, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, _window, cx| {

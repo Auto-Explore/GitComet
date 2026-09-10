@@ -783,6 +783,14 @@ impl GitCometView {
         action: UnsavedFileEditsAction,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        if super::native_transfers::active(cx)
+            || self.file_operations.has_pending()
+            || !self.state.filesystem.pending.is_empty()
+            || !self.documents.read(cx).saves_drained(cx)
+        {
+            self.retry_once_file_edit_writes_drain(action, cx);
+            return true;
+        }
         // `pending_*_prompt` is `take()`n by `Render` when it opens the popover,
         // so it is `None` for as long as the dialog is actually on screen. Ask
         // the popover host whether the dialog is up rather than mirroring that
@@ -809,7 +817,8 @@ impl GitCometView {
             self.retry_once_file_edit_writes_drain(action, cx);
             return true;
         }
-        let files = self.main_pane.read(cx).unsaved_file_edit_labels();
+        let mut files = self.main_pane.read(cx).unsaved_file_edit_labels();
+        files.extend(self.documents.read(cx).unsaved_labels(cx));
         if files.is_empty() {
             return false;
         }
@@ -855,6 +864,13 @@ impl GitCometView {
                 pane.discard_all_file_edits(cx);
             }
         });
+        self.documents.update(cx, |documents, cx| {
+            if save {
+                documents.save_all(cx);
+            } else {
+                documents.discard_all(cx);
+            }
+        });
 
         if !save {
             // Ordering note: the caller's `close_popover` defers a clear of
@@ -894,11 +910,15 @@ impl GitCometView {
                 }
                 let drained = view
                     .read_with(cx, |view, _cx| {
-                        !view
-                            .state
-                            .repos
-                            .iter()
-                            .any(|repo| repo.local_actions_in_flight > 0)
+                        !super::native_transfers::active(_cx)
+                            && !view.file_operations.has_pending()
+                            && view.state.filesystem.pending.is_empty()
+                            && view.documents.read(_cx).saves_drained(_cx)
+                            && !view
+                                .state
+                                .repos
+                                .iter()
+                                .any(|repo| repo.local_actions_in_flight > 0)
                     })
                     .unwrap_or(true);
                 if drained {

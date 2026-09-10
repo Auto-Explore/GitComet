@@ -1088,7 +1088,10 @@ impl Render for RepoTabsBarView {
                     }),
                 )
                 .gitcomet_tooltip(theme, tooltip.clone())
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, _cx| {
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                    let _ = this
+                        .root_view
+                        .update(cx, |root, cx| root.show_repository_canvas(cx));
                     if let Some(msg) = Self::repo_tab_click_message(this.active_repo_id(), repo_id)
                     {
                         this.store.dispatch(msg);
@@ -1257,7 +1260,12 @@ impl Render for RepoTabsBarView {
                     .is_some_and(|paths| matches!(paths.paths(), [_]))
             })
             .on_drop(
-                cx.listener(|this, paths: &gpui::ExternalPaths, _window, cx| {
+                cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                    if let Some(transfer) = window.take_file_drop() {
+                        transfer
+                            .completion
+                            .complete(Some(gpui::FileTransferOperation::Copy));
+                    }
                     this.set_external_folder_drag_active(false, cx);
                     let paths = paths.clone();
                     let _ = this.root_view.update(cx, |root, cx| {

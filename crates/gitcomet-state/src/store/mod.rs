@@ -295,6 +295,7 @@ pub struct AppStore {
     state: Arc<RwLock<Arc<AppState>>>,
     msg_tx: StoreWorkerSender,
     public_lifetime: Arc<StorePublicLifetime>,
+    backend: Arc<dyn GitBackend>,
 }
 
 struct StorePublicLifetime {
@@ -319,6 +320,7 @@ impl Clone for AppStore {
             state: Arc::clone(&self.state),
             msg_tx: self.msg_tx.clone(),
             public_lifetime: Arc::clone(&self.public_lifetime),
+            backend: Arc::clone(&self.backend),
         }
     }
 }
@@ -329,6 +331,7 @@ impl AppStore {
     }
 
     pub fn new(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
+        let discovery_backend = Arc::clone(&backend);
         let state = Arc::new(RwLock::new(Arc::new(AppState::default())));
         let (command_tx, command_rx) = mpsc::channel::<StoreWorkerCommand>();
         let store_id = StoreInstanceId::next();
@@ -620,6 +623,7 @@ impl AppStore {
                 state,
                 msg_tx: msg_tx.clone(),
                 public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
+                backend: discovery_backend,
             },
             event_rx,
         )
@@ -627,6 +631,34 @@ impl AppStore {
 
     pub fn dispatch(&self, msg: Msg) {
         self.msg_tx.dispatch(msg);
+    }
+
+    /// Probe the closest repository boundary, including nested repos and .git
+    /// files used by linked worktrees. Backend opening validates the boundary.
+    pub fn discover_file_repository(
+        &self,
+        file: &std::path::Path,
+    ) -> gitcomet_core::services::Result<Option<PathBuf>> {
+        let file = gitcomet_core::filesystem::absolute_identity(file).map_err(|e| {
+            gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Io(e.kind()))
+        })?;
+        for parent in file.parent().into_iter().flat_map(|p| p.ancestors()) {
+            if parent.join(".git").symlink_metadata().is_ok() {
+                match self.backend.open(parent) {
+                    Ok(repository) => return Ok(Some(repository.spec().workdir.clone())),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            gitcomet_core::error::ErrorKind::NotARepository
+                        ) =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub fn snapshot(&self) -> Arc<AppState> {

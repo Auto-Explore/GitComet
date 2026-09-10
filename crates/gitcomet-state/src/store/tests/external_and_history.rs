@@ -3917,6 +3917,7 @@ fn a_burst_of_worktree_changes_coalesces_into_one_walk_at_a_time() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
             repo_id,
             source: FileSource::WorkingDirectory,
             result: Ok(Vec::new()),
@@ -3965,6 +3966,7 @@ fn a_reply_for_an_abandoned_source_still_releases_the_lane() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            cancellation: None,
             repo_id,
             source: FileSource::WorkingDirectory,
             result: Ok(Vec::new()),

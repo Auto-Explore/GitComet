@@ -15,6 +15,7 @@ pub struct UiSession {
     pub open_repos: Vec<PathBuf>,
     pub active_repo: Option<PathBuf>,
     pub recent_repos: Vec<PathBuf>,
+    pub recent_documents: Vec<PathBuf>,
     /// Repositories the user pinned in the repository picker, in the order they
     /// were pinned. Independent of `recent_repos`, so a pin outlives the
     /// recents cap.
@@ -104,6 +105,7 @@ struct UiSessionFile {
     open_repos: Vec<String>,
     active_repo: Option<String>,
     recent_repos: Option<Vec<String>>,
+    recent_documents: Option<Vec<String>>,
     pinned_repos: Option<Vec<String>>,
     repo_picker_sort: Option<String>,
     repo_picker_collapsed_sections: Option<BTreeSet<String>>,
@@ -223,6 +225,11 @@ pub fn load_from_path(path: &Path) -> UiSession {
         open_repos,
         active_repo,
         recent_repos,
+        recent_documents: parse_path_list(file.recent_documents.unwrap_or_default())
+            .into_iter()
+            .filter(|p| p.is_absolute())
+            .take(50)
+            .collect(),
         pinned_repos,
         repo_picker_sort: file.repo_picker_sort,
         repo_picker_collapsed_sections: file.repo_picker_collapsed_sections.unwrap_or_default(),
@@ -524,6 +531,7 @@ use history_mode::{HistoryModeSetting, HistoryScopeSetting};
 use parse::*;
 use survey::SurveyPromptSession;
 
+mod documents;
 mod history_mode;
 mod parse;
 mod paths;
@@ -531,6 +539,7 @@ mod repos;
 mod settings;
 mod survey;
 
+pub use documents::*;
 pub use history_mode::*;
 pub use paths::*;
 pub use repos::*;

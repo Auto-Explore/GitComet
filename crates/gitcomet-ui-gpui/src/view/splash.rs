@@ -1060,12 +1060,30 @@ impl GitCometView {
     ) -> AnyElement {
         let theme = self.theme;
 
+        if self.documents_active {
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h(px(0.))
+                .child(div().flex_1().min_h(px(0.)).child(self.documents.clone()))
+                .child(self.bottom_status_bar.clone())
+                .into_any_element();
+        }
+
         if self.is_startup_repository_loading_screen_active() {
             return self.startup_repository_loading_screen();
         }
 
         if self.is_splash_screen_active() {
-            return self.splash_screen(cx);
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h(px(0.))
+                .child(self.splash_screen(cx))
+                .child(self.bottom_status_bar.clone())
+                .into_any_element();
         }
 
         if renders_full_chrome(self.view_mode) {

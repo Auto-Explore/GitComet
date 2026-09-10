@@ -79,8 +79,11 @@ impl BottomStatusBarView {
             let previous_summary = Self::hook_activity_summary(&this.state);
             let next = Arc::clone(&model.read(cx).state);
             let next_summary = Self::hook_activity_summary(&next);
+            let filesystem_changed = next.filesystem.pending.len()
+                != this.state.filesystem.pending.len()
+                || next.filesystem.progress != this.state.filesystem.progress;
             this.state = next;
-            if next_summary != previous_summary {
+            if next_summary != previous_summary || filesystem_changed {
                 cx.notify();
             }
         });
@@ -175,6 +178,10 @@ impl BottomStatusBarView {
 impl Render for BottomStatusBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let filesystem_pending = self
+            .root_view
+            .upgrade()
+            .is_some_and(|root| root.read(cx).file_operations.has_pending());
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
@@ -479,7 +486,32 @@ impl Render for BottomStatusBarView {
                     .flex()
                     .items_center()
                     .gap(scaled_px(2.0))
-                    .child(sidebar_toggle),
+                    .child(sidebar_toggle)
+                    .when(filesystem_pending, |d| {
+                        d.child(
+                            components::Button::new(
+                                "filesystem_progress",
+                                self.state
+                                    .filesystem
+                                    .progress
+                                    .as_ref()
+                                    .map(|p| {
+                                        format!(
+                                            "Files: {}/{} · Cancel",
+                                            p.completed_items, p.total_items
+                                        )
+                                    })
+                                    .unwrap_or_else(|| "Files: waiting · Cancel".into()),
+                            )
+                            .borderless()
+                            .style(components::ButtonStyle::Subtle)
+                            .on_click(theme, cx, |this, _, _, cx| {
+                                let _ = this
+                                    .root_view
+                                    .update(cx, |root, cx| root.cancel_filesystem_operations(cx));
+                            }),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -489,6 +521,28 @@ impl Render for BottomStatusBarView {
                     .child(details_toggle)
                     .child(hook_activity_button)
                     .child(zoom_button)
+                    .child(
+                        components::Button::new("bottom_documents", "")
+                            .start_slot(svg_icon(
+                                "icons/file.svg",
+                                theme.colors.foreground.secondary,
+                                scaled_px(16.),
+                            ))
+                            .selected(
+                                self.root_view
+                                    .upgrade()
+                                    .is_some_and(|r| r.read(cx).documents_active),
+                            )
+                            .style(components::ButtonStyle::Subtle)
+                            .borderless()
+                            .on_click(theme, cx, |this, _, window, cx| {
+                                let _ = this
+                                    .root_view
+                                    .update(cx, |root, cx| root.toggle_documents(window, cx));
+                            })
+                            .gitcomet_tooltip(theme, "Documents".into())
+                            .debug_selector(|| "bottom_documents".into()),
+                    )
                     .child(
                         // Branding chips want more air between them than the
                         // toggles, which read as one control group.

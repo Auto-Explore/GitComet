@@ -115,7 +115,7 @@ fn validate_utf8_chunk_streaming(
 /// budget — a 3 MB log or CSV is perfectly editable, it just does not get a
 /// tree, and the editor already has a heuristic fallback for exactly that. So
 /// past the ceiling this re-reads the file plainly rather than refusing it.
-pub(super) fn read_worktree_file_for_editing(
+pub(in crate::view) fn read_worktree_file_for_editing(
     path: &std::path::Path,
 ) -> Result<SharedString, String> {
     let len = std::fs::metadata(path)

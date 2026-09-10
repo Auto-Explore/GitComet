@@ -2143,9 +2143,8 @@ impl MainPaneView {
         }
 
         self.state = next;
-        // A closed repo tab takes its `RepoId` with it; buffers stashed under it
-        // can never be saved again and would block every future close.
-        self.prune_orphaned_file_editor_stash();
+        // Absolute buffer identities survive tab closure in Documents.
+        self.prune_orphaned_file_editor_stash(cx);
 
         self.sync_conflict_resolver(cx);
         self.ensure_file_image_diff_cache(cx);

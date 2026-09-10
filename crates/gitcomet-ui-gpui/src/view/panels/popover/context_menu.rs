@@ -18,6 +18,7 @@ mod diff_actions;
 mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
+mod explorer_operations;
 mod file_browser_file;
 mod file_browser_folder;
 pub(super) mod file_history_commit;
@@ -643,6 +644,17 @@ impl PopoverHost {
         let mut close_after_action = true;
         let mut restore_diff_panel_focus_after_action = false;
         match action {
+            ContextMenuAction::Explorer {
+                repo_id,
+                path,
+                action,
+            } => {
+                if self.state.active_repo == Some(repo_id) {
+                    self.sidebar_pane.update(cx, |pane, cx| {
+                        pane.explorer_action(action, Some(path), window, cx)
+                    });
+                }
+            }
             ContextMenuAction::AppMenu(action) => {
                 app_menu::activate(self, action, window, cx);
                 return;
@@ -692,6 +704,9 @@ impl PopoverHost {
                 source,
                 path,
             } => {
+                let _ = self
+                    .root_view
+                    .update(cx, |root, cx| root.show_repository_canvas(cx));
                 self.store.dispatch(Msg::OpenFileContent {
                     repo_id,
                     source,
@@ -699,6 +714,9 @@ impl PopoverHost {
                 });
             }
             ContextMenuAction::EditFile { repo_id, path } => {
+                let _ = self
+                    .root_view
+                    .update(cx, |root, cx| root.show_repository_canvas(cx));
                 self.store.dispatch(Msg::OpenFileEditor { repo_id, path });
             }
             ContextMenuAction::DiscardFileEdits { repo_id, path } => {
@@ -864,6 +882,9 @@ impl PopoverHost {
                 });
             }
             ContextMenuAction::OpenRepo { path } => {
+                let _ = self
+                    .root_view
+                    .update(cx, |root, cx| root.show_repository_canvas(cx));
                 self.store.dispatch(Msg::OpenRepo(path));
             }
             ContextMenuAction::ActivateRepo { repo_id } => {
@@ -871,6 +892,9 @@ impl PopoverHost {
                     self.warn_repository_gone(cx);
                     return;
                 }
+                let _ = self
+                    .root_view
+                    .update(cx, |root, cx| root.show_repository_canvas(cx));
                 self.store.dispatch(Msg::SetActiveRepo { repo_id });
             }
             ContextMenuAction::CloseRepo { repo_id } if !self.repo_is_open(repo_id) => {
@@ -1227,11 +1251,26 @@ impl PopoverHost {
                 );
                 return;
             }
+            ContextMenuAction::AddExplorerToGitignore { repo_id, path } => {
+                self.gitignore_explorer = true;
+                self.open_popover_at(
+                    PopoverKind::AddToGitignorePrompt {
+                        repo_id,
+                        area: DiffArea::Unstaged,
+                        path,
+                    },
+                    self.popover_anchor_point(),
+                    window,
+                    cx,
+                );
+                return;
+            }
             ContextMenuAction::AddToGitignoreSelectionOrPath {
                 repo_id,
                 area,
                 path,
             } => {
+                self.gitignore_explorer = false;
                 let anchor = self.popover_anchor_point();
                 // Deliberately does not consume the row selection: the dialog
                 // can still be cancelled, and `submit_add_to_gitignore` is what
@@ -1789,6 +1828,51 @@ impl PopoverHost {
         Some((paths, suggestions))
     }
 
+    pub(super) fn explorer_gitignore_target(
+        &self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+    ) -> Option<(
+        Vec<std::path::PathBuf>,
+        gitcomet_core::gitignore::GitignoreSuggestions,
+    )> {
+        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
+        if repo.file_browser.source != gitcomet_core::domain::FileSource::WorkingDirectory
+            || path.as_os_str().is_empty()
+        {
+            return None;
+        }
+        let paths: Vec<_> = if repo.file_browser.selection.paths.contains(path) {
+            repo.file_browser.selection.paths.iter().cloned().collect()
+        } else {
+            vec![path.to_path_buf()]
+        };
+        let Loadable::Ready(entries) = &repo.file_browser.entries else {
+            return None;
+        };
+        let mut targets = Vec::new();
+        for path in &paths {
+            if matches!(&repo.submodules, Loadable::Ready(submodules) if submodules.iter().any(|submodule| submodule.path.as_path() == path))
+            {
+                return None;
+            }
+            let directory = entries.iter().any(|e| {
+                e.path.as_path() == path
+                    && e.kind == gitcomet_core::domain::FileEntryKind::Directory
+            });
+            if !directory
+                && !repo
+                    .status_entry_for_path(DiffArea::Unstaged, path)
+                    .is_some_and(|s| s.kind == gitcomet_core::domain::FileStatusKind::Untracked)
+            {
+                return None;
+            }
+            targets.push((path.clone(), directory));
+        }
+        let suggestions = gitcomet_core::gitignore::suggestions_for_entries(&targets)?;
+        Some((paths, suggestions))
+    }
+
     /// Seed the "Add to .gitignore" dialog when it opens.
     pub(super) fn prepare_add_to_gitignore(
         &mut self,
@@ -1798,7 +1882,11 @@ impl PopoverHost {
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let target = self.add_to_gitignore_target(repo_id, area, path, cx);
+        let target = if self.gitignore_explorer {
+            self.explorer_gitignore_target(repo_id, path)
+        } else {
+            self.add_to_gitignore_target(repo_id, area, path, cx)
+        };
         let scope = gitcomet_core::gitignore::GitignoreScope::File;
         let text = target
             .as_ref()
@@ -1901,7 +1989,9 @@ impl PopoverHost {
         // Now that the action is going ahead, the row selection has served its
         // purpose and is cleared. The returned paths are unused — the patterns
         // come from the field, which the user may have edited.
-        let _ = self.take_status_paths_for_action(repo_id, area, &path, cx);
+        if !self.gitignore_explorer {
+            let _ = self.take_status_paths_for_action(repo_id, area, &path, cx);
+        }
         self.store
             .dispatch(Msg::AppendGitignorePatterns { repo_id, patterns });
         self.close_popover(cx);

@@ -862,6 +862,7 @@ impl PopoverHost {
             gitignore_patterns_scroll,
             gitignore_scope: gitcomet_core::gitignore::GitignoreScope::File,
             gitignore_suggestions: None,
+            gitignore_explorer: false,
             gitignore_paths: Vec::new(),
             squash_message_input,
             squash_description_input,
@@ -2347,12 +2348,17 @@ impl PopoverHost {
         if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
             self.cherry_pick_mainline = None;
         }
-        self.menu_invoker_focus =
-            if matches!(&kind, PopoverKind::AppMenu | PopoverKind::AddRepoMenu) {
-                window.focused(cx)
-            } else {
-                None
-            };
+        self.menu_invoker_focus = if matches!(
+            &kind,
+            PopoverKind::AppMenu
+                | PopoverKind::AddRepoMenu
+                | PopoverKind::FileBrowserFileMenu { .. }
+                | PopoverKind::FileBrowserFolderMenu { .. }
+        ) {
+            window.focused(cx)
+        } else {
+            None
+        };
         // The diff panel takes focus on any left press inside it, so its focus
         // state at open time is a faithful record of where the click landed.
         self.popover_opened_from_diff_panel = self

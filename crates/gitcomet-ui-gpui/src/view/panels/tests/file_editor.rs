@@ -35,6 +35,27 @@ fn unique_workdir(label: &str) -> std::path::PathBuf {
     dir
 }
 
+/// Filesystem effects run on the real shared worker. Pump the result into the
+/// pane without replacing the synthetic repository used by this test fixture.
+fn finish_editor_saves(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
+    for _ in 0..200 {
+        cx.run_until_parked();
+        let drained = cx.update(|_, app| {
+            let main = view.read(app).main_pane.clone();
+            main.update(app, |pane, cx| {
+                let snapshot = pane.store.snapshot();
+                pane.process_file_editor_saves(&snapshot, cx);
+                pane.file_editor_saves.is_empty()
+            })
+        });
+        if drained {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("filesystem save did not finish");
+}
+
 #[gpui::test]
 async fn file_editor_loads_the_working_tree_file_and_starts_clean(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
@@ -128,9 +149,13 @@ async fn file_editor_marks_dirty_on_edit_and_clean_after_save(cx: &mut gpui::Tes
         });
     });
 
+    finish_editor_saves(&view, cx);
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        assert!(!pane.file_editor_is_dirty(), "saving settles the buffer");
+        assert!(
+            !pane.file_editor_is_dirty(),
+            "a confirmed save settles the buffer"
+        );
         assert!(pane.unsaved_file_edit_labels().is_empty());
     });
 
@@ -518,6 +543,7 @@ async fn alt_e_toggles_the_editor_and_ctrl_s_saves_and_exits_while_it_has_focus(
         press(cx, "secondary-s"),
         "ctrl/cmd-s saves inside the editor"
     );
+    finish_editor_saves(&view, cx);
     assert!(
         cx.update(|_window, app| !main_pane.read(app).file_editor_is_dirty()),
         "the buffer settles once saved"
@@ -1564,6 +1590,7 @@ async fn saving_keeps_the_caret_and_the_undo_stack(cx: &mut gpui::TestAppContext
     cx.update(|_window, app| {
         main_pane.update(app, |pane, cx| pane.save_file_editor_buffer(cx));
     });
+    finish_editor_saves(&view, cx);
     // Let the save land and the follow-up re-read run to completion.
     cx.run_until_parked();
     cx.update(|_window, app| {
@@ -1590,7 +1617,9 @@ async fn saving_keeps_the_caret_and_the_undo_stack(cx: &mut gpui::TestAppContext
 }
 
 #[gpui::test]
-async fn a_closed_repos_stashed_buffer_cannot_wedge_the_quit_dialog(cx: &mut gpui::TestAppContext) {
+async fn closing_a_repository_retains_its_unsaved_buffer_in_documents(
+    cx: &mut gpui::TestAppContext,
+) {
     // Regression: a stash entry whose repo tab had closed stayed dirty forever.
     // The quit dialog listed it, "Save all" could not write it (the store drops
     // messages for a repo it no longer has), and the retry raised the dialog
@@ -1650,13 +1679,19 @@ async fn a_closed_repos_stashed_buffer_cannot_wedge_the_quit_dialog(cx: &mut gpu
         );
     });
 
-    // And Save all is a no-op rather than an endless round trip.
     cx.update(|_window, app| {
-        main_pane.update(app, |pane, cx| pane.save_all_file_edits(cx));
+        let docs = view.read(app).documents.read(app);
+        assert_eq!(
+            docs.unsaved_labels(app),
+            vec![SharedString::from(
+                workdir.join(&file_rel).display().to_string()
+            )]
+        );
     });
-    cx.update(|_window, app| {
-        assert!(main_pane.read(app).unsaved_file_edit_labels().is_empty());
-    });
+    assert_eq!(
+        std::fs::read_to_string(workdir.join(&file_rel)).unwrap(),
+        "fn main() {}\n"
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
@@ -1805,6 +1840,7 @@ async fn editing_mid_file_keeps_blame_above_the_edit(cx: &mut gpui::TestAppConte
     cx.update(|_window, app| {
         main_pane.update(app, |pane, cx| pane.save_file_editor_buffer(cx));
     });
+    finish_editor_saves(&view, cx);
     cx.update(|_window, app| {
         let pane = main_pane.read(app);
         assert!(!pane.file_editor_is_dirty());
@@ -3151,4 +3187,98 @@ async fn file_editor_occurrences_do_not_depend_on_the_direction_of_approach(
     );
 
     let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn file_editor_saves_stay_paused_until_rename_retargets_the_unsaved_buffer(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::filesystem::{DocumentIdentity, Filesystem, Operation, Request};
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let original = directory.path().join("before.rs");
+    let renamed = directory.path().join("after.rs");
+    std::fs::write(&original, "fn original() {}\n").unwrap();
+    let repo_id = gitcomet_state::model::RepoId(995);
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            push_test_state(
+                this,
+                editor_state(repo_id, directory.path(), Path::new("before.rs")),
+                cx,
+            );
+            this.main_pane
+                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        });
+    });
+    cx.run_until_parked();
+    let request = Request::new(Operation::Rename {
+        source: original.clone(),
+        name: "after.rs".into(),
+    });
+    cx.update(|_, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "// retained edit\n", cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            assert!(pane.file_editor_dirty);
+            pane.filesystem_pause(request.id, cx);
+            pane.save_file_editor_buffer(cx);
+            assert!(pane.file_editor_saves.is_empty());
+        });
+    });
+    let result = Filesystem::default().execute(request, |_| {});
+    assert!(result.succeeded(), "{:?}", result.items);
+    assert!(!original.exists());
+    assert_eq!(
+        std::fs::read_to_string(&renamed).unwrap(),
+        "fn original() {}\n"
+    );
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.filesystem_finish(result.id, &result.changes, &result.moved_versions, cx);
+                assert_eq!(
+                    pane.file_editor_key,
+                    Some(DocumentIdentity(renamed.clone()))
+                );
+                assert!(pane.file_editor_dirty);
+                assert_eq!(
+                    pane.file_editor_input.read(cx).text(),
+                    "// retained edit\nfn original() {}\n"
+                );
+            });
+            push_test_state(
+                this,
+                editor_state(repo_id, directory.path(), Path::new("after.rs")),
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        view.read(app)
+            .main_pane
+            .clone()
+            .update(app, |pane, cx| pane.save_file_editor_buffer(cx));
+    });
+    finish_editor_saves(&view, cx);
+    assert!(
+        !original.exists(),
+        "saving after a rename must never recreate the old path"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&renamed).unwrap(),
+        "// retained edit\nfn original() {}\n"
+    );
 }
