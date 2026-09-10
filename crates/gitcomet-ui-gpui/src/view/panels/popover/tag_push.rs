@@ -178,142 +178,49 @@ impl PopoverHost {
             .detach();
         }
     }
-
-    pub(super) fn open_tag_push_list(
-        &mut self,
-        mode: TagPushMode,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.tag_push_search.is_none() {
-            let theme = self.theme;
-            let input = cx.new(|cx| {
-                let mut input = components::TextInput::new(
-                    components::TextInputOptions {
-                        placeholder: "Search tags…".into(),
-                        ..Default::default()
-                    },
-                    window,
-                    cx,
-                );
-                input.set_theme(theme, cx);
-                input
-            });
-            self._tag_push_search_subscription =
-                Some(cx.observe_in(&input, window, |this, input, window, cx| {
-                    let escape = input.update(cx, |input, _| input.take_escape_pressed());
-                    if escape {
-                        this.close_popover_and_restore_focus(window, cx);
-                    }
-                    cx.notify();
-                }));
-            self.tag_push_search = Some(input);
-        }
-        self.tag_push_list = Some(mode);
-        let input = self.tag_push_search.as_ref().unwrap();
-        input.update(cx, |input, cx| input.set_text("", cx));
-        window.focus(&input.read(cx).focus_handle(), cx);
-        cx.notify();
-    }
-}
-
-/// Full searchable list. This uses a virtual list so a large release-tag set
-/// doesn't create an element for every tag on every keystroke.
-pub(super) fn list_panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
-    let theme = this.theme;
-    let scale = ui_scale::UiScale::current(cx);
-    let mode = this.tag_push_list.unwrap_or(TagPushMode::FollowAnnotated);
-    let query = this
-        .tag_push_search
-        .as_ref()
-        .map(|input| input.read(cx).text().to_lowercase())
-        .unwrap_or_default();
-    let requests = this.tag_push_requests(cx);
-    let request = requests
-        .as_ref()
-        .and_then(|(_, requests)| requests.iter().find(|request| request.mode == mode));
-    let repo = requests
-        .as_ref()
-        .and_then(|(repo_id, _)| this.state.repos.iter().find(|repo| repo.id == *repo_id));
-    let result = repo
-        .zip(request)
-        .and_then(|(repo, request)| preview(repo, request));
-    let ready = matches!(result, Some(Loadable::Ready(_)));
-    let status = summary(result);
-    let mut rows: Vec<SharedString> = Vec::new();
-    if let Some(Loadable::Ready(preview)) = result {
-        rows.extend(
-            preview
-                .new_tags
-                .iter()
-                .filter(|name| name.to_lowercase().contains(&query))
-                .map(|name| SharedString::from(name.clone())),
-        );
-        rows.extend(
-            preview
-                .conflicting_tags
-                .iter()
-                .filter(|name| name.to_lowercase().contains(&query))
-                .map(|name| SharedString::from(format!("Conflict: {name}"))),
-        );
-    }
-    let tooltip_host = this.tooltip_host.clone();
-    let rows = Arc::new(rows);
-    let count = rows.len();
-    div().w(scale.px(380.0)).flex().flex_col().gap_2().p_2()
-        .child(components::Button::new("tag_push_list_back", "Back to Push")
-            .on_click(theme, cx, |this, _, window, cx| {
-                this.tag_push_list = None;
-                let focus = if matches!(this.popover, Some(PopoverKind::PushSetUpstreamPrompt { .. })) {
-                    this.push_upstream_branch_input.read(cx).focus_handle()
-                } else { this.context_menu_focus_handle.clone() };
-                window.focus(&focus, cx);
-                cx.notify();
-            }))
-        .child(div().text_size(theme.ui_text(14.0)).child(mode.label()))
-        .child(div().text_size(theme.ui_text(12.0)).child(status))
-        .children(this.tag_push_search.clone())
-        .when(ready && count == 0, |el| el.child(div().text_size(theme.ui_text(12.0)).child("No matching tags to show")))
-        .when(count > 0, |el| el.child(gpui::uniform_list("tags_to_push", count, cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
-            range.map(|ix| div().h(scale.row_height(24.0, 32.0)).flex().items_center().text_size(theme.ui_text(13.0)).min_w(px(0.0)).child(components::TruncatedText::new(rows[ix].clone(), theme.ui_text(13.0)).full_text_tooltip(tooltip_host.clone()).render(cx))).collect::<Vec<_>>()
-        })).h(scale.px(280.0))))
-        .child(div().text_size(theme.ui_text(12.0)).text_color(theme.colors.foreground.secondary)
-            .child("The preview may change before the push. Conflicting tags will not be overwritten."))
 }
 
 pub(super) fn prompt_summary(
     this: &mut PopoverHost,
     cx: &mut gpui::Context<PopoverHost>,
-) -> gpui::Div {
+) -> gpui::Stateful<gpui::Div> {
     this.sync_tag_push_previews(cx);
     let theme = this.theme;
-    let text = this
+    let (text, tooltip_text) = this
         .tag_push_requests(cx)
         .and_then(|(repo_id, requests)| {
             let request = requests.first()?;
             let repo = this.state.repos.iter().find(|repo| repo.id == repo_id)?;
-            Some(format!(
-                "{} · {}",
-                request.mode.label(),
-                summary(preview(repo, request))
+            let result = preview(repo, request);
+            Some((
+                format!("{} · {}", request.mode.label(), summary(result)),
+                SharedString::from(tooltip(request, result)),
             ))
         })
         .unwrap_or_default();
+    let tooltip_host_for_move = this.tooltip_host.clone();
+    let tooltip_host_for_hover = this.tooltip_host.clone();
+    let tooltip_text_for_move = tooltip_text.clone();
     div()
+        .id("upstream_tag_push_summary")
         .px_2()
         .flex()
         .flex_col()
         .text_size(theme.ui_text(12.0))
         .child(text)
-        .when_some(this.push_upstream_tag_mode, |row, mode| {
-            row.child(
-                components::Button::new("upstream_tags_to_push", "View tags to push…").on_click(
-                    theme,
-                    cx,
-                    move |this, _, window, cx| this.open_tag_push_list(mode, window, cx),
-                ),
-            )
-        })
+        .on_mouse_move(cx.listener(move |_, event: &MouseMoveEvent, _, cx| {
+            let _ = tooltip_host_for_move.update(cx, |host, cx| {
+                host.on_mouse_moved(event.position, cx);
+                host.set_tooltip_text_if_changed(Some(tooltip_text_for_move.clone()), cx);
+            });
+        }))
+        .on_hover(cx.listener(move |_, hovering: &bool, _, cx| {
+            if !*hovering {
+                let _ = tooltip_host_for_hover.update(cx, |host, cx| {
+                    host.clear_tooltip_if_matches(&tooltip_text, cx);
+                });
+            }
+        }))
 }
 
 impl Drop for PopoverHost {

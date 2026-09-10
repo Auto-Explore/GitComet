@@ -2077,9 +2077,6 @@ impl PopoverHost {
         kind: PopoverKind,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
-        if matches!(kind, PopoverKind::PushPicker) && self.tag_push_list.is_some() {
-            return super::tag_push::list_panel(self, cx);
-        }
         let theme = self.theme;
         let ui_scale = super::popover_ui_scale(cx);
         let width = super::popover_width_spec(&kind).unwrap_or(super::DEFAULT_CONTEXT_MENU_WIDTH);

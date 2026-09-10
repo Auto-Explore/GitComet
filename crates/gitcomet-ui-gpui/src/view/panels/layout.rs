@@ -148,7 +148,7 @@ fn commit_file_filter_labels_for_width(
         })
         .sum::<usize>();
     let count = filters.len() as f32;
-    let needed = text_chars as f32 * COMMIT_FILE_FILTER_TEXT_WIDTH_PX
+    let needed = text_chars as f32 * metrics.ui_text(COMMIT_FILE_FILTER_TEXT_WIDTH_PX)
         + count
             * (COMMIT_FILE_FILTER_ICON_WIDTH_PX
                 + COMMIT_FILE_FILTER_ICON_GAP_PX
@@ -3675,6 +3675,27 @@ mod tests {
             widths_where_padding_decides > 0,
             "the extra padding must reach the budget that picks the labels"
         );
+    }
+
+    #[test]
+    fn commit_file_filter_tabs_compact_for_larger_ui_fonts() {
+        let counts = commit_file_filter_test_counts();
+        let default = crate::appearance::Appearance::default();
+        let larger_font = crate::appearance::Appearance {
+            ui_font_size_px: 20,
+            ..default
+        };
+        for scale in [100, 150, 200] {
+            let width = crate::ui_scale::design_px_from_percent(500.0, scale);
+            assert_eq!(
+                commit_file_filter_labels_for_width(width, counts, scale, default),
+                CommitFileFilterLabels::Full,
+            );
+            assert_eq!(
+                commit_file_filter_labels_for_width(width, counts, scale, larger_font),
+                CommitFileFilterLabels::Compact,
+            );
+        }
     }
 
     #[test]

@@ -839,9 +839,6 @@ impl PopoverHost {
             tag_push_preview_key: None,
             tag_push_cancellations: Vec::new(),
             push_upstream_tag_mode: None,
-            tag_push_list: None,
-            tag_push_search: None,
-            _tag_push_search_subscription: None,
             popover: None,
             popover_anchor: None,
             hook_activity_selected: None,
@@ -1169,7 +1166,6 @@ impl PopoverHost {
         self.popover_anchor = None;
         self.cancel_tag_push_previews();
         self.push_upstream_tag_mode = None;
-        self.tag_push_list = None;
         self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));
         self.context_menu_scroll_anchors.clear();
         self.context_menu_selected_ix = None;
@@ -2467,7 +2463,6 @@ impl PopoverHost {
         self.popover_anchor = Some(anchor);
         self.cancel_tag_push_previews();
         self.push_upstream_tag_mode = None;
-        self.tag_push_list = None;
         self.context_menu_scroll.set_offset(point(px(0.0), px(0.0)));
         self.context_menu_scroll_anchors.clear();
         self.context_menu_selected_ix = None;

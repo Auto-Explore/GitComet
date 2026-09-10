@@ -108,9 +108,6 @@ pub(super) fn panel(
     configure_only_for: Option<String>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
-    if this.tag_push_list.is_some() {
-        return super::tag_push::list_panel(this, cx);
-    }
     let theme = this.theme;
     let can_submit = this.can_submit_push_set_upstream(cx);
     let configure_only = configure_only_for.is_some();
