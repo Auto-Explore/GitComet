@@ -461,6 +461,189 @@ mod worktree_uncommitted {
         assert_eq!(expected.0, 2, "and c.rs is still source index 2");
     }
 
+    /// Three modified files, a reversed sort, and an inline diff open on one of
+    /// them. `selected_ix` is a source index, so stepping to the next *drawn*
+    /// file is not `selected_ix + 1`.
+    fn draw_sorted_worktree_inline_diff(
+        cx: &mut gpui::TestAppContext,
+        repo_id: RepoId,
+        selected_ix: usize,
+        layout: crate::view::FileListLayout,
+    ) -> (
+        gpui::Entity<super::super::super::GitCometView>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let summary = WorktreeDirtySummary {
+            path: std::path::PathBuf::from("/tmp/linked-worktree"),
+            head: Some(CommitId(sha(0).into())),
+            branch: Some("side".into()),
+            detached: false,
+            added: 0,
+            modified: 3,
+            deleted: 0,
+            staged: Vec::new(),
+            unstaged: vec![
+                file("a.rs", FileStatusKind::Modified),
+                file("b.rs", FileStatusKind::Modified),
+                file("c.rs", FileStatusKind::Modified),
+            ],
+            line_stats: Default::default(),
+        };
+
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::super::super::GitCometView::new(store, events, None, window, cx)
+        });
+        let worktree_path = summary.path.clone();
+        let entries: Arc<[_]> =
+            gitcomet_state::model::worktree_inline_diff_entries(&summary).into();
+        let target = entries[selected_ix].target.clone();
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-worktree-nav"));
+                repo.open = Loadable::Ready(());
+                repo.head_branch = Loadable::Ready("main".into());
+                repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+                repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));
+                repo.history_state.worktree_selection = Some(worktree_path.clone());
+                repo.diff_state.inline_submodule_diff =
+                    Some(gitcomet_state::model::InlineSubmoduleDiffState {
+                        origin: gitcomet_state::model::ForeignDiffOrigin::Worktree {
+                            branch: Some("side".into()),
+                            detached: false,
+                        },
+                        submodule_repo_path: worktree_path.clone(),
+                        parent_submodule_path: worktree_path.clone(),
+                        entries: Arc::clone(&entries),
+                        selected_ix,
+                        target,
+                        rev: 1,
+                        diff_rev: 1,
+                        diff: Loadable::NotLoaded,
+                        diff_file_rev: 1,
+                        diff_file: Loadable::NotLoaded,
+                        diff_file_image: Loadable::NotLoaded,
+                    });
+                let next_state = app_state_with_repo(repo, repo_id);
+                this.store
+                    .replace_snapshot_for_test(Arc::clone(&next_state));
+                push_test_state(this, next_state, cx);
+            });
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.details_pane.update(cx, |pane, cx| {
+                    pane.set_file_list_sort(
+                        crate::view::rows::FileListId::WorktreeFiles,
+                        crate::view::rows::CommitFileSort::PathDescending,
+                        cx,
+                    );
+                    pane.set_file_list_layout(layout, cx);
+                });
+            });
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        (view, cx)
+    }
+
+    fn navigate_worktree_inline_diff(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<super::super::super::GitCometView>,
+        repo_id: RepoId,
+        direction: i8,
+    ) -> bool {
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane.update(app, |pane, cx| {
+                pane.try_select_adjacent_diff_file(repo_id, direction, window, cx)
+            })
+        })
+    }
+
+    /// The path the store settled on, once its worker has reduced the dispatch.
+    fn selected_worktree_inline_path(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<super::super::super::GitCometView>,
+        repo_id: RepoId,
+    ) -> Option<std::path::PathBuf> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let selected = cx.update(|_window, app| {
+                let snapshot = view.read(app).store.snapshot();
+                let repo = snapshot.repos.iter().find(|repo| repo.id == repo_id)?;
+                let inline = repo.diff_state.inline_submodule_diff.as_ref()?;
+                Some(inline.entries[inline.selected_ix].path.clone())
+            });
+            match &selected {
+                Some(path) if path != std::path::Path::new("c.rs") => return selected,
+                _ if std::time::Instant::now() >= deadline => return selected,
+                _ => std::thread::sleep(std::time::Duration::from_millis(10)),
+            }
+        }
+    }
+
+    /// Rows draw c, b, a under a reversed sort, so next-file from c.rs is b.rs.
+    /// Walking source order instead either dead-ends or opens a file the user
+    /// never saw next to the one on screen.
+    #[gpui::test]
+    fn worktree_file_navigation_follows_the_sorted_order(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(98);
+        // c.rs is source index 2 and the first drawn row.
+        let (view, cx) =
+            draw_sorted_worktree_inline_diff(cx, repo_id, 2, crate::view::FileListLayout::Flat);
+
+        assert!(
+            navigate_worktree_inline_diff(cx, &view, repo_id, 1),
+            "next-file from the first drawn row should move"
+        );
+        assert_eq!(
+            selected_worktree_inline_path(cx, &view, repo_id),
+            Some(std::path::PathBuf::from("b.rs")),
+            "next-file must open the row drawn below, not the next source index"
+        );
+    }
+
+    /// And the last drawn row has no next file, even though its source index does.
+    #[gpui::test]
+    fn worktree_file_navigation_stops_at_the_last_sorted_row(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(99);
+        // a.rs is source index 0 and the last drawn row.
+        let (view, cx) =
+            draw_sorted_worktree_inline_diff(cx, repo_id, 0, crate::view::FileListLayout::Flat);
+
+        assert!(
+            !navigate_worktree_inline_diff(cx, &view, repo_id, 1),
+            "next-file from the last drawn row must not jump back up the list"
+        );
+    }
+
+    /// Tree layout groups the files under folder rows, so drawn order comes from
+    /// the plan rather than the projection. Files at the root of a reversed tree
+    /// still draw c, b, a.
+    #[gpui::test]
+    fn worktree_file_navigation_follows_tree_order(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(100);
+        let (view, cx) =
+            draw_sorted_worktree_inline_diff(cx, repo_id, 2, crate::view::FileListLayout::Tree);
+
+        assert!(
+            navigate_worktree_inline_diff(cx, &view, repo_id, 1),
+            "next-file from the first drawn row should move in tree layout too"
+        );
+        assert_eq!(
+            selected_worktree_inline_path(cx, &view, repo_id),
+            Some(std::path::PathBuf::from("b.rs")),
+            "tree order must drive next-file, not the entry order"
+        );
+    }
+
     #[gpui::test]
     fn a_selected_worktree_row_takes_over_the_details_pane(cx: &mut gpui::TestAppContext) {
         let cx = draw_worktree(

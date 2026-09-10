@@ -82,9 +82,12 @@ impl FileTree {
         for item in items {
             let ordinal = tree.stats.len() as u32;
             tree.kinds.push(item.kind);
+            // Both sides or neither, the way the backend reports counts: half
+            // a pair folded into a directory subtotal would state a zero
+            // nobody measured.
             tree.stats.push(match (item.additions, item.deletions) {
-                (None, None) => None,
-                (additions, deletions) => Some((additions.unwrap_or(0), deletions.unwrap_or(0))),
+                (Some(additions), Some(deletions)) => Some((additions, deletions)),
+                _ => None,
             });
 
             let mut node_ix = 0usize;
@@ -130,10 +133,18 @@ impl FileTree {
             collapsed_spans: Vec::new(),
         };
         self.emit(0, 0, false, collapsed, &mut out);
+        // Inverted here, once, because `display_position` is a per-visible-row
+        // lookup during render: scanning `ordered` there made one section's
+        // frame O(visible rows x files).
+        let mut display_ix_by_ordinal = vec![0usize; self.stats.len()];
+        for (display_ix, ordinal) in out.ordered.iter().enumerate() {
+            display_ix_by_ordinal[*ordinal] = display_ix;
+        }
         FileListPlan::Tree {
             rows: out.rows.into(),
             ordered: out.ordered.into(),
             row_ix_by_ordinal: out.row_ix_by_ordinal.into(),
+            display_ix_by_ordinal: display_ix_by_ordinal.into(),
             collapsed_spans: out.collapsed_spans.into(),
         }
     }

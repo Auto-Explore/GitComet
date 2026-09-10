@@ -375,6 +375,7 @@ pub(super) fn schedule_load_uncommitted_line_stats(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
         executor,
@@ -387,7 +388,9 @@ pub(super) fn schedule_load_uncommitted_line_stats(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
                     repo_id,
-                    result: repo.uncommitted_line_stats(),
+                    // Cancellable: this reads every changed file, so a
+                    // superseded scan must not hold the repo-load worker.
+                    result: repo.uncommitted_line_stats_cancellable(&cancellation),
                 }),
             );
         },
@@ -1053,7 +1056,18 @@ pub(super) fn schedule_load_worktree_dirty(
                         let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
                         // Like the file lists, only the selected worktree pays.
                         let line_stats = if keep_files {
-                            handle.uncommitted_line_stats().unwrap_or_default()
+                            match handle.uncommitted_line_stats_cancellable(&cancellation) {
+                                Ok(stats) => stats,
+                                // Like the status read above: a cancelled scan
+                                // stops the walk rather than reporting a
+                                // worktree whose counts silently went missing.
+                                Err(_) if cancellation.is_cancelled() => {
+                                    return Err(Error::new(ErrorKind::Cancelled));
+                                }
+                                // Counts are decoration; a worktree that cannot
+                                // produce them still belongs in the list.
+                                Err(_) => Default::default(),
+                            }
                         } else {
                             Default::default()
                         };

@@ -167,6 +167,31 @@ pub(super) enum AdjacentDiffFileTarget {
     },
 }
 
+/// The entry an inline foreign diff should open when stepping `direction` from
+/// `selected_ix`. Entries are in source order, so a sorted or tree-grouped list
+/// passes `drawn_order` -- display position to entry index -- and navigation
+/// follows the rows the user sees. An entry the list is not currently showing
+/// has no neighbour, like the commit-file path above.
+fn adjacent_inline_diff_ix(
+    selected_ix: usize,
+    entries_len: usize,
+    drawn_order: Option<&[usize]>,
+    direction: i8,
+) -> Option<usize> {
+    let step = |ix: usize, len: usize| match direction {
+        d if d < 0 => ix.checked_sub(1),
+        d if d > 0 => (ix + 1 < len).then_some(ix + 1),
+        _ => None,
+    };
+    match drawn_order {
+        Some(order) => {
+            let display_ix = order.iter().position(|entry| *entry == selected_ix)?;
+            order.get(step(display_ix, order.len())?).copied()
+        }
+        None => step(selected_ix, entries_len),
+    }
+}
+
 pub(super) fn adjacent_diff_file_target_for_repo(
     repo: &RepoState,
     diff_target: &DiffTarget,
@@ -279,14 +304,32 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         if let Some(inline) = self.active_inline_submodule_diff() {
-            let next_ix = if direction < 0 {
-                inline.selected_ix.checked_sub(1)
-            } else if direction > 0 {
-                (inline.selected_ix + 1 < inline.entries.len()).then_some(inline.selected_ix + 1)
-            } else {
-                None
-            };
-            let Some(next_ix) = next_ix else {
+            let selected_ix = inline.selected_ix;
+            let entries_len = inline.entries.len();
+            // A worktree's file list is sortable and can be drawn as a tree, so
+            // its rows are not in entry order; a submodule summary's list is
+            // neither, and steps through the entries as they come.
+            let worktree_path = matches!(
+                inline.origin,
+                gitcomet_state::model::ForeignDiffOrigin::Worktree { .. }
+            )
+            .then(|| inline.submodule_repo_path.clone());
+            let drawn_order = worktree_path.and_then(|path| {
+                self.root_view
+                    .update(cx, |root, cx| {
+                        root.details_pane
+                            .read(cx)
+                            .active_worktree_file_source_indices(repo_id, &path)
+                    })
+                    .ok()
+                    .flatten()
+            });
+            let Some(next_ix) = adjacent_inline_diff_ix(
+                selected_ix,
+                entries_len,
+                drawn_order.as_deref(),
+                direction,
+            ) else {
                 return false;
             };
             if focus_diff_panel {

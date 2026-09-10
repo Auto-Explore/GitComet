@@ -90,6 +90,8 @@ pub(in crate::view) enum FileListPlan {
         ordered: Arc<[usize]>,
         /// Ordinal -> row, or [`HIDDEN`].
         row_ix_by_ordinal: Arc<[usize]>,
+        /// Ordinal -> position in `ordered`, i.e. the inverse permutation.
+        display_ix_by_ordinal: Arc<[usize]>,
         /// Every collapsed folder's span over `ordered`, nested ones included.
         collapsed_spans: Arc<[CollapsedSpan]>,
     },
@@ -166,7 +168,10 @@ impl FileListPlan {
     pub(in crate::view) fn display_position(&self, ordinal: FileOrdinal) -> Option<usize> {
         match self {
             Self::Flat { len } => (ordinal.0 < *len).then_some(ordinal.0),
-            Self::Tree { ordered, .. } => ordered.iter().position(|value| *value == ordinal.0),
+            Self::Tree {
+                display_ix_by_ordinal,
+                ..
+            } => display_ix_by_ordinal.get(ordinal.0).copied(),
         }
     }
 

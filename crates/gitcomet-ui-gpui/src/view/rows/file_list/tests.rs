@@ -207,7 +207,7 @@ fn directory_rows_carry_subtree_edit_totals() {
             path: owned[1].as_path(),
             kind: Some(gitcomet_core::domain::FileStatusKind::Added),
             additions: Some(4),
-            deletions: None,
+            deletions: Some(0),
         },
     ];
     let plan = FileTree::build(items.into_iter(), CommitFileSort::PathAscending)
@@ -472,5 +472,84 @@ fn projection_keys_separate_lists_that_share_a_rev() {
         base(None),
         file_list_projection_key(7, 42, CommitFileSort::PathAscending, CommitFileFilter::All),
         "an unscoped list keeps the plain key"
+    );
+}
+
+/// Half-known counts are the shape `commit_file_line_stats` never produces —
+/// it reports `(None, None)` when either side is unreadable. Folding one into
+/// `Some((n, 0))` would put a made-up zero into the folder badge's subtotal, so
+/// the builder keeps unknown unknown.
+#[test]
+fn a_one_sided_unknown_count_is_not_folded_into_a_directory_total() {
+    let known = PathBuf::from("dir/known.rs");
+    let half = PathBuf::from("dir/half.rs");
+    let tree = FileTree::build(
+        [
+            FileTreeItem {
+                path: known.as_path(),
+                kind: Some(gitcomet_core::domain::FileStatusKind::Modified),
+                additions: Some(3),
+                deletions: Some(1),
+            },
+            FileTreeItem {
+                path: half.as_path(),
+                kind: Some(gitcomet_core::domain::FileStatusKind::Modified),
+                additions: Some(5),
+                deletions: None,
+            },
+        ]
+        .into_iter(),
+        CommitFileSort::PathAscending,
+    );
+    let plan = tree.flatten(&CollapsedDirs::default());
+    let totals = (0..plan.row_len())
+        .filter_map(|ix| match plan.row_at(RowIx(ix)) {
+            Some(FileListRow::Directory {
+                additions,
+                deletions,
+                ..
+            }) => Some((additions, deletions)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        totals,
+        vec![(Some(3), Some(1))],
+        "the half-known file must not contribute a deletions count nobody measured"
+    );
+}
+
+/// `display_position` runs once per *visible* row every frame, so a scan over
+/// every file in the list makes one section's render O(visible x files).
+#[test]
+#[ignore]
+fn perf_display_position_per_visible_row() {
+    const FILES: usize = 5_000;
+    const VISIBLE: usize = 40;
+    const FRAMES: usize = 200;
+
+    let paths: Vec<PathBuf> = (0..FILES)
+        .map(|ix| PathBuf::from(format!("crates/pkg_{}/src/file_{ix}.rs", ix % 50)))
+        .collect();
+    let tree = FileTree::build(
+        paths.iter().map(|p| FileTreeItem::new(p.as_path())),
+        CommitFileSort::PathAscending,
+    );
+    let plan = tree.flatten(&CollapsedDirs::default());
+
+    // The worst case is the visible window sitting at the end of the list.
+    let window: Vec<FileOrdinal> = (FILES - VISIBLE..FILES).map(FileOrdinal).collect();
+    let start = std::time::Instant::now();
+    let mut sink = 0usize;
+    for _ in 0..FRAMES {
+        for ordinal in &window {
+            sink += plan.display_position(*ordinal).unwrap_or(0);
+        }
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "display_position: {FRAMES} frames x {VISIBLE} rows over {FILES} files in {elapsed:?} ({:?}/frame, sink={sink})",
+        elapsed / FRAMES as u32
     );
 }

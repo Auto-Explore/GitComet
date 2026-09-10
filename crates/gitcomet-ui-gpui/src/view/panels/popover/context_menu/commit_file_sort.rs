@@ -34,10 +34,15 @@ fn model_for_sort(
     current: crate::view::rows::CommitFileSort,
 ) -> ContextMenuModel {
     let check = |selected: bool| selected.then_some("icons/check.svg".into());
-    let header = match list {
-        crate::view::rows::FileListId::Status(_) => "Sort files",
-        _ => "Sort committed files",
-    };
+    let header =
+        match list {
+            // A linked worktree's list is uncommitted changes too, so it cannot
+            // borrow the committed-files wording.
+            crate::view::rows::FileListId::Status(_)
+            | crate::view::rows::FileListId::WorktreeFiles => "Sort files",
+            crate::view::rows::FileListId::CommitFiles
+            | crate::view::rows::FileListId::RangeFiles => "Sort committed files",
+        };
     let mut items = vec![
         ContextMenuItem::Header(header.into()),
         ContextMenuItem::Separator,
@@ -75,6 +80,42 @@ mod tests {
         assert!(entries.iter().any(|(label, icon)| {
             *label == current.label() && icon.is_some_and(|icon| icon.as_ref() == "icons/check.svg")
         }));
+    }
+
+    fn header(list: crate::view::rows::FileListId) -> String {
+        super::model_for_sort(list, crate::view::rows::CommitFileSort::PathAscending)
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ContextMenuItem::Header(label) => Some(label.as_ref().to_string()),
+                _ => None,
+            })
+            .expect("the sort menu opens with a header")
+    }
+
+    /// A linked worktree's list holds *uncommitted* changes, so calling them
+    /// committed states the opposite of what the rows are.
+    #[test]
+    fn no_menu_header_calls_uncommitted_changes_committed() {
+        use crate::view::StatusSection;
+        use crate::view::rows::FileListId;
+
+        for list in [
+            FileListId::Status(StatusSection::Staged),
+            FileListId::Status(StatusSection::Unstaged),
+            FileListId::Status(StatusSection::Untracked),
+            FileListId::WorktreeFiles,
+        ] {
+            let header = header(list);
+            assert!(
+                !header.contains("committed"),
+                "{list:?} lists uncommitted changes but its header reads {header:?}"
+            );
+        }
+
+        for list in [FileListId::CommitFiles, FileListId::RangeFiles] {
+            assert_eq!(header(list), "Sort committed files");
+        }
     }
 
     fn sort_labels(list: crate::view::rows::FileListId) -> Vec<String> {

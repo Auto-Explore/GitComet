@@ -1608,7 +1608,7 @@ pub(super) fn schedule_effect(
             }
         }
         Effect::LoadUncommittedLineStats { repo_id } => {
-            if let Some((msg_tx, _cancellation)) =
+            if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_uncommitted_line_stats(
@@ -1616,6 +1616,7 @@ pub(super) fn schedule_effect(
                     repos,
                     msg_tx,
                     repo_id,
+                    cancellation,
                 );
             }
         }

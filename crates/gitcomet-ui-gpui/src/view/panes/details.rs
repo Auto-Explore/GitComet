@@ -1259,6 +1259,48 @@ impl DetailsPaneView {
         )
     }
 
+    /// A linked worktree's changed files as source indices in *drawn* order —
+    /// the counterpart to [`Self::active_commit_file_source_indices`]. An
+    /// inline worktree diff's `selected_ix` is a source index, so prev/next
+    /// file has to step through this rather than through source order.
+    pub(in super::super) fn active_worktree_file_source_indices(
+        &self,
+        repo_id: RepoId,
+        worktree_path: &std::path::Path,
+    ) -> Option<Arc<[usize]>> {
+        let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
+        let worktree_dirty_rev = repo.worktree_dirty_rev;
+        // The list on screen has to be the one the diff was opened from, or its
+        // indices belong to another checkout's files.
+        let summary = self
+            .selected_worktree_summary()
+            .filter(|summary| summary.path == worktree_path)?;
+        let inputs = self.cached_worktree_file_inputs(repo_id, worktree_dirty_rev, summary);
+        let projection = self.cached_worktree_file_projection(
+            repo_id,
+            worktree_dirty_rev,
+            &summary.path,
+            &inputs.files,
+        );
+        let plan = self.cached_worktree_file_plan(
+            repo_id,
+            worktree_dirty_rev,
+            &summary.path,
+            &inputs.files,
+        );
+        if !plan.is_tree() {
+            return Some(projection.source_indices.clone());
+        }
+        // Tree order, and deliberately every file: a collapsed folder hides
+        // rows, it does not narrow what prev/next file steps through.
+        Some(
+            plan.ordered()
+                .iter()
+                .filter_map(|ordinal| projection.source_indices.get(ordinal).copied())
+                .collect(),
+        )
+    }
+
     pub(in super::super) fn set_commit_file_sort(
         &mut self,
         sort: crate::view::rows::CommitFileSort,
