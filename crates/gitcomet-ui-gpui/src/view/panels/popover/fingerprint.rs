@@ -57,7 +57,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             }
         }
         PopoverKind::DiffContentModeSettings
-        | PopoverKind::CommitFileSortMenu
+        | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::CommitShaLinkMenu { .. }
         | PopoverKind::DiffActionMenu
@@ -137,7 +137,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::RepoPicker
         | PopoverKind::CloneRepo
         | PopoverKind::DiffContentModeSettings
-        | PopoverKind::CommitFileSortMenu
+        | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
@@ -434,7 +434,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // user's cursor when a refresh lands mid-edit.
         | PopoverKind::AddToGitignorePrompt { .. }
         | PopoverKind::DiffContentModeSettings
-        | PopoverKind::CommitFileSortMenu
+        | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::CommitShaLinkMenu { .. }
         | PopoverKind::DiffActionMenu
@@ -539,7 +539,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::CloneRepo => 4u8.hash(hasher),
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
-        PopoverKind::CommitFileSortMenu => 104u8.hash(hasher),
+        PopoverKind::CommitFileSortMenu { list } => {
+            104u8.hash(hasher);
+            list.hash(hasher);
+        }
         PopoverKind::UiScalePicker => 68u8.hash(hasher),
         PopoverKind::WebLinkMenu {
             url,

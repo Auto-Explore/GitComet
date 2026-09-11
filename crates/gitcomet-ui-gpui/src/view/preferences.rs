@@ -42,6 +42,13 @@ pub(super) struct ChangeTrackingPreferences {
     pub(super) untracked_height: Option<u32>,
 }
 
+/// Defaults for every changed-file list. Kept out of
+/// [`ChangeTrackingPreferences`], which is about untracked grouping alone.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct FileListPreferences {
+    pub(super) layout: FileListLayout,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct DiffPreferences {
     pub(super) scroll_sync: DiffScrollSync,
@@ -215,6 +222,7 @@ pub(super) struct UiPreferences {
     pub(super) window: WindowPreferences,
     pub(super) appearance: AppearancePreferences,
     pub(super) change_tracking: ChangeTrackingPreferences,
+    pub(super) file_lists: FileListPreferences,
     pub(super) diff: DiffPreferences,
     pub(super) security: SecurityPreferences,
     pub(super) merge_tool: MergeToolPreferences,
@@ -263,6 +271,13 @@ impl UiPreferences {
                     .unwrap_or_default(),
                 height: session.change_tracking_height,
                 untracked_height: session.untracked_height,
+            },
+            file_lists: FileListPreferences {
+                layout: session
+                    .file_list_layout
+                    .as_deref()
+                    .and_then(FileListLayout::from_key)
+                    .unwrap_or_default(),
             },
             diff: DiffPreferences {
                 scroll_sync: session

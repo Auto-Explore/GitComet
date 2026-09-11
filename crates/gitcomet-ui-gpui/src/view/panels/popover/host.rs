@@ -1452,7 +1452,7 @@ impl PopoverHost {
             return;
         }
         if self.popover.as_ref().is_some_and(popover_is_confirm_dialog) {
-            self.close_popover(cx);
+            self.close_popover_and_restore_focus(window, cx);
             return;
         }
         match self.popover.as_ref() {
@@ -2415,6 +2415,7 @@ impl PopoverHost {
             &kind,
             PopoverKind::AppMenu
                 | PopoverKind::AddRepoMenu
+                | PopoverKind::StageConflictMarkersConfirm { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::PushPicker
         ) {

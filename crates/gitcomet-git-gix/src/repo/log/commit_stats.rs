@@ -17,7 +17,7 @@ pub(crate) struct CommitStatsScratch {
 /// Loads one side's blob into `buf`. `false` means the side cannot be diffed
 /// (not a blob, over the size cap, or unreadable). An absent side leaves `buf`
 /// empty, which diffs as empty content.
-fn read_commit_stats_blob(
+pub(crate) fn read_commit_stats_blob(
     repo: &gix::Repository,
     id: Option<gix::ObjectId>,
     buf: &mut Vec<u8>,
@@ -66,7 +66,12 @@ pub(crate) fn commit_file_line_stats(
     {
         return (None, None);
     }
-    let (old, new) = (scratch.old.as_slice(), scratch.new.as_slice());
+    line_stats_from_bytes(scratch.old.as_slice(), scratch.new.as_slice())
+}
+
+/// The counting core, over content both sides already hold. Shared with the
+/// uncommitted lanes, whose new side is a worktree file rather than a blob.
+pub(crate) fn line_stats_from_bytes(old: &[u8], new: &[u8]) -> (Option<u32>, Option<u32>) {
     if commit_stats_looks_binary(old) || commit_stats_looks_binary(new) {
         return (None, None);
     }

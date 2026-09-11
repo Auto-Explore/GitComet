@@ -2442,6 +2442,28 @@ pub(super) fn worktree_status_loaded(
     effects
 }
 
+pub(super) fn uncommitted_line_stats_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<gitcomet_core::domain::UncommittedLineStats, Error>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        // Previous numbers stand: a cosmetic column that re-fires on every fs
+        // event should not raise a banner.
+        if let Ok(next) = result {
+            repo_state.set_uncommitted_line_stats(Loadable::Ready(std::sync::Arc::new(next)));
+        }
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::UNCOMMITTED_LINE_STATS,
+            Effect::LoadUncommittedLineStats { repo_id },
+            &mut effects,
+        );
+    }
+    effects
+}
+
 pub(super) fn staged_status_loaded(
     state: &mut AppState,
     repo_id: RepoId,

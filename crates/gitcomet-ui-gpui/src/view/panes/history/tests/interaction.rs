@@ -248,6 +248,7 @@ fn a_worktree_reveal_caches_the_commits_row_not_the_worktree_row(cx: &mut gpui::
             deleted: 0,
             staged: Vec::new(),
             unstaged: Vec::new(),
+            line_stats: Default::default(),
         },
     ]));
     repo.worktree_dirty_rev = 1;
@@ -452,6 +453,7 @@ fn a_stash_list_arriving_replans_the_worktree_rows(cx: &mut gpui::TestAppContext
                 deleted: 0,
                 staged: Vec::new(),
                 unstaged: Vec::new(),
+                line_stats: Default::default(),
             },
         ]));
         repo.worktree_dirty_rev = 1;

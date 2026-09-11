@@ -67,6 +67,9 @@ pub enum Effect {
     LoadStagedStatus {
         repo_id: RepoId,
     },
+    LoadUncommittedLineStats {
+        repo_id: RepoId,
+    },
     LoadStatus {
         repo_id: RepoId,
     },
