@@ -228,11 +228,17 @@ fn history_column_drag_next_width(
 
 fn history_reset_widths_for_available_width(
     available_width: Pixels,
+    branch_names: HistoryBranchNamesMode,
     show_graph: bool,
     preferred: (bool, bool, bool),
     ui_scale_percent: u32,
 ) -> HistoryColumnWidths {
     let mut widths = default_history_column_widths(ui_scale_percent);
+    // The hidden ref column must not constrain the graph's reset width.
+    let branch_width = widths.branch;
+    if branch_names == HistoryBranchNamesMode::Inline {
+        widths.branch = px(0.0);
+    }
     widths.graph = history_column_drag_next_width(
         HistoryColResizeHandle::Graph,
         widths.graph,
@@ -242,6 +248,10 @@ fn history_reset_widths_for_available_width(
         widths,
         ui_scale_percent,
     );
+    if branch_names == HistoryBranchNamesMode::Inline {
+        widths.branch = branch_width;
+        return widths;
+    }
     widths.branch = history_column_drag_next_width(
         HistoryColResizeHandle::Branch,
         widths.branch,
@@ -1080,6 +1090,7 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_col_author: Pixels,
     pub(in super::super) history_col_date: Pixels,
     pub(in super::super) history_col_sha: Pixels,
+    pub(in super::super) history_branch_names: HistoryBranchNamesMode,
     pub(in super::super) history_show_graph: bool,
     pub(in super::super) history_show_author: bool,
     pub(in super::super) history_show_date: bool,
@@ -1277,6 +1288,7 @@ impl HistoryView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
+        let history_branch_names = ui_model.read(cx).preferences.history.branch_names;
         let initial_fingerprint = Self::notify_fingerprint_for(&state, history_show_tags);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
@@ -1383,6 +1395,7 @@ impl HistoryView {
             history_col_author: default_widths.author,
             history_col_date: default_widths.date,
             history_col_sha: default_widths.sha,
+            history_branch_names,
             history_show_graph,
             history_show_author,
             history_show_date,
@@ -1763,7 +1776,7 @@ impl HistoryView {
             show_author: self.history_show_author,
             show_date: self.history_show_date,
             show_sha: self.history_show_sha,
-            branch_w: self.history_col_branch,
+            branch_w: self.history_ref_column_width(),
             graph_w: self.history_col_graph,
             author_w: self.history_col_author,
             date_w: self.history_col_date,
@@ -1782,6 +1795,7 @@ impl HistoryView {
     pub(in super::super) fn reset_history_column_widths(&mut self) {
         let widths = history_reset_widths_for_available_width(
             self.history_content_width,
+            self.history_branch_names,
             self.history_show_graph,
             (
                 self.history_show_author,
@@ -1909,6 +1923,27 @@ impl HistoryView {
             self.history_show_tags,
             self.history_auto_fetch_tags_on_repo_activation,
         )
+    }
+
+    pub(in super::super) fn history_ref_column_width(&self) -> Pixels {
+        match self.history_branch_names {
+            HistoryBranchNamesMode::SeparateColumn => self.history_col_branch,
+            HistoryBranchNamesMode::Inline => px(0.0),
+        }
+    }
+
+    pub(in super::super) fn set_history_branch_names(
+        &mut self,
+        next: HistoryBranchNamesMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_branch_names == next {
+            return;
+        }
+        self.history_branch_names = next;
+        self.history_col_resize = None;
+        self.update_history_row_hover(None, None, cx);
+        cx.notify();
     }
 
     pub(in super::super) fn set_history_column_preferences(

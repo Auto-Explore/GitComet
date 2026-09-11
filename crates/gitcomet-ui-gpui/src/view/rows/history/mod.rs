@@ -55,7 +55,8 @@ impl HistoryView {
             history_scope_shows_graph_color_marker(repo.history_state.history_scope);
 
         let theme = this.theme;
-        let col_branch = this.history_col_branch;
+        let col_branch = this.history_ref_column_width();
+        let branch_names = this.history_branch_names;
         let col_graph = this.history_col_graph;
         let col_author = this.history_col_author;
         let col_date = this.history_col_date;
@@ -233,6 +234,7 @@ impl HistoryView {
                     Some(history_table_row(
                         theme,
                         ui_scale,
+                        branch_names,
                         col_branch,
                         col_graph,
                         col_author,
@@ -358,7 +360,7 @@ impl HistoryView {
             .flex()
             .items_center()
             .px_2()
-            .child(div().w(self.history_col_branch).flex_none())
+            .child(div().w(self.history_ref_column_width()).flex_none())
             .when(graph, |row| {
                 row.child(div().w(self.history_col_graph).flex_none())
             })
@@ -426,6 +428,7 @@ fn history_scope_shows_graph_color_marker(scope: gitcomet_core::domain::LogScope
 fn history_table_row(
     theme: AppTheme,
     ui_scale: ui_scale::UiScale,
+    branch_names: HistoryBranchNamesMode,
     col_branch: Pixels,
     col_graph: Pixels,
     col_author: Pixels,
@@ -491,6 +494,7 @@ fn history_table_row(
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
         cx.entity(),
+        branch_names,
         ix,
         repo_id,
         commit.id.clone(),

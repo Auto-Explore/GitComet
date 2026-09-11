@@ -437,6 +437,10 @@ impl HistoryView {
             if theme.is_dark { 0.72 } else { 0.82 },
         );
         let (show_graph, show_author, show_date, show_sha) = self.history_visible_columns();
+        let inline_refs = self.history_branch_names == HistoryBranchNamesMode::Inline;
+        let col_branch = self.history_ref_column_width();
+        let compact_scope = inline_refs && show_graph;
+        let scope_label_visible = !compact_scope || self.history_col_graph >= scaled_px(60.0);
         let col_author = self.history_col_author;
         let col_date = self.history_col_date;
         let col_sha = self.history_col_sha;
@@ -544,7 +548,7 @@ impl HistoryView {
                             show_author: this.history_show_author,
                             show_date: this.history_show_date,
                             show_sha: this.history_show_sha,
-                            branch_w: this.history_col_branch,
+                            branch_w: this.history_ref_column_width(),
                             graph_w: this.history_col_graph,
                             author_w: this.history_col_author,
                             date_w: this.history_col_date,
@@ -604,6 +608,94 @@ impl HistoryView {
                 )
         };
 
+        let scope_control = div()
+            .min_w(px(0.0))
+            .max_w_full()
+            .when(compact_scope, |d| d.w_full())
+            .on_children_prepainted(move |children_bounds, _w, _cx| {
+                if let Some(bounds) = children_bounds.first() {
+                    *scope_anchor_bounds_for_prepaint.borrow_mut() = Some(*bounds);
+                }
+            })
+            .child(
+                div()
+                    .id("history_mode_header")
+                    .debug_selector(|| "history_mode_header".to_string())
+                    .flex()
+                    .min_w(px(0.0))
+                    .max_w_full()
+                    .when(compact_scope, |d| d.w_full())
+                    .items_center()
+                    .when(scope_label_visible, |d| d.gap_1())
+                    .px_1()
+                    .h(ui_scale.row_height(
+                        HISTORY_HEADER_CHIP_HEIGHT_PX,
+                        HISTORY_HEADER_CHIP_COMFORTABLE_HEIGHT_PX,
+                    ))
+                    .line_height(scaled_px(HISTORY_HEADER_CHIP_HEIGHT_PX))
+                    .rounded(px(theme.radii.row))
+                    .when(scope_active, |d| {
+                        d.bg(theme.colors.interaction.pressed_background)
+                    })
+                    .hover(move |s| {
+                        if scope_active {
+                            s.bg(theme.colors.interaction.pressed_background)
+                        } else {
+                            s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
+                        }
+                    })
+                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+                    .cursor(CursorStyle::PointingHand)
+                    .when(scope_label_visible, |d| {
+                        d.child(
+                            div()
+                                .min_w(px(0.0))
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .child(scope_label.clone()),
+                        )
+                    })
+                    .child(svg_icon(
+                        "icons/chevron_down.svg",
+                        icon_muted,
+                        scaled_px(12.0),
+                    ))
+                    .when_some(scope_repo_id, |this, repo_id| {
+                        let scope_invoker = scope_invoker.clone();
+                        let scope_anchor_bounds_for_click =
+                            Rc::clone(&scope_anchor_bounds_for_click);
+                        this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            this.activate_context_menu_invoker(scope_invoker.clone(), cx);
+                            if let Some(bounds) = *scope_anchor_bounds_for_click.borrow() {
+                                this.open_popover_for_bounds(
+                                    PopoverKind::HistoryBranchFilter { repo_id },
+                                    bounds,
+                                    window,
+                                    cx,
+                                );
+                            } else {
+                                this.open_popover_at(
+                                    PopoverKind::HistoryBranchFilter { repo_id },
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }))
+                    })
+                    .when(scope_repo_id.is_none(), |this| {
+                        this.opacity(0.6).cursor(CursorStyle::Arrow)
+                    })
+                    .gitcomet_tooltip(theme, format!("History mode: {}", scope_label).into()),
+            );
+        let (ref_control, graph_control, message_control) = if !inline_refs {
+            (Some(scope_control), None, None)
+        } else if show_graph {
+            (None, Some(scope_control), None)
+        } else {
+            (None, None, Some(scope_control))
+        };
+
         let mut header = div()
             .relative()
             .flex()
@@ -617,118 +709,28 @@ impl HistoryView {
             .text_size(theme.ui_text(12.0))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.colors.foreground.secondary)
-            .child(
+            .when_some(ref_control, |header, control| header.child(
                 div()
-                    .w(self.history_col_branch)
+                    .debug_selector(|| "history_ref_header_cell".to_string())
+                    .w(col_branch)
                     .flex_none()
                     .flex()
                     .items_center()
-                    .gap_1()
                     .min_w(px(0.0))
                     .px(cell_pad)
                     .overflow_hidden()
-                    .child(
-                        div()
-                            .on_children_prepainted(move |children_bounds, _w, _cx| {
-                                if let Some(bounds) = children_bounds.first() {
-                                    *scope_anchor_bounds_for_prepaint.borrow_mut() = Some(*bounds);
-                                }
-                            })
-                            .child(
-                                div()
-                                    .id("history_mode_header")
-                                    .debug_selector(|| "history_mode_header".to_string())
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px_1()
-                                    .h(ui_scale.row_height(
-                                        HISTORY_HEADER_CHIP_HEIGHT_PX,
-                                        HISTORY_HEADER_CHIP_COMFORTABLE_HEIGHT_PX,
-                                    ))
-                                    .line_height(scaled_px(HISTORY_HEADER_CHIP_HEIGHT_PX))
-                                    .rounded(px(theme.radii.row))
-                                    .when(scope_active, |d| {
-                                        d.bg(theme.colors.interaction.pressed_background)
-                                    })
-                                    .hover(move |s| {
-                                        if scope_active {
-                                            s.bg(theme.colors.interaction.pressed_background)
-                                        } else {
-                                            s.bg(with_alpha(
-                                                theme.colors.interaction.hover_background,
-                                                0.55,
-                                            ))
-                                        }
-                                    })
-                                    .active(move |s| {
-                                        s.bg(theme.colors.interaction.pressed_background)
-                                    })
-                                    .cursor(CursorStyle::PointingHand)
-                                    .child(
-                                        div()
-                                            .min_w(px(0.0))
-                                            .line_clamp(1)
-                                            .whitespace_nowrap()
-                                            .child(scope_label.clone()),
-                                    )
-                                    .child(svg_icon(
-                                        "icons/chevron_down.svg",
-                                        icon_muted,
-                                        scaled_px(12.0),
-                                    ))
-                                    .when_some(scope_repo_id, |this, repo_id| {
-                                        let scope_invoker = scope_invoker.clone();
-                                        let scope_anchor_bounds_for_click =
-                                            Rc::clone(&scope_anchor_bounds_for_click);
-                                        this.on_click(cx.listener(
-                                            move |this, e: &ClickEvent, window, cx| {
-                                                this.activate_context_menu_invoker(
-                                                    scope_invoker.clone(),
-                                                    cx,
-                                                );
-                                                if let Some(bounds) =
-                                                    *scope_anchor_bounds_for_click.borrow()
-                                                {
-                                                    this.open_popover_for_bounds(
-                                                        PopoverKind::HistoryBranchFilter {
-                                                            repo_id,
-                                                        },
-                                                        bounds,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                } else {
-                                                    this.open_popover_at(
-                                                        PopoverKind::HistoryBranchFilter {
-                                                            repo_id,
-                                                        },
-                                                        e.position(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            },
-                                        ))
-                                    })
-                                    .when(scope_repo_id.is_none(), |this| {
-                                        this.opacity(0.6).cursor(CursorStyle::Arrow)
-                                    })
-                                    .gitcomet_tooltip(
-                                        theme,
-                                        crate::view::history_mode::HISTORY_MODE_TOOLTIP_TEXT.into(),
-                                    ),
-                            ),
-                    ),
-            )
+                    .child(control),
+            ))
             .when(show_graph, |header| {
                 // The graph column explains itself; a header label only adds noise.
                 header.child(
                     div()
+                        .debug_selector(|| "history_graph_header_cell".to_string())
                         .w(self.history_col_graph)
                         .flex_none()
                         .px(cell_pad)
-                        .overflow_hidden(),
+                        .overflow_hidden()
+                        .children(graph_control),
                 )
             })
             .child(
@@ -739,6 +741,9 @@ impl HistoryView {
                     .px(cell_pad)
                     .whitespace_nowrap()
                     .overflow_hidden()
+                    .debug_selector(|| "history_message_header_cell".to_string())
+                    .when_some(message_control, |cell, control| cell
+                        .items_center().gap_2().child(control))
                     .child(div().flex_none().child("MESSAGE"))
                     .when_some(message_label, |cell, label| cell.child(
                         div()
@@ -903,16 +908,17 @@ impl HistoryView {
         // hairline used to touch the AUTHOR label).
         let cell_edge_pad = scaled_px(8.0);
 
-        let mut header_with_handles = header.child(
-            resize_handle("history_col_resize_branch", HistoryColResizeHandle::Branch)
-                .left((cell_edge_pad + self.history_col_branch - handle_half).max(px(0.0))),
-        );
+        let mut header_with_handles = header.when(!inline_refs, |header| {
+            header.child(
+                resize_handle("history_col_resize_branch", HistoryColResizeHandle::Branch)
+                    .left((cell_edge_pad + col_branch - handle_half).max(px(0.0))),
+            )
+        });
 
         if show_graph {
             header_with_handles = header_with_handles.child(
                 resize_handle("history_col_resize_graph", HistoryColResizeHandle::Graph).left(
-                    (cell_edge_pad + self.history_col_branch + self.history_col_graph
-                        - handle_half)
+                    (cell_edge_pad + col_branch + self.history_col_graph - handle_half)
                         .max(px(0.0)),
                 ),
             );

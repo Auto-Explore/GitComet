@@ -934,10 +934,27 @@ fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::Te
 
 #[gpui::test]
 fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppContext) {
+    history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
+        cx,
+        HistoryBranchNamesMode::SeparateColumn,
+    );
+}
+
+#[gpui::test]
+fn inline_history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppContext) {
+    history_refs_hover_lists_refs_and_opens_item_menus_in_mode(cx, HistoryBranchNamesMode::Inline);
+}
+
+fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
+    cx: &mut gpui::TestAppContext,
+    mode: HistoryBranchNamesMode,
+) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|_, app| view.update(app, |view, cx| view.set_history_branch_names(mode, cx)));
 
     let repo_id = RepoId(1);
     let commit_id = CommitId("tip".into());
@@ -1021,7 +1038,15 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
         let row = cx
             .debug_bounds(selector)
             .expect("history row should be rendered");
-        point(row.left() + px(24.0), row.center().y)
+        let left = if mode == HistoryBranchNamesMode::Inline {
+            cx.debug_bounds("history_message_header_cell")
+                .expect("message header")
+                .left()
+                + px(16.0)
+        } else {
+            row.left() + px(24.0)
+        };
+        point(left, row.center().y)
     };
 
     let away_from_refs_column_point = |cx: &mut gpui::VisualTestContext| {
