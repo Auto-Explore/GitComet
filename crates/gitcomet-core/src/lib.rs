@@ -27,3 +27,5 @@ pub mod text_utils;
 pub mod test_support;
 
 pub mod tag_push;
+
+pub mod history_perf;

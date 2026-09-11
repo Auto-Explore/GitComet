@@ -7,23 +7,111 @@ use gitcomet_core::services::CancellationToken;
 use gitcomet_state::indexed_history::IndexedHistoryMsg as Event;
 use std::rc::Rc;
 
+type PreparedDecorations = ((bool, u64), Arc<FxHashMap<usize, HistoryDecorationRowVm>>);
+
 pub(in crate::view) struct Presentation {
     pub key: HistoryBaseCacheRequest,
-    pub graph: IndexedGraph,
+    pub graph: Arc<IndexedGraph>,
     pub head: Option<String>,
     pub branches: Arc<Vec<Branch>>,
     pub remotes: Arc<Vec<RemoteBranch>>,
     pub stashes: Arc<Vec<StashEntry>>,
     pub head_branch: Option<String>,
+    decorations: std::sync::Mutex<Option<PreparedDecorations>>,
+    stash_rows: FxHashMap<usize, usize>,
 }
 
+fn empty_decoration() -> HistoryDecorationRowVm {
+    static EMPTY: std::sync::OnceLock<HistoryDecorationRowVm> = std::sync::OnceLock::new();
+    EMPTY
+        .get_or_init(|| HistoryDecorationRowVm {
+            branches_text: Default::default(),
+            tag_names: Arc::from([]),
+            branch_chips: Arc::from([]),
+            ref_items: Arc::from([]),
+            lane_branch: None,
+        })
+        .clone()
+}
+
+impl Presentation {
+    fn decorations(
+        &self,
+        revision: (bool, u64),
+        tags: &[Tag],
+    ) -> Arc<FxHashMap<usize, HistoryDecorationRowVm>> {
+        let mut cache = self.decorations.lock().unwrap();
+        if let Some((key, rows)) = &*cache
+            && *key == revision
+        {
+            return rows.clone();
+        }
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::DecorationBuild);
+        let head = self.head.as_deref();
+        let branch = self.head_branch.as_deref();
+        let (mut texts, head_text) =
+            build_history_branch_text_by_target(&self.branches, &self.remotes, branch, head);
+        let (mut chips, head_chips) =
+            build_history_branch_chips_by_target(&self.branches, &self.remotes, branch, head);
+        let (mut refs, head_refs) =
+            build_history_branch_ref_items_by_target(&self.branches, &self.remotes, branch, head);
+        if let Some(head) = head {
+            if let Some(text) = head_text {
+                texts.insert(head, text);
+            }
+            if let Some(value) = head_chips {
+                chips.insert(head, value);
+            }
+            if let Some(refs_value) = head_refs {
+                refs.insert(head, refs_value);
+            }
+        }
+        let tags = build_history_tag_names_by_target(tags);
+        let mut rows = FxHashMap::default();
+        for (id, text) in texts {
+            if let Some(row) = self.graph.projection.position(id) {
+                rows.entry(row)
+                    .or_insert_with(empty_decoration)
+                    .branches_text = text;
+            }
+        }
+        for (id, value) in chips {
+            if let Some(row) = self.graph.projection.position(id) {
+                rows.entry(row)
+                    .or_insert_with(empty_decoration)
+                    .branch_chips = value;
+            }
+        }
+        for (id, value) in refs {
+            if let Some(row) = self.graph.projection.position(id) {
+                rows.entry(row).or_insert_with(empty_decoration).ref_items = value;
+            }
+        }
+        for (id, names) in tags {
+            if let Some(row) = self.graph.projection.position(id) {
+                let row = rows.entry(row).or_insert_with(empty_decoration);
+                row.ref_items =
+                    history_ref_items_from_displayed_refs(&names, row.ref_items.clone());
+                row.tag_names = names;
+            }
+        }
+        let rows = Arc::new(rows);
+        *cache = Some((revision, rows.clone()));
+        rows
+    }
+}
+
+#[derive(Clone)]
 pub(in crate::view) struct WindowCache {
     pub start: usize,
     pub cache: HistoryCache,
     pub loaded: Vec<bool>,
-    pub labels: Vec<Option<SharedString>>,
+    pub labels: Arc<[Option<SharedString>]>,
     pub selected_lane: Option<crate::view::rows::history_graph_paint::SelectedLane>,
     key: WindowKey,
+    // Keep pointer-based dependency identities alive for the lifetime of the cache.
+    _presentation: Arc<Presentation>,
+    _blocks: Vec<Arc<gitcomet_core::history_index::HistoryRange>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,16 +119,25 @@ struct WindowKey {
     presentation: usize,
     start: usize,
     end: usize,
-    ranges_rev: u64,
+    blocks: Vec<(usize, usize)>,
     selection: Option<(usize, Option<bool>)>,
     tags_rev: u64,
+    tags_visible: bool,
 }
 
 struct PendingPresentation {
     presentation: Arc<Presentation>,
     old_presentation: Option<usize>,
-    nearest_survivors: Vec<u32>,
+    nearest_survivors: Option<Vec<u32>>,
+    mapping: bool,
+    cancellation: CancellationToken,
     window: Option<WindowCache>,
+}
+
+impl Drop for PendingPresentation {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
 }
 
 #[derive(Default)]
@@ -205,35 +302,53 @@ impl HistoryView {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let graph = IndexedGraph::build(
-                        index,
-                        &branches,
-                        &remotes,
-                        &stashes,
-                        head_branch.as_deref(),
-                        head.as_deref(),
-                        &cancellation,
-                    )?;
+                    let reusable = previous.as_ref().filter(|old| {
+                        Arc::ptr_eq(&old.graph.projection.index, &index)
+                            && old.head == head
+                            && old.head_branch == head_branch
+                            && old.branches == branches
+                            && old.remotes == remotes
+                            && old.stashes == stashes
+                    });
+                    let graph = match reusable {
+                        Some(old) => old.graph.clone(),
+                        None => Arc::new(IndexedGraph::build_reusing(
+                            index,
+                            &branches,
+                            &remotes,
+                            &stashes,
+                            head_branch.as_deref(),
+                            head.as_deref(),
+                            &cancellation,
+                            previous.as_ref().map(|old| old.graph.as_ref()),
+                        )?),
+                    };
                     let presentation = Arc::new(Presentation {
                         key: task_key,
+                        stash_rows: stashes
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(ix, stash)| {
+                                graph
+                                    .projection
+                                    .position(stash.id.as_ref())
+                                    .map(|row| (row, ix))
+                            })
+                            .collect(),
                         graph,
                         head,
                         branches,
                         remotes,
                         stashes,
                         head_branch,
+                        decorations: Default::default(),
                     });
-                    let nearest_survivors = match &previous {
-                        Some(old) => old
-                            .graph
-                            .projection
-                            .nearest_survivors(&presentation.graph.projection, &cancellation)?,
-                        None => Vec::new(),
-                    };
                     Ok::<_, gitcomet_core::error::Error>(PendingPresentation {
                         presentation,
                         old_presentation: previous.as_ref().map(|old| Arc::as_ptr(old) as usize),
-                        nearest_survivors,
+                        nearest_survivors: None,
+                        mapping: false,
+                        cancellation,
                         window: None,
                     })
                 })
@@ -338,6 +453,44 @@ impl HistoryView {
             }
             _ => None,
         };
+        if anchor
+            .as_ref()
+            .is_some_and(|id| next.graph.projection.position(id.as_ref()).is_none())
+            && pending.nearest_survivors.is_none()
+            && let Some(old) = self.indexed.presentation.clone()
+            && pending.old_presentation == Some(Arc::as_ptr(&old) as usize)
+        {
+            if !pending.mapping {
+                pending.mapping = true;
+                let replacement = next.clone();
+                let cancellation = pending.cancellation.clone();
+                cx.spawn(async move |view, cx| {
+                    let identity = Arc::as_ptr(&replacement) as usize;
+                    let mapped = cx
+                        .background_executor()
+                        .spawn(async move {
+                            old.graph
+                                .projection
+                                .nearest_survivors(&replacement.graph.projection, &cancellation)
+                        })
+                        .await;
+                    let _ = view.update(cx, |this, cx| {
+                        if let Some(pending) = &mut this.indexed.pending
+                            && Arc::as_ptr(&pending.presentation) as usize == identity
+                        {
+                            pending.mapping = false;
+                            if let Ok(mapped) = mapped {
+                                pending.nearest_survivors = Some(mapped);
+                            }
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+            self.indexed.pending = Some(pending);
+            return;
+        }
         let survivor = anchor
             .as_ref()
             .and_then(|id| next.graph.projection.position(id.as_ref()))
@@ -360,7 +513,8 @@ impl HistoryView {
                 };
                 pending
                     .nearest_survivors
-                    .get(visible_ix)
+                    .as_ref()
+                    .and_then(|rows| rows.get(visible_ix))
                     .copied()
                     .filter(|&row| row != gitcomet_core::history_index::MISSING_PARENT)
                     .map(|row| row as usize)
@@ -582,7 +736,14 @@ impl HistoryView {
             }
         }
         let snapshot = shown.graph.projection.index.snapshot.clone();
-        if self.indexed.requested_blocks.as_ref() != Some(&(snapshot.clone(), blocks.clone())) {
+        if self
+            .indexed
+            .requested_blocks
+            .as_ref()
+            .is_none_or(|(old_snapshot, old_blocks)| {
+                old_snapshot != &snapshot || old_blocks != &blocks
+            })
+        {
             self.indexed.requested_blocks = Some((snapshot.clone(), blocks.clone()));
             self.store
                 .dispatch(Msg::IndexedHistory(Event::RequestRanges {
@@ -631,8 +792,26 @@ impl HistoryView {
             presentation: Arc::as_ptr(&shown) as usize,
             start,
             end,
-            ranges_rev: repo.history_state.indexed.rev,
+            blocks: {
+                let indexed = &repo.history_state.indexed;
+                let mut blocks = Vec::new();
+                for row in start..end {
+                    let raw = shown.graph.projection.raw_position(row).unwrap();
+                    let block = raw / HISTORY_BLOCK_SIZE * HISTORY_BLOCK_SIZE;
+                    if blocks.last().is_some_and(|(old, _)| *old == block) {
+                        continue;
+                    }
+                    let identity = (indexed.range_index.as_ref().map(|index| &index.snapshot)
+                        == Some(&snapshot))
+                    .then(|| indexed.ranges.get(&block))
+                    .flatten()
+                    .map_or(0, |range| Arc::as_ptr(range) as usize);
+                    blocks.push((block, identity));
+                }
+                blocks
+            },
             selection,
+            tags_visible: self.history_show_tags,
             tags_rev: if self.history_show_tags {
                 repo.tags_rev
             } else {
@@ -655,13 +834,12 @@ impl HistoryView {
         }
         // Seed only this target window by immutable object ID. Missing objects
         // remain placeholders; an existing visible commit never regresses to one.
-        let seed: std::collections::HashMap<_, _> = (start..end)
-            .filter_map(|row| {
-                let id = shown.graph.projection.commit_id(row)?;
-                let commit = self.cached_history_commit(&id)?.clone();
-                Some((id, commit))
-            })
-            .collect();
+        let old_window = self
+            .indexed
+            .window
+            .as_ref()
+            .map(|window| window.as_ref().clone());
+        let bootstrap = self.history_cache.as_ref().map(|cache| cache.page.clone());
         let ranges = repo.history_state.indexed.ranges.clone();
         let range_snapshot = repo
             .history_state
@@ -687,6 +865,50 @@ impl HistoryView {
             let result = cx
                 .background_executor()
                 .spawn(async move {
+                    let mut old_window = old_window;
+                    if old_window.as_ref().is_some_and(|old| {
+                        old.key.presentation == task_key.presentation
+                            && old.key.start == task_key.start
+                            && old.key.end == task_key.end
+                            && old.key.blocks == task_key.blocks
+                    }) {
+                        // Selection and tag visibility do not change commit text.
+                        // Retain the page, formatted text and geometry verbatim.
+                        let mut cached = old_window.take().unwrap();
+                        cancellation.check_cancelled()?;
+                        if cached.key.selection != selection {
+                            cached.selected_lane = match selection {
+                                Some((row, branch)) => {
+                                    shown
+                                        .graph
+                                        .selected_lane(row, branch, start, &cancellation)?
+                                }
+                                None => None,
+                            };
+                        }
+                        if (cached.key.tags_visible, cached.key.tags_rev)
+                            != (task_key.tags_visible, task_key.tags_rev)
+                        {
+                            let sparse = shown
+                                .decorations((task_key.tags_visible, task_key.tags_rev), &tags);
+                            cached.cache.decorations.row_vms = (start..end)
+                                .map(|row| {
+                                    sparse.get(&row).cloned().unwrap_or_else(empty_decoration)
+                                })
+                                .collect();
+                            cached.cache.decorations.request.tags_rev = task_key.tags_rev;
+                        }
+                        cached.key = task_key;
+                        return Ok(cached);
+                    }
+                    let seed: FxHashMap<_, _> = old_window
+                        .iter()
+                        .flat_map(|window| window.cache.page.commits.iter().zip(&window.loaded))
+                        .filter(|(_, loaded)| **loaded)
+                        .map(|(commit, _)| commit)
+                        .chain(bootstrap.iter().flat_map(|page| &page.commits))
+                        .map(|commit| (commit.id.clone(), commit.clone()))
+                        .collect();
                     let graph = shown.graph.window(start..end, &cancellation)?;
                     let selected_lane = match selection {
                         Some((row, branch)) => {
@@ -696,13 +918,21 @@ impl HistoryView {
                         }
                         None => None,
                     };
+                    gitcomet_core::history_perf::record(
+                        gitcomet_core::history_perf::Work::TextWindowBuild,
+                    );
                     let mut loaded = Vec::with_capacity(end - start);
                     let mut commits = Vec::with_capacity(end - start);
                     for row in start..end {
                         cancellation.check_cancelled()?;
                         let raw = shown.graph.projection.raw_position(row).unwrap();
                         let block = raw / HISTORY_BLOCK_SIZE * HISTORY_BLOCK_SIZE;
-                        let id = shown.graph.projection.index.commit_id(raw).unwrap();
+                        let fallback_id = std::cell::OnceCell::new();
+                        let id = || {
+                            fallback_id.get_or_init(|| {
+                                shown.graph.projection.index.commit_id(raw).unwrap()
+                            })
+                        };
                         let commit = (range_snapshot.as_ref() == Some(&snapshot))
                             .then(|| {
                                 ranges
@@ -710,10 +940,10 @@ impl HistoryView {
                                     .and_then(|range| range.commits.get(raw - block))
                             })
                             .flatten()
-                            .or_else(|| seed.get(&id));
+                            .or_else(|| seed.get(id()));
                         loaded.push(commit.is_some());
                         commits.push(commit.cloned().unwrap_or_else(|| Commit {
-                            id,
+                            id: id().clone(),
                             parent_ids: Default::default(),
                             summary: Arc::from(""),
                             author: Arc::from(""),
@@ -735,8 +965,25 @@ impl HistoryView {
                         .iter()
                         .enumerate()
                         .map(|(ix, commit)| {
+                            if let Some(old) = &old_window
+                                && old.cache.base.request.repo_id == shown.key.repo_id
+                                && old.cache.base.request.branches_rev == shown.key.branches_rev
+                                && old.cache.base.request.stashes_rev == shown.key.stashes_rev
+                                && old.cache.base.request.head_branch_rev
+                                    == shown.key.head_branch_rev
+                                && old.cache.base.request.detached_head_commit
+                                    == request.detached_head_commit
+                                && let Some(&old_ix) =
+                                    old.cache.base.visible_ix_by_commit.get(&commit.id)
+                                && old.cache.page.commits.get(old_ix) == Some(commit)
+                            {
+                                return old.cache.base.row_vms[old_ix].clone();
+                            }
                             let raw = shown.graph.projection.raw_position(start + ix).unwrap();
-                            let stash = shown.stashes.iter().find(|stash| stash.id == commit.id);
+                            let stash = shown
+                                .stash_rows
+                                .get(&(start + ix))
+                                .map(|&ix| &shown.stashes[ix]);
                             let is_stash = stash.is_some()
                                 || shown.graph.projection.index.is_probable_stash(raw);
                             let summary = if is_stash {
@@ -750,7 +997,13 @@ impl HistoryView {
                             };
                             HistoryBaseRowVm {
                                 author: HistoryTextVm::new(commit.author.clone().into()),
-                                summary: HistoryTextVm::new(SharedString::new(summary)),
+                                summary: HistoryTextVm::new(
+                                    if summary == commit.summary.as_ref() {
+                                        commit.summary.clone().into()
+                                    } else {
+                                        SharedString::new(summary)
+                                    },
+                                ),
                                 when: HistoryWhenVm::deferred(commit.time),
                                 short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
                                 is_head: shown.head.as_deref() == Some(commit.id.as_ref()),
@@ -771,8 +1024,10 @@ impl HistoryView {
                         graph_rows: graph.rows,
                         row_vms,
                     };
-                    let decorations = build_history_decoration_cache(
-                        HistoryDecorationCacheRequest {
+                    let sparse =
+                        shown.decorations((task_key.tags_visible, task_key.tags_rev), &tags);
+                    let decorations = HistoryDecorationCache {
+                        request: HistoryDecorationCacheRequest {
                             base_request: request,
                             head_branch_rev: shown.key.head_branch_rev,
                             detached_head_commit: shown
@@ -783,13 +1038,12 @@ impl HistoryView {
                             remote_branches_rev: shown.key.remote_branches_rev,
                             tags_rev: task_key.tags_rev,
                         },
-                        &page,
-                        &base,
-                        shown.head_branch.as_deref(),
-                        &shown.branches,
-                        &shown.remotes,
-                        &tags,
-                    );
+                        row_vms: (start..end)
+                            .map(|row| sparse.get(&row).cloned().unwrap_or_else(empty_decoration))
+                            .collect(),
+                        // Indexed attribution is already carried in graph.labels.
+                        branch_names: Arc::from([]),
+                    };
                     Ok::<_, gitcomet_core::error::Error>(WindowCache {
                         start,
                         cache: HistoryCache {
@@ -800,6 +1054,17 @@ impl HistoryView {
                         loaded,
                         labels: graph.labels,
                         selected_lane,
+                        _presentation: shown,
+                        _blocks: task_key
+                            .blocks
+                            .iter()
+                            .filter_map(|(start, identity)| {
+                                ranges
+                                    .get(start)
+                                    .filter(|range| Arc::as_ptr(range) as usize == *identity)
+                                    .cloned()
+                            })
+                            .collect(),
                         key: task_key,
                     })
                 })
@@ -1101,5 +1366,96 @@ impl HistoryView {
             self.cancel_history_scroll_reveal();
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod cache_regressions {
+    use super::*;
+    use gitcomet_core::history_index::HistoryIndexBuilder;
+    use gitcomet_core::history_perf::{self, Work};
+    use gitcomet_core::services::HistorySnapshot;
+
+    #[test]
+    fn indexed_history_warm_decorations_do_not_rebuild_ref_maps() {
+        let mut builder =
+            HistoryIndexBuilder::new(HistorySnapshot("refs".into()), LogScope::AllBranches, 20)
+                .unwrap();
+        for row in 0..100u8 {
+            builder.push(&[row; 20], std::iter::empty(), false).unwrap();
+        }
+        let index = builder.finish(&CancellationToken::new()).unwrap();
+        let head = index.commit_id(0).unwrap();
+        let branches = Arc::new(vec![Branch {
+            name: "main".into(),
+            target: head.clone(),
+            upstream: None,
+            divergence: None,
+        }]);
+        let graph = Arc::new(
+            IndexedGraph::build(
+                index,
+                &branches,
+                &[],
+                &[],
+                Some("main"),
+                Some(head.as_ref()),
+                &CancellationToken::new(),
+            )
+            .unwrap(),
+        );
+        let key = HistoryBaseCacheRequest {
+            repo_id: RepoId(1),
+            history_scope: LogScope::AllBranches,
+            log_source: 0,
+            history_author_filter: None,
+            head_branch_rev: 1,
+            detached_head_commit: None,
+            head_branch_target: Some(head.clone()),
+            branches_rev: 1,
+            remote_branches_rev: 1,
+            stashes_rev: 1,
+        };
+        let presentation = Presentation {
+            key,
+            graph,
+            head: Some(head.as_ref().into()),
+            branches,
+            remotes: Arc::new(Vec::new()),
+            stashes: Arc::new(Vec::new()),
+            head_branch: Some("main".into()),
+            decorations: Default::default(),
+            stash_rows: Default::default(),
+        };
+        let tags: Vec<_> = (0..40_000)
+            .map(|row| Tag {
+                name: format!("v{row}"),
+                target: presentation.graph.projection.commit_id(row % 100).unwrap(),
+            })
+            .collect();
+        let _capture = history_perf::capture();
+        let first = presentation.decorations((true, 0), &tags);
+        assert_eq!(history_perf::count(Work::DecorationBuild), 1);
+        for _ in 0..10 {
+            assert!(Arc::ptr_eq(
+                &first,
+                &presentation.decorations((true, 0), &tags)
+            ));
+        }
+        assert_eq!(history_perf::count(Work::DecorationBuild), 1);
+        assert_eq!(first.len(), 100);
+        assert_eq!(first[&0].tag_names.len(), 400);
+        let before = presentation
+            .graph
+            .window(0..40, &CancellationToken::new())
+            .unwrap();
+        let hidden = presentation.decorations((false, 0), &[]);
+        assert!(hidden.values().all(|row| row.tag_names.is_empty()));
+        let after = presentation
+            .graph
+            .window(0..40, &CancellationToken::new())
+            .unwrap();
+        assert!(Arc::ptr_eq(&before.rows, &after.rows));
+        assert_eq!(history_perf::count(Work::DecorationBuild), 2);
     }
 }

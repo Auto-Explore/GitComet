@@ -19,7 +19,10 @@ pub struct IndexedHistoryState {
     pub error: Option<String>,
     pub ranges: BTreeMap<usize, Arc<HistoryRange>>,
     pub range_errors: BTreeMap<usize, String>,
+    /// Aggregate notification revision; consumers cache metadata by block identity.
     pub rev: u64,
+    pub status_rev: u64,
+    pub ranges_rev: u64,
     pub epoch: u64,
     pub(crate) seq: u64,
     pub(crate) cancellation: CancellationToken,
@@ -51,10 +54,14 @@ impl IndexedHistoryState {
         let seq = self.seq.wrapping_add(1);
         let range_seq = self.range_seq.wrapping_add(1);
         let rev = self.rev.wrapping_add(1);
+        let status_rev = self.status_rev.wrapping_add(1);
+        let ranges_rev = self.ranges_rev.wrapping_add(1);
         *self = Self {
             seq,
             range_seq,
             rev,
+            status_rev,
+            ranges_rev,
             ..Default::default()
         };
     }

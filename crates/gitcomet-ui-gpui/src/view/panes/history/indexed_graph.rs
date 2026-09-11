@@ -6,18 +6,54 @@ pub(super) const CHECKPOINT_STRIDE: usize = 1_024;
 
 #[derive(Clone, Debug)]
 struct Checkpoint {
-    walk: history_graph::GraphWalk,
-    labels: SmallVec<[Option<(u16, usize)>; 8]>,
+    walk: Arc<history_graph::GraphCheckpoint>,
+    labels: Vec<SavedLabel>,
 }
+
+#[derive(Clone, Debug)]
+struct SavedLabel {
+    column: u16,
+    label: u16,
+    seeded: u32,
+}
+
+impl Checkpoint {
+    fn restore(&self) -> WalkState {
+        let mut labels = SmallVec::new();
+        for saved in &self.labels {
+            labels.resize(usize::from(saved.column) + 1, None);
+            labels[usize::from(saved.column)] = Some((saved.label, saved.seeded));
+        }
+        WalkState {
+            walk: self.walk.restore(),
+            labels,
+        }
+    }
+}
+
+struct WalkState {
+    walk: history_graph::GraphWalk,
+    labels: SmallVec<[Option<(u16, u32)>; 8]>,
+}
+
+type GeometryWindow = (std::ops::Range<usize>, Arc<[history_graph::GraphRow]>);
+type SelectedSpan = (
+    (usize, Option<bool>),
+    Option<crate::view::rows::history_graph_paint::SelectedLane>,
+);
 
 pub(in crate::view) struct IndexedGraph {
     pub projection: HistoryProjection,
     checkpoints: Vec<Checkpoint>,
     branch_heads: FxHashSet<usize>,
+    main: Option<usize>,
+    geometry_cache: Arc<std::sync::Mutex<Option<GeometryWindow>>>,
     direct_labels: FxHashMap<usize, u16>,
     branch_names: Vec<SharedString>,
     containment: Vec<(u16, Vec<u64>)>,
-    lane_spans: Vec<Vec<LaneSpan>>,
+    lane_spans: Arc<Vec<Vec<LaneSpan>>>,
+    window_cache: std::sync::Mutex<Option<(std::ops::Range<usize>, GraphWindow)>>,
+    selection_cache: Arc<std::sync::Mutex<Option<SelectedSpan>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -27,12 +63,27 @@ struct LaneSpan {
     color: history_graph::LaneColorIx,
 }
 
+#[derive(Clone)]
 pub(in crate::view) struct GraphWindow {
     pub rows: Arc<[history_graph::GraphRow]>,
-    pub labels: Vec<Option<SharedString>>,
+    pub labels: Arc<[Option<SharedString>]>,
 }
 
 impl IndexedGraph {
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub fn checkpoint_bytes(&self) -> usize {
+        self.checkpoints.capacity() * std::mem::size_of::<Checkpoint>()
+            + self
+                .checkpoints
+                .iter()
+                .map(|checkpoint| {
+                    checkpoint.walk.estimated_bytes()
+                        + checkpoint.labels.capacity() * std::mem::size_of::<SavedLabel>()
+                })
+                .sum::<usize>()
+    }
+
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn build(
         index: HistoryIndexHandle,
         branches: &[Branch],
@@ -42,15 +93,34 @@ impl IndexedGraph {
         head_id: Option<&str>,
         cancellation: &CancellationToken,
     ) -> Result<Self> {
+        Self::build_reusing(
+            index,
+            branches,
+            remotes,
+            stashes,
+            head_branch,
+            head_id,
+            cancellation,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_reusing(
+        index: HistoryIndexHandle,
+        branches: &[Branch],
+        remotes: &[RemoteBranch],
+        stashes: &[StashEntry],
+        head_branch: Option<&str>,
+        head_id: Option<&str>,
+        cancellation: &CancellationToken,
+        previous: Option<&Self>,
+    ) -> Result<Self> {
         let mut hidden = Vec::new();
         if stashes.is_empty() {
-            for raw in 0..index.len() {
-                if raw.is_multiple_of(CHECKPOINT_STRIDE) {
-                    cancellation.check_cancelled()?;
-                }
-                if index.is_probable_stash(raw) {
-                    hidden.extend(index.parents(raw).iter().skip(1).copied());
-                }
+            for &raw in index.probable_stash_rows() {
+                cancellation.check_cancelled()?;
+                hidden.extend(index.parents(raw as usize).iter().skip(1).copied());
             }
         } else {
             for stash in stashes {
@@ -118,7 +188,15 @@ impl IndexedGraph {
         let main = head_id
             .and_then(|id| projection.position(id))
             .or_else(|| (!projection.is_empty()).then_some(0));
-        let mut state = Checkpoint {
+        // Ref names/decorations can change without changing lane geometry. A new
+        // head position (even at an existing commit) must invalidate geometry.
+        let reusable = previous.filter(|old| {
+            Arc::ptr_eq(&old.projection.index, &projection.index)
+                && old.projection == projection
+                && old.branch_heads == branch_heads
+                && old.main == main
+        });
+        let mut state = WalkState {
             walk: history_graph::GraphWalk::new(main),
             labels: SmallVec::new(),
         };
@@ -126,58 +204,109 @@ impl IndexedGraph {
             projection,
             checkpoints: Vec::new(),
             branch_heads,
+            main,
+            geometry_cache: reusable
+                .map(|old| old.geometry_cache.clone())
+                .unwrap_or_default(),
             direct_labels,
             branch_names: names,
             containment,
-            lane_spans: Vec::new(),
+            lane_spans: reusable
+                .map(|old| old.lane_spans.clone())
+                .unwrap_or_default(),
+            window_cache: Default::default(),
+            selection_cache: reusable
+                .map(|old| old.selection_cache.clone())
+                .unwrap_or_default(),
         };
+        if reusable.is_none() && main.is_some() && !graph.projection.is_empty() {
+            Arc::get_mut(&mut graph.lane_spans)
+                .unwrap()
+                .push(vec![LaneSpan {
+                    first: 0,
+                    last: graph.projection.len() as u32 - 1,
+                    color: 0,
+                }]);
+        }
         for row in 0..graph.projection.len() {
             if row.is_multiple_of(CHECKPOINT_STRIDE) {
                 cancellation.check_cancelled()?;
-                graph.checkpoints.push(state.clone());
+                graph.checkpoints.push(Checkpoint {
+                    walk: reusable
+                        .map(|old| old.checkpoints[row / CHECKPOINT_STRIDE].walk.clone())
+                        .unwrap_or_else(|| Arc::new(state.walk.checkpoint())),
+                    labels: state
+                        .labels
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(col, label)| {
+                            label.map(|(label, seeded)| SavedLabel {
+                                column: col as u16,
+                                label,
+                                seeded,
+                            })
+                        })
+                        .collect(),
+                });
             }
-            let (paint, _) = graph.step(row, &mut state);
-            graph
-                .lane_spans
-                .resize_with(graph.lane_spans.len().max(paint.lanes_now.len()), Vec::new);
-            for (col, lane) in paint
-                .lanes_now
-                .iter()
-                .enumerate()
-                .filter(|(_, lane)| lane.is_active())
-            {
-                let spans = &mut graph.lane_spans[col];
-                if let Some(last) = spans
-                    .last_mut()
-                    .filter(|last| last.color == lane.color_ix && last.last as usize + 1 == row)
-                {
-                    last.last = row as u32;
-                } else {
-                    spans.push(LaneSpan {
-                        first: row as u32,
-                        last: row as u32,
-                        color: lane.color_ix,
-                    });
-                }
+            let (transition, _) = graph.step(row, &mut state, false);
+            if reusable.is_some() {
+                continue;
+            }
+            for (col, lane) in transition.now {
+                graph.change_span(col, row, lane);
+            }
+            for (col, lane) in transition.next {
+                graph.change_span(col, row + 1, lane);
             }
         }
         cancellation.check_cancelled()?;
         Ok(graph)
     }
 
-    fn step(&self, row: usize, state: &mut Checkpoint) -> (history_graph::GraphRow, Option<u16>) {
+    fn change_span(&mut self, col: usize, row: usize, lane: history_graph::LanePaint) {
+        let columns = Arc::get_mut(&mut self.lane_spans).expect("new geometry");
+        columns.resize_with(columns.len().max(col + 1), Vec::new);
+        let spans = &mut columns[col];
+        if let Some(last) = spans.last_mut().filter(|span| span.last as usize >= row) {
+            if lane.is_active() && last.color == lane.color_ix {
+                return;
+            }
+            if last.first as usize == row {
+                spans.pop();
+            } else {
+                last.last = row as u32 - 1;
+            }
+        }
+        if lane.is_active() && row < self.projection.len() {
+            spans.push(LaneSpan {
+                first: row as u32,
+                last: self.projection.len() as u32 - 1,
+                color: lane.color_ix,
+            });
+        }
+    }
+
+    fn step(
+        &self,
+        row: usize,
+        state: &mut WalkState,
+        materialize: bool,
+    ) -> (history_graph::GraphTransition, Option<u16>) {
         let parents: SmallVec<[usize; 4]> = self
             .projection
             .parents(row)
             .filter(|&parent| parent > row)
             .collect();
         let raw = self.projection.raw_position(row).expect("graph row");
-        let paint = state.walk.step(
+        let transition = state.walk.transition(
             row,
             &parents,
             self.projection.index.parents(raw).len() > 1,
             self.branch_heads.contains(&row),
+            materialize,
         );
+        let paint = &transition.paint;
         let node = usize::from(paint.node_col);
         let mut resolved = state.labels.get(node).copied().flatten();
         for edge in &paint.joins_in {
@@ -197,25 +326,27 @@ impl IndexedGraph {
             .find(|(_, bits)| bits[raw / 64] & (1u64 << (raw % 64)) != 0)
             .map(|(label, _)| *label);
         if let Some(label) = contained.or_else(|| self.direct_labels.get(&row).copied()) {
-            resolved = Some((label, row));
+            resolved = Some((label, row as u32));
         }
         if state.labels.len() <= node {
             state.labels.resize(node + 1, None);
         }
         state.labels[node] = resolved;
-        if state.labels.len() < paint.lanes_next.len() {
-            state.labels.resize(paint.lanes_next.len(), None);
+        if state.labels.len() < transition.next_len {
+            state.labels.resize(transition.next_len, None);
         }
-        for (col, lane) in paint.lanes_next.iter().enumerate() {
+        for &(col, lane) in &transition.next {
+            if col >= state.labels.len() {
+                continue;
+            }
             if !lane.is_active() {
                 state.labels[col] = None;
             } else if lane.starts_at_node() {
                 state.labels[col] = resolved;
             }
         }
-        // Discard ended trailing lanes as well as their attribution.
-        state.labels.truncate(paint.lanes_next.len());
-        (paint, resolved.map(|(label, _)| label))
+        state.labels.truncate(transition.next_len);
+        (transition, resolved.map(|(label, _)| label))
     }
 
     pub fn selected_lane(
@@ -225,8 +356,32 @@ impl IndexedGraph {
         window_start: usize,
         cancellation: &CancellationToken,
     ) -> Result<Option<crate::view::rows::history_graph_paint::SelectedLane>> {
+        let key = (anchor, on_branch);
+        let cached = *self.selection_cache.lock().unwrap();
+        let absolute =
+            if let Some((cached_key, lane)) = cached.filter(|(cached_key, _)| *cached_key == key) {
+                let _ = cached_key;
+                lane
+            } else {
+                let lane = self.selected_lane_absolute(anchor, on_branch, cancellation)?;
+                *self.selection_cache.lock().unwrap() = Some((key, lane));
+                lane
+            };
+        Ok(absolute.map(|lane| lane.relative_to(window_start)))
+    }
+
+    fn selected_lane_absolute(
+        &self,
+        anchor: usize,
+        on_branch: Option<bool>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<crate::view::rows::history_graph_paint::SelectedLane>> {
         use crate::view::rows::history_graph_paint::{self as paint, SelectedLane};
+        let saved_geometry = self.geometry_cache.lock().unwrap().take();
+        let saved = self.window_cache.lock().unwrap().take();
         let window = self.window(anchor..anchor + 1, cancellation)?;
+        *self.window_cache.lock().unwrap() = saved;
+        *self.geometry_cache.lock().unwrap() = saved_geometry;
         let Some(row) = window.rows.first() else {
             return Ok(None);
         };
@@ -254,17 +409,7 @@ impl IndexedGraph {
         let (first, last) = span.map_or((anchor, anchor), |span| {
             (span.first as usize, span.last as usize)
         });
-        // Keep an off-screen selection active so unrelated lanes still wash out.
-        // A span wholly above this window cannot cover a local row.
-        Ok(Some(if last < window_start {
-            SelectedLane::span(color, usize::MAX - 1, usize::MAX - 1)
-        } else {
-            SelectedLane::span(
-                color,
-                first.saturating_sub(window_start),
-                last - window_start,
-            )
-        }))
+        Ok(Some(SelectedLane::span(color, first, last)))
     }
 
     pub fn window(
@@ -272,19 +417,40 @@ impl IndexedGraph {
         range: std::ops::Range<usize>,
         cancellation: &CancellationToken,
     ) -> Result<GraphWindow> {
+        cancellation.check_cancelled()?;
+        if let Some((_, window)) = self
+            .window_cache
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(key, _)| *key == range)
+        {
+            return Ok(window.clone());
+        }
+        let geometry = self
+            .geometry_cache
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(key, _)| *key == range)
+            .map(|(_, rows)| rows.clone());
         let end = range.end.min(self.projection.len());
         let mut rows = Vec::with_capacity(end.saturating_sub(range.start));
         let mut labels = Vec::with_capacity(rows.capacity());
         if range.start < end {
             let checkpoint = range.start / CHECKPOINT_STRIDE;
-            let mut state = self.checkpoints[checkpoint].clone();
+            let saved = &self.checkpoints[checkpoint];
+            let mut state = saved.restore();
             for row in checkpoint * CHECKPOINT_STRIDE..end {
                 if row.is_multiple_of(128) {
                     cancellation.check_cancelled()?;
                 }
-                let (paint, label) = self.step(row, &mut state);
+                let (transition, label) =
+                    self.step(row, &mut state, geometry.is_none() && row >= range.start);
                 if row >= range.start {
-                    rows.push(paint);
+                    if geometry.is_none() {
+                        rows.push(transition.paint);
+                    }
                     labels.push(
                         label
                             .and_then(|label| self.branch_names.get(usize::from(label)))
@@ -293,10 +459,14 @@ impl IndexedGraph {
                 }
             }
         }
-        Ok(GraphWindow {
-            rows: rows.into(),
-            labels,
-        })
+        let rows = geometry.unwrap_or_else(|| rows.into());
+        *self.geometry_cache.lock().unwrap() = Some((range.clone(), rows.clone()));
+        let window = GraphWindow {
+            rows,
+            labels: labels.into(),
+        };
+        *self.window_cache.lock().unwrap() = Some((range, window.clone()));
+        Ok(window)
     }
 }
 
@@ -314,7 +484,7 @@ mod tests {
 
     #[test]
     fn checkpoint_windows_match_continuous_graph_and_attribution() {
-        for linear in [true, false] {
+        for (linear, width) in [(true, 1), (false, 83), (false, 512)] {
             let count = 4200;
             let mut builder = HistoryIndexBuilder::new(
                 HistorySnapshot("graph".into()),
@@ -325,19 +495,14 @@ mod tests {
             let mut commits = Vec::new();
             for row in 0..count {
                 let mut parents = Vec::new();
-                if row + 1 < count {
+                if row + width < count {
+                    parents.push(raw(row + width));
+                }
+                if !linear && row.is_multiple_of(37) && row + 1 < count {
                     parents.push(raw(row + 1));
                 }
-                if !linear && row.is_multiple_of(37) && row + 83 < count {
-                    parents.push(raw(row + 83));
-                }
                 builder
-                    .push(
-                        &raw(row),
-                        parents.iter().map(|id| id.as_slice()),
-                        (count - row) as i64,
-                        false,
-                    )
+                    .push(&raw(row), parents.iter().map(|id| id.as_slice()), false)
                     .unwrap();
                 commits.push(Commit {
                     id: CommitId(gitcomet_core::hex::encode(&raw(row)).into()),
@@ -493,7 +658,6 @@ mod benchmarks {
                 .push(
                     &raw(row),
                     parents.iter().map(|parent| parent.as_slice()),
-                    0,
                     false,
                 )
                 .unwrap();
@@ -520,5 +684,263 @@ mod benchmarks {
             samples[50], samples[95]
         );
         assert_eq!(graph.checkpoints.len(), count.div_ceil(CHECKPOINT_STRIDE));
+    }
+}
+
+/// Benchmark entry points use the same index, checkpoints and windows as the UI.
+#[cfg(any(test, feature = "benchmarks"))]
+pub struct IndexedHistoryFixture {
+    count: usize,
+    width: usize,
+    hash_len: usize,
+    index_peak_bytes: usize,
+    graph: IndexedGraph,
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+impl IndexedHistoryFixture {
+    pub fn new(count: usize, width: usize, hash_len: usize) -> Self {
+        let (index, index_peak_bytes) = Self::index(count, width, hash_len);
+        let graph =
+            IndexedGraph::build(index, &[], &[], &[], None, None, &CancellationToken::new())
+                .unwrap();
+        Self {
+            count,
+            width,
+            hash_len,
+            index_peak_bytes,
+            graph,
+        }
+    }
+    fn id(row: usize) -> [u8; 32] {
+        let mut id = [0; 32];
+        let mut seed = row as u64;
+        for chunk in id.as_chunks_mut::<8>().0 {
+            seed = seed.wrapping_add(0x9e3779b97f4a7c15);
+            let mut value = seed;
+            value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+            chunk.copy_from_slice(&(value ^ (value >> 31)).to_be_bytes());
+        }
+        id
+    }
+    fn index(count: usize, width: usize, hash_len: usize) -> (HistoryIndexHandle, usize) {
+        use gitcomet_core::{history_index::HistoryIndexBuilder, services::HistorySnapshot};
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot("indexed-benchmark".into()),
+            LogScope::AllBranches,
+            hash_len,
+        )
+        .unwrap();
+        for row in 0..count {
+            let parents: SmallVec<[[u8; 32]; 2]> = [row + width.max(1), row + 1]
+                .into_iter()
+                .enumerate()
+                .filter(|&(ix, parent)| parent < count && (ix == 0 || (width > 1 && row % 37 == 0)))
+                .map(|(_, row)| Self::id(row))
+                .collect();
+            builder
+                .push(
+                    &Self::id(row)[..hash_len],
+                    parents.iter().map(|id| &id[..hash_len]),
+                    false,
+                )
+                .unwrap();
+        }
+        let peak = builder.estimated_peak_bytes();
+        (builder.finish(&CancellationToken::new()).unwrap(), peak)
+    }
+    pub fn build_index(&self) -> usize {
+        Self::index(self.count, self.width, self.hash_len)
+            .0
+            .estimated_bytes()
+    }
+    pub fn build_graph(&self) -> usize {
+        let graph = IndexedGraph::build(
+            self.graph.projection.index.clone(),
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        graph.checkpoint_bytes()
+    }
+    pub fn window(&self, start: usize, rows: usize, selection: Option<usize>) -> usize {
+        let start = start.min(self.count.saturating_sub(rows));
+        let window = self
+            .graph
+            .window(
+                start..(start + rows).min(self.count),
+                &CancellationToken::new(),
+            )
+            .unwrap();
+        if let Some(anchor) = selection {
+            std::hint::black_box(
+                self.graph
+                    .selected_lane(anchor, None, start, &CancellationToken::new())
+                    .unwrap(),
+            );
+        }
+        std::hint::black_box(&window);
+        window.rows.len()
+    }
+    pub fn retained_bytes(&self) -> usize {
+        self.graph.projection.index.estimated_bytes()
+    }
+    pub fn estimated_index_peak_bytes(&self) -> usize {
+        self.index_peak_bytes
+    }
+    pub fn checkpoint_bytes(&self) -> usize {
+        self.graph.checkpoint_bytes()
+    }
+    pub fn clear_window(&self) {
+        *self.graph.window_cache.lock().unwrap() = None;
+        *self.graph.geometry_cache.lock().unwrap() = None;
+    }
+}
+
+#[cfg(test)]
+mod performance_regressions {
+    use super::*;
+    use gitcomet_core::history_perf::{self, Work};
+
+    #[test]
+    fn indexed_history_skipped_rows_and_warm_windows_materialize_no_paint() {
+        for width in [1, 64, 512, 5261] {
+            let fixture = IndexedHistoryFixture::new(20_000, width, 20);
+            assert_eq!(fixture.build_index(), fixture.retained_bytes());
+            assert!(fixture.estimated_index_peak_bytes() >= fixture.retained_bytes());
+            {
+                let _capture = history_perf::capture();
+                fixture.build_graph();
+                assert_eq!(history_perf::count(Work::PaintRow), 0);
+                assert_eq!(history_perf::count(Work::GraphTransition), 20_000);
+            }
+            let _capture = history_perf::capture();
+            fixture.window(10_239, 40, None);
+            assert_eq!(history_perf::count(Work::PaintRow), 40);
+            let transitions = history_perf::count(Work::GraphTransition);
+            assert_eq!(transitions, 1023 + 40);
+            fixture.window(10_239, 40, None);
+            assert_eq!(history_perf::count(Work::GraphTransition), transitions);
+            fixture.window(10_239, 40, Some(100));
+            let transitions = history_perf::count(Work::GraphTransition);
+            fixture.window(10_239, 40, Some(100));
+            assert_eq!(history_perf::count(Work::GraphTransition), transitions);
+            assert!(fixture.checkpoint_bytes() > 0);
+        }
+    }
+
+    #[test]
+    #[ignore = "production index/graph phase and window latency benchmark"]
+    fn indexed_history_wide_graph_phase_benchmark() {
+        use std::time::Instant;
+        for count in [100_000, 2_000_000] {
+            for width in [1, 64, 512, 5261] {
+                let started = Instant::now();
+                let fixture = IndexedHistoryFixture::new(count, width, 20);
+                let construction = started.elapsed();
+                let mut cold = Vec::new();
+                let mut warm = Vec::new();
+                for sample in 0..100 {
+                    let start = (sample * 97171) % (count - 40);
+                    fixture.clear_window();
+                    let started = Instant::now();
+                    fixture.window(start, 40, Some(count / 3));
+                    cold.push(started.elapsed().as_secs_f64() * 1000.0);
+                    let started = Instant::now();
+                    fixture.window(start, 40, Some(count / 3));
+                    warm.push(started.elapsed().as_secs_f64() * 1000.0);
+                }
+                cold.sort_by(f64::total_cmp);
+                warm.sort_by(f64::total_cmp);
+                eprintln!(
+                    "rows={count} width={width} construct_s={:.3} retained_bytes={} checkpoint_bytes={} first_touch_ms_p50_p95_p99={:?} warm_ms_p50_p95_p99={:?}",
+                    construction.as_secs_f64(),
+                    fixture.retained_bytes(),
+                    fixture.checkpoint_bytes(),
+                    [cold[50], cold[95], cold[99]],
+                    [warm[50], warm[95], warm[99]]
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod geometry_reuse_regressions {
+    use super::*;
+
+    #[test]
+    fn indexed_history_ref_renames_reuse_geometry_but_new_head_positions_do_not() {
+        let fixture = IndexedHistoryFixture::new(2000, 64, 20);
+        let index = fixture.graph.projection.index.clone();
+        let cancel = CancellationToken::new();
+        let head = index.commit_id(0).unwrap();
+        let mut branches = vec![Branch {
+            name: "feature".into(),
+            target: head.clone(),
+            upstream: None,
+            divergence: None,
+        }];
+        let first = IndexedGraph::build(
+            index.clone(),
+            &branches,
+            &[],
+            &[],
+            Some("feature"),
+            Some(head.as_ref()),
+            &cancel,
+        )
+        .unwrap();
+        let window = first.window(0..40, &cancel).unwrap();
+        branches[0].name = "renamed".into();
+        let next = IndexedGraph::build_reusing(
+            index.clone(),
+            &branches,
+            &[],
+            &[],
+            Some("renamed"),
+            Some(head.as_ref()),
+            &cancel,
+            Some(&first),
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(&first.lane_spans, &next.lane_spans));
+        assert!(Arc::ptr_eq(
+            &first.checkpoints[0].walk,
+            &next.checkpoints[0].walk
+        ));
+        let renamed = next.window(0..40, &cancel).unwrap();
+        assert!(Arc::ptr_eq(&window.rows, &renamed.rows));
+        assert_eq!(
+            renamed.labels[0].as_ref().map(|name| name.as_ref()),
+            Some("renamed")
+        );
+        branches.push(Branch {
+            name: "new".into(),
+            target: index.commit_id(65).unwrap(),
+            upstream: None,
+            divergence: None,
+        });
+        let changed = IndexedGraph::build_reusing(
+            index,
+            &branches,
+            &[],
+            &[],
+            Some("renamed"),
+            Some(head.as_ref()),
+            &cancel,
+            Some(&next),
+        )
+        .unwrap();
+        assert!(!Arc::ptr_eq(&next.lane_spans, &changed.lane_spans));
+        assert!(!Arc::ptr_eq(
+            &next.checkpoints[0].walk,
+            &changed.checkpoints[0].walk
+        ));
     }
 }

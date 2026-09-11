@@ -1,0 +1,193 @@
+{
+  "profile": "release",
+  "runner": "shared developer workstation; timing alerts only",
+  "machine": {
+    "system": "Linux",
+    "node": "linuxdesktop",
+    "release": "7.2.3-zen1-2-zen",
+    "version": "#1 ZEN SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 18:37:05 +0000",
+    "machine": "x86_64",
+    "processor": ""
+  },
+  "cpu": "AMD Ryzen 9 5950X 16-Core Processor",
+  "binary_sha256": "d0d0225f818a1be2de7a2fe5cf10230ae538b32acd37fc9de19be597d2fa4213",
+  "shipping_calibration": "Pending five accepted runs on the dedicated runner",
+  "benchmarks": {
+    "indexed_history/index_100000_hash_32": {
+      "mean_ns": 6982249.04581807,
+      "median_ns": 6982064.826923077
+    },
+    "indexed_history/index_100000_hash_20": {
+      "mean_ns": 6880223.404447278,
+      "median_ns": 6878359.613095239
+    },
+    "indexed_history/100000_rows_1_columns/changing_selection": {
+      "mean_ns": 65682.27920195936,
+      "median_ns": 58504.45060713125
+    },
+    "indexed_history/100000_rows_1_columns/distant_jump": {
+      "mean_ns": 53457.53345533331,
+      "median_ns": 53229.57388205429
+    },
+    "indexed_history/100000_rows_1_columns/first_touch": {
+      "mean_ns": 102625.7140371877,
+      "median_ns": 99735.50502008032
+    },
+    "indexed_history/100000_rows_1_columns/build_graph": {
+      "mean_ns": 9217933.438194444,
+      "median_ns": 9189230.52125
+    },
+    "indexed_history/100000_rows_1_columns/warm": {
+      "mean_ns": 37.988650640598465,
+      "median_ns": 37.918861440517894,
+      "sidecar": {
+        "bench": "indexed_history/100000_rows_1_columns/warm",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 48,
+          "alloc_ops": 2,
+          "checkpoint_bytes": 8800,
+          "dealloc_bytes": 48,
+          "dealloc_ops": 2,
+          "estimated_index_peak_bytes": 11629296,
+          "net_alloc_bytes": 0,
+          "paint_rows": 0,
+          "realloc_bytes_delta": 0,
+          "realloc_ops": 0,
+          "retained_index_bytes": 4207872
+        }
+      }
+    },
+    "indexed_history/100000_rows_64_columns/changing_selection": {
+      "mean_ns": 47364.9967076404,
+      "median_ns": 47078.17908893709
+    },
+    "indexed_history/100000_rows_64_columns/distant_jump": {
+      "mean_ns": 60011.78698095891,
+      "median_ns": 60562.89822898295
+    },
+    "indexed_history/100000_rows_64_columns/first_touch": {
+      "mean_ns": 98113.87609510038,
+      "median_ns": 98726.53552663293
+    },
+    "indexed_history/100000_rows_64_columns/build_graph": {
+      "mean_ns": 10098276.752208995,
+      "median_ns": 9420995.72962963
+    },
+    "indexed_history/100000_rows_64_columns/warm": {
+      "mean_ns": 38.15616611070927,
+      "median_ns": 37.99126193764121,
+      "sidecar": {
+        "bench": "indexed_history/100000_rows_64_columns/warm",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 48,
+          "alloc_ops": 2,
+          "checkpoint_bytes": 78640,
+          "dealloc_bytes": 48,
+          "dealloc_ops": 2,
+          "estimated_index_peak_bytes": 11766576,
+          "net_alloc_bytes": 0,
+          "paint_rows": 0,
+          "realloc_bytes_delta": 0,
+          "realloc_ops": 0,
+          "retained_index_bytes": 4218432
+        }
+      }
+    },
+    "indexed_history/100000_rows_512_columns/changing_selection": {
+      "mean_ns": 53019.541932798944,
+      "median_ns": 52730.121160432034
+    },
+    "indexed_history/100000_rows_512_columns/distant_jump": {
+      "mean_ns": 123093.88489459327,
+      "median_ns": 123146.29190066425
+    },
+    "indexed_history/100000_rows_512_columns/first_touch": {
+      "mean_ns": 166710.57273457907,
+      "median_ns": 166744.7833785413
+    },
+    "indexed_history/100000_rows_512_columns/build_graph": {
+      "mean_ns": 8827881.695523089,
+      "median_ns": 8753414.3989899
+    },
+    "indexed_history/100000_rows_512_columns/warm": {
+      "mean_ns": 38.93979033774063,
+      "median_ns": 37.12207153616653,
+      "sidecar": {
+        "bench": "indexed_history/100000_rows_512_columns/warm",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 48,
+          "alloc_ops": 2,
+          "checkpoint_bytes": 600112,
+          "dealloc_bytes": 48,
+          "dealloc_ops": 2,
+          "estimated_index_peak_bytes": 11743280,
+          "net_alloc_bytes": 0,
+          "paint_rows": 0,
+          "realloc_bytes_delta": 0,
+          "realloc_ops": 0,
+          "retained_index_bytes": 4216640
+        }
+      }
+    },
+    "indexed_history/100000_rows_5261_columns/changing_selection": {
+      "mean_ns": 191101.79129115966,
+      "median_ns": 190429.95230310434
+    },
+    "indexed_history/100000_rows_5261_columns/distant_jump": {
+      "mean_ns": 902910.3727145337,
+      "median_ns": 908267.684375
+    },
+    "indexed_history/100000_rows_5261_columns/first_touch": {
+      "mean_ns": 892002.6232722221,
+      "median_ns": 889215.7952777778
+    },
+    "indexed_history/100000_rows_5261_columns/build_graph": {
+      "mean_ns": 10916661.902182538,
+      "median_ns": 10911683.888888888
+    },
+    "indexed_history/100000_rows_5261_columns/warm": {
+      "mean_ns": 42.327057718695606,
+      "median_ns": 37.473456267629835,
+      "sidecar": {
+        "bench": "indexed_history/100000_rows_5261_columns/warm",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 48,
+          "alloc_ops": 2,
+          "checkpoint_bytes": 9023536,
+          "dealloc_bytes": 48,
+          "dealloc_ops": 2,
+          "estimated_index_peak_bytes": 11496332,
+          "net_alloc_bytes": 0,
+          "paint_rows": 0,
+          "realloc_bytes_delta": 0,
+          "realloc_ops": 0,
+          "retained_index_bytes": 4197644
+        }
+      }
+    }
+  }
+}

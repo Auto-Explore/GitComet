@@ -844,7 +844,7 @@ pub(super) fn select_commit_multi(
     commit_id: CommitId,
     mode: CommitSelectMode,
     clicked_index: Option<usize>,
-    visible_order: Option<Vec<CommitId>>,
+    mut visible_order: Option<Vec<CommitId>>,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -860,7 +860,7 @@ pub(super) fn select_commit_multi(
         }
         CommitSelectMode::Toggle => {
             if let Some(ix) = sel.commits.iter().position(|c| *c == commit_id) {
-                sel.commits.remove(ix);
+                Arc::make_mut(&mut sel.commits).remove(ix);
                 let Some(focus) = sel.commits.last().cloned() else {
                     // Toggled the last commit away: clear the selection
                     // entirely (also dissolves the multi-selection).
@@ -870,7 +870,7 @@ pub(super) fn select_commit_multi(
                 };
                 focus
             } else {
-                sel.commits.push(commit_id.clone());
+                Arc::make_mut(&mut sel.commits).push(commit_id.clone());
                 sel.anchor = Some(commit_id.clone());
                 sel.anchor_index = clicked_index;
                 sel.anchor_log_rev = Some(log_rev);
@@ -905,7 +905,11 @@ pub(super) fn select_commit_multi(
                     } else {
                         (clicked_ix, anchor_ix)
                     };
-                    sel.commits = entries[a..=b].to_vec();
+                    sel.commits = Arc::new(if a == 0 && b + 1 == entries.len() {
+                        visible_order.take().unwrap()
+                    } else {
+                        entries[a..=b].to_vec()
+                    });
                     if sel.anchor.is_none() {
                         sel.anchor = Some(commit_id.clone());
                     }
@@ -1262,8 +1266,7 @@ fn collapse_multi_selection_to(
     clicked_index: Option<usize>,
     log_rev: u64,
 ) {
-    sel.commits.clear();
-    sel.commits.push(commit_id.clone());
+    sel.commits = Arc::new(vec![commit_id.clone()]);
     sel.anchor = Some(commit_id);
     sel.anchor_index = clicked_index;
     sel.anchor_log_rev = Some(log_rev);

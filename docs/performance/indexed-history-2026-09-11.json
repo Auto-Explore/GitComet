@@ -1,0 +1,838 @@
+{
+  "profile": "test",
+  "baseline_revision": "d29568643f239da6d9656fb225346f2f30ba3d3b",
+  "machine": {
+    "system": "Linux",
+    "node": "linuxdesktop",
+    "release": "7.2.3-zen1-2-zen",
+    "version": "#1 ZEN SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 18:37:05 +0000",
+    "machine": "x86_64",
+    "processor": ""
+  },
+  "cpu": "AMD Ryzen 9 5950X 16-Core Processor",
+  "runner": "shared developer workstation; timing alerts only",
+  "binaries": {
+    "before": {
+      "path": "/tmp/index-perf-before-backend-phased",
+      "sha256": "2c3e1428c0f1aaf07ea8144670fa586950efb1d0b13b5d5dbc22be2a93b013d6"
+    },
+    "after": {
+      "path": "/tmp/index-perf-after-backend-phased",
+      "sha256": "e33cc3a698141fcdf45a7e20da80b2d5ab3c2cd6ec48d08a354b17e8cfd04dce"
+    }
+  },
+  "initial_paired_runs": [
+    {
+      "name": "chromium",
+      "head": "e6333471674f4d3af9f386bfc2e5e4388333b734",
+      "refs_sha256": "692724f49689a7eb27bfb4980c4974dd5a045fdd14542ebe894e2314c23382e6",
+      "commit_graphs": {
+        "/home/sampo/chromium/src/.git/objects/info/commit-graphs/commit-graph-chain": "b2d79012c7e5d8974e69a89f96a2a4e02f8fa4a21922c5b0e573b9c8c931a12d",
+        "/home/sampo/chromium/src/.git/objects/info/commit-graphs/graph-b5bd6255d566d15f6ef192e8e43e691244da46ea.graph": "08603ecb614b6511eb7bf47d9c820e5411cb798c8ab9a18bd985d92d151927aa"
+      },
+      "samples": {
+        "before": [
+          {
+            "commits": 1922916,
+            "index_seconds": 6.155,
+            "retained_mib": 80.8,
+            "range_p50_ms": 3.17,
+            "range_p95_ms": 3.51
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 6.126,
+            "retained_mib": 80.8,
+            "range_p50_ms": 3.2,
+            "range_p95_ms": 3.53
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 5.947,
+            "retained_mib": 80.8,
+            "range_p50_ms": 3.21,
+            "range_p95_ms": 3.66
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 6.163,
+            "retained_mib": 80.8,
+            "range_p50_ms": 3.23,
+            "range_p95_ms": 3.54
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 6.101,
+            "retained_mib": 80.8,
+            "range_p50_ms": 3.2,
+            "range_p95_ms": 3.55
+          }
+        ],
+        "after": [
+          {
+            "commits": 1922916,
+            "index_seconds": 4.805,
+            "retained_mib": 63.1,
+            "range_p50_ms": 1.79,
+            "range_p95_ms": 4.4
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 4.815,
+            "retained_mib": 63.1,
+            "range_p50_ms": 1.8,
+            "range_p95_ms": 4.4
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 4.728,
+            "retained_mib": 63.1,
+            "range_p50_ms": 1.81,
+            "range_p95_ms": 4.42
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 4.801,
+            "retained_mib": 63.1,
+            "range_p50_ms": 1.85,
+            "range_p95_ms": 4.44
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 4.881,
+            "retained_mib": 63.1,
+            "range_p50_ms": 1.81,
+            "range_p95_ms": 4.43
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "commits": 1922916,
+          "index_seconds": 6.126,
+          "retained_mib": 80.8,
+          "range_p50_ms": 3.2,
+          "range_p95_ms": 3.54
+        },
+        "after": {
+          "commits": 1922916,
+          "index_seconds": 4.805,
+          "retained_mib": 63.1,
+          "range_p50_ms": 1.81,
+          "range_p95_ms": 4.42
+        }
+      }
+    },
+    {
+      "name": "git",
+      "head": "2cc71917514657b93014134350864f4849edfc83",
+      "refs_sha256": "7ca2834876227cb6c02c791c3e54993f725c5baaf4d042311ffec6792c2d63e3",
+      "commit_graphs": {},
+      "samples": {
+        "before": [
+          {
+            "commits": 83182,
+            "index_seconds": 4.156,
+            "retained_mib": 4.8,
+            "range_p50_ms": 2.65,
+            "range_p95_ms": 3.15
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.15,
+            "retained_mib": 4.8,
+            "range_p50_ms": 2.65,
+            "range_p95_ms": 3.16
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.142,
+            "retained_mib": 4.8,
+            "range_p50_ms": 2.64,
+            "range_p95_ms": 3.11
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.321,
+            "retained_mib": 4.8,
+            "range_p50_ms": 2.71,
+            "range_p95_ms": 3.23
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.199,
+            "retained_mib": 4.8,
+            "range_p50_ms": 2.69,
+            "range_p95_ms": 3.2
+          }
+        ],
+        "after": [
+          {
+            "commits": 83182,
+            "index_seconds": 4.127,
+            "retained_mib": 4.0,
+            "range_p50_ms": 1.57,
+            "range_p95_ms": 1.79
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.134,
+            "retained_mib": 4.0,
+            "range_p50_ms": 1.56,
+            "range_p95_ms": 1.79
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.086,
+            "retained_mib": 4.0,
+            "range_p50_ms": 1.62,
+            "range_p95_ms": 1.97
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.329,
+            "retained_mib": 4.0,
+            "range_p50_ms": 1.69,
+            "range_p95_ms": 2.03
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.22,
+            "retained_mib": 4.0,
+            "range_p50_ms": 1.59,
+            "range_p95_ms": 1.84
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "commits": 83182,
+          "index_seconds": 4.156,
+          "retained_mib": 4.8,
+          "range_p50_ms": 2.65,
+          "range_p95_ms": 3.16
+        },
+        "after": {
+          "commits": 83182,
+          "index_seconds": 4.134,
+          "retained_mib": 4.0,
+          "range_p50_ms": 1.59,
+          "range_p95_ms": 1.84
+        }
+      }
+    },
+    {
+      "name": "bun",
+      "head": "06820dc10fd31bc21c7a7e65743978a62d00843d",
+      "refs_sha256": "9bc2ac0dd7cb95c998b67ca5d880307d4d334f81f40cea9970fb1e1380d86fd2",
+      "commit_graphs": {},
+      "samples": {
+        "before": [
+          {
+            "commits": 72926,
+            "index_seconds": 4.753,
+            "retained_mib": 4.7,
+            "range_p50_ms": 3.44,
+            "range_p95_ms": 3.94
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.635,
+            "retained_mib": 4.7,
+            "range_p50_ms": 3.37,
+            "range_p95_ms": 3.91
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.657,
+            "retained_mib": 4.7,
+            "range_p50_ms": 3.41,
+            "range_p95_ms": 3.91
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.823,
+            "retained_mib": 4.7,
+            "range_p50_ms": 3.44,
+            "range_p95_ms": 3.96
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.793,
+            "retained_mib": 4.7,
+            "range_p50_ms": 3.51,
+            "range_p95_ms": 4.04
+          }
+        ],
+        "after": [
+          {
+            "commits": 72926,
+            "index_seconds": 4.753,
+            "retained_mib": 3.8,
+            "range_p50_ms": 2.33,
+            "range_p95_ms": 2.73
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.667,
+            "retained_mib": 3.8,
+            "range_p50_ms": 2.26,
+            "range_p95_ms": 2.67
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.679,
+            "retained_mib": 3.8,
+            "range_p50_ms": 2.29,
+            "range_p95_ms": 2.68
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.917,
+            "retained_mib": 3.8,
+            "range_p50_ms": 2.67,
+            "range_p95_ms": 3.25
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.705,
+            "retained_mib": 3.8,
+            "range_p50_ms": 2.33,
+            "range_p95_ms": 2.76
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "commits": 72926,
+          "index_seconds": 4.753,
+          "retained_mib": 4.7,
+          "range_p50_ms": 3.44,
+          "range_p95_ms": 3.94
+        },
+        "after": {
+          "commits": 72926,
+          "index_seconds": 4.705,
+          "retained_mib": 3.8,
+          "range_p50_ms": 2.33,
+          "range_p95_ms": 2.73
+        }
+      }
+    }
+  ],
+  "repositories": [
+    {
+      "name": "chromium",
+      "head": "e6333471674f4d3af9f386bfc2e5e4388333b734",
+      "refs_sha256": "692724f49689a7eb27bfb4980c4974dd5a045fdd14542ebe894e2314c23382e6",
+      "commit_graphs": {
+        "/home/sampo/chromium/src/.git/objects/info/commit-graphs/commit-graph-chain": "b2d79012c7e5d8974e69a89f96a2a4e02f8fa4a21922c5b0e573b9c8c931a12d",
+        "/home/sampo/chromium/src/.git/objects/info/commit-graphs/graph-b5bd6255d566d15f6ef192e8e43e691244da46ea.graph": "08603ecb614b6511eb7bf47d9c820e5411cb798c8ab9a18bd985d92d151927aa"
+      },
+      "samples": {
+        "before": [
+          {
+            "commits": 1922916,
+            "index_seconds": 13.74,
+            "retained_mib": 80.8,
+            "range_p50_ms": 6.77,
+            "range_p95_ms": 27.52,
+            "first_touch_p50_ms": 25.743,
+            "first_touch_p95_ms": 27.793,
+            "first_touch_p99_ms": 27.793,
+            "warm_p50_ms": 6.474,
+            "warm_p95_ms": 11.672,
+            "warm_p99_ms": 13.765
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 7.35,
+            "retained_mib": 80.8,
+            "range_p50_ms": 3.44,
+            "range_p95_ms": 3.83,
+            "first_touch_p50_ms": 3.5,
+            "first_touch_p95_ms": 3.996,
+            "first_touch_p99_ms": 3.996,
+            "warm_p50_ms": 3.427,
+            "warm_p95_ms": 3.717,
+            "warm_p99_ms": 3.831
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 9.458,
+            "retained_mib": 80.8,
+            "range_p50_ms": 3.49,
+            "range_p95_ms": 3.82,
+            "first_touch_p50_ms": 3.479,
+            "first_touch_p95_ms": 4.065,
+            "first_touch_p99_ms": 4.065,
+            "warm_p50_ms": 3.514,
+            "warm_p95_ms": 3.811,
+            "warm_p99_ms": 3.817
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 7.087,
+            "retained_mib": 80.8,
+            "range_p50_ms": 3.26,
+            "range_p95_ms": 3.56,
+            "first_touch_p50_ms": 3.297,
+            "first_touch_p95_ms": 3.732,
+            "first_touch_p99_ms": 3.732,
+            "warm_p50_ms": 3.263,
+            "warm_p95_ms": 3.559,
+            "warm_p99_ms": 3.565
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 7.062,
+            "retained_mib": 80.8,
+            "range_p50_ms": 3.27,
+            "range_p95_ms": 3.56,
+            "first_touch_p50_ms": 3.315,
+            "first_touch_p95_ms": 3.736,
+            "first_touch_p99_ms": 3.736,
+            "warm_p50_ms": 3.269,
+            "warm_p95_ms": 3.553,
+            "warm_p99_ms": 3.559
+          }
+        ],
+        "after": [
+          {
+            "commits": 1922916,
+            "index_seconds": 5.255,
+            "retained_mib": 63.1,
+            "range_p50_ms": 1.94,
+            "range_p95_ms": 4.69,
+            "first_touch_p50_ms": 3.565,
+            "first_touch_p95_ms": 5.342,
+            "first_touch_p99_ms": 5.342,
+            "warm_p50_ms": 1.906,
+            "warm_p95_ms": 2.079,
+            "warm_p99_ms": 2.088
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 5.132,
+            "retained_mib": 63.1,
+            "range_p50_ms": 1.83,
+            "range_p95_ms": 4.62,
+            "first_touch_p50_ms": 3.544,
+            "first_touch_p95_ms": 5.426,
+            "first_touch_p99_ms": 5.426,
+            "warm_p50_ms": 1.815,
+            "warm_p95_ms": 1.995,
+            "warm_p99_ms": 2.041
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 5.414,
+            "retained_mib": 63.1,
+            "range_p50_ms": 1.89,
+            "range_p95_ms": 4.84,
+            "first_touch_p50_ms": 3.704,
+            "first_touch_p95_ms": 5.773,
+            "first_touch_p99_ms": 5.773,
+            "warm_p50_ms": 1.841,
+            "warm_p95_ms": 2.068,
+            "warm_p99_ms": 2.122
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 5.436,
+            "retained_mib": 63.1,
+            "range_p50_ms": 1.88,
+            "range_p95_ms": 4.53,
+            "first_touch_p50_ms": 3.487,
+            "first_touch_p95_ms": 5.331,
+            "first_touch_p99_ms": 5.331,
+            "warm_p50_ms": 1.861,
+            "warm_p95_ms": 2.029,
+            "warm_p99_ms": 2.036
+          },
+          {
+            "commits": 1922916,
+            "index_seconds": 5.347,
+            "retained_mib": 63.1,
+            "range_p50_ms": 1.88,
+            "range_p95_ms": 4.5,
+            "first_touch_p50_ms": 3.467,
+            "first_touch_p95_ms": 5.236,
+            "first_touch_p99_ms": 5.236,
+            "warm_p50_ms": 1.841,
+            "warm_p95_ms": 2.004,
+            "warm_p99_ms": 2.011
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "commits": 1922916,
+          "index_seconds": 7.35,
+          "retained_mib": 80.8,
+          "range_p50_ms": 3.44,
+          "range_p95_ms": 3.82,
+          "first_touch_p50_ms": 3.479,
+          "first_touch_p95_ms": 3.996,
+          "first_touch_p99_ms": 3.996,
+          "warm_p50_ms": 3.427,
+          "warm_p95_ms": 3.717,
+          "warm_p99_ms": 3.817
+        },
+        "after": {
+          "commits": 1922916,
+          "index_seconds": 5.347,
+          "retained_mib": 63.1,
+          "range_p50_ms": 1.88,
+          "range_p95_ms": 4.62,
+          "first_touch_p50_ms": 3.544,
+          "first_touch_p95_ms": 5.342,
+          "first_touch_p99_ms": 5.342,
+          "warm_p50_ms": 1.841,
+          "warm_p95_ms": 2.029,
+          "warm_p99_ms": 2.041
+        }
+      }
+    },
+    {
+      "name": "git",
+      "head": "2cc71917514657b93014134350864f4849edfc83",
+      "refs_sha256": "7ca2834876227cb6c02c791c3e54993f725c5baaf4d042311ffec6792c2d63e3",
+      "commit_graphs": {},
+      "samples": {
+        "before": [
+          {
+            "commits": 83182,
+            "index_seconds": 4.216,
+            "retained_mib": 4.8,
+            "range_p50_ms": 2.75,
+            "range_p95_ms": 3.27,
+            "first_touch_p50_ms": 2.77,
+            "first_touch_p95_ms": 3.378,
+            "first_touch_p99_ms": 3.378,
+            "warm_p50_ms": 2.753,
+            "warm_p95_ms": 3.262,
+            "warm_p99_ms": 3.271
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 5.265,
+            "retained_mib": 4.8,
+            "range_p50_ms": 2.74,
+            "range_p95_ms": 3.23,
+            "first_touch_p50_ms": 2.736,
+            "first_touch_p95_ms": 3.261,
+            "first_touch_p99_ms": 3.261,
+            "warm_p50_ms": 2.754,
+            "warm_p95_ms": 3.233,
+            "warm_p99_ms": 3.233
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 5.026,
+            "retained_mib": 4.8,
+            "range_p50_ms": 5.21,
+            "range_p95_ms": 6.61,
+            "first_touch_p50_ms": 4.923,
+            "first_touch_p95_ms": 5.729,
+            "first_touch_p99_ms": 5.729,
+            "warm_p50_ms": 5.569,
+            "warm_p95_ms": 6.607,
+            "warm_p99_ms": 7.205
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.233,
+            "retained_mib": 4.8,
+            "range_p50_ms": 2.72,
+            "range_p95_ms": 3.23,
+            "first_touch_p50_ms": 2.724,
+            "first_touch_p95_ms": 3.224,
+            "first_touch_p99_ms": 3.224,
+            "warm_p50_ms": 2.692,
+            "warm_p95_ms": 3.232,
+            "warm_p99_ms": 3.242
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.159,
+            "retained_mib": 4.8,
+            "range_p50_ms": 2.6,
+            "range_p95_ms": 3.08,
+            "first_touch_p50_ms": 2.583,
+            "first_touch_p95_ms": 3.077,
+            "first_touch_p99_ms": 3.077,
+            "warm_p50_ms": 2.605,
+            "warm_p95_ms": 3.084,
+            "warm_p99_ms": 3.095
+          }
+        ],
+        "after": [
+          {
+            "commits": 83182,
+            "index_seconds": 4.038,
+            "retained_mib": 4.0,
+            "range_p50_ms": 1.57,
+            "range_p95_ms": 1.81,
+            "first_touch_p50_ms": 1.589,
+            "first_touch_p95_ms": 1.82,
+            "first_touch_p99_ms": 1.82,
+            "warm_p50_ms": 1.571,
+            "warm_p95_ms": 1.803,
+            "warm_p99_ms": 1.808
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 4.053,
+            "retained_mib": 4.0,
+            "range_p50_ms": 1.61,
+            "range_p95_ms": 1.87,
+            "first_touch_p50_ms": 1.643,
+            "first_touch_p95_ms": 1.877,
+            "first_touch_p99_ms": 1.877,
+            "warm_p50_ms": 1.61,
+            "warm_p95_ms": 1.864,
+            "warm_p99_ms": 1.87
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 8.191,
+            "retained_mib": 4.0,
+            "range_p50_ms": 2.96,
+            "range_p95_ms": 3.3,
+            "first_touch_p50_ms": 3.031,
+            "first_touch_p95_ms": 3.35,
+            "first_touch_p99_ms": 3.35,
+            "warm_p50_ms": 2.935,
+            "warm_p95_ms": 3.28,
+            "warm_p99_ms": 3.298
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 7.671,
+            "retained_mib": 4.0,
+            "range_p50_ms": 1.68,
+            "range_p95_ms": 1.93,
+            "first_touch_p50_ms": 1.73,
+            "first_touch_p95_ms": 1.97,
+            "first_touch_p99_ms": 1.97,
+            "warm_p50_ms": 1.67,
+            "warm_p95_ms": 1.923,
+            "warm_p99_ms": 1.925
+          },
+          {
+            "commits": 83182,
+            "index_seconds": 3.978,
+            "retained_mib": 4.0,
+            "range_p50_ms": 1.59,
+            "range_p95_ms": 1.82,
+            "first_touch_p50_ms": 1.603,
+            "first_touch_p95_ms": 1.825,
+            "first_touch_p99_ms": 1.825,
+            "warm_p50_ms": 1.593,
+            "warm_p95_ms": 1.818,
+            "warm_p99_ms": 1.824
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "commits": 83182,
+          "index_seconds": 4.233,
+          "retained_mib": 4.8,
+          "range_p50_ms": 2.74,
+          "range_p95_ms": 3.23,
+          "first_touch_p50_ms": 2.736,
+          "first_touch_p95_ms": 3.261,
+          "first_touch_p99_ms": 3.261,
+          "warm_p50_ms": 2.753,
+          "warm_p95_ms": 3.233,
+          "warm_p99_ms": 3.242
+        },
+        "after": {
+          "commits": 83182,
+          "index_seconds": 4.053,
+          "retained_mib": 4.0,
+          "range_p50_ms": 1.61,
+          "range_p95_ms": 1.87,
+          "first_touch_p50_ms": 1.643,
+          "first_touch_p95_ms": 1.877,
+          "first_touch_p99_ms": 1.877,
+          "warm_p50_ms": 1.61,
+          "warm_p95_ms": 1.864,
+          "warm_p99_ms": 1.87
+        }
+      }
+    },
+    {
+      "name": "bun",
+      "head": "06820dc10fd31bc21c7a7e65743978a62d00843d",
+      "refs_sha256": "9bc2ac0dd7cb95c998b67ca5d880307d4d334f81f40cea9970fb1e1380d86fd2",
+      "commit_graphs": {},
+      "samples": {
+        "before": [
+          {
+            "commits": 72926,
+            "index_seconds": 4.739,
+            "retained_mib": 4.7,
+            "range_p50_ms": 3.5,
+            "range_p95_ms": 4.02,
+            "first_touch_p50_ms": 3.508,
+            "first_touch_p95_ms": 4.023,
+            "first_touch_p99_ms": 4.023,
+            "warm_p50_ms": 3.498,
+            "warm_p95_ms": 4.022,
+            "warm_p99_ms": 4.035
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.634,
+            "retained_mib": 4.7,
+            "range_p50_ms": 3.42,
+            "range_p95_ms": 3.97,
+            "first_touch_p50_ms": 3.46,
+            "first_touch_p95_ms": 3.952,
+            "first_touch_p99_ms": 3.952,
+            "warm_p50_ms": 3.416,
+            "warm_p95_ms": 3.972,
+            "warm_p99_ms": 4.043
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.679,
+            "retained_mib": 4.7,
+            "range_p50_ms": 3.46,
+            "range_p95_ms": 3.97,
+            "first_touch_p50_ms": 3.521,
+            "first_touch_p95_ms": 3.97,
+            "first_touch_p99_ms": 3.97,
+            "warm_p50_ms": 3.455,
+            "warm_p95_ms": 3.969,
+            "warm_p99_ms": 3.971
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.625,
+            "retained_mib": 4.7,
+            "range_p50_ms": 3.4,
+            "range_p95_ms": 3.93,
+            "first_touch_p50_ms": 3.519,
+            "first_touch_p95_ms": 3.926,
+            "first_touch_p99_ms": 3.926,
+            "warm_p50_ms": 3.396,
+            "warm_p95_ms": 3.91,
+            "warm_p99_ms": 3.955
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.737,
+            "retained_mib": 4.7,
+            "range_p50_ms": 3.46,
+            "range_p95_ms": 5.0,
+            "first_touch_p50_ms": 3.466,
+            "first_touch_p95_ms": 5.002,
+            "first_touch_p99_ms": 5.002,
+            "warm_p50_ms": 3.4,
+            "warm_p95_ms": 4.316,
+            "warm_p99_ms": 5.193
+          }
+        ],
+        "after": [
+          {
+            "commits": 72926,
+            "index_seconds": 4.557,
+            "retained_mib": 3.8,
+            "range_p50_ms": 2.24,
+            "range_p95_ms": 2.64,
+            "first_touch_p50_ms": 2.317,
+            "first_touch_p95_ms": 2.684,
+            "first_touch_p99_ms": 2.684,
+            "warm_p50_ms": 2.244,
+            "warm_p95_ms": 2.608,
+            "warm_p99_ms": 2.638
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.54,
+            "retained_mib": 3.8,
+            "range_p50_ms": 2.22,
+            "range_p95_ms": 2.61,
+            "first_touch_p50_ms": 2.28,
+            "first_touch_p95_ms": 2.689,
+            "first_touch_p99_ms": 2.689,
+            "warm_p50_ms": 2.224,
+            "warm_p95_ms": 2.596,
+            "warm_p99_ms": 2.613
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.586,
+            "retained_mib": 3.8,
+            "range_p50_ms": 2.29,
+            "range_p95_ms": 2.68,
+            "first_touch_p50_ms": 2.312,
+            "first_touch_p95_ms": 2.702,
+            "first_touch_p99_ms": 2.702,
+            "warm_p50_ms": 2.294,
+            "warm_p95_ms": 2.667,
+            "warm_p99_ms": 2.684
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.573,
+            "retained_mib": 3.8,
+            "range_p50_ms": 2.27,
+            "range_p95_ms": 2.66,
+            "first_touch_p50_ms": 2.285,
+            "first_touch_p95_ms": 2.658,
+            "first_touch_p99_ms": 2.658,
+            "warm_p50_ms": 2.274,
+            "warm_p95_ms": 2.64,
+            "warm_p99_ms": 2.664
+          },
+          {
+            "commits": 72926,
+            "index_seconds": 4.535,
+            "retained_mib": 3.8,
+            "range_p50_ms": 2.26,
+            "range_p95_ms": 2.65,
+            "first_touch_p50_ms": 2.292,
+            "first_touch_p95_ms": 2.659,
+            "first_touch_p99_ms": 2.659,
+            "warm_p50_ms": 2.265,
+            "warm_p95_ms": 2.645,
+            "warm_p99_ms": 2.648
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "commits": 72926,
+          "index_seconds": 4.679,
+          "retained_mib": 4.7,
+          "range_p50_ms": 3.46,
+          "range_p95_ms": 3.97,
+          "first_touch_p50_ms": 3.508,
+          "first_touch_p95_ms": 3.97,
+          "first_touch_p99_ms": 3.97,
+          "warm_p50_ms": 3.416,
+          "warm_p95_ms": 3.972,
+          "warm_p99_ms": 4.035
+        },
+        "after": {
+          "commits": 72926,
+          "index_seconds": 4.557,
+          "retained_mib": 3.8,
+          "range_p50_ms": 2.26,
+          "range_p95_ms": 2.65,
+          "first_touch_p50_ms": 2.292,
+          "first_touch_p95_ms": 2.684,
+          "first_touch_p99_ms": 2.684,
+          "warm_p50_ms": 2.265,
+          "warm_p95_ms": 2.64,
+          "warm_p99_ms": 2.648
+        }
+      }
+    }
+  ]
+}

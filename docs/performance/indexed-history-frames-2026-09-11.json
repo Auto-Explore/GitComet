@@ -1,0 +1,1266 @@
+{
+  "profile": "optimized test (opt-level 1)",
+  "runner": "shared developer workstation; timing alerts only",
+  "metadata": {
+    "profile": "test",
+    "machine": {
+      "system": "Linux",
+      "node": "linuxdesktop",
+      "release": "7.2.3-zen1-2-zen",
+      "version": "#1 ZEN SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 18:37:05 +0000",
+      "machine": "x86_64",
+      "processor": ""
+    },
+    "fixture": {
+      "commits": 20000,
+      "displayed_rows": 38,
+      "frames_per_sample": 100
+    },
+    "binaries": {
+      "before": {
+        "path": "/tmp/index-perf-before-ui",
+        "sha256": "95557a6a0becea6cb55cbc8f0577e3dd1e96afdc67c803d54d4f5dda1875ecec"
+      },
+      "after": {
+        "path": "/tmp/index-perf-after-ui",
+        "sha256": "b892ddb86848f947bd8be71e883c243d8779b0c8f034174666773ab6628fdda5"
+      }
+    }
+  },
+  "paired": [
+    {
+      "case": "5261_columns_80_pixels_100_percent",
+      "samples": {
+        "before": [
+          {
+            "draw_p50_ms": 269.072,
+            "draw_p95_ms": 284.006,
+            "draw_p99_ms": 296.898,
+            "allocations_per_frame": 2903857.0,
+            "bytes_per_frame": 2861201245.3,
+            "total_p50_ms": 542.461,
+            "total_p95_ms": 569.058,
+            "total_p99_ms": 577.569,
+            "emitted_paths_max": null
+          },
+          {
+            "draw_p50_ms": 275.148,
+            "draw_p95_ms": 294.665,
+            "draw_p99_ms": 301.698,
+            "allocations_per_frame": 2903857.4,
+            "bytes_per_frame": 2861201251.7,
+            "total_p50_ms": 555.54,
+            "total_p95_ms": 579.232,
+            "total_p99_ms": 590.737,
+            "emitted_paths_max": null
+          },
+          {
+            "draw_p50_ms": 270.611,
+            "draw_p95_ms": 286.255,
+            "draw_p99_ms": 295.794,
+            "allocations_per_frame": 2903857.4,
+            "bytes_per_frame": 2861201251.7,
+            "total_p50_ms": 546.871,
+            "total_p95_ms": 570.337,
+            "total_p99_ms": 579.216,
+            "emitted_paths_max": null
+          },
+          {
+            "draw_p50_ms": 271.184,
+            "draw_p95_ms": 290.069,
+            "draw_p99_ms": 300.637,
+            "allocations_per_frame": 2903857.0,
+            "bytes_per_frame": 2861201245.3,
+            "total_p50_ms": 546.517,
+            "total_p95_ms": 571.94,
+            "total_p99_ms": 588.515,
+            "emitted_paths_max": null
+          },
+          {
+            "draw_p50_ms": 271.923,
+            "draw_p95_ms": 350.893,
+            "draw_p99_ms": 757.964,
+            "allocations_per_frame": 2903857.4,
+            "bytes_per_frame": 2861201251.7,
+            "total_p50_ms": 549.281,
+            "total_p95_ms": 770.46,
+            "total_p99_ms": 1420.474,
+            "emitted_paths_max": null
+          }
+        ],
+        "after": [
+          {
+            "draw_p50_ms": 14.106,
+            "draw_p95_ms": 14.723,
+            "draw_p99_ms": 15.473,
+            "allocations_per_frame": 10352.0,
+            "bytes_per_frame": 6068177.3,
+            "total_p50_ms": 28.424,
+            "total_p95_ms": 29.66,
+            "total_p99_ms": 30.589,
+            "emitted_paths_max": 400
+          },
+          {
+            "draw_p50_ms": 14.044,
+            "draw_p95_ms": 14.631,
+            "draw_p99_ms": 15.637,
+            "allocations_per_frame": 10352.0,
+            "bytes_per_frame": 6068177.3,
+            "total_p50_ms": 28.287,
+            "total_p95_ms": 29.407,
+            "total_p99_ms": 30.699,
+            "emitted_paths_max": 400
+          },
+          {
+            "draw_p50_ms": 13.997,
+            "draw_p95_ms": 14.625,
+            "draw_p99_ms": 15.816,
+            "allocations_per_frame": 10352.0,
+            "bytes_per_frame": 6068177.3,
+            "total_p50_ms": 28.157,
+            "total_p95_ms": 29.706,
+            "total_p99_ms": 31.063,
+            "emitted_paths_max": 400
+          },
+          {
+            "draw_p50_ms": 14.01,
+            "draw_p95_ms": 14.42,
+            "draw_p99_ms": 15.104,
+            "allocations_per_frame": 10352.0,
+            "bytes_per_frame": 6068177.3,
+            "total_p50_ms": 28.141,
+            "total_p95_ms": 28.739,
+            "total_p99_ms": 29.266,
+            "emitted_paths_max": 400
+          },
+          {
+            "draw_p50_ms": 14.381,
+            "draw_p95_ms": 14.985,
+            "draw_p99_ms": 15.52,
+            "allocations_per_frame": 10352.0,
+            "bytes_per_frame": 6068177.3,
+            "total_p50_ms": 28.936,
+            "total_p95_ms": 30.266,
+            "total_p99_ms": 30.646,
+            "emitted_paths_max": 400
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "draw_p50_ms": 271.184,
+          "draw_p95_ms": 290.069,
+          "draw_p99_ms": 300.637,
+          "allocations_per_frame": 2903857.4,
+          "bytes_per_frame": 2861201251.7,
+          "total_p50_ms": 546.871,
+          "total_p95_ms": 571.94,
+          "total_p99_ms": 588.515
+        },
+        "after": {
+          "draw_p50_ms": 14.044,
+          "draw_p95_ms": 14.631,
+          "draw_p99_ms": 15.52,
+          "allocations_per_frame": 10352.0,
+          "bytes_per_frame": 6068177.3,
+          "total_p50_ms": 28.287,
+          "total_p95_ms": 29.66,
+          "total_p99_ms": 30.646,
+          "emitted_paths_max": 400
+        }
+      }
+    }
+  ],
+  "sweep": [
+    {
+      "case": "1_columns_80_pixels_100_percent",
+      "samples": {
+        "before": [
+          {
+            "draw_p50_ms": 2.611,
+            "draw_p95_ms": 2.65,
+            "draw_p99_ms": 2.689,
+            "allocations_per_frame": 8069.0,
+            "bytes_per_frame": 3877013.3,
+            "total_p50_ms": 5.346,
+            "total_p95_ms": 5.414,
+            "total_p99_ms": 5.497,
+            "emitted_paths_max": null
+          }
+        ],
+        "after": [
+          {
+            "draw_p50_ms": 2.578,
+            "draw_p95_ms": 2.954,
+            "draw_p99_ms": 3.265,
+            "allocations_per_frame": 8071.0,
+            "bytes_per_frame": 3876841.3,
+            "total_p50_ms": 5.281,
+            "total_p95_ms": 6.325,
+            "total_p99_ms": 6.493,
+            "emitted_paths_max": 80
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "draw_p50_ms": 2.611,
+          "draw_p95_ms": 2.65,
+          "draw_p99_ms": 2.689,
+          "allocations_per_frame": 8069.0,
+          "bytes_per_frame": 3877013.3,
+          "total_p50_ms": 5.346,
+          "total_p95_ms": 5.414,
+          "total_p99_ms": 5.497
+        },
+        "after": {
+          "draw_p50_ms": 2.578,
+          "draw_p95_ms": 2.954,
+          "draw_p99_ms": 3.265,
+          "allocations_per_frame": 8071.0,
+          "bytes_per_frame": 3876841.3,
+          "total_p50_ms": 5.281,
+          "total_p95_ms": 6.325,
+          "total_p99_ms": 6.493,
+          "emitted_paths_max": 80
+        }
+      }
+    },
+    {
+      "case": "64_columns_80_pixels_100_percent",
+      "samples": {
+        "before": [
+          {
+            "draw_p50_ms": 6.244,
+            "draw_p95_ms": 6.748,
+            "draw_p99_ms": 6.826,
+            "allocations_per_frame": 42829.5,
+            "bytes_per_frame": 38381865.3,
+            "total_p50_ms": 12.759,
+            "total_p95_ms": 13.798,
+            "total_p99_ms": 14.376,
+            "emitted_paths_max": null
+          }
+        ],
+        "after": [
+          {
+            "draw_p50_ms": 2.996,
+            "draw_p95_ms": 3.479,
+            "draw_p99_ms": 4.859,
+            "allocations_per_frame": 10352.0,
+            "bytes_per_frame": 6068177.3,
+            "total_p50_ms": 6.117,
+            "total_p95_ms": 7.041,
+            "total_p99_ms": 8.96,
+            "emitted_paths_max": 400
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "draw_p50_ms": 6.244,
+          "draw_p95_ms": 6.748,
+          "draw_p99_ms": 6.826,
+          "allocations_per_frame": 42829.5,
+          "bytes_per_frame": 38381865.3,
+          "total_p50_ms": 12.759,
+          "total_p95_ms": 13.798,
+          "total_p99_ms": 14.376
+        },
+        "after": {
+          "draw_p50_ms": 2.996,
+          "draw_p95_ms": 3.479,
+          "draw_p99_ms": 4.859,
+          "allocations_per_frame": 10352.0,
+          "bytes_per_frame": 6068177.3,
+          "total_p50_ms": 6.117,
+          "total_p95_ms": 7.041,
+          "total_p99_ms": 8.96,
+          "emitted_paths_max": 400
+        }
+      }
+    },
+    {
+      "case": "512_columns_80_pixels_100_percent",
+      "samples": {
+        "before": [
+          {
+            "draw_p50_ms": 30.045,
+            "draw_p95_ms": 31.676,
+            "draw_p99_ms": 32.687,
+            "allocations_per_frame": 289532.5,
+            "bytes_per_frame": 284387881.3,
+            "total_p50_ms": 60.964,
+            "total_p95_ms": 64.107,
+            "total_p99_ms": 64.364,
+            "emitted_paths_max": null
+          }
+        ],
+        "after": [
+          {
+            "draw_p50_ms": 3.98,
+            "draw_p95_ms": 4.044,
+            "draw_p99_ms": 4.192,
+            "allocations_per_frame": 10352.0,
+            "bytes_per_frame": 6068177.3,
+            "total_p50_ms": 8.069,
+            "total_p95_ms": 8.186,
+            "total_p99_ms": 8.272,
+            "emitted_paths_max": 400
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "draw_p50_ms": 30.045,
+          "draw_p95_ms": 31.676,
+          "draw_p99_ms": 32.687,
+          "allocations_per_frame": 289532.5,
+          "bytes_per_frame": 284387881.3,
+          "total_p50_ms": 60.964,
+          "total_p95_ms": 64.107,
+          "total_p99_ms": 64.364
+        },
+        "after": {
+          "draw_p50_ms": 3.98,
+          "draw_p95_ms": 4.044,
+          "draw_p99_ms": 4.192,
+          "allocations_per_frame": 10352.0,
+          "bytes_per_frame": 6068177.3,
+          "total_p50_ms": 8.069,
+          "total_p95_ms": 8.186,
+          "total_p99_ms": 8.272,
+          "emitted_paths_max": 400
+        }
+      }
+    },
+    {
+      "case": "5261_columns_28_pixels_100_percent",
+      "samples": {
+        "before": [
+          {
+            "draw_p50_ms": 281.675,
+            "draw_p95_ms": 319.291,
+            "draw_p99_ms": 329.934,
+            "allocations_per_frame": 2903857.4,
+            "bytes_per_frame": 2861201251.6,
+            "total_p50_ms": 566.517,
+            "total_p95_ms": 638.055,
+            "total_p99_ms": 684.2,
+            "emitted_paths_max": null
+          }
+        ],
+        "after": [
+          {
+            "draw_p50_ms": 14.128,
+            "draw_p95_ms": 14.577,
+            "draw_p99_ms": 15.684,
+            "allocations_per_frame": 8071.0,
+            "bytes_per_frame": 3876841.3,
+            "total_p50_ms": 28.522,
+            "total_p95_ms": 29.445,
+            "total_p99_ms": 31.855,
+            "emitted_paths_max": 80
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "draw_p50_ms": 281.675,
+          "draw_p95_ms": 319.291,
+          "draw_p99_ms": 329.934,
+          "allocations_per_frame": 2903857.4,
+          "bytes_per_frame": 2861201251.6,
+          "total_p50_ms": 566.517,
+          "total_p95_ms": 638.055,
+          "total_p99_ms": 684.2
+        },
+        "after": {
+          "draw_p50_ms": 14.128,
+          "draw_p95_ms": 14.577,
+          "draw_p99_ms": 15.684,
+          "allocations_per_frame": 8071.0,
+          "bytes_per_frame": 3876841.3,
+          "total_p50_ms": 28.522,
+          "total_p95_ms": 29.445,
+          "total_p99_ms": 31.855,
+          "emitted_paths_max": 80
+        }
+      }
+    },
+    {
+      "case": "5261_columns_240_pixels_100_percent",
+      "samples": {
+        "before": [
+          {
+            "draw_p50_ms": 274.249,
+            "draw_p95_ms": 678.554,
+            "draw_p99_ms": 850.879,
+            "allocations_per_frame": 2903857.4,
+            "bytes_per_frame": 2861201258.5,
+            "total_p50_ms": 555.523,
+            "total_p95_ms": 1338.707,
+            "total_p99_ms": 1541.876,
+            "emitted_paths_max": null
+          }
+        ],
+        "after": [
+          {
+            "draw_p50_ms": 15.183,
+            "draw_p95_ms": 15.732,
+            "draw_p99_ms": 15.98,
+            "allocations_per_frame": 16094.0,
+            "bytes_per_frame": 11581593.3,
+            "total_p50_ms": 30.606,
+            "total_p95_ms": 31.929,
+            "total_p99_ms": 32.309,
+            "emitted_paths_max": 1200
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "draw_p50_ms": 274.249,
+          "draw_p95_ms": 678.554,
+          "draw_p99_ms": 850.879,
+          "allocations_per_frame": 2903857.4,
+          "bytes_per_frame": 2861201258.5,
+          "total_p50_ms": 555.523,
+          "total_p95_ms": 1338.707,
+          "total_p99_ms": 1541.876
+        },
+        "after": {
+          "draw_p50_ms": 15.183,
+          "draw_p95_ms": 15.732,
+          "draw_p99_ms": 15.98,
+          "allocations_per_frame": 16094.0,
+          "bytes_per_frame": 11581593.3,
+          "total_p50_ms": 30.606,
+          "total_p95_ms": 31.929,
+          "total_p99_ms": 32.309,
+          "emitted_paths_max": 1200
+        }
+      }
+    },
+    {
+      "case": "5261_columns_28_pixels_150_percent",
+      "samples": {
+        "before": [
+          {
+            "draw_p50_ms": 305.847,
+            "draw_p95_ms": 363.045,
+            "draw_p99_ms": 539.653,
+            "allocations_per_frame": 2903865.4,
+            "bytes_per_frame": 2861207818.5,
+            "total_p50_ms": 616.717,
+            "total_p95_ms": 799.361,
+            "total_p99_ms": 963.344,
+            "emitted_paths_max": null
+          }
+        ],
+        "after": [
+          {
+            "draw_p50_ms": 14.714,
+            "draw_p95_ms": 16.179,
+            "draw_p99_ms": 17.632,
+            "allocations_per_frame": 8079.0,
+            "bytes_per_frame": 3883401.3,
+            "total_p50_ms": 29.67,
+            "total_p95_ms": 31.868,
+            "total_p99_ms": 34.085,
+            "emitted_paths_max": 80
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "draw_p50_ms": 305.847,
+          "draw_p95_ms": 363.045,
+          "draw_p99_ms": 539.653,
+          "allocations_per_frame": 2903865.4,
+          "bytes_per_frame": 2861207818.5,
+          "total_p50_ms": 616.717,
+          "total_p95_ms": 799.361,
+          "total_p99_ms": 963.344
+        },
+        "after": {
+          "draw_p50_ms": 14.714,
+          "draw_p95_ms": 16.179,
+          "draw_p99_ms": 17.632,
+          "allocations_per_frame": 8079.0,
+          "bytes_per_frame": 3883401.3,
+          "total_p50_ms": 29.67,
+          "total_p95_ms": 31.868,
+          "total_p99_ms": 34.085,
+          "emitted_paths_max": 80
+        }
+      }
+    },
+    {
+      "case": "5261_columns_80_pixels_150_percent",
+      "samples": {
+        "before": [
+          {
+            "draw_p50_ms": 300.43,
+            "draw_p95_ms": 931.329,
+            "draw_p99_ms": 1262.794,
+            "allocations_per_frame": 2903865.4,
+            "bytes_per_frame": 2861207811.6,
+            "total_p50_ms": 605.303,
+            "total_p95_ms": 1716.622,
+            "total_p99_ms": 2463.9,
+            "emitted_paths_max": null
+          }
+        ],
+        "after": [
+          {
+            "draw_p50_ms": 33.468,
+            "draw_p95_ms": 44.608,
+            "draw_p99_ms": 71.091,
+            "allocations_per_frame": 10360.0,
+            "bytes_per_frame": 6074737.3,
+            "total_p50_ms": 68.557,
+            "total_p95_ms": 90.437,
+            "total_p99_ms": 119.516,
+            "emitted_paths_max": 400
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "draw_p50_ms": 300.43,
+          "draw_p95_ms": 931.329,
+          "draw_p99_ms": 1262.794,
+          "allocations_per_frame": 2903865.4,
+          "bytes_per_frame": 2861207811.6,
+          "total_p50_ms": 605.303,
+          "total_p95_ms": 1716.622,
+          "total_p99_ms": 2463.9
+        },
+        "after": {
+          "draw_p50_ms": 33.468,
+          "draw_p95_ms": 44.608,
+          "draw_p99_ms": 71.091,
+          "allocations_per_frame": 10360.0,
+          "bytes_per_frame": 6074737.3,
+          "total_p50_ms": 68.557,
+          "total_p95_ms": 90.437,
+          "total_p99_ms": 119.516,
+          "emitted_paths_max": 400
+        }
+      }
+    },
+    {
+      "case": "5261_columns_240_pixels_150_percent",
+      "samples": {
+        "before": [
+          {
+            "draw_p50_ms": 300.177,
+            "draw_p95_ms": 596.05,
+            "draw_p99_ms": 867.651,
+            "allocations_per_frame": 2903865.4,
+            "bytes_per_frame": 2861207818.5,
+            "total_p50_ms": 608.475,
+            "total_p95_ms": 1229.278,
+            "total_p99_ms": 1613.229,
+            "emitted_paths_max": null
+          }
+        ],
+        "after": [
+          {
+            "draw_p50_ms": 15.062,
+            "draw_p95_ms": 15.77,
+            "draw_p99_ms": 17.059,
+            "allocations_per_frame": 16102.0,
+            "bytes_per_frame": 11588153.3,
+            "total_p50_ms": 30.263,
+            "total_p95_ms": 31.661,
+            "total_p99_ms": 33.504,
+            "emitted_paths_max": 1200
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "draw_p50_ms": 300.177,
+          "draw_p95_ms": 596.05,
+          "draw_p99_ms": 867.651,
+          "allocations_per_frame": 2903865.4,
+          "bytes_per_frame": 2861207818.5,
+          "total_p50_ms": 608.475,
+          "total_p95_ms": 1229.278,
+          "total_p99_ms": 1613.229
+        },
+        "after": {
+          "draw_p50_ms": 15.062,
+          "draw_p95_ms": 15.77,
+          "draw_p99_ms": 17.059,
+          "allocations_per_frame": 16102.0,
+          "bytes_per_frame": 11588153.3,
+          "total_p50_ms": 30.263,
+          "total_p95_ms": 31.661,
+          "total_p99_ms": 33.504,
+          "emitted_paths_max": 1200
+        }
+      }
+    }
+  ],
+  "release": {
+    "profile": "release",
+    "binary_sha256": "6052a152ad8cd7367ca36f5c20681504ce96cbc52f06ae286e899fe8bfd683f2",
+    "frames_per_sample": 100,
+    "samples": [
+      {
+        "case": "5261_80_100_0",
+        "bench": "indexed_history_frames/5261_columns/80_pixels_100_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 561499734,
+          "alloc_ops": 905100,
+          "dealloc_bytes": 503537550,
+          "dealloc_ops": 798900,
+          "draw_ms_p50_p95_p99": [
+            4.1932,
+            4.3757589999999995,
+            4.529369
+          ],
+          "emitted_paths_max": 400,
+          "input_publication_ms_p50_p95_p99": [
+            4.29736,
+            4.570569,
+            4.6986989999999995
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 14791084,
+          "realloc_ops": 94003,
+          "warm_draw_p95_ms": 4.3757589999999995
+        }
+      },
+      {
+        "case": "5261_80_100_1",
+        "bench": "indexed_history_frames/5261_columns/80_pixels_100_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 561499734,
+          "alloc_ops": 905100,
+          "dealloc_bytes": 503537550,
+          "dealloc_ops": 798900,
+          "draw_ms_p50_p95_p99": [
+            4.29439,
+            4.407729,
+            5.868159
+          ],
+          "emitted_paths_max": 400,
+          "input_publication_ms_p50_p95_p99": [
+            4.39885,
+            4.49489,
+            5.63532
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 14791084,
+          "realloc_ops": 94003,
+          "warm_draw_p95_ms": 4.407729
+        }
+      },
+      {
+        "case": "5261_80_100_2",
+        "bench": "indexed_history_frames/5261_columns/80_pixels_100_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 561499734,
+          "alloc_ops": 905100,
+          "dealloc_bytes": 503537550,
+          "dealloc_ops": 798900,
+          "draw_ms_p50_p95_p99": [
+            4.307809,
+            4.35954,
+            4.487759
+          ],
+          "emitted_paths_max": 400,
+          "input_publication_ms_p50_p95_p99": [
+            4.411529,
+            4.48638,
+            4.80364
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 14791084,
+          "realloc_ops": 94003,
+          "warm_draw_p95_ms": 4.35954
+        }
+      },
+      {
+        "case": "5261_80_100_3",
+        "bench": "indexed_history_frames/5261_columns/80_pixels_100_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 561499734,
+          "alloc_ops": 905100,
+          "dealloc_bytes": 503537550,
+          "dealloc_ops": 798900,
+          "draw_ms_p50_p95_p99": [
+            4.18752,
+            4.324470000000001,
+            4.482659
+          ],
+          "emitted_paths_max": 400,
+          "input_publication_ms_p50_p95_p99": [
+            4.30511,
+            4.496059,
+            5.1447
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 14791084,
+          "realloc_ops": 94003,
+          "warm_draw_p95_ms": 4.324470000000001
+        }
+      },
+      {
+        "case": "5261_80_100_4",
+        "bench": "indexed_history_frames/5261_columns/80_pixels_100_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 561499734,
+          "alloc_ops": 905100,
+          "dealloc_bytes": 503537550,
+          "dealloc_ops": 798900,
+          "draw_ms_p50_p95_p99": [
+            4.232209,
+            4.385519,
+            4.83183
+          ],
+          "emitted_paths_max": 400,
+          "input_publication_ms_p50_p95_p99": [
+            4.3506789999999995,
+            4.542568999999999,
+            6.243779
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 14791084,
+          "realloc_ops": 94003,
+          "warm_draw_p95_ms": 4.385519
+        }
+      },
+      {
+        "case": "1_80_100_0",
+        "bench": "indexed_history_frames/1_columns/80_pixels_100_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 342366134,
+          "alloc_ops": 677000,
+          "dealloc_bytes": 284403950,
+          "dealloc_ops": 570800,
+          "draw_ms_p50_p95_p99": [
+            1.61451,
+            1.9594399999999998,
+            1.9948700000000001
+          ],
+          "emitted_paths_max": 80,
+          "input_publication_ms_p50_p95_p99": [
+            1.72335,
+            2.0924289999999997,
+            2.37498
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 15454684,
+          "realloc_ops": 30803,
+          "warm_draw_p95_ms": 1.9594399999999998
+        }
+      },
+      {
+        "case": "64_80_100_0",
+        "bench": "indexed_history_frames/64_columns/80_pixels_100_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 561499734,
+          "alloc_ops": 905100,
+          "dealloc_bytes": 503537550,
+          "dealloc_ops": 798900,
+          "draw_ms_p50_p95_p99": [
+            1.79945,
+            1.8436100000000002,
+            2.0385400000000002
+          ],
+          "emitted_paths_max": 400,
+          "input_publication_ms_p50_p95_p99": [
+            1.9030799999999999,
+            1.93604,
+            1.96284
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 14791084,
+          "realloc_ops": 94003,
+          "warm_draw_p95_ms": 1.8436100000000002
+        }
+      },
+      {
+        "case": "512_80_100_0",
+        "bench": "indexed_history_frames/512_columns/80_pixels_100_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 561499734,
+          "alloc_ops": 905100,
+          "dealloc_bytes": 503537550,
+          "dealloc_ops": 798900,
+          "draw_ms_p50_p95_p99": [
+            2.02249,
+            2.30575,
+            2.89091
+          ],
+          "emitted_paths_max": 400,
+          "input_publication_ms_p50_p95_p99": [
+            2.12196,
+            2.21847,
+            4.485839
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 14791084,
+          "realloc_ops": 94003,
+          "warm_draw_p95_ms": 2.30575
+        }
+      },
+      {
+        "case": "5261_28_100_0",
+        "bench": "indexed_history_frames/5261_columns/28_pixels_100_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 342366134,
+          "alloc_ops": 677000,
+          "dealloc_bytes": 284403950,
+          "dealloc_ops": 570800,
+          "draw_ms_p50_p95_p99": [
+            4.1855,
+            4.72222,
+            6.268349000000001
+          ],
+          "emitted_paths_max": 80,
+          "input_publication_ms_p50_p95_p99": [
+            4.2902000000000005,
+            4.8984190000000005,
+            6.022219
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 15454684,
+          "realloc_ops": 30803,
+          "warm_draw_p95_ms": 4.72222
+        }
+      },
+      {
+        "case": "5261_240_100_0",
+        "bench": "indexed_history_frames/5261_columns/240_pixels_100_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 1112841334,
+          "alloc_ops": 1479300,
+          "dealloc_bytes": 1054879150,
+          "dealloc_ops": 1373100,
+          "draw_ms_p50_p95_p99": [
+            4.613230000000001,
+            4.98681,
+            6.88092
+          ],
+          "emitted_paths_max": 1200,
+          "input_publication_ms_p50_p95_p99": [
+            4.715078999999999,
+            5.518168999999999,
+            7.1507890000000005
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 13132084,
+          "realloc_ops": 252003,
+          "warm_draw_p95_ms": 4.98681
+        }
+      }
+    ]
+  },
+  "cpu": "AMD Ryzen 9 5950X 16-Core Processor",
+  "baseline_revision": "d29568643f239da6d9656fb225346f2f30ba3d3b",
+  "discarded_scale_probe": {
+    "reason": "The test window did not apply its configured drawing scale; superseded by corrected scale samples.",
+    "test": [
+      {
+        "case": "5261_columns_80_pixels_150_percent",
+        "samples": {
+          "before": [
+            {
+              "draw_p50_ms": 279.679,
+              "draw_p95_ms": 348.915,
+              "draw_p99_ms": 678.531,
+              "allocations_per_frame": 2903865.0,
+              "bytes_per_frame": 2861207812.1,
+              "total_p50_ms": 569.556,
+              "total_p95_ms": 772.006,
+              "total_p99_ms": 1348.082,
+              "emitted_paths_max": null
+            }
+          ],
+          "after": [
+            {
+              "draw_p50_ms": 15.507,
+              "draw_p95_ms": 18.678,
+              "draw_p99_ms": 24.395,
+              "allocations_per_frame": 11461.4,
+              "bytes_per_frame": 7167567.7,
+              "total_p50_ms": 31.351,
+              "total_p95_ms": 39.739,
+              "total_p99_ms": 51.376,
+              "emitted_paths_max": 560
+            }
+          ]
+        },
+        "medians": {
+          "before": {
+            "draw_p50_ms": 279.679,
+            "draw_p95_ms": 348.915,
+            "draw_p99_ms": 678.531,
+            "allocations_per_frame": 2903865.0,
+            "bytes_per_frame": 2861207812.1,
+            "total_p50_ms": 569.556,
+            "total_p95_ms": 772.006,
+            "total_p99_ms": 1348.082
+          },
+          "after": {
+            "draw_p50_ms": 15.507,
+            "draw_p95_ms": 18.678,
+            "draw_p99_ms": 24.395,
+            "allocations_per_frame": 11461.4,
+            "bytes_per_frame": 7167567.7,
+            "total_p50_ms": 31.351,
+            "total_p95_ms": 39.739,
+            "total_p99_ms": 51.376,
+            "emitted_paths_max": 560
+          }
+        }
+      }
+    ],
+    "release": [
+      {
+        "case": "5261_80_150_0",
+        "bench": "indexed_history_frames/5261_columns/80_pixels_150_percent",
+        "runner": {
+          "hostname": "linuxdesktop",
+          "os": "linux",
+          "arch": "x86_64",
+          "cpu_count": 32
+        },
+        "metrics": {
+          "alloc_bytes": 671438134,
+          "alloc_ops": 1016000,
+          "dealloc_bytes": 613475950,
+          "dealloc_ops": 909800,
+          "draw_ms_p50_p95_p99": [
+            4.3378000000000005,
+            4.3967,
+            4.695880000000001
+          ],
+          "emitted_paths_max": 560,
+          "input_publication_ms_p50_p95_p99": [
+            4.458709,
+            4.509959,
+            6.006129
+          ],
+          "net_alloc_bytes": 57962184,
+          "profile": "release",
+          "realloc_bytes_delta": 14459284,
+          "realloc_ops": 125603,
+          "warm_draw_p95_ms": 4.3967
+        }
+      }
+    ]
+  },
+  "scale_metadata": {
+    "profile": "test",
+    "machine": {
+      "system": "Linux",
+      "node": "linuxdesktop",
+      "release": "7.2.3-zen1-2-zen",
+      "version": "#1 ZEN SMP PREEMPT_DYNAMIC Thu, 03 Sep 2026 18:37:05 +0000",
+      "machine": "x86_64",
+      "processor": ""
+    },
+    "fixture": {
+      "commits": 20000,
+      "displayed_rows": 38,
+      "frames_per_sample": 100
+    },
+    "binaries": {
+      "before": {
+        "path": "/tmp/index-perf-before-ui-scaled",
+        "sha256": "61ddd3551ef2e37d61992f2317674ab60579eea3651d69597f31481c3904999d"
+      },
+      "after": {
+        "path": "/tmp/index-perf-after-ui-scaled",
+        "sha256": "ab0d4083d85b9710e08a32bf90fa76c81d951561a1ede4fd659b658b471d968d"
+      }
+    }
+  },
+  "narrow_control": {
+    "samples": {
+      "before": [
+        {
+          "graph_seconds": 0.291,
+          "window_p50_ms": 0.107,
+          "window_p95_ms": 0.173
+        },
+        {
+          "graph_seconds": 0.297,
+          "window_p50_ms": 0.113,
+          "window_p95_ms": 0.18
+        },
+        {
+          "graph_seconds": 0.291,
+          "window_p50_ms": 0.112,
+          "window_p95_ms": 0.17
+        },
+        {
+          "graph_seconds": 0.284,
+          "window_p50_ms": 0.105,
+          "window_p95_ms": 0.165
+        },
+        {
+          "graph_seconds": 0.285,
+          "window_p50_ms": 0.105,
+          "window_p95_ms": 0.166
+        }
+      ],
+      "after": [
+        {
+          "graph_seconds": 0.321,
+          "window_p50_ms": 0.129,
+          "window_p95_ms": 0.196
+        },
+        {
+          "graph_seconds": 0.32,
+          "window_p50_ms": 0.125,
+          "window_p95_ms": 0.193
+        },
+        {
+          "graph_seconds": 0.325,
+          "window_p50_ms": 0.128,
+          "window_p95_ms": 0.195
+        },
+        {
+          "graph_seconds": 0.329,
+          "window_p50_ms": 0.136,
+          "window_p95_ms": 0.197
+        },
+        {
+          "graph_seconds": 0.32,
+          "window_p50_ms": 0.126,
+          "window_p95_ms": 0.192
+        }
+      ]
+    },
+    "medians": {
+      "before": {
+        "graph_seconds": 0.291,
+        "window_p50_ms": 0.107,
+        "window_p95_ms": 0.17
+      },
+      "after": {
+        "graph_seconds": 0.321,
+        "window_p50_ms": 0.128,
+        "window_p95_ms": 0.195
+      }
+    }
+  },
+  "wide_phase": [
+    {
+      "rows": 100000,
+      "columns": 1,
+      "index_and_graph_seconds": 0.031,
+      "retained_index_bytes": 4207872,
+      "checkpoint_payload_bytes": 8800,
+      "first_touch_ms_p50_p95_p99": [
+        0.08195,
+        0.14525000000000002,
+        0.15219
+      ],
+      "warm_ms_p50_p95_p99": [
+        8.999999999999999e-05,
+        0.00015,
+        0.00021
+      ]
+    },
+    {
+      "rows": 100000,
+      "columns": 64,
+      "index_and_graph_seconds": 0.03,
+      "retained_index_bytes": 4218432,
+      "checkpoint_payload_bytes": 78640,
+      "first_touch_ms_p50_p95_p99": [
+        0.09417,
+        0.16032000000000002,
+        0.16798
+      ],
+      "warm_ms_p50_p95_p99": [
+        0.00011,
+        0.00014000000000000001,
+        0.00019
+      ]
+    },
+    {
+      "rows": 100000,
+      "columns": 512,
+      "index_and_graph_seconds": 0.029,
+      "retained_index_bytes": 4216640,
+      "checkpoint_payload_bytes": 600112,
+      "first_touch_ms_p50_p95_p99": [
+        0.18222,
+        0.25203,
+        0.29888000000000003
+      ],
+      "warm_ms_p50_p95_p99": [
+        0.00011999999999999999,
+        0.00017999999999999998,
+        0.00058
+      ]
+    },
+    {
+      "rows": 100000,
+      "columns": 5261,
+      "index_and_graph_seconds": 0.033,
+      "retained_index_bytes": 4197644,
+      "checkpoint_payload_bytes": 9023536,
+      "first_touch_ms_p50_p95_p99": [
+        1.1300999999999999,
+        1.21013,
+        1.346
+      ],
+      "warm_ms_p50_p95_p99": [
+        0.00011999999999999999,
+        0.00019999999999999998,
+        0.00041
+      ]
+    },
+    {
+      "rows": 2000000,
+      "columns": 1,
+      "index_and_graph_seconds": 1.257,
+      "retained_index_bytes": 66593792,
+      "checkpoint_payload_bytes": 159328,
+      "first_touch_ms_p50_p95_p99": [
+        0.08421,
+        0.14984,
+        0.153
+      ],
+      "warm_ms_p50_p95_p99": [
+        0.00011,
+        0.00016,
+        0.00022
+      ]
+    },
+    {
+      "rows": 2000000,
+      "columns": 64,
+      "index_and_graph_seconds": 1.38,
+      "retained_index_bytes": 66809760,
+      "checkpoint_payload_bytes": 1565488,
+      "first_touch_ms_p50_p95_p99": [
+        0.09598999999999999,
+        0.16407999999999998,
+        0.16819
+      ],
+      "warm_ms_p50_p95_p99": [
+        0.00011,
+        0.00014000000000000001,
+        0.00015
+      ]
+    },
+    {
+      "rows": 2000000,
+      "columns": 512,
+      "index_and_graph_seconds": 1.295,
+      "retained_index_bytes": 66807968,
+      "checkpoint_payload_bytes": 12060208,
+      "first_touch_ms_p50_p95_p99": [
+        0.185,
+        0.25447000000000003,
+        0.27132
+      ],
+      "warm_ms_p50_p95_p99": [
+        0.00011999999999999999,
+        0.00014000000000000001,
+        0.00045
+      ]
+    },
+    {
+      "rows": 2000000,
+      "columns": 5261,
+      "index_and_graph_seconds": 1.407,
+      "retained_index_bytes": 66788972,
+      "checkpoint_payload_bytes": 191526448,
+      "first_touch_ms_p50_p95_p99": [
+        1.1446,
+        1.40527,
+        1.6737989999999998
+      ],
+      "warm_ms_p50_p95_p99": [
+        0.00013,
+        0.00024900000000000004,
+        0.0005700000000000001
+      ]
+    }
+  ],
+  "scale_measurement_note": "Corrected 150% test-profile controls have one pair per case and substantial shared-workstation timing noise; they verify geometry and are not shipping calibration.",
+  "checkpoint_measurement_note": "Estimated checkpoint payload and capacity bytes exclude Arc allocation headers."
+}

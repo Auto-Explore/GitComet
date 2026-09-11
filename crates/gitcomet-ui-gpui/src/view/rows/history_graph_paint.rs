@@ -2,6 +2,31 @@ use super::*;
 use gpui::{App, Bounds, Pixels, Window, fill, point, px, size};
 use smallvec::SmallVec;
 
+/// Keep the last winner for each displayed geometry, visiting the selected
+/// pass first in reverse order. Reversing the survivors preserves paint order
+/// at intersections while retained storage is bounded by displayed geometry.
+fn coalesced<T: Copy, K: Eq + std::hash::Hash>(
+    items: impl DoubleEndedIterator<Item = T> + Clone,
+    geometry: impl Fn(T) -> K,
+    selected: impl Fn(T) -> bool,
+) -> SmallVec<[T; 8]> {
+    let mut seen = rustc_hash::FxHashSet::default();
+    let mut winners = SmallVec::new();
+    for pass in [true, false] {
+        for item in items.clone().rev() {
+            if selected(item) == pass && seen.insert(geometry(item)) {
+                winners.push(item);
+            }
+        }
+    }
+    winners.reverse();
+    winners
+}
+
+fn x_key(x: Pixels) -> u32 {
+    f32::from(x).to_bits()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint_history_graph(
     theme: AppTheme,
@@ -86,30 +111,42 @@ pub(super) fn paint_history_graph(
     };
 
     // Incoming vertical segments.
-    let mut incoming: SmallVec<[(usize, history_graph::LanePaint); 8]> = row
-        .lanes_now
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|&(col, lane)| {
-            lane.is_active()
-                && (lane.incoming() || connect_from_top_col == Some(col))
-                && !joins_out_of(col)
-        })
-        .collect();
-    incoming.sort_by_key(|&(col, lane)| paints_last(col, lane.color_ix));
+    let incoming = coalesced(
+        row.lanes_now
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|&(col, lane)| {
+                lane.is_active()
+                    && (lane.incoming() || connect_from_top_col == Some(col))
+                    && !joins_out_of(col)
+            }),
+        |(col, _)| x_key(x_for_col(col)),
+        |(col, lane)| paints_last(col, lane.color_ix),
+    );
     for (col, lane_paint) in incoming {
         let x = x_for_col(col);
         let mut path = PathBuilder::stroke(stroke_width);
         path.move_to(point(left + x, y_top));
         path.line_to(point(left + x, y_center));
         if let Ok(p) = path.build() {
+            gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
             window.paint_path(p, segment_color(x, lane_paint.color_ix));
         }
     }
 
     // Incoming join edges into the node (used both for merge commits and fork points).
-    for edge in row.joins_in.iter() {
+    for edge in coalesced(
+        row.joins_in.iter().copied(),
+        |edge| {
+            (
+                x_key(x_for_col(usize::from(edge.from_col))),
+                x_key(x_for_col(usize::from(edge.to_col))),
+                has_incoming_vertical(usize::from(edge.from_col)),
+            )
+        },
+        |_| false,
+    ) {
         let from = usize::from(edge.from_col);
         if same_x(x_for_col(from), x_for_col(usize::from(edge.to_col))) {
             continue;
@@ -133,20 +170,27 @@ pub(super) fn paint_history_graph(
             path.move_to(point(left + x_for_col(from), y_center));
             path.line_to(point(left + x_for_col(usize::from(edge.to_col)), y_center));
             if let Ok(p) = path.build() {
+                gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
                 window.paint_path(p, color);
             }
         }
     }
 
     // Continuations from current row to next row.
-    let mut continuing: SmallVec<[(usize, history_graph::LanePaint); 8]> = row
-        .lanes_next
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(_, lane)| lane.is_active())
-        .collect();
-    continuing.sort_by_key(|&(col, lane)| paints_last(col, lane.color_ix));
+    let continuing = coalesced(
+        row.lanes_next
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, lane)| lane.is_active()),
+        |(col, lane)| {
+            (
+                x_key(x_for_col(col)),
+                lane.starts_at_node() && !same_x(node_x, x_for_col(col)),
+            )
+        },
+        |(col, lane)| paints_last(col, lane.color_ix),
+    );
     for (out_col, lane_paint) in continuing {
         let x_out = x_for_col(out_col);
         let color = segment_color(x_out, lane_paint.color_ix);
@@ -167,6 +211,7 @@ pub(super) fn paint_history_graph(
             path.move_to(point(left + x_out, y_center));
             path.line_to(point(left + x_out, y_bottom));
             if let Ok(p) = path.build() {
+                gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
                 window.paint_path(p, color);
             }
         }
@@ -174,7 +219,11 @@ pub(super) fn paint_history_graph(
 
     // Additional merge edges from the node into lanes that were re-targeted to secondary parents.
     // Collapsed onto the node's x, the target lane's own continuation covers it.
-    for edge in row.edges_out.iter() {
+    for edge in coalesced(
+        row.edges_out.iter().copied(),
+        |edge| x_key(x_for_col(usize::from(edge.to_col))),
+        |_| false,
+    ) {
         let x_to = x_for_col(usize::from(edge.to_col));
         if same_x(node_x, x_to) {
             continue;
@@ -333,6 +382,18 @@ pub(in crate::view) struct SelectedLane {
 }
 
 impl SelectedLane {
+    pub(in crate::view) fn relative_to(self, start: usize) -> Self {
+        if self.last_row < start {
+            Self::span(self.color_ix, usize::MAX - 1, usize::MAX - 1)
+        } else {
+            Self::span(
+                self.color_ix,
+                self.first_row.saturating_sub(start),
+                self.last_row - start,
+            )
+        }
+    }
+
     pub(in crate::view) fn span(
         color_ix: history_graph::LaneColorIx,
         first_row: usize,
@@ -649,35 +710,44 @@ pub(super) fn paint_history_graph_band(
     // column is the edge x.
     let node_x_offset = x_for_col(usize::from(node.col));
 
-    let mut segments = band_lane_segments(lanes, usize::from(node.col), connect_from_top_col);
-    segments.sort_by_key(|segment| {
-        edge_paint_last(same_x(x_for_col(segment.col), edge_x), || {
-            selected_lane.is_some_and(|lane| lane.covers(theme, row_ix, segment.color_ix))
-        })
-    });
-    for segment in segments {
-        let x = x_for_col(segment.col);
-        let from_y = if segment.has_top { y_top } else { y_center };
-        let to_y = if segment.has_bottom {
-            y_bottom
-        } else {
-            y_center
-        };
-        let mut path = PathBuilder::stroke(stroke_width);
-        path.move_to(point(left + x, from_y));
-        path.line_to(point(left + x, to_y));
-        if let Ok(p) = path.build() {
-            // The lane's own colour, not the node's: a branch head keeps the
-            // descendant lane's colour above the node, and the commit below
-            // paints its matching stub the same way -- including its wash, or the
-            // seam between the two rows reappears. The exception is the edge line
-            // beside a node on it, which matches the node like a commit row's.
-            let color = if edge_takes_node_colour(node_x_offset, x, edge_x) {
-                node.color
-            } else {
-                lane_wash_color(theme, segment.color_ix, row_ix, selected_lane)
-            };
-            window.paint_path(p, color);
+    let segments = band_lane_segments(lanes, usize::from(node.col), connect_from_top_col);
+    for top in [true, false] {
+        let winners = coalesced(
+            segments.iter().copied().filter(|segment| {
+                if top {
+                    segment.has_top
+                } else {
+                    segment.has_bottom
+                }
+            }),
+            |segment| x_key(x_for_col(segment.col)),
+            |segment| {
+                edge_paint_last(same_x(x_for_col(segment.col), edge_x), || {
+                    selected_lane.is_some_and(|lane| lane.covers(theme, row_ix, segment.color_ix))
+                })
+            },
+        );
+        for segment in winners {
+            let x = x_for_col(segment.col);
+            let from_y = if top { y_top } else { y_center };
+            let to_y = if !top { y_bottom } else { y_center };
+            let mut path = PathBuilder::stroke(stroke_width);
+            path.move_to(point(left + x, from_y));
+            path.line_to(point(left + x, to_y));
+            if let Ok(p) = path.build() {
+                // The lane's own colour, not the node's: a branch head keeps the
+                // descendant lane's colour above the node, and the commit below
+                // paints its matching stub the same way -- including its wash, or the
+                // seam between the two rows reappears. The exception is the edge line
+                // beside a node on it, which matches the node like a commit row's.
+                let color = if edge_takes_node_colour(node_x_offset, x, edge_x) {
+                    node.color
+                } else {
+                    lane_wash_color(theme, segment.color_ix, row_ix, selected_lane)
+                };
+                gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
+                window.paint_path(p, color);
+            }
         }
     }
 
@@ -804,6 +874,7 @@ fn paint_node_to_lane(
     }
 
     if let Ok(p) = path.build() {
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
         window.paint_path(p, color);
     }
 }
@@ -839,6 +910,7 @@ fn paint_lane_to_node(
     path.line_to(point(left + x_to, y_center));
 
     if let Ok(p) = path.build() {
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
         window.paint_path(p, color);
     }
 }
@@ -1667,5 +1739,121 @@ mod tests {
             elbow_radius(px(HISTORY_GRAPH_ELBOW_RADIUS_PX), px(COL_GAP), px(-1.0)),
             px(0.0)
         );
+    }
+}
+
+#[cfg(test)]
+mod coalescing_regressions {
+    use super::*;
+
+    #[gpui::test]
+    fn indexed_history_actual_paint_paths_are_bounded_by_displayed_columns(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gitcomet_core::history_perf::{self, Work};
+        let _guard = crate::test_support::lock_visual_test();
+        let cx = cx.add_empty_window();
+        for pixels in [32.0, 80.0, 240.0] {
+            for band in [false, true] {
+                let mut counts = Vec::new();
+                for width in [64, 512, 5261] {
+                    let row = history_graph::GraphRow {
+                        lanes_now: (0..width)
+                            .map(|col| {
+                                history_graph::LanePaint::lane((col % 12) as u8, true, false)
+                            })
+                            .collect(),
+                        lanes_next: (0..width)
+                            .map(|col| {
+                                history_graph::LanePaint::lane((col % 12) as u8, false, false)
+                            })
+                            .collect(),
+                        joins_in: Default::default(),
+                        edges_out: Default::default(),
+                        node_col: (width - 1) as u16,
+                        node_color_ix: 0,
+                        is_merge: false,
+                    };
+                    let _capture = history_perf::capture();
+                    cx.draw(
+                        point(px(0.0), px(0.0)),
+                        size(
+                            gpui::AvailableSpace::Definite(px(pixels)),
+                            gpui::AvailableSpace::Definite(px(28.0)),
+                        ),
+                        |_, _| {
+                            gpui::canvas(
+                                |_, _, _| (),
+                                move |bounds, (), window, app| {
+                                    let theme = AppTheme::gitcomet_dark();
+                                    let background = gpui::rgba(0x202020ff);
+                                    let selected = Some(SelectedLane::span(1, 0, 100));
+                                    if band {
+                                        paint_history_graph_band(
+                                            theme,
+                                            &row.lanes_now,
+                                            10,
+                                            None,
+                                            selected,
+                                            BandNodePaint {
+                                                col: row.node_col,
+                                                color: lane_wash_color(
+                                                    theme,
+                                                    row.node_color_ix,
+                                                    10,
+                                                    selected,
+                                                ),
+                                                exit_col: None,
+                                            },
+                                            false,
+                                            background,
+                                            bounds,
+                                            window,
+                                            app,
+                                        );
+                                    } else {
+                                        paint_history_graph(
+                                            theme, &row, 10, None, false, selected, background,
+                                            bounds, window, app,
+                                        );
+                                    }
+                                },
+                            )
+                            .w(px(pixels))
+                            .h(px(28.0))
+                        },
+                    );
+                    counts.push(history_perf::count(Work::PaintPath));
+                }
+                assert!(counts[0] > 0);
+                assert!(
+                    counts.iter().all(|count| *count == counts[0]),
+                    "pixels={pixels} band={band}: {counts:?}"
+                );
+                assert!(counts[0] <= 40, "bounded displayed geometry: {counts:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_history_coincident_paths_keep_last_winning_color_in_each_pass() {
+        for lanes in [64usize, 512, 5261] {
+            for displayed in [1usize, 8, 35] {
+                let items = (0..lanes).map(|col| (col, col as u8 % 8));
+                let geometry = |(col, _): (usize, u8)| col.min(displayed - 1);
+                let selected = |(col, color)| col >= displayed - 1 && color == 3;
+                let winners = coalesced(items.clone(), geometry, selected);
+                let mut original: Vec<_> = items.collect();
+                original.sort_by_key(|item| selected(*item));
+                let mut expected = rustc_hash::FxHashMap::default();
+                for item in original {
+                    expected.insert(geometry(item), item);
+                }
+                assert_eq!(winners.len(), displayed);
+                for item in winners {
+                    assert_eq!(Some(&item), expected.get(&geometry(item)));
+                }
+            }
+        }
     }
 }

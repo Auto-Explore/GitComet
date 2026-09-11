@@ -5,19 +5,21 @@ use gitcomet_core::services::{CancellationToken, HistorySnapshot};
 use gitcomet_state::model::{CommitMultiSelection, RangeSelection};
 
 fn fixture(selected: &[usize]) -> (RepoState, Vec<Commit>) {
+    fixture_with_count(selected, 600)
+}
+
+fn fixture_with_count(selected: &[usize], count: u32) -> (RepoState, Vec<Commit>) {
     let mut builder = HistoryIndexBuilder::new(
         HistorySnapshot("comparison".into()),
         LogScope::AllBranches,
         20,
     )
     .unwrap();
-    let commits: Vec<_> = (0..600u32)
+    let commits: Vec<_> = (0..count)
         .map(|row| {
             let mut id = [0u8; 20];
             id[..4].copy_from_slice(&row.to_be_bytes());
-            builder
-                .push(&id, std::iter::empty(), row as i64, false)
-                .unwrap();
+            builder.push(&id, std::iter::empty(), false).unwrap();
             Commit {
                 id: CommitId(gitcomet_core::hex::encode(&id).into()),
                 parent_ids: Default::default(),
@@ -52,7 +54,8 @@ fn fixture(selected: &[usize]) -> (RepoState, Vec<Commit>) {
         commits: selected
             .iter()
             .map(|&row| commits[row].id.clone())
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         ..Default::default()
     };
     repo.history_state.range_selection = Some(RangeSelection {
@@ -110,7 +113,7 @@ fn indexed_regression_comparison_handoff_keeps_order_when_range_rows_move() {
     for row in [301u32, 300] {
         let mut id = [0u8; 20];
         id[..4].copy_from_slice(&row.to_be_bytes());
-        builder.push(&id, std::iter::empty(), 0, false).unwrap();
+        builder.push(&id, std::iter::empty(), false).unwrap();
     }
     let replacement = builder.finish(&CancellationToken::new()).unwrap();
     let indexed = &mut repo.history_state.indexed;
@@ -173,5 +176,110 @@ fn indexed_regression_comparison_count_and_cache_survive_metadata_loading(
                 .collect::<Vec<_>>(),
             ["commit 100", "commit 300", "commit 301"]
         );
+    });
+}
+
+#[gpui::test]
+fn indexed_history_comparison_ignores_progress_and_unrelated_blocks(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::history_perf::{self, Work};
+    let _guard = crate::test_support::lock_visual_test();
+    let (mut repo, commits) = fixture(&[300, 301]);
+    let (store, events) =
+        gitcomet_state::store::AppStore::new(Arc::new(crate::view::test_support::TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let cards = pane.range_comparison_commits_shared(&repo);
+        let _capture = history_perf::capture();
+        repo.history_state.indexed.rev += 1;
+        repo.history_state.indexed.ranges.insert(
+            0,
+            Arc::new(HistoryRange {
+                snapshot: repo
+                    .history_state
+                    .indexed
+                    .index
+                    .as_ref()
+                    .unwrap()
+                    .snapshot
+                    .clone(),
+                start: 0,
+                commits: commits[..256].to_vec(),
+            }),
+        );
+        assert!(std::rc::Rc::ptr_eq(
+            &cards,
+            &pane.range_comparison_commits_shared(&repo)
+        ));
+        assert_eq!(history_perf::count(Work::ComparisonCard), 0);
+    });
+}
+
+#[gpui::test]
+fn indexed_history_large_comparisons_prepare_order_once_and_only_build_visible_cards(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::history_perf::{self, Work};
+    let _guard = crate::test_support::lock_visual_test();
+    let (mut repo, commits) = fixture_with_count(&[], 100_000);
+    repo.history_state.multi_selection.commits = Arc::new(
+        commits
+            .iter()
+            .rev()
+            .map(|commit| commit.id.clone())
+            .collect(),
+    );
+    let (store, events) =
+        gitcomet_state::store::AppStore::new(Arc::new(crate::view::test_support::TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let pane = cx.update(|_, app| view.read(app).details_pane.clone());
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            pane.state = Arc::new(gitcomet_state::model::AppState {
+                repos: vec![repo.clone()],
+                active_repo: Some(repo.id),
+                ..Default::default()
+            });
+            pane.ensure_comparison_order(cx);
+            assert!(pane.comparison_order.is_none());
+            assert!(pane.comparison_order_pending.is_some());
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        pane.update(app, |pane, cx| {
+            let ordered = pane
+                .comparison_order
+                .as_ref()
+                .expect("background order published")
+                .ids
+                .clone();
+            assert_eq!(ordered.len(), 100_000);
+            assert_eq!(ordered[0], commits[0].id);
+            assert_eq!(ordered[99_999], commits[99_999].id);
+            let _capture = history_perf::capture();
+            let visible = pane.comparison_cards(&repo, &ordered[1000..1040], 1000);
+            assert_eq!(visible.len(), 40);
+            assert_eq!(history_perf::count(Work::ComparisonCard), 40);
+            repo.history_state.indexed.rev += 1;
+            pane.state = Arc::new(gitcomet_state::model::AppState {
+                repos: vec![repo.clone()],
+                active_repo: Some(repo.id),
+                ..Default::default()
+            });
+            pane.ensure_comparison_order(cx);
+            assert!(Arc::ptr_eq(
+                &ordered,
+                &pane.comparison_order.as_ref().unwrap().ids
+            ));
+            assert!(pane.comparison_order_pending.is_none());
+            assert!(std::rc::Rc::ptr_eq(
+                &visible,
+                &pane.comparison_cards(&repo, &ordered[1000..1040], 1000)
+            ));
+            assert_eq!(history_perf::count(Work::ComparisonCard), 40);
+        })
     });
 }

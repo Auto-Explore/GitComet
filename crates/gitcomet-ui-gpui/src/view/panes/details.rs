@@ -42,6 +42,19 @@ pub(in super::super) struct WorktreeFileListInputs {
     pub(in super::super) entries: Arc<[gitcomet_state::model::InlineSubmoduleDiffEntry]>,
 }
 
+pub(in crate::view) struct ComparisonOrderCache {
+    pub key: u64,
+    pub ids: Arc<Vec<CommitId>>,
+    pub _selection: Arc<Vec<CommitId>>,
+    pub _index: Option<gitcomet_core::history_index::HistoryIndexHandle>,
+}
+
+pub(in crate::view) struct ComparisonCardCache {
+    pub key: u64,
+    pub cards: std::rc::Rc<[crate::view::rows::CommitCard]>,
+    pub _blocks: Vec<Arc<gitcomet_core::history_index::HistoryRange>>,
+}
+
 pub(in super::super) struct DetailsPaneView {
     pub(in super::super) store: Arc<AppStore>,
     pub(in super::super) state: Arc<AppState>,
@@ -113,7 +126,9 @@ pub(in super::super) struct DetailsPaneView {
     /// Comparison cards memoized on the revs that feed them; they walked
     /// the whole log page and cloned every selected commit 2-3 times per frame.
     pub(in super::super) range_comparison_commits_cache:
-        std::cell::RefCell<Option<(u64, std::rc::Rc<[crate::view::rows::CommitCard]>)>>,
+        std::cell::RefCell<Option<ComparisonCardCache>>,
+    pub(in super::super) comparison_order: Option<ComparisonOrderCache>,
+    pub(in super::super) comparison_order_pending: Option<u64>,
     commit_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
     commit_file_projection: std::cell::RefCell<
@@ -517,6 +532,8 @@ impl DetailsPaneView {
             commit_details_delay_seq: 0,
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             range_comparison_commits_cache: std::cell::RefCell::new(None),
+            comparison_order: None,
+            comparison_order_pending: None,
             commit_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),

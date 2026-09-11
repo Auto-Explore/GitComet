@@ -491,6 +491,16 @@ fn indexed_history_large_repository_benchmark() {
             eprintln!("first ten block reads ms={samples:?}");
         }
     }
+    for (name, values) in [("first_touch", &samples[..10]), ("warm", &samples[10..])] {
+        let mut values = values.to_vec();
+        values.sort_by(f64::total_cmp);
+        eprintln!(
+            "{name} range p50_ms={:.3} p95_ms={:.3} p99_ms={:.3}",
+            values[values.len() / 2],
+            values[values.len() * 95 / 100],
+            values[values.len() * 99 / 100]
+        );
+    }
     samples.sort_by(f64::total_cmp);
     eprintln!(
         "256-commit range reads p50_ms={:.2} p95_ms={:.2}",
@@ -502,4 +512,99 @@ fn indexed_history_large_repository_benchmark() {
         0,
         "direct range reads must not walk history"
     );
+}
+
+#[test]
+fn indexed_history_reads_headers_only_when_needed_and_decodes_ranges_once() {
+    use gitcomet_core::history_perf::{Work, capture, count};
+    let dir = tempfile::tempdir().unwrap();
+    run_git(dir.path(), &["init", "-q", "-b", "master"]);
+    fast_import_linear_history_with_authors(dir.path(), 1100, |ix| {
+        if ix % 3 == 0 {
+            "Alice <alice@example.com>"
+        } else {
+            "Bob <bob@example.com>"
+        }
+    });
+    for graph in [false, true] {
+        if graph {
+            run_git(dir.path(), &["commit-graph", "write", "--reachable"]);
+        }
+        let repo = GixBackend.open(dir.path()).unwrap();
+        for mode in [
+            HistoryMode::FullReachable,
+            HistoryMode::FirstParent,
+            HistoryMode::NoMerges,
+            HistoryMode::MergesOnly,
+            HistoryMode::AllBranches,
+        ] {
+            for author in [None, Some("Alice")] {
+                let _capture = capture();
+                let cancel = CancellationToken::new();
+                let index = repo
+                    .build_history_index(mode, author, &cancel, &mut |_| {})
+                    .unwrap()
+                    .unwrap();
+                if author.is_none() {
+                    assert_eq!(
+                        count(Work::IndexObjectRead),
+                        0,
+                        "graph={graph} mode={mode:?}"
+                    );
+                }
+                let end = index.len().min(256);
+                let range = repo.read_history_range(&index, 0..end, &cancel).unwrap();
+                assert_eq!(count(Work::RangeObjectRead), range.commits.len() as u64);
+                let (page, _) = first(repo.as_ref(), mode, author, end.max(1));
+                assert_eq!(range.commits, page.commits[..end]);
+            }
+        }
+    }
+}
+
+#[test]
+fn indexed_history_stash_topology_rejects_misleading_merge_messages() {
+    let dir = tempfile::tempdir().unwrap();
+    run_git(dir.path(), &["init", "-q", "-b", "master"]);
+    run_git(dir.path(), &["config", "user.name", "Alice"]);
+    run_git(dir.path(), &["config", "user.email", "alice@example.com"]);
+    fast_import_linear_history(dir.path(), 10);
+    run_git(dir.path(), &["checkout", "-q", "-b", "side", "HEAD~5"]);
+    run_git(dir.path(), &["commit", "--allow-empty", "-qm", "side"]);
+    run_git(dir.path(), &["checkout", "-q", "master"]);
+    run_git(
+        dir.path(),
+        &[
+            "merge",
+            "--no-ff",
+            "-qm",
+            "WIP on master: misleading merge",
+            "side",
+        ],
+    );
+    let merge = git_stdout(dir.path(), &["rev-parse", "HEAD"]);
+    std::fs::write(dir.path().join("file.txt"), "changed tracked content").unwrap();
+    std::fs::write(dir.path().join("untracked.txt"), "untracked content").unwrap();
+    run_git(dir.path(), &["stash", "push", "-u", "-qm", "real stash"]);
+    let stash = git_stdout(dir.path(), &["rev-parse", "refs/stash"]);
+    for graph in [false, true] {
+        if graph {
+            run_git(dir.path(), &["commit-graph", "write", "--reachable"]);
+        }
+        let repo = GixBackend.open(dir.path()).unwrap();
+        let index = repo
+            .build_history_index(
+                HistoryMode::AllBranches,
+                None,
+                &CancellationToken::new(),
+                &mut |_| {},
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            index.is_probable_stash(index.position(merge.trim()).unwrap()),
+            !graph
+        );
+        assert!(index.is_probable_stash(index.position(stash.trim()).unwrap()));
+    }
 }

@@ -1,0 +1,428 @@
+//! Frontier transitions touch only lanes participating in a row. Dense paint
+//! arrays are an optional output used by visible windows and the legacy view.
+use super::*;
+use std::collections::BTreeSet;
+
+#[derive(Clone, Copy, Debug)]
+struct LiveLane {
+    id: u32,
+    target: u32,
+    born: usize,
+    color: LaneColorIx,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SavedLane {
+    target: u32,
+    id: u32,
+    col: u16,
+    color: LaneColorIx,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::view) struct GraphCheckpoint {
+    lanes: Vec<SavedLane>,
+    next_id: u32,
+    next_color: usize,
+    main: Option<u32>,
+    main_target: Option<usize>,
+    pending: bool,
+}
+
+impl GraphCheckpoint {
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub fn estimated_bytes(&self) -> usize {
+        self.lanes.capacity() * std::mem::size_of::<SavedLane>()
+    }
+    pub fn restore(&self) -> GraphWalk {
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::CheckpointRestore);
+        let mut walk = GraphWalk {
+            next_id: self.next_id,
+            next_color: self.next_color,
+            main: self.main,
+            main_target: self.main_target,
+            pending: self.pending,
+            lanes: Vec::new(),
+            targets: FxHashMap::default(),
+            free: BTreeSet::new(),
+            colors: [0; LANE_COLOR_PALETTE_SIZE],
+        };
+        for saved in &self.lanes {
+            let col = usize::from(saved.col);
+            while walk.lanes.len() < col {
+                walk.free.insert(walk.lanes.len());
+                walk.lanes.push(None);
+            }
+            walk.place(
+                col,
+                LiveLane {
+                    id: saved.id,
+                    target: saved.target,
+                    color: saved.color,
+                    born: usize::MAX,
+                },
+            );
+        }
+        walk
+    }
+}
+
+pub(in crate::view) struct GraphTransition {
+    pub paint: GraphRow,
+    /// Overrides to the preceding row's outgoing lanes, including whiskers.
+    pub now: SmallVec<[(usize, LanePaint); 4]>,
+    /// Only changed outgoing columns; holes and births update labels and spans.
+    pub next: SmallVec<[(usize, LanePaint); 4]>,
+    pub next_len: usize,
+}
+
+#[derive(Debug)]
+pub(in crate::view) struct GraphWalk {
+    lanes: Vec<Option<LiveLane>>,
+    targets: FxHashMap<u32, SmallVec<[usize; 2]>>,
+    free: BTreeSet<usize>,
+    colors: [u32; LANE_COLOR_PALETTE_SIZE],
+    next_id: u32,
+    next_color: usize,
+    main: Option<u32>,
+    main_target: Option<usize>,
+    pending: bool,
+}
+
+impl GraphWalk {
+    pub fn new(main_target: Option<usize>) -> Self {
+        let mut walk = Self {
+            lanes: Vec::new(),
+            targets: FxHashMap::default(),
+            free: BTreeSet::new(),
+            colors: [0; LANE_COLOR_PALETTE_SIZE],
+            next_id: 1,
+            next_color: 0,
+            main: None,
+            main_target,
+            pending: main_target.is_some(),
+        };
+        if let Some(target) = main_target {
+            walk.place(
+                0,
+                LiveLane {
+                    id: 1,
+                    target: target as u32,
+                    color: 0,
+                    born: usize::MAX,
+                },
+            );
+            walk.main = Some(1);
+            walk.next_id = 2;
+            walk.next_color = 1;
+        }
+        walk
+    }
+    pub fn checkpoint(&self) -> GraphCheckpoint {
+        GraphCheckpoint {
+            lanes: self
+                .lanes
+                .iter()
+                .enumerate()
+                .filter_map(|(col, lane)| {
+                    lane.map(|lane| SavedLane {
+                        target: lane.target,
+                        id: lane.id,
+                        col: lane_col(col),
+                        color: lane.color,
+                    })
+                })
+                .collect(),
+            next_id: self.next_id,
+            next_color: self.next_color,
+            main: self.main,
+            main_target: self.main_target,
+            pending: self.pending,
+        }
+    }
+    fn place(&mut self, col: usize, lane: LiveLane) {
+        if col == self.lanes.len() {
+            self.lanes.push(Some(lane));
+        } else {
+            debug_assert!(self.lanes[col].is_none());
+            self.lanes[col] = Some(lane);
+        }
+        self.free.remove(&col);
+        self.targets.entry(lane.target).or_default().push(col);
+        self.colors[usize::from(lane.color)] += 1;
+    }
+    fn take(&mut self, col: usize) -> Option<LiveLane> {
+        let lane = self.lanes.get_mut(col)?.take()?;
+        let targets = self.targets.get_mut(&lane.target).unwrap();
+        targets.retain(|target| *target != col);
+        if targets.is_empty() {
+            self.targets.remove(&lane.target);
+        }
+        self.free.insert(col);
+        self.colors[usize::from(lane.color)] -= 1;
+        Some(lane)
+    }
+    fn alloc(&self, prefer: usize) -> usize {
+        self.free
+            .range(prefer..)
+            .next()
+            .or_else(|| self.free.first())
+            .copied()
+            .unwrap_or(self.lanes.len())
+    }
+    fn color(&mut self, avoid: &[LaneColorIx]) -> LaneColorIx {
+        let start = self.next_color;
+        for offset in 0..LANE_COLOR_PALETTE_SIZE {
+            let color = ((start + offset) % LANE_COLOR_PALETTE_SIZE) as LaneColorIx;
+            if self.colors[usize::from(color)] == 0 && !avoid.contains(&color) {
+                self.next_color = start + offset + 1;
+                return color;
+            }
+        }
+        self.next_color = start + 1;
+        (start % LANE_COLOR_PALETTE_SIZE) as LaneColorIx
+    }
+    fn birth(&mut self, col: usize, target: usize, row: usize, color: LaneColorIx) {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.place(
+            col,
+            LiveLane {
+                id,
+                target: target as u32,
+                born: row,
+                color,
+            },
+        );
+    }
+    pub fn step(&mut self, row: usize, parents: &[usize], merge: bool, head: bool) -> GraphRow {
+        self.transition(row, parents, merge, head, true).paint
+    }
+    pub fn transition(
+        &mut self,
+        row: usize,
+        parents: &[usize],
+        merge: bool,
+        head: bool,
+        materialize: bool,
+    ) -> GraphTransition {
+        gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::GraphTransition);
+        if materialize {
+            gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintRow);
+        }
+        let mut hits = self.targets.get(&(row as u32)).cloned().unwrap_or_default();
+        hits.sort_unstable();
+        let had_hits = !hits.is_empty();
+        let mut now = SmallVec::new();
+        if hits.is_empty() {
+            let color = self.color(&[]);
+            let col = self.alloc(0);
+            self.birth(col, row, row, color);
+            hits.push(col);
+            now.push((col, LanePaint::lane(color, false, false)));
+        }
+        let only_main = hits.len() == 1 && self.main == self.lanes[hits[0]].map(|lane| lane.id);
+        let force = head
+            && had_hits
+            && hits.len() == 1
+            && parents.len() <= 1
+            && !(self.main_target == Some(row) && only_main);
+        let node = hits
+            .iter()
+            .copied()
+            .find(|&col| self.main == self.lanes[col].map(|lane| lane.id))
+            .unwrap_or(hits[0]);
+        let fork_color = force.then(|| self.color(&[]));
+        let fork = fork_color.and_then(|color| {
+            self.lanes
+                .get(node + 1)
+                .copied()
+                .flatten()
+                .is_none()
+                .then_some((node + 1, color))
+        });
+        if let Some((col, color)) = fork {
+            now.push((col, LanePaint::lane(color, false, false)));
+        }
+        let adopt = force && !only_main;
+        let node_color = if adopt {
+            fork_color.unwrap()
+        } else {
+            self.lanes[node].unwrap().color
+        };
+        let mut lanes_now = LanePaints::new();
+        if materialize {
+            let len = self.lanes.len().max(fork.map_or(0, |(col, _)| col + 1));
+            lanes_now.reserve(len);
+            for col in 0..len {
+                lanes_now.push(self.lanes.get(col).copied().flatten().map_or(
+                    LanePaint::HOLE,
+                    |lane| {
+                        LanePaint::lane(
+                            lane.color,
+                            lane.born != row
+                                && !(self.pending
+                                    && self.main_target == Some(row)
+                                    && self.main == Some(lane.id)),
+                            false,
+                        )
+                    },
+                ));
+            }
+            if let Some((col, color)) = fork {
+                lanes_now[col] = LanePaint::lane(color, false, false);
+            }
+        }
+        let pos = hits.iter().position(|&col| col == node).unwrap();
+        hits.swap(0, pos);
+        let mut joins = GraphEdges::new();
+        for &col in hits.iter().skip(1) {
+            joins.push(GraphEdge {
+                from_col: lane_col(col),
+                to_col: lane_col(node),
+                color_ix: self.lanes[col].unwrap().color,
+            });
+        }
+        if let Some((col, color)) = fork {
+            joins.push(GraphEdge {
+                from_col: lane_col(col),
+                to_col: lane_col(node),
+                color_ix: color,
+            });
+        }
+        let mut changed: SmallVec<[usize; 4]> = hits.iter().copied().collect();
+        let mut ended: SmallVec<[LaneColorIx; 4]> = SmallVec::new();
+        for (ix, &col) in hits.iter().enumerate() {
+            if let Some(&parent) = parents.get(ix) {
+                let lane = self.lanes[col].as_mut().unwrap();
+                let old_target = lane.target;
+                lane.target = parent as u32;
+                let targets = self.targets.get_mut(&old_target).unwrap();
+                targets.retain(|target| *target != col);
+                if targets.is_empty() {
+                    self.targets.remove(&old_target);
+                }
+                self.targets.entry(parent as u32).or_default().push(col);
+            } else {
+                ended.push(self.take(col).unwrap().color);
+            }
+        }
+        if adopt && let Some(lane) = self.lanes.get_mut(node).and_then(Option::as_mut) {
+            ended.push(lane.color);
+            self.colors[usize::from(lane.color)] -= 1;
+            lane.color = fork_color.unwrap();
+            self.colors[usize::from(lane.color)] += 1;
+            lane.id = self.next_id;
+            self.next_id += 1;
+            lane.born = row;
+        }
+        for &parent in parents.iter().skip(parents.len().min(hits.len())) {
+            if self.targets.contains_key(&(parent as u32)) {
+                continue;
+            }
+            let color = self.color(&ended);
+            let col = self.alloc(node + 1);
+            self.birth(col, parent, row, color);
+            changed.push(col);
+        }
+        while self.lanes.last().is_some_and(Option::is_none) {
+            self.free.remove(&(self.lanes.len() - 1));
+            self.lanes.pop();
+        }
+        if let Some((col, _)) = fork {
+            changed.push(col);
+        }
+        changed.sort_unstable();
+        changed.dedup();
+        let outgoing = |slot: Option<LiveLane>| {
+            slot.map_or(LanePaint::HOLE, |lane| {
+                LanePaint::lane(lane.color, false, lane.born == row)
+            })
+        };
+        let next = changed
+            .into_iter()
+            .map(|col| (col, outgoing(self.lanes.get(col).copied().flatten())))
+            .collect();
+        let lanes_next = if materialize {
+            self.lanes.iter().map(|lane| outgoing(*lane)).collect()
+        } else {
+            LanePaints::new()
+        };
+        let mut edges = GraphEdges::new();
+        for &parent in parents.iter().skip(1) {
+            if let Some(col) = self.targets.get(&(parent as u32)).and_then(|cols| {
+                cols.iter()
+                    .copied()
+                    .filter(|&col| self.lanes[col].unwrap().born != row)
+                    .min()
+            }) {
+                edges.push(GraphEdge {
+                    from_col: lane_col(node),
+                    to_col: lane_col(col),
+                    color_ix: self.lanes[col].unwrap().color,
+                });
+            }
+        }
+        self.pending = false;
+        GraphTransition {
+            paint: GraphRow {
+                lanes_now,
+                lanes_next,
+                joins_in: joins,
+                edges_out: edges,
+                node_col: lane_col(node),
+                node_color_ix: node_color,
+                is_merge: merge,
+            },
+            now,
+            next,
+            next_len: self.lanes.len(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transitions_and_restored_checkpoints_match_original_frontier() {
+        for width in [1, 8, 64, 512, 5261] {
+            let count = width * 3 + 2200;
+            let mut walk = GraphWalk::new(Some(width / 2));
+            let mut original = super::super::oracle::OracleGraphWalk::new(Some(width / 2));
+            let mut no_paint = GraphWalk::new(Some(width / 2));
+            let mut random = 0x92e2a972u64;
+            for row in 0..count {
+                random ^= random << 13;
+                random ^= random >> 7;
+                random ^= random << 17;
+                let mut parents: SmallVec<[usize; 4]> = SmallVec::new();
+                if row + width < count {
+                    parents.push(row + width);
+                }
+                if row % 7 == 0 && row + 1 < count {
+                    parents.push(row + 1);
+                }
+                if row % 13 == 0 && row + 1 < count {
+                    parents.push(row + 1 + random as usize % (count - row - 1));
+                }
+                let head = row % 31 == 0;
+                if row % 1024 == 0 {
+                    walk = walk.checkpoint().restore();
+                    no_paint = no_paint.checkpoint().restore();
+                }
+                let expected = original.step(row, &parents, parents.len() > 1, head);
+                let actual = walk.step(row, &parents, parents.len() > 1, head);
+                assert_eq!(actual, expected, "width={width} row={row}");
+                let transition = no_paint.transition(row, &parents, parents.len() > 1, head, false);
+                assert!(transition.paint.lanes_now.is_empty());
+                assert!(transition.paint.lanes_next.is_empty());
+                assert_eq!(transition.paint.joins_in, expected.joins_in);
+                assert_eq!(transition.paint.edges_out, expected.edges_out);
+                assert_eq!(transition.paint.node_col, expected.node_col);
+                assert_eq!(transition.paint.node_color_ix, expected.node_color_ix);
+            }
+        }
+    }
+}

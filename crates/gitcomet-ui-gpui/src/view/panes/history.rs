@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 mod history_panel;
 mod indexed;
-mod indexed_graph;
+pub(in crate::view) mod indexed_graph;
 mod loading;
 mod scroll;
 mod viewport;

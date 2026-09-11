@@ -997,6 +997,7 @@ pub struct HistoryState {
     pub commit_details_rev: u64,
     pub multi_selection: CommitMultiSelection,
     selected_ids: Arc<FxHashSet<CommitId>>,
+    squash_cache: Option<Arc<HistorySquashCache>>,
     /// Active "compare two points" selection: when two commits are selected (or
     /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
     /// and the changed-file list between them. `None` when no comparison is
@@ -1062,6 +1063,15 @@ impl Default for CommitLookup {
     }
 }
 
+#[derive(Clone, Debug)]
+struct HistorySquashCache {
+    key: (usize, u64, u64, u64, Option<CommitId>, usize),
+    // Pin identities used by the cache key across asynchronous snapshots.
+    _selection: Arc<Vec<CommitId>>,
+    _index: Option<gitcomet_core::history_index::HistoryIndexHandle>,
+    plan: Option<gitcomet_core::squash::SquashPlan>,
+}
+
 impl HistoryState {
     pub fn selection_contains(&self, id: &CommitId) -> bool {
         if self.selected_ids.len() == self.multi_selection.commits.len() {
@@ -1097,6 +1107,7 @@ impl Default for HistoryState {
             commit_details_rev: 0,
             multi_selection: CommitMultiSelection::default(),
             selected_ids: Arc::new(FxHashSet::default()),
+            squash_cache: None,
             range_selection: None,
             worktree_selection: None,
             worktree_selection_rev: 0,
@@ -1120,7 +1131,7 @@ impl Default for HistoryState {
 /// resolution hint trusted only while the log revision is unchanged.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommitMultiSelection {
-    pub commits: Vec<CommitId>,
+    pub commits: Arc<Vec<CommitId>>,
     pub anchor: Option<CommitId>,
     pub anchor_index: Option<usize>,
     pub anchor_log_rev: Option<u64>,
@@ -2435,7 +2446,56 @@ impl RepoState {
         self.history_state.range_files_rev = self.history_state.range_files_rev.wrapping_add(1);
     }
 
+    fn history_squash_key(&self) -> (usize, u64, u64, u64, Option<CommitId>, usize) {
+        (
+            Arc::as_ptr(&self.history_state.multi_selection.commits) as usize,
+            self.log_rev,
+            self.head_branch_rev,
+            self.branches_rev,
+            self.detached_head_commit.clone(),
+            self.history_state
+                .indexed
+                .index
+                .as_ref()
+                .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+                .map_or(0, |index| Arc::as_ptr(index) as usize),
+        )
+    }
+
+    /// Called on the store worker before publication, once per selection/topology.
+    pub(crate) fn prepare_history_squash_plan(&mut self) {
+        if !self.history_state.multi_selection.is_multi() {
+            self.history_state.squash_cache = None;
+            return;
+        }
+        let key = self.history_squash_key();
+        if self
+            .history_state
+            .squash_cache
+            .as_ref()
+            .is_some_and(|cache| cache.key == key)
+        {
+            return;
+        }
+        let plan = self.compute_history_squash_plan();
+        self.history_state.squash_cache = Some(Arc::new(HistorySquashCache {
+            key,
+            _selection: self.history_state.multi_selection.commits.clone(),
+            _index: self.history_state.indexed.index.clone(),
+            plan,
+        }));
+    }
+
     pub fn history_squash_plan(&self) -> Option<gitcomet_core::squash::SquashPlan> {
+        if let Some(cache) = &self.history_state.squash_cache
+            && cache.key == self.history_squash_key()
+        {
+            return cache.plan.clone();
+        }
+        self.compute_history_squash_plan()
+    }
+
+    fn compute_history_squash_plan(&self) -> Option<gitcomet_core::squash::SquashPlan> {
         let head = self.head_commit_id()?;
         if let Some(index) = self
             .history_state
@@ -2464,7 +2524,9 @@ impl RepoState {
         if self.history_state.multi_selection == v {
             return;
         }
-        self.history_state.selected_ids = Arc::new(v.commits.iter().cloned().collect());
+        if !Arc::ptr_eq(&self.history_state.multi_selection.commits, &v.commits) {
+            self.history_state.selected_ids = Arc::new(v.commits.iter().cloned().collect());
+        }
         self.history_state.multi_selection = v;
         self.history_state.selected_commit_rev =
             self.history_state.selected_commit_rev.wrapping_add(1);

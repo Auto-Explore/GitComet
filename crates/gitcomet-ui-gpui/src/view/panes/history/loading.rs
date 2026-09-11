@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::caches::HistoryListRow;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::time::{Duration, Instant};
 
 const SKELETON_DELAY: Duration = Duration::from_millis(300);
@@ -8,7 +8,9 @@ const STATUS_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum RowIdentity {
+    #[cfg(test)]
     Commit(CommitId),
+    Indexed(usize),
     Worktree(PathBuf),
 }
 
@@ -18,6 +20,7 @@ pub(in crate::view) struct HistoryLoading {
     presentation: usize,
     missing: HashMap<RowIdentity, Instant>,
     rows: HashMap<usize, Instant>,
+    spare_missing: HashMap<RowIdentity, Instant>,
     initial_since: Option<Instant>,
     busy_since: Option<Instant>,
     background_busy: bool,
@@ -44,7 +47,9 @@ impl HistoryLoading {
     }
 
     fn sync_rows(&mut self, rows: Vec<(usize, RowIdentity)>, now: Instant) {
-        let old = std::mem::take(&mut self.missing);
+        std::mem::swap(&mut self.missing, &mut self.spare_missing);
+        self.missing.clear();
+        let old = &self.spare_missing;
         self.rows.clear();
         for (row, id) in rows {
             let since = old.get(&id).copied().unwrap_or(now);
@@ -144,27 +149,17 @@ impl HistoryView {
                 if row >= visible_end {
                     break;
                 }
-                let (visible_ix, identity) = match self.indexed.plan.row_at(row) {
-                    Some(HistoryListRow::Commit { visible_ix }) => {
-                        let Some(id) = shown.graph.projection.commit_id(visible_ix) else {
-                            continue;
-                        };
-                        (visible_ix, RowIdentity::Commit(id))
-                    }
+                let (visible_ix, worktree_ix) = match self.indexed.plan.row_at(row) {
+                    Some(HistoryListRow::Commit { visible_ix }) => (visible_ix, None),
                     Some(HistoryListRow::WorktreeUncommitted {
                         visible_ix,
                         worktree_ix,
-                    }) => {
-                        let Some(worktree) = self.indexed.worktrees.get(worktree_ix) else {
-                            continue;
-                        };
-                        (visible_ix, RowIdentity::Worktree(worktree.path.clone()))
-                    }
+                    }) => (visible_ix, Some(worktree_ix)),
                     _ => continue,
                 };
                 let loaded = self.indexed.window.as_ref().is_some_and(|window| {
                     visible_ix.checked_sub(window.start).is_some_and(|ix| {
-                        if matches!(identity, RowIdentity::Worktree(_)) {
+                        if worktree_ix.is_some() {
                             window.cache.base.graph_rows.get(ix).is_some()
                         } else {
                             window.loaded.get(ix).copied().unwrap_or(false)
@@ -183,6 +178,15 @@ impl HistoryView {
                         })
                     });
                 if !loaded && !failed {
+                    let identity = match worktree_ix {
+                        Some(ix) => {
+                            let Some(worktree) = self.indexed.worktrees.get(ix) else {
+                                continue;
+                            };
+                            RowIdentity::Worktree(worktree.path.clone())
+                        }
+                        None => RowIdentity::Indexed(visible_ix),
+                    };
                     missing.push((row, identity));
                 }
             }

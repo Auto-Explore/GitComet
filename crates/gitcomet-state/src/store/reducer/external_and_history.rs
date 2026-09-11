@@ -711,7 +711,7 @@ pub(super) fn log_loaded(
             };
 
             let mut next = repo_state.history_state.multi_selection.clone();
-            next.commits.retain(&survives);
+            Arc::make_mut(&mut next.commits).retain(&survives);
             if let Some(anchor) = &next.anchor
                 && !survives(anchor)
             {

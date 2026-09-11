@@ -430,6 +430,16 @@ fn indexed_fixture(
     gitcomet_core::history_index::HistoryIndexHandle,
     Vec<Commit>,
 ) {
+    indexed_fixture_with_width(count, 1)
+}
+
+fn indexed_fixture_with_width(
+    count: usize,
+    width: usize,
+) -> (
+    gitcomet_core::history_index::HistoryIndexHandle,
+    Vec<Commit>,
+) {
     use gitcomet_core::history_index::HistoryIndexBuilder;
     use gitcomet_core::services::HistorySnapshot;
     let mut builder = HistoryIndexBuilder::new(
@@ -446,12 +456,12 @@ fn indexed_fixture(
     let mut commits = Vec::new();
     for row in 0..count {
         let id = raw(count - row);
-        let parents: Vec<_> = (row + 1 < count)
-            .then(|| raw(count - row - 1))
+        let parents: Vec<_> = (row + width < count)
+            .then(|| raw(count - row - width))
             .into_iter()
             .collect();
         builder
-            .push(&id, parents.iter().map(|id| id.as_slice()), 0, false)
+            .push(&id, parents.iter().map(|id| id.as_slice()), false)
             .unwrap();
         commits.push(Commit {
             id: CommitId(gitcomet_core::hex::encode(&id).into()),
@@ -1161,5 +1171,297 @@ fn graph_column_width_holds_through_bootstrap_and_indexed_publish(cx: &mut gpui:
         graph_width(cx),
         HISTORY_COL_GRAPH_PX,
         "the indexed publish must not resize the graph column"
+    );
+}
+
+#[gpui::test]
+fn indexed_history_unrelated_updates_reuse_text_and_graph_windows(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(5000);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index.clone());
+    state.repos[0].history_state.indexed.range_index = Some(index.clone());
+    state.repos[0].history_state.indexed.ranges.insert(
+        0,
+        Arc::new(gitcomet_core::history_index::HistoryRange {
+            snapshot: index.snapshot.clone(),
+            start: 0,
+            commits: commits[..256].to_vec(),
+        }),
+    );
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "indexed window", |cx| {
+        cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .history_view
+                .read(app)
+                .indexed
+                .window
+                .is_some()
+        })
+    });
+    let cached = cx.update(|_, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .indexed
+            .window
+            .clone()
+            .unwrap()
+    });
+    for progress in [true, false] {
+        let history = &mut state.repos[0].history_state.indexed;
+        history.rev += 1;
+        if progress {
+            history.progress = Some(gitcomet_core::history_index::HistoryIndexProgress {
+                scanned: 40_000,
+                matched: 30_000,
+            });
+        } else {
+            history.ranges.insert(
+                4096,
+                Arc::new(gitcomet_core::history_index::HistoryRange {
+                    snapshot: index.snapshot.clone(),
+                    start: 4096,
+                    commits: commits[4096..4352].to_vec(),
+                }),
+            );
+        }
+        store.replace_snapshot_for_test(Arc::new(state.clone()));
+        set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            assert!(std::rc::Rc::ptr_eq(
+                &cached,
+                history.indexed.window.as_ref().unwrap()
+            ));
+        });
+    }
+    // Decoration and selection updates retain the complete immutable text page.
+    state.repos[0].history_state.selected_commit = Some(commits[1].id.clone());
+    state.repos[0].history_state.selected_commit_rev += 1;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    for tags in [false, true] {
+        cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .history_view
+                .clone()
+                .update(app, |history, cx| {
+                    history.history_highlight_commit_chain = true;
+                    history.history_show_tags = tags;
+                    cx.notify();
+                });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            let next = history.indexed.window.as_ref().unwrap();
+            assert!(Arc::ptr_eq(&cached.cache.page, &next.cache.page));
+            assert!(Arc::ptr_eq(
+                &cached.cache.base.graph_rows,
+                &next.cache.base.graph_rows
+            ));
+            assert!(next.selected_lane.is_some());
+        });
+    }
+}
+
+#[gpui::test]
+#[ignore = "production GPUI input, window publication and draw benchmark"]
+fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::history_perf::{self, Work};
+    let _guard = crate::test_support::lock_visual_test();
+    let width = std::env::var("GITCOMET_BENCH_GRAPH_WIDTH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5261);
+    let graph_pixels = std::env::var("GITCOMET_BENCH_GRAPH_PIXELS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(HISTORY_COL_GRAPH_PX);
+    let scale: u32 = std::env::var("GITCOMET_BENCH_UI_SCALE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100);
+    cx.update(|app| {
+        crate::ui_scale::set_current(app, scale);
+    });
+    let (index, commits) = indexed_fixture_with_width(20_000, width);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    cx.update(|window, _| {
+        // Test windows bypass the application's window creation hook.
+        crate::ui_scale::apply_to_window(window, scale);
+        assert_eq!(
+            crate::ui_scale::design_scale_factor_from_window(window),
+            scale as f32 / 100.0
+        );
+    });
+    cx.simulate_resize(gpui::size(
+        px(1800.0 * scale as f32 / 100.0),
+        px(1300.0 * scale as f32 / 100.0),
+    ));
+    install_index(&mut state, index.clone());
+    let history = &mut state.repos[0].history_state.indexed;
+    history.range_index = Some(index.clone());
+    for start in [0, 256].into_iter().chain((9984..17_664).step_by(256)) {
+        history.ranges.insert(
+            start,
+            Arc::new(gitcomet_core::history_index::HistoryRange {
+                snapshot: index.snapshot.clone(),
+                start,
+                commits: commits[start..start + 256].to_vec(),
+            }),
+        );
+    }
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed window", |cx| {
+        cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .history_view
+                .read(app)
+                .indexed
+                .window
+                .is_some()
+        })
+    });
+    cx.update(|window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .clone()
+            .update(app, |history, cx| {
+                history.history_col_graph_design = graph_pixels;
+                history.ui_scale_percent = scale;
+                history.sync_history_column_widths_from_design();
+                let mut interaction = history.scroll_interaction.borrow_mut();
+                let logical = interaction.logical.as_mut().unwrap();
+                logical.set_position(10_000.0 * logical.height);
+                cx.notify();
+            });
+        window.refresh();
+    });
+    wait_until(cx, "wide window publication", |cx| {
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            history.indexed.window.as_ref().is_some_and(|window| {
+                window.start <= 10_000 && window.start + window.loaded.len() > 10_000
+            })
+        })
+    });
+    let (size, viewport, height) = cx.update(|window, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        let scroll = history.scroll_interaction.borrow();
+        let logical = scroll.logical.as_ref().unwrap();
+        (
+            window.window_bounds().get_bounds().size,
+            logical.viewport,
+            logical.height,
+        )
+    });
+    cx.simulate_resize(gpui::size(
+        size.width,
+        size.height - px(viewport as f32) + px(38.0 * height as f32),
+    ));
+    cx.run_until_parked();
+    let mut timings = Vec::new();
+    let mut paths = Vec::new();
+    let mut draws = Vec::new();
+    let mut input = Vec::new();
+    let mut allocations = crate::perf_alloc::PerfAllocMetrics::default();
+    let bounds = cx.debug_bounds("indexed_history_viewport").unwrap();
+    for frame in 0..100 {
+        let _capture = history_perf::capture();
+        let started = Instant::now();
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: bounds.center(),
+            delta: gpui::ScrollDelta::Pixels(point(
+                px(0.0),
+                px(if frame % 2 == 0 { -3.25 } else { 3.25 }),
+            )),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        input.push(started.elapsed().as_secs_f64() * 1000.0);
+        let _draw_capture = history_perf::capture();
+        let draw_started = Instant::now();
+        let (_, allocation) = crate::perf_alloc::measure_allocations(|| {
+            cx.update(|window, app| {
+                window.refresh();
+                let _ = window.draw(app);
+            })
+        });
+        allocations = allocations.saturating_add(allocation);
+        draws.push(draw_started.elapsed().as_secs_f64() * 1000.0);
+        timings.push(started.elapsed().as_secs_f64() * 1000.0);
+        paths.push(history_perf::count(Work::PaintPath));
+    }
+    timings.sort_by(f64::total_cmp);
+    draws.sort_by(f64::total_cmp);
+    input.sort_by(f64::total_cmp);
+    let mut metrics = serde_json::Map::new();
+    metrics.insert(
+        "profile".into(),
+        serde_json::json!(if cfg!(debug_assertions) {
+            "test"
+        } else {
+            "release"
+        }),
+    );
+    metrics.insert("warm_draw_p95_ms".into(), serde_json::json!(draws[95]));
+    metrics.insert(
+        "draw_ms_p50_p95_p99".into(),
+        serde_json::json!([draws[50], draws[95], draws[99]]),
+    );
+    metrics.insert(
+        "input_publication_ms_p50_p95_p99".into(),
+        serde_json::json!([input[50], input[95], input[99]]),
+    );
+    metrics.insert(
+        "emitted_paths_max".into(),
+        serde_json::json!(paths.iter().max()),
+    );
+    allocations.append_to_payload(&mut metrics);
+    let report = crate::perf_sidecar::PerfSidecarReport::new(
+        format!("indexed_history_frames/{width}_columns/{graph_pixels}_pixels_{scale}_percent"),
+        metrics,
+    );
+    crate::perf_sidecar::write_criterion_sidecar(&report).unwrap();
+    eprintln!(
+        "GPUI draw width={width} graph_pixels={graph_pixels} scale={scale} draw_p50_ms={:.3} draw_p95_ms={:.3} draw_p99_ms={:.3} allocations_per_frame={:.1} bytes_per_frame={:.1}",
+        draws[50],
+        draws[95],
+        draws[99],
+        allocations.alloc_ops as f64 / 100.0,
+        allocations.alloc_bytes as f64 / 100.0
+    );
+    eprintln!(
+        "GPUI wheel + publication + draw width={width} graph_pixels={graph_pixels} scale={scale} p50_ms={:.3} p95_ms={:.3} p99_ms={:.3} paths_max={}",
+        timings[50],
+        timings[95],
+        timings[99],
+        paths.iter().max().unwrap()
     );
 }

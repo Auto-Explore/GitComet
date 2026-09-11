@@ -28,16 +28,17 @@ pub struct HistoryIndex {
     parents: Vec<u32>,
     external_edges: Vec<u32>,
     external_ids: Vec<u8>,
-    times: Vec<i64>,
-    probable_stashes: Vec<bool>,
+    /// Start offsets for each two-byte ID prefix, plus the final end offset.
+    fanout: Vec<u32>,
+    probable_stashes: Vec<u32>,
 }
 
 impl HistoryIndex {
     pub fn len(&self) -> usize {
-        self.times.len()
+        self.parent_offsets.len() - 1
     }
     pub fn is_empty(&self) -> bool {
-        self.times.is_empty()
+        self.len() == 0
     }
     pub fn id_bytes(&self, row: usize) -> Option<&[u8]> {
         let start = row.checked_mul(self.hash_len)?;
@@ -45,7 +46,7 @@ impl HistoryIndex {
     }
     pub fn commit_id(&self, row: usize) -> Option<CommitId> {
         let bytes = self.id_bytes(row)?;
-        Some(CommitId(crate::hex::encode(bytes).into()))
+        Some(CommitId(crate::hex::encode_object_id(bytes)))
     }
     pub fn position(&self, id: &str) -> Option<usize> {
         if id.len() != self.hash_len * 2 {
@@ -94,45 +95,65 @@ impl HistoryIndex {
         }
         Some(row)
     }
-    fn position_bytes(&self, id: &[u8]) -> Option<usize> {
-        self.sorted_rows
-            .binary_search_by(|row| self.id_bytes(*row as usize).expect("indexed row").cmp(id))
+    pub fn position_bytes(&self, id: &[u8]) -> Option<usize> {
+        if id.len() != self.hash_len {
+            return None;
+        }
+        let rows = if self.fanout.is_empty() {
+            &self.sorted_rows[..]
+        } else {
+            let prefix = u16::from_be_bytes([id[0], id[1]]) as usize;
+            &self.sorted_rows[self.fanout[prefix] as usize..self.fanout[prefix + 1] as usize]
+        };
+        rows.binary_search_by(|row| self.id_bytes(*row as usize).expect("indexed row").cmp(id))
             .ok()
-            .map(|ix| self.sorted_rows[ix] as usize)
+            .map(|ix| rows[ix] as usize)
     }
     pub fn parents(&self, row: usize) -> &[u32] {
         match (
             self.parent_offsets.get(row),
-            self.parent_offsets.get(row + 1),
+            row.checked_add(1)
+                .and_then(|row| self.parent_offsets.get(row)),
         ) {
             (Some(&start), Some(&end)) => &self.parents[start as usize..end as usize],
             _ => &[],
         }
     }
-    pub fn parent_commit_id(&self, row: usize, parent: usize) -> Option<CommitId> {
+    /// The parent IDs and their order are those of the walk, including external parents.
+    pub fn parent_id_bytes(&self, row: usize, parent: usize) -> Option<&[u8]> {
         let rank = *self.parents(row).get(parent)?;
         if rank != MISSING_PARENT {
-            return self.commit_id(rank as usize);
+            return self.id_bytes(rank as usize);
         }
         let edge = *self.parent_offsets.get(row)? as usize + parent;
         let ix = self.external_edges.binary_search(&(edge as u32)).ok()? * self.hash_len;
-        Some(CommitId(
-            crate::hex::encode(&self.external_ids[ix..ix + self.hash_len]).into(),
-        ))
+        self.external_ids.get(ix..ix + self.hash_len)
     }
-    pub fn timestamp(&self, row: usize) -> Option<i64> {
-        self.times.get(row).copied()
+    pub fn parent_commit_id(&self, row: usize, parent: usize) -> Option<CommitId> {
+        Some(CommitId(crate::hex::encode_object_id(
+            self.parent_id_bytes(row, parent)?,
+        )))
+    }
+    /// Check a range response without searching the index or allocating an ID.
+    pub fn row_matches_hex_id(&self, row: usize, id: &str) -> bool {
+        self.id_bytes(row)
+            .is_some_and(|bytes| crate::hex::matches(bytes, id))
     }
     pub fn is_probable_stash(&self, row: usize) -> bool {
-        self.probable_stashes.get(row).copied().unwrap_or(false)
+        u32::try_from(row)
+            .ok()
+            .is_some_and(|row| self.probable_stashes.binary_search(&row).is_ok())
+    }
+    pub fn probable_stash_rows(&self) -> &[u32] {
+        &self.probable_stashes
     }
     pub fn estimated_bytes(&self) -> usize {
         self.ids.capacity()
             + self.sorted_rows.capacity() * 4
             + self.parent_offsets.capacity() * 4
             + self.parents.capacity() * 4
-            + self.times.capacity() * 8
-            + self.probable_stashes.capacity()
+            + self.fanout.capacity() * 4
+            + self.probable_stashes.capacity() * 4
             + self.external_edges.capacity() * 4
             + self.external_ids.capacity()
     }
@@ -314,7 +335,7 @@ impl HistoryIndexBuilder {
                 parents: Vec::new(),
                 external_edges: Vec::new(),
                 external_ids: Vec::new(),
-                times: Vec::new(),
+                fanout: Vec::new(),
                 probable_stashes: Vec::new(),
             },
             parent_ids: Vec::new(),
@@ -330,36 +351,92 @@ impl HistoryIndexBuilder {
         &mut self,
         id: &[u8],
         parents: impl IntoIterator<Item = &'a [u8]>,
-        time: i64,
         probable_stash: bool,
     ) -> Result<()> {
         if id.len() != self.index.hash_len || self.len() >= MISSING_PARENT as usize {
             return Err(invalid_index("invalid or oversized history"));
         }
-        self.index.ids.extend_from_slice(id);
+        let original_parents = self.parent_ids.len();
         for parent in parents {
             if parent.len() != self.index.hash_len {
+                self.parent_ids.truncate(original_parents);
                 return Err(invalid_index("inconsistent parent ID"));
             }
             self.parent_ids.extend_from_slice(parent);
         }
         let end = u32::try_from(self.parent_ids.len() / self.index.hash_len)
             .map_err(|_| invalid_index("too many history edges"))?;
+        self.index.ids.extend_from_slice(id);
         self.index.parent_offsets.push(end);
-        self.index.times.push(time);
-        self.index.probable_stashes.push(probable_stash);
+        if probable_stash {
+            self.index.probable_stashes.push((self.len() - 1) as u32);
+        }
         Ok(())
     }
+    /// Estimated peak construction storage, including cached-prefix sorting,
+    /// unresolved parents, and capacity growth if every parent is external.
+    /// Retained index bytes are reported separately.
+    pub fn estimated_peak_bytes(&self) -> usize {
+        let rows = self.len();
+        let (sort, fanout) = if rows >= 65_536 {
+            (rows * std::mem::size_of::<(u64, u32)>(), 65_537 * 4)
+        } else {
+            (0, 0)
+        };
+        let edges = self.parent_ids.len() / self.index.hash_len;
+        let resolved = edges * 4 + 2 * edges * (self.index.hash_len + 4) + 32;
+        self.index.estimated_bytes()
+            + self.parent_ids.capacity()
+            + rows * 4
+            + fanout
+            + sort.max(resolved)
+    }
+
     pub fn finish(mut self, cancellation: &CancellationToken) -> Result<HistoryIndexHandle> {
         cancellation.check_cancelled()?;
         self.index.sorted_rows = (0..self.index.len() as u32).collect();
         let hash_len = self.index.hash_len;
         let ids = &self.index.ids;
-        self.index.sorted_rows.sort_unstable_by(|&a, &b| {
-            let a = a as usize * hash_len;
-            let b = b as usize * hash_len;
-            ids[a..a + hash_len].cmp(&ids[b..b + hash_len])
-        });
+        if self.index.len() >= 65_536 {
+            // Cache prefixes contiguously: comparisons usually avoid random reads
+            // into the much larger ID table. Full IDs resolve prefix collisions.
+            let mut keyed: Vec<_> = self
+                .index
+                .sorted_rows
+                .iter()
+                .map(|&row| {
+                    let start = row as usize * hash_len;
+                    (
+                        u64::from_be_bytes(ids[start..start + 8].try_into().unwrap()),
+                        row,
+                    )
+                })
+                .collect();
+            keyed.sort_unstable_by(|a, b| {
+                a.0.cmp(&b.0).then_with(|| {
+                    let a = a.1 as usize * hash_len;
+                    let b = b.1 as usize * hash_len;
+                    ids[a..a + hash_len].cmp(&ids[b..b + hash_len])
+                })
+            });
+            for (row, (_, rank)) in self.index.sorted_rows.iter_mut().zip(keyed.iter()) {
+                *row = *rank;
+            }
+            self.index.fanout = vec![0; 65_537];
+            for (prefix, _) in &keyed {
+                self.index.fanout[(prefix >> 48) as usize + 1] += 1;
+            }
+            for prefix in 1..self.index.fanout.len() {
+                self.index.fanout[prefix] += self.index.fanout[prefix - 1];
+            }
+            drop(keyed);
+        } else {
+            self.index.sorted_rows.sort_unstable_by(|&a, &b| {
+                let a = a as usize * hash_len;
+                let b = b as usize * hash_len;
+                ids[a..a + hash_len].cmp(&ids[b..b + hash_len])
+            });
+        }
         cancellation.check_cancelled()?;
         self.index.parents.reserve(self.parent_ids.len() / hash_len);
         for (ix, parent) in self.parent_ids.chunks_exact(hash_len).enumerate() {
@@ -377,6 +454,7 @@ impl HistoryIndexBuilder {
             self.index.parents.push(rank);
         }
         cancellation.check_cancelled()?;
+        drop(self.parent_ids);
         Ok(Arc::new(self.index))
     }
 }
@@ -411,7 +489,6 @@ mod tests {
                 .push(
                     &vec![id; hash_len],
                     [vec![id - 1; hash_len].as_slice()],
-                    id as i64,
                     false,
                 )
                 .unwrap();
@@ -428,7 +505,6 @@ mod tests {
                 assert_eq!(index.position(id.as_ref()), Some(row));
                 assert_eq!(index.resolve_reference(&id.as_ref()[..7]), Some(row));
                 assert_eq!(index.position(&id.as_ref().to_ascii_uppercase()), Some(row));
-                assert_eq!(index.timestamp(row), Some((12 - row) as i64));
                 if row + 1 < index.len() {
                     assert_eq!(index.parent_commit_id(row, 0), index.commit_id(row + 1));
                 }
@@ -525,5 +601,87 @@ mod tests {
             builder.finish(&child).unwrap_err().kind(),
             ErrorKind::Cancelled
         ));
+    }
+}
+
+#[cfg(test)]
+mod lookup_regressions {
+    use super::*;
+
+    #[test]
+    fn random_ids_and_colliding_prefixes_cross_fanout_threshold() {
+        for hash_len in [20, 32] {
+            for count in [31, 65_535, 65_536, 100_000] {
+                let mut builder = HistoryIndexBuilder::new(
+                    HistorySnapshot("random".into()),
+                    HistoryMode::FullReachable,
+                    hash_len,
+                )
+                .unwrap();
+                let mut random = 0x9e3779b97f4a7c15u64;
+                let mut ids = Vec::with_capacity(count);
+                for row in 0..count {
+                    let mut id = vec![0; hash_len];
+                    for chunk in id.chunks_mut(8) {
+                        random ^= random << 13;
+                        random ^= random >> 7;
+                        random ^= random << 17;
+                        chunk.copy_from_slice(&random.to_be_bytes()[..chunk.len()]);
+                    }
+                    if row % 4 == 0 {
+                        id[..8].fill(0xab);
+                    }
+                    id[hash_len - 4..].copy_from_slice(&(row as u32).to_be_bytes());
+                    builder
+                        .push(
+                            &id,
+                            ids.last().map(|id: &Vec<u8>| id.as_slice()),
+                            row % 9001 == 0,
+                        )
+                        .unwrap();
+                    ids.push(id);
+                }
+                let peak = builder.estimated_peak_bytes();
+                let index = builder.finish(&CancellationToken::new()).unwrap();
+                assert!(peak >= index.estimated_bytes());
+                assert_eq!(index.fanout.is_empty(), count < 65_536);
+                assert_eq!(index.probable_stash_rows().len(), count.div_ceil(9001));
+                for (row, id) in ids.iter().enumerate() {
+                    assert_eq!(index.position_bytes(id), Some(row));
+                    let hex = index.commit_id(row).unwrap();
+                    assert!(index.row_matches_hex_id(row, hex.as_ref()));
+                    assert!(index.row_matches_hex_id(row, &hex.as_ref().to_uppercase()));
+                    assert_eq!(
+                        index.parent_id_bytes(row, 0),
+                        row.checked_sub(1).map(|row| ids[row].as_slice())
+                    );
+                }
+                assert_eq!(index.resolve_reference("abababababababab"), None);
+                assert_eq!(index.position_bytes(&[0; 19]), None);
+                assert!(!index.row_matches_hex_id(usize::MAX, &"0".repeat(hash_len * 2)));
+                assert!(!index.row_matches_hex_id(0, &"é".repeat(hash_len)));
+                assert_eq!(index.parent_id_bytes(usize::MAX, usize::MAX), None);
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_parent_does_not_corrupt_builder() {
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot("bad".into()),
+            HistoryMode::FullReachable,
+            20,
+        )
+        .unwrap();
+        assert!(
+            builder
+                .push(&[1; 20], [[2; 20].as_slice(), [3; 19].as_slice()], false)
+                .is_err()
+        );
+        assert!(builder.is_empty());
+        builder.push(&[4; 20], std::iter::empty(), false).unwrap();
+        let index = builder.finish(&CancellationToken::new()).unwrap();
+        assert_eq!(index.id_bytes(0), Some([4; 20].as_slice()));
+        assert!(index.parents(0).is_empty());
     }
 }

@@ -97,6 +97,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 history.loading = false;
                 history.progress = None;
                 history.rev = history.rev.wrapping_add(1);
+                history.status_rev = history.status_rev.wrapping_add(1);
             } else {
                 history.cancellation.cancel();
                 history.seq = history.seq.wrapping_add(1);
@@ -107,6 +108,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 history.error = None;
                 history.cancellation = CancellationToken::new();
                 history.rev = history.rev.wrapping_add(1);
+                history.status_rev = history.status_rev.wrapping_add(1);
                 return vec![Effect::IndexedHistory(Work::Build {
                     repo_id,
                     seq: history.seq,
@@ -121,6 +123,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             if seq == history.seq && history.loading && history.epoch == repo.load_epoch {
                 history.progress = Some(progress);
                 history.rev = history.rev.wrapping_add(1);
+                history.status_rev = history.status_rev.wrapping_add(1);
             }
         }
         Event::Built { seq, result, .. } => {
@@ -137,12 +140,15 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 {
                     history.index = Some(index.clone());
                     history.rev = history.rev.wrapping_add(1);
+                    history.status_rev = history.status_rev.wrapping_add(1);
                     let reveal = repo.history_state.reveal_target.clone();
                     let survives = |id: &gitcomet_core::domain::CommitId| {
                         reveal.as_ref() == Some(id) || index.position(id.as_ref()).is_some()
                     };
                     let mut selection = repo.history_state.multi_selection.clone();
-                    selection.commits.retain(&survives);
+                    if selection.commits.iter().any(|id| !survives(id)) {
+                        Arc::make_mut(&mut selection.commits).retain(&survives);
+                    }
                     if selection.anchor.as_ref().is_some_and(|id| !survives(id)) {
                         selection.anchor = None;
                     }
@@ -173,6 +179,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 }
             }
             history.rev = history.rev.wrapping_add(1);
+            history.status_rev = history.status_rev.wrapping_add(1);
         }
         Event::RequestRanges {
             snapshot,
@@ -205,6 +212,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 }
                 history.pending.clear();
                 history.ranges.clear();
+                history.ranges_rev = history.ranges_rev.wrapping_add(1);
                 history.range_errors.clear();
                 history.lru.clear();
                 history.range_index = Some(index.clone());
@@ -274,13 +282,14 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                             range.commits.len()
                                 == HISTORY_BLOCK_SIZE.min(index.len().saturating_sub(start))
                                 && range.commits.iter().enumerate().all(|(ix, commit)| {
-                                    index.position(commit.id.as_ref()) == Some(start + ix)
+                                    index.row_matches_hex_id(start + ix, commit.id.as_ref())
                                 })
                         }) =>
                 {
                     history.lru.retain(|entry| *entry != start);
                     history.lru.push_back(start);
                     history.ranges.insert(start, Arc::new(range));
+                    history.ranges_rev = history.ranges_rev.wrapping_add(1);
                     while history.ranges.len() > HISTORY_ROW_CACHE_LIMIT / HISTORY_BLOCK_SIZE {
                         let Some(oldest) = history.lru.pop_front() else {
                             break;
@@ -355,7 +364,7 @@ mod tests {
             id[..4].copy_from_slice(&row.to_be_bytes());
             let mut parent = [0u8; 20];
             parent[..4].copy_from_slice(&(row + 1).to_be_bytes());
-            builder.push(&id, [parent.as_slice()], 0, false).unwrap();
+            builder.push(&id, [parent.as_slice()], false).unwrap();
         }
         let index = builder.finish(&CancellationToken::new()).unwrap();
         let mut repo = RepoState::new_opening(
@@ -646,7 +655,7 @@ mod tests {
             );
         }
         assert_eq!(
-            state.repos[0].history_state.multi_selection.commits,
+            *state.repos[0].history_state.multi_selection.commits,
             [10_000, 10_001, 10_003, 10_004].map(|row| index.commit_id(row).unwrap())
         );
         assert!(state.repos[0].history_state.multi_selection.is_multi());
@@ -677,5 +686,34 @@ mod tests {
         );
         assert_eq!(state.repos[0].history_state.indexed.rev, rev);
         assert!(state.repos[0].history_state.indexed.loading);
+    }
+}
+
+#[cfg(test)]
+mod snapshot_regressions {
+    use super::*;
+
+    #[test]
+    fn indexed_history_snapshot_clones_share_a_hundred_thousand_selected_ids() {
+        let mut repo = crate::model::RepoState::new_opening(
+            RepoId(1),
+            gitcomet_core::domain::RepoSpec {
+                workdir: "/tmp/selection-sharing".into(),
+            },
+        );
+        repo.set_commit_multi_selection(crate::model::CommitMultiSelection {
+            commits: Arc::new(
+                (0..100_000)
+                    .map(|row| gitcomet_core::domain::CommitId(format!("{row:040x}").into()))
+                    .collect(),
+            ),
+            ..Default::default()
+        });
+        let next = repo.clone();
+        assert!(Arc::ptr_eq(
+            &repo.history_state.multi_selection.commits,
+            &next.history_state.multi_selection.commits
+        ));
+        assert_eq!(next.history_state.multi_selection.commits.len(), 100_000);
     }
 }

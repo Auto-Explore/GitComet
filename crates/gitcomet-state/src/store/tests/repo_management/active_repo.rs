@@ -1258,7 +1258,7 @@ fn set_active_repo_resets_the_activated_tabs_history_selection_only_on_change() 
         .expect("repo1 exists");
     target.history_state.selected_commit = Some(stale_commit.clone());
     target.history_state.multi_selection = CommitMultiSelection {
-        commits: vec![stale_commit.clone(), CommitId("older".into())],
+        commits: vec![stale_commit.clone(), CommitId("older".into())].into(),
         anchor: Some(stale_commit.clone()),
         anchor_index: Some(0),
         anchor_log_rev: Some(target.history_state.log_rev),

@@ -22,7 +22,7 @@ pub struct SquashPlan {
     pub oldest_parent: CommitId,
     pub commit_count: usize,
     /// Selected commits in log order (youngest first).
-    pub ordered_ids: Vec<CommitId>,
+    pub ordered_ids: std::sync::Arc<Vec<CommitId>>,
 }
 
 /// Validates a selection against the loaded log page (`commits`) and the
@@ -95,7 +95,7 @@ pub fn squash_eligibility(
                     oldest: current.clone(),
                     oldest_parent: commit.parent_ids[0].clone(),
                     commit_count: selected.len(),
-                    ordered_ids,
+                    ordered_ids: ordered_ids.into(),
                 });
             }
         } else if inside_selection {
@@ -350,7 +350,7 @@ pub fn squash_eligibility_indexed(
                     oldest: index.commit_id(row)?,
                     oldest_parent: index.parent_commit_id(row, 0)?,
                     commit_count: selected.len(),
-                    ordered_ids,
+                    ordered_ids: ordered_ids.into(),
                 });
             }
         } else if !ordered_ids.is_empty() {
@@ -402,7 +402,7 @@ mod tests {
         assert_eq!(plan.oldest, id("b"));
         assert_eq!(plan.oldest_parent, id("a"));
         assert_eq!(plan.commit_count, 3);
-        assert_eq!(plan.ordered_ids, vec![id("d"), id("c"), id("b")]);
+        assert_eq!(*plan.ordered_ids, vec![id("d"), id("c"), id("b")]);
     }
 
     #[test]
@@ -414,7 +414,7 @@ mod tests {
         assert_eq!(plan.oldest, id("b"));
         assert_eq!(plan.oldest_parent, id("a"));
         assert_eq!(plan.commit_count, 2);
-        assert_eq!(plan.ordered_ids, vec![id("c"), id("b")]);
+        assert_eq!(*plan.ordered_ids, vec![id("c"), id("b")]);
     }
 
     #[test]
@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(plan.oldest, id("b"));
         assert_eq!(plan.oldest_parent, id("a"));
         assert_eq!(plan.commit_count, 3);
-        assert_eq!(plan.ordered_ids, vec![id("d"), id("c"), id("b")]);
+        assert_eq!(*plan.ordered_ids, vec![id("d"), id("c"), id("b")]);
     }
 
     #[test]

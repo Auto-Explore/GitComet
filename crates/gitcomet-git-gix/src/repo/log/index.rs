@@ -37,6 +37,7 @@ impl GixRepo {
             Some(cancellation),
             None,
         )?;
+        let topology = repo.commit_graph_if_enabled().ok().flatten();
         let mut decode_buf = Vec::new();
         let mut scanned = 0u64;
         let mut last_progress = Instant::now();
@@ -59,10 +60,16 @@ impl GixRepo {
             }
             // Author filtering requires object headers. The stash heuristic
             // only needs messages from commits with two or three parents.
-            let stash_candidate = (2..=3).contains(&info.parent_ids.len());
+            let stash_candidate = (2..=3).contains(&info.parent_ids.len())
+                && topology
+                    .as_ref()
+                    .and_then(|graph| stash_shape(graph, &info.parent_ids))
+                    .unwrap_or(true);
             let mut probable_stash = false;
-            let mut commit_time = info.commit_time;
-            if author.is_some() || stash_candidate || commit_time.is_none() {
+            if author.is_some() || stash_candidate {
+                gitcomet_core::history_perf::record(
+                    gitcomet_core::history_perf::Work::IndexObjectRead,
+                );
                 let commit = repo
                     .objects
                     .find_commit(info.id.as_ref(), &mut decode_buf)
@@ -71,14 +78,6 @@ impl GixRepo {
                             "gix history index object: {error}"
                         )))
                     })?;
-                if commit_time.is_none() {
-                    commit_time = Some(
-                        commit
-                            .committer()
-                            .map(|signature| signature.seconds())
-                            .unwrap_or(0),
-                    );
-                }
                 if let Some(author) = &author
                     && !commit
                         .author()
@@ -97,7 +96,6 @@ impl GixRepo {
             builder.push(
                 info.id.as_bytes(),
                 info.parent_ids.iter().map(|id| id.as_bytes()),
-                commit_time.unwrap_or(0),
                 probable_stash,
             )?;
         }
@@ -128,21 +126,25 @@ impl GixRepo {
             cancellation.check_cancelled()?;
             let id =
                 gix::ObjectId::from_bytes_or_panic(index.id_bytes(row).expect("validated range"));
+            gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::RangeObjectRead);
             let object = repo
                 .objects
                 .find_commit(id.as_ref(), &mut header_buf)
                 .map_err(|error| {
                     Error::new(ErrorKind::Backend(format!("gix history range: {error}")))
                 })?;
-            let parents: Vec<_> = object.parents().take(index.parents(row).len()).collect();
-            // The original walk determines parent count (first-parent and
-            // shallow histories can differ from the raw object's parents).
-            let commit = commit_from_walk_parts(
-                &repo,
+            // Use precisely the indexed topology (including first-parent,
+            // shallow boundaries and parents excluded by an author filter).
+            let parents = (0..index.parents(row).len()).map(|parent| {
+                gix::oid::from_bytes_unchecked(index.parent_id_bytes(row, parent).unwrap())
+            });
+            let commit = commit_from_decoded(
+                &object,
                 id.as_ref(),
-                &parents,
-                index.timestamp(row),
-                &mut decode,
+                parents,
+                None,
+                &mut decode.author_cache,
+                &mut decode.next_commit_id_cache,
                 None,
             )?
             .expect("unfiltered decoding produces a commit");
@@ -155,4 +157,28 @@ impl GixRepo {
             commits,
         })
     }
+}
+
+/// Only reject when unfiltered commit-graph topology proves the shape impossible.
+/// Missing graph entries or malformed edges retain the message-check fallback.
+fn stash_shape(graph: &gix::commitgraph::Graph, parents: &[gix::ObjectId]) -> Option<bool> {
+    let base = graph.lookup(parents.first()?)?;
+    let index = graph.commit_by_id(parents.get(1)?)?;
+    let mut edges = index.iter_parents();
+    let parent = edges.next().transpose().ok()?;
+    if parent != Some(base) || edges.next().transpose().ok()?.is_some() {
+        return Some(false);
+    }
+    if let Some(untracked) = parents.get(2) {
+        return Some(
+            graph
+                .commit_by_id(untracked)?
+                .iter_parents()
+                .next()
+                .transpose()
+                .ok()?
+                .is_none(),
+        );
+    }
+    Some(true)
 }
