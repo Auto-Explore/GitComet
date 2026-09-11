@@ -123,6 +123,8 @@ const STASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0,
 /// default.
 const HISTORY_AUTHOR_FILTER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 240.0, 420.0);
 const REPO_TAB_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(360.0);
+/// Rows read "origin — github.com/owner/repo", so wider than a plain menu.
+const REMOTE_WEB_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(360.0, 260.0, 520.0);
 const PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(420.0, 420.0, 820.0);
 const LARGE_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(520.0, 520.0, 820.0);
 const DIALOG_320_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
@@ -510,7 +512,9 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::BranchSectionMenu { .. }
             | PopoverKind::SubmoduleInnerDiffMenu { .. }
             | PopoverKind::Repo {
-                kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { .. }),
+                kind: RepoPopoverKind::Remote(
+                    RemotePopoverKind::Menu { .. } | RemotePopoverKind::OpenInBrowserMenu,
+                ),
                 ..
             }
             | PopoverKind::StashMenu { .. }
@@ -1008,6 +1012,10 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+            ..
+        } => Some(REMOTE_WEB_PICKER_WIDTH),
         PopoverKind::CommitFileSortMenu { .. } => Some(SORT_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings

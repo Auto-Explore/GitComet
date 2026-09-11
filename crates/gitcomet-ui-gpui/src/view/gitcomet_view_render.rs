@@ -603,6 +603,10 @@ impl Render for GitCometView {
                 this.locate_open_file_in_explorer(cx);
                 cx.stop_propagation();
             }))
+            .on_action(cx.listener(|this, _: &OpenRemoteInBrowser, window, cx| {
+                this.open_remote_in_browser(window, cx);
+                cx.stop_propagation();
+            }))
             .on_action(cx.listener(|this, _: &CommandPaletteDismiss, window, cx| {
                 if this.command_palette_open {
                     this.close_command_palette(window, cx);

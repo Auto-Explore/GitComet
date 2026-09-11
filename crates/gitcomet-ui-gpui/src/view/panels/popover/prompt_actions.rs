@@ -125,6 +125,10 @@ impl PopoverHost {
                         PopoverKind::remote(repo_id, RemotePopoverKind::Menu { name }),
                         cx,
                     ),
+                    RemotePopoverKind::OpenInBrowserMenu => self.context_menu_view(
+                        PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
+                        cx,
+                    ),
                 },
                 RepoPopoverKind::Worktree(worktree_kind) => match worktree_kind {
                     WorktreePopoverKind::SectionMenu => self.context_menu_view(

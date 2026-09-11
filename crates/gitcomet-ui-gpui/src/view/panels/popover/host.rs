@@ -1128,6 +1128,16 @@ impl PopoverHost {
         self.popover_opened_from_diff_panel
     }
 
+    #[cfg(test)]
+    pub(in crate::view) fn context_menu_focus_handle_for_tests(&self) -> FocusHandle {
+        self.context_menu_focus_handle.clone()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn context_menu_selected_ix_for_tests(&self) -> Option<usize> {
+        self.context_menu_selected_ix
+    }
+
     /// The box the open popover hangs off, when it was anchored to one.
     #[cfg(test)]
     pub(in crate::view) fn popover_anchor_bounds_for_tests(&self) -> Option<Bounds<Pixels>> {
@@ -2418,6 +2428,10 @@ impl PopoverHost {
                 | PopoverKind::StageConflictMarkersConfirm { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::PushPicker
+                | PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+                    ..
+                }
         ) {
             window
                 .focused(cx)
@@ -2434,7 +2448,16 @@ impl PopoverHost {
             .diff_panel_focus_handle
             .is_focused(window);
         let is_context_menu = popover_is_context_menu(&kind);
-        let keep_active_invoker = is_context_menu
+        // The remote picker opens from a shortcut or menu, never from a row, so
+        // a row lit by an earlier right-click must not stay lit behind it.
+        let opened_from_row = !matches!(
+            &kind,
+            PopoverKind::Repo {
+                kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+                ..
+            }
+        );
+        let keep_active_invoker = (is_context_menu && opened_from_row)
             || matches!(
                 &kind,
                 PopoverKind::CreateBranchFromRefPrompt { .. }
