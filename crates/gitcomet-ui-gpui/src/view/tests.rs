@@ -5684,3 +5684,251 @@ fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
         })
     });
 }
+
+#[gpui::test]
+fn explorer_folder_click_preserves_sources_and_keyboard_paste_uses_focused_folder(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("source.txt"), "clipboard content").unwrap();
+    std::fs::create_dir(directory.path().join("destination")).unwrap();
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].spec.workdir = directory.path().to_path_buf();
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
+        FileEntry {
+            name: "destination".into(),
+            path: Arc::new("destination".into()),
+            kind: FileEntryKind::Directory,
+            depth: 0,
+        },
+        FileEntry {
+            name: "source.txt".into(),
+            path: Arc::new("source.txt".into()),
+            kind: FileEntryKind::File,
+            depth: 0,
+        },
+    ]));
+    state.repos[0].file_browser.bump_rev();
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    let primary = gpui::Modifiers {
+        control: !cfg!(target_os = "macos"),
+        platform: cfg!(target_os = "macos"),
+        ..Default::default()
+    };
+    let click = |cx: &mut gpui::VisualTestContext, selector: &'static str, modifiers| {
+        let position = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_mouse_down(position, gpui::MouseButton::Left, modifiers);
+        cx.simulate_mouse_up(position, gpui::MouseButton::Left, modifiers);
+    };
+    click(cx, "file_browser_row_1", primary);
+    pump_until(cx, "file selection", || {
+        store.snapshot().repos[0]
+            .file_browser
+            .selection
+            .paths
+            .contains(Path::new("source.txt"))
+    });
+    sync_view_snapshot(cx, &view);
+    let selected = store.snapshot().repos[0]
+        .file_browser
+        .selection
+        .paths
+        .clone();
+    click(cx, "file_browser_row_0", Default::default());
+    pump_until(cx, "folder expanded", || {
+        store.snapshot().repos[0]
+            .file_browser
+            .expanded_dirs
+            .contains(&PathBuf::from("destination"))
+    });
+    sync_view_snapshot(cx, &view);
+    assert_eq!(
+        store.snapshot().repos[0].file_browser.selection.paths,
+        selected
+    );
+    assert_eq!(
+        store.snapshot().repos[0]
+            .file_browser
+            .selection
+            .focused
+            .as_deref(),
+        Some(Path::new("destination"))
+    );
+    // A modified click adds the folder to the selection without toggling it.
+    click(cx, "file_browser_row_0", primary);
+    pump_until(cx, "folder selected", || {
+        store.snapshot().repos[0].file_browser.selection.paths.len() == 2
+    });
+    assert!(
+        store.snapshot().repos[0]
+            .file_browser
+            .expanded_dirs
+            .contains(&PathBuf::from("destination"))
+    );
+    sync_view_snapshot(cx, &view);
+    click(cx, "file_browser_row_0", primary);
+    pump_until(cx, "folder deselected", || {
+        store.snapshot().repos[0].file_browser.selection.paths == selected
+    });
+    sync_view_snapshot(cx, &view);
+    click(cx, "file_browser_row_0", Default::default());
+    pump_until(cx, "folder collapsed", || {
+        !store.snapshot().repos[0]
+            .file_browser
+            .expanded_dirs
+            .contains(&PathBuf::from("destination"))
+    });
+    sync_view_snapshot(cx, &view);
+    // Focus remains on the destination. Copy must still use the file selection.
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-c"
+    } else {
+        "ctrl-c"
+    });
+    cx.update(|_, app| {
+        assert_eq!(
+            view.update(app, |_, cx| crate::clipboard::read_files(cx).unwrap().paths),
+            vec![directory.path().join("source.txt")]
+        );
+    });
+    // Paste immediately after the folder click, before the model can publish
+    // its new focus. Keyboard routing must honor the click we just handled.
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-end"
+    } else {
+        "ctrl-end"
+    });
+    pump_until(cx, "source focused", || {
+        store.snapshot().repos[0]
+            .file_browser
+            .selection
+            .focused
+            .as_deref()
+            == Some(Path::new("source.txt"))
+    });
+    sync_view_snapshot(cx, &view);
+    click(cx, "file_browser_row_0", Default::default());
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-v"
+    } else {
+        "ctrl-v"
+    });
+    pump_until(cx, "file pasted into focused folder", || {
+        directory.path().join("destination/source.txt").exists()
+    });
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("destination/source.txt")).unwrap(),
+        "clipboard content"
+    );
+    assert!(directory.path().join("source.txt").exists());
+    cx.update(|_, app| {
+        assert_eq!(
+            view.update(app, |_, cx| crate::clipboard::read_files(cx).unwrap().paths),
+            vec![directory.path().join("source.txt")],
+            "copy remains available for repeated paste"
+        );
+    });
+    // Native clipboard content from another process follows the same path.
+    let external = tempfile::tempdir().unwrap();
+    std::fs::write(external.path().join("external.txt"), "external clipboard").unwrap();
+    cx.update(|_, app| {
+        app.write_to_clipboard(gpui::ClipboardItem {
+            entries: vec![gpui::ClipboardEntry::Files(gpui::FileTransfer {
+                paths: gpui::ExternalPaths(
+                    [external.path().join("external.txt")].into_iter().collect(),
+                ),
+                operation: gpui::FileTransferOperation::Copy,
+                ownership: 0,
+            })],
+        })
+    });
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-v"
+    } else {
+        "ctrl-v"
+    });
+    pump_until(cx, "native clipboard file pasted", || {
+        directory.path().join("destination/external.txt").exists()
+    });
+    assert!(external.path().join("external.txt").exists());
+}
+
+#[gpui::test]
+fn explorer_external_drop_writes_to_highlighted_folder_in_sidebar_and_popup(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    let directory = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("destination")).unwrap();
+    std::fs::write(directory.path().join("destination/keep.txt"), "keep").unwrap();
+    for popup in [false, true] {
+        let name = if popup { "popup.txt" } else { "sidebar.txt" };
+        let source = external.path().join(name);
+        std::fs::write(&source, "dropped content").unwrap();
+        let mut state = view_state_with_active_ready_repo(RepoId(1));
+        state.repos[0].spec.workdir = directory.path().to_path_buf();
+        state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+        state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
+            FileEntry {
+                name: "destination".into(),
+                path: Arc::new("destination".into()),
+                kind: FileEntryKind::Directory,
+                depth: 0,
+            },
+            FileEntry {
+                name: "keep.txt".into(),
+                path: Arc::new("destination/keep.txt".into()),
+                kind: FileEntryKind::File,
+                depth: 1,
+            },
+        ]));
+        state.repos[0]
+            .file_browser
+            .expanded_dirs
+            .insert(Arc::new(PathBuf::from("destination")));
+        state.repos[0].file_browser.bump_rev();
+        store.replace_snapshot_for_test(Arc::new(state));
+        sync_view_snapshot(cx, &view);
+        if popup {
+            cx.update(|_, app| {
+                view.update(app, |view, cx| {
+                    view.set_sidebar_collapsed(true, cx);
+                    view.open_sidebar_collapsed_popover(panes::CollapsedSidebarSection::Files, cx);
+                })
+            });
+            for _ in 0..25 {
+                cx.executor().advance_clock(Duration::from_millis(16));
+                cx.run_until_parked();
+                test_support::redraw(cx);
+            }
+        }
+        let position = cx.debug_bounds("file_browser_row_1").unwrap().center();
+        dispatch_file_drop(
+            cx,
+            gpui::FileDropEvent::Entered {
+                position,
+                paths: gpui::ExternalPaths([source.clone()].into_iter().collect()),
+            },
+        );
+        dispatch_file_drop(cx, gpui::FileDropEvent::Pending { position });
+        dispatch_file_drop(cx, gpui::FileDropEvent::Submit { position });
+        pump_until(cx, "drop into highlighted destination", || {
+            directory.path().join("destination").join(name).exists()
+        });
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("destination").join(name)).unwrap(),
+            "dropped content"
+        );
+        assert!(source.exists(), "external drop copies by default");
+    }
+}

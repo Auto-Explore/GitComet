@@ -38,6 +38,7 @@ impl InteractiveRowState {
 pub struct InteractiveRowStyle {
     surface: Rgba,
     hover: Rgba,
+    hover_enabled: bool,
     active: Rgba,
     focus: Rgba,
     focus_ring: Rgba,
@@ -52,6 +53,7 @@ impl InteractiveRowStyle {
         Self {
             surface,
             hover: theme.hover_overlay(),
+            hover_enabled: true,
             active: theme.active_overlay(),
             focus: theme.colors.interaction.focus_background,
             focus_ring: theme.colors.interaction.focus_ring,
@@ -66,6 +68,13 @@ impl InteractiveRowStyle {
     /// as one plane instead of a stack of pills.
     pub fn flat(mut self) -> Self {
         self.radius = 0.0;
+        self
+    }
+
+    /// Avoid hover invalidations when another interaction supplies the feedback,
+    /// such as a drag whose destination is highlighted explicitly.
+    pub fn without_hover(mut self) -> Self {
+        self.hover_enabled = false;
         self
     }
 
@@ -140,7 +149,9 @@ impl InteractiveRowStyle {
             .cursor(CursorStyle::PointingHand)
             .when_some(resting, |row, background| row.bg(background))
             .when_some(selection_outline, |row, outline| row.shadow(outline))
-            .hover(move |row| row.bg(hover))
+            .when(self.hover_enabled, |row| {
+                row.hover(move |row| row.bg(hover))
+            })
             .active(move |row| row.bg(active))
             .focus(move |row| row.bg(focus).shadow(focus_outline.clone()))
     }
@@ -171,9 +182,27 @@ pub fn light_theme_selection_outline(theme: AppTheme) -> Option<gpui::BoxShadow>
 
 pub trait InteractiveRowExt {
     fn interactive_row(self, style: InteractiveRowStyle, state: InteractiveRowState) -> Self;
+    /// Paint a leading accent without changing the row's content geometry or hitboxes.
+    fn row_accent(self, color: Rgba) -> Self;
 }
 
 impl InteractiveRowExt for Stateful<Div> {
+    fn row_accent(self, color: Rgba) -> Self {
+        self.relative().child(
+            gpui::canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    window.paint_quad(gpui::fill(bounds, color));
+                },
+            )
+            .absolute()
+            .left_0()
+            .top_0()
+            .w(px(1.0))
+            .h_full(),
+        )
+    }
+
     fn interactive_row(self, style: InteractiveRowStyle, state: InteractiveRowState) -> Self {
         style.apply(self, state)
     }

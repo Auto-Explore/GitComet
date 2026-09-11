@@ -3,9 +3,8 @@ use gitcomet_core::domain::FileSource;
 
 /// Context menu for a folder row in the sidebar file browser.
 ///
-/// The file menu's counterpart: same header/path block, but the actions are
-/// about the folder as a container — opening and closing it in the tree, and
-/// handing its location to the OS.
+/// Actions for the folder as a container: opening and closing it in the tree,
+/// and handing its location to the OS.
 pub(super) fn model(
     this: &PopoverHost,
     repo_id: RepoId,
@@ -36,16 +35,7 @@ pub(super) fn model(
         crate::view::panes::file_browser_search_is_active(&repo.file_browser.search_query)
     });
 
-    let mut items = vec![ContextMenuItem::Header(
-        path.file_name()
-            .and_then(|p| p.to_str().map(ToOwned::to_owned))
-            .unwrap_or_else(|| format!("{path:?}"))
-            .into(),
-    )];
-    items.push(ContextMenuItem::Label(
-        components::ContextMenuText::path_single_line(path.display().to_string()),
-    ));
-    items.push(ContextMenuItem::Separator);
+    let mut items = Vec::new();
     super::explorer_operations::append(this, &mut items, repo_id, path, &source);
 
     items.push(ContextMenuItem::Entry {

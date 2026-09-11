@@ -18,16 +18,7 @@ pub(super) fn model(
         .map(|repo| repo.file_browser.source.clone())
         .unwrap_or_default();
 
-    let mut items = vec![ContextMenuItem::Header(
-        path.file_name()
-            .and_then(|p| p.to_str().map(ToOwned::to_owned))
-            .unwrap_or_else(|| format!("{path:?}"))
-            .into(),
-    )];
-    items.push(ContextMenuItem::Label(
-        components::ContextMenuText::path_single_line(path.display().to_string()),
-    ));
-    items.push(ContextMenuItem::Separator);
+    let mut items = Vec::new();
     super::explorer_operations::append(this, &mut items, repo_id, path, &source);
 
     items.push(ContextMenuItem::Entry {

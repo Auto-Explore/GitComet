@@ -10,6 +10,7 @@ use gitcomet_state::model::{Loadable, SidebarDataRequest, SidebarMode};
 use gitcomet_state::msg::Msg;
 use palette::IntoColor;
 use rustc_hash::{FxHashSet, FxHasher};
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -29,6 +30,8 @@ type FileBrowserRowsCache = std::cell::RefCell<
         Rc<[FileBrowserVisibleRow]>,
     )>,
 >;
+type ExplorerCutCache = std::cell::RefCell<Option<(u64, Option<Rc<[PathBuf]>>)>>;
+type ExplorerPopoverRows = Rc<Cell<Option<(gpui::Bounds<Pixels>, Pixels)>>>;
 
 /// One row of the file explorer list.
 ///
@@ -282,6 +285,8 @@ impl CollapsedSidebarSection {
 
 pub(in super::super) struct SidebarPaneView {
     explorer_focus: gpui::FocusHandle,
+    /// Input events can arrive before the store publishes the preceding click.
+    explorer_pending_focus: Option<(RepoId, PathBuf)>,
     explorer_name_input: Entity<TextInput>,
     explorer_name_edit: Option<explorer_operations::NameEdit>,
     /// Cut paths mirrored from the clipboard, keyed on
@@ -289,13 +294,18 @@ pub(in super::super) struct SidebarPaneView {
     /// clipboard itself, which on Linux/X11 is a synchronous selection transfer
     /// -- once per prepaint, and gpui re-renders on every mouse move during a
     /// drag.
-    explorer_cut_cache: std::cell::RefCell<Option<(u64, Option<Rc<[PathBuf]>>)>>,
+    explorer_cut_cache: ExplorerCutCache,
     explorer_drop_target: Option<PathBuf>,
+    explorer_drop_region: std::cell::RefCell<Option<explorer_operations::DropRegion>>,
+    explorer_drag_repo: Option<RepoId>,
     /// The row that claimed `explorer_drop_target`. Rows are not one-to-one
     /// with destinations, so only this identifies the claimant.
     explorer_drop_row: Option<PathBuf>,
     explorer_hover_task: Option<gpui::Task<()>>,
     explorer_scroll_task: Option<gpui::Task<()>>,
+    /// Unscrolled row bounds and row height for the Files rail popover.
+    explorer_popover_rows: ExplorerPopoverRows,
+    explorer_empty_bounds: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
@@ -518,6 +528,18 @@ impl SidebarPaneView {
 
             this.notify_fingerprint = next_fingerprint;
             this.state = next;
+            if this
+                .explorer_pending_focus
+                .as_ref()
+                .is_some_and(|(id, path)| {
+                    this.active_repo_id() != Some(*id)
+                        || this.active_repo().is_some_and(|repo| {
+                            repo.file_browser.selection.focused.as_ref() == Some(path)
+                        })
+                })
+            {
+                this.explorer_pending_focus = None;
+            }
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
             }
@@ -619,10 +641,12 @@ impl SidebarPaneView {
 
         let mut this = Self {
             explorer_focus: cx.focus_handle(),
+            explorer_pending_focus: None,
             explorer_name_input: cx.new(|cx| {
                 TextInput::new_inert(
                     TextInputOptions {
                         placeholder: "Name".into(),
+                        chromeless: true,
                         ..Default::default()
                     },
                     cx,
@@ -631,9 +655,13 @@ impl SidebarPaneView {
             explorer_name_edit: None,
             explorer_cut_cache: std::cell::RefCell::new(None),
             explorer_drop_target: None,
+            explorer_drop_region: Default::default(),
+            explorer_drag_repo: None,
             explorer_drop_row: None,
             explorer_hover_task: None,
             explorer_scroll_task: None,
+            explorer_popover_rows: Rc::new(Cell::new(None)),
+            explorer_empty_bounds: Rc::new(Cell::new(None)),
             store,
             state,
             theme,
@@ -1469,7 +1497,7 @@ impl SidebarPaneView {
                     Loadable::Error(_) => "Error loading files.",
                 },
             };
-            components::empty_state(theme, "Files", message).into_any_element()
+            self.explorer_empty_state(theme, message)
         } else {
             // Virtualized like the branch-section popovers: only the visible
             // slice becomes elements, with spacers standing in for the rest.
@@ -1490,7 +1518,24 @@ impl SidebarPaneView {
             let after =
                 scale.px((visible_rows.len() - range.end) as f32 * FILE_BROWSER_ROW_HEIGHT_PX);
             let rows = Self::render_file_browser_rows(self, range, window, cx);
+            let geometry = self.explorer_popover_rows.clone();
+            let scroll = self.collapsed_popover_scroll.clone();
+            let height = scale.px(FILE_BROWSER_ROW_HEIGHT_PX);
             div()
+                .relative()
+                .child(
+                    gpui::canvas(
+                        move |mut bounds, _, _| {
+                            bounds.origin.y -= scroll.offset().y;
+                            bounds.origin.y += px(2.0);
+                            bounds.size.height -= px(8.0);
+                            geometry.set(Some((bounds, height)));
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
                 .debug_selector(|| "collapsed_file_browser_rows".to_string())
                 .flex()
                 .flex_col()
@@ -1505,6 +1550,42 @@ impl SidebarPaneView {
         };
 
         div()
+            .id("explorer_popover_focus_scope")
+            .on_click(cx.listener(|this, _, window, cx| this.explorer_background_click(window, cx)))
+            .on_drag_move(cx.listener(
+                |this,
+                 event: &gpui::DragMoveEvent<explorer_operations::ExplorerDrag>,
+                 window,
+                 cx| {
+                    this.explorer_drag_move(event.event.position, window, cx);
+                },
+            ))
+            .on_drag_move(cx.listener(
+                |this, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, window, cx| {
+                    this.explorer_drag_move(event.event.position, window, cx);
+                },
+            ))
+            .on_mouse_exit(cx.listener(|this, _: &gpui::MouseExitEvent, _, cx| {
+                this.clear_explorer_drag_state(cx)
+            }))
+            .on_drop(cx.listener(
+                |this, drag: &explorer_operations::ExplorerDrag, window, cx| {
+                    let Some(target) = this.explorer_pointer_target(window, cx) else {
+                        return;
+                    };
+                    this.explorer_drop(drag.paths.to_vec(), Some(target), false, window, cx);
+                },
+            ))
+            .on_drop(
+                cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                    let Some(target) = this.explorer_pointer_target(window, cx) else {
+                        return;
+                    };
+                    this.explorer_drop(paths.paths().to_vec(), Some(target), true, window, cx);
+                }),
+            )
+            .track_focus(&self.explorer_focus)
+            .capture_key_down(cx.listener(Self::explorer_key_down))
             .flex()
             .flex_col()
             .child(search_bar)
@@ -2406,7 +2487,7 @@ impl SidebarPaneView {
                     Loadable::Error(_) => "Error loading files.",
                 },
             };
-            components::empty_state(theme, "Files", message).into_any_element()
+            self.explorer_empty_state(theme, message)
         } else {
             let row_count = visible_rows.len();
             let list = uniform_list(
@@ -2461,6 +2542,7 @@ impl SidebarPaneView {
         });
         div()
             .id("explorer_focus_scope")
+            .on_click(cx.listener(|this, _, window, cx| this.explorer_background_click(window, cx)))
             .track_focus(&self.explorer_focus)
             .capture_key_down(cx.listener(Self::explorer_key_down))
             .on_mouse_down(
@@ -2492,35 +2574,39 @@ impl SidebarPaneView {
                          event: &gpui::DragMoveEvent<explorer_operations::ExplorerDrag>,
                          window,
                          cx| {
-                            this.explorer_drag_scroll(event.event.position, window, cx)
+                            this.explorer_drag_move(event.event.position, window, cx)
                         },
                     ))
                     .on_drag_move(cx.listener(
                         |this, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, window, cx| {
-                            this.explorer_drag_scroll(event.event.position, window, cx)
+                            this.explorer_drag_move(event.event.position, window, cx)
                         },
                     ))
                     .on_mouse_exit(cx.listener(|this, _: &gpui::MouseExitEvent, _window, cx| {
                         this.clear_explorer_drag_state(cx)
                     }))
-                    // Rows claim their own drops first, so what reaches here is
-                    // the area around them. Only the empty space under the last
-                    // row means "the repository root" -- the search field, the
-                    // visibility toggles and the scrollbar mean nothing.
+                    // Resolve drops from the same geometry as hover feedback;
+                    // controls, pinned buffers and scrollbars are excluded.
                     .on_drop(
                         cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
-                            if !this.explorer_pointer_over_rows(window) {
+                            let Some(target) = this.explorer_pointer_target(window, cx) else {
                                 return;
-                            }
-                            this.explorer_drop(paths.paths().to_vec(), None, true, window, cx)
+                            };
+                            this.explorer_drop(
+                                paths.paths().to_vec(),
+                                Some(target),
+                                true,
+                                window,
+                                cx,
+                            )
                         }),
                     )
                     .on_drop(cx.listener(
                         |this, drag: &explorer_operations::ExplorerDrag, window, cx| {
-                            if !this.explorer_pointer_over_rows(window) {
+                            let Some(target) = this.explorer_pointer_target(window, cx) else {
                                 return;
-                            }
-                            this.explorer_drop(drag.paths.to_vec(), None, false, window, cx)
+                            };
+                            this.explorer_drop(drag.paths.to_vec(), Some(target), false, window, cx)
                         },
                     ))
             })
@@ -2605,7 +2691,14 @@ impl SidebarPaneView {
                 }
             } else {
                 rows.insert(
-                    ix.map_or(0, |i| i + 1),
+                    ix.map_or_else(
+                        || {
+                            rows.iter()
+                                .position(|row| row.entry_index().is_some())
+                                .unwrap_or(rows.len())
+                        },
+                        |i| i + 1,
+                    ),
                     FileBrowserVisibleRow::NameEntry {
                         depth: relative.components().count(),
                     },
@@ -2869,6 +2962,14 @@ impl SidebarPaneView {
         // Match the Branches tree: both are continuous lists, and their
         // hover/selection fills should have the same square row silhouette.
         let row_style = components::InteractiveRowStyle::new(theme, row_surface).flat();
+        // GPUI hides ordinary hover styles during a drag, but their listeners
+        // still invalidate the sidebar when crossing rows. Drop highlighting
+        // below supplies the feedback and only changes when the target changes.
+        let row_style = if cx.has_active_drag() {
+            row_style.without_hover()
+        } else {
+            row_style
+        };
         let store = Arc::clone(&this.store);
         let search_matchers = this
             .active_repo()
@@ -2878,6 +2979,7 @@ impl SidebarPaneView {
             .unwrap_or_default();
 
         let visible_rows = this.file_browser_visible_rows(cx);
+        let drop_region = this.explorer_drop_range(&visible_rows);
         let cut_paths = this.explorer_cut_paths(cx);
         // Every selected row drags the whole selection, so build it once rather
         // than joining and cloning it per row per frame.
@@ -2965,10 +3067,26 @@ impl SidebarPaneView {
                     // The pinned section shares the list with the tree but not
                     // its shape, so both rows are built here and return early.
                     FileBrowserVisibleRow::NameEntry { depth } => {
+                        let edit = this.explorer_name_edit.as_ref()?;
+                        let icon = if edit.is_directory {
+                            file_icons::folder_icon(false)
+                        } else {
+                            file_icons::file_icon_for_path(&edit.path)
+                        };
                         return this.explorer_name_entry(cx).map(|entry| {
                             div()
+                                .debug_selector(|| "explorer_inline_row".into())
+                                .flex()
+                                .items_center()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .flex_none()
                                 .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
                                 .pl(scaled_px(6.0 + INDENT_STEP_PX * *depth as f32))
+                                .pr_2()
+                                .gap(scaled_px(4.0))
+                                .child(chevron_slot(false, false))
+                                .child(icon_slot(icon))
                                 .child(entry)
                                 .into_any_element()
                         });
@@ -3125,14 +3243,9 @@ impl SidebarPaneView {
                         .gap(scaled_px(4.0))
                         .interactive_row(row_style, row_state)
                         .when(focused, |row| {
-                            row.border_l_1()
-                                .border_color(theme.colors.accent.foreground)
+                            row.row_accent(theme.colors.accent.foreground)
                         });
 
-                    let drop_path = (*entry.path).clone();
-                    let external_drop_path = drop_path.clone();
-                    let hover_path = drop_path.clone();
-                    let external_hover_path = drop_path.clone();
                     let paths = if selected {
                         Rc::clone(&selection_sources)
                     } else {
@@ -3142,6 +3255,7 @@ impl SidebarPaneView {
                         )
                     };
                     let native_root = this.root_view.clone();
+                    let drag_focus = this.explorer_focus.clone();
                     row_div = row_div
                         .when(
                             repo.is_some_and(|r| {
@@ -3151,8 +3265,19 @@ impl SidebarPaneView {
                             |row| {
                                 row.on_drag(
                                     explorer_operations::ExplorerDrag { paths },
-                                    |drag, _, _, cx| cx.new(|_| drag.clone()),
+                                    move |drag, offset, window, cx| {
+                                        window.focus(&drag_focus, cx);
+                                        cx.new(|_| {
+                                            explorer_operations::ExplorerDragPreview::new(
+                                                drag,
+                                                is_directory,
+                                                theme,
+                                                offset,
+                                            )
+                                        })
+                                    },
                                 )
+                                .drag_move_refresh(gpui::DragMoveRefresh::Preview)
                                 .external_drag_payload_async(
                                     move |drag: &explorer_operations::ExplorerDrag, window, cx| {
                                         let intent = if (cfg!(target_os = "macos")
@@ -3175,91 +3300,44 @@ impl SidebarPaneView {
                                             .unwrap_or_else(|_| gpui::Task::ready(None))
                                     },
                                 )
-                                .on_drop(cx.listener(
-                                    move |this,
-                                          drag: &explorer_operations::ExplorerDrag,
-                                          window,
-                                          cx| {
-                                        this.explorer_drop(
-                                            drag.paths.to_vec(),
-                                            Some(drop_path.clone()),
-                                            false,
-                                            window,
-                                            cx,
-                                        )
-                                    },
-                                ))
-                                .on_drop(cx.listener(
-                                    move |this, paths: &gpui::ExternalPaths, window, cx| {
-                                        this.explorer_drop(
-                                            paths.paths().to_vec(),
-                                            Some(external_drop_path.clone()),
-                                            true,
-                                            window,
-                                            cx,
-                                        )
-                                    },
-                                ))
-                                // gpui runs every registered drag_move listener, so
-                                // each row has to decide for itself whether the pointer
-                                // is actually over it.
-                                .on_drag_move(cx.listener(
-                                    move |this,
-                                          event: &gpui::DragMoveEvent<
-                                        explorer_operations::ExplorerDrag,
-                                    >,
-                                          window,
-                                          cx| {
-                                        this.explorer_hover(
-                                            &hover_path,
-                                            is_directory,
-                                            event.bounds,
-                                            event.event.position,
-                                            window,
-                                            cx,
-                                        )
-                                    },
-                                ))
-                                .on_drag_move(cx.listener(
-                                    move |this,
-                                          event: &gpui::DragMoveEvent<gpui::ExternalPaths>,
-                                          window,
-                                          cx| {
-                                        this.explorer_hover(
-                                            &external_hover_path,
-                                            is_directory,
-                                            event.bounds,
-                                            event.event.position,
-                                            window,
-                                            cx,
-                                        )
-                                    },
-                                ))
                             },
                         )
-                        .when(
-                            this.explorer_drop_target.as_ref() == Some(entry.path.as_ref()),
-                            |row| row.bg(with_alpha(theme.colors.accent.foreground, 0.22)),
-                        );
+                        .when(drop_region.contains(&ix), |row| {
+                            let first = ix == drop_region.start;
+                            let last = ix + 1 == drop_region.end;
+                            let color = theme.colors.accent.foreground;
+                            row.relative().bg(with_alpha(color, 0.16)).child(
+                                gpui::canvas(
+                                    |_, _, _| {},
+                                    move |bounds, _, window, _| {
+                                        window.paint_quad(
+                                            gpui::outline(
+                                                bounds,
+                                                with_alpha(color, 0.7),
+                                                gpui::BorderStyle::default(),
+                                            )
+                                            .border_widths(gpui::Edges {
+                                                top: px(if first { 1.0 } else { 0.0 }),
+                                                bottom: px(if last { 1.0 } else { 0.0 }),
+                                                left: px(1.0),
+                                                right: px(1.0),
+                                            }),
+                                        );
+                                    },
+                                )
+                                .absolute()
+                                .inset_0(),
+                            )
+                        });
 
                     if is_directory {
                         let path = (*entry.path).clone();
                         let menu_path = path.clone();
                         row_div = row_div
-                            .when(!expansion_frozen, |row| {
-                                row.on_click(cx.listener(
-                                    move |this, e: &gpui::ClickEvent, window, cx| {
-                                        this.explorer_select(
-                                            path.clone(),
-                                            e.modifiers(),
-                                            false,
-                                            window,
-                                            cx,
-                                        );
-                                        cx.stop_propagation();
-                                    },
-                                ))
-                            })
+                            .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                                this.explorer_folder_click(path.clone(), e.modifiers(), window, cx);
+                                cx.stop_propagation();
+                            }))
                             .on_mouse_down(
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
@@ -3352,13 +3430,17 @@ impl SidebarPaneView {
                             chevron_slot(is_directory && !expansion_frozen, is_expanded)
                                 .id(("explorer_chevron", ix))
                                 .when(is_directory && !expansion_frozen, |d| {
-                                    d.on_click(cx.listener(move |this, _, _, cx| {
-                                        cx.stop_propagation();
-                                        this.store.dispatch(Msg::ToggleFileBrowserDir {
-                                            repo_id,
-                                            path: path.clone(),
-                                        });
-                                    }))
+                                    d.on_click(cx.listener(
+                                        move |this, event: &gpui::ClickEvent, window, cx| {
+                                            cx.stop_propagation();
+                                            this.explorer_folder_click(
+                                                path.clone(),
+                                                event.modifiers(),
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    ))
                                 })
                         })
                         .child(if cut {
@@ -3387,7 +3469,11 @@ impl SidebarPaneView {
                                     highlight_ranges.into_iter().map(|range| (range, style)),
                                 );
                             }
-                            div().flex_1().min_w(px(0.0)).child(label.render(cx))
+                            div()
+                                .debug_selector(move || format!("explorer_label_{ix}"))
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .child(label.render(cx))
                         })
                         .when_some(status, |row, status| {
                             use gitcomet_core::domain::FileStatusKind;
@@ -3515,6 +3601,57 @@ impl SidebarPaneView {
 
 impl Render for SidebarPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if self
+            .explorer_name_edit
+            .as_ref()
+            .is_some_and(|edit| Some(edit.repo_id) != self.active_repo_id())
+        {
+            self.explorer_name_edit = None;
+        }
+        if self.explorer_name_edit.is_some() {
+            let height = ui_scale::UiScale::current(cx).px(FILE_BROWSER_ROW_HEIGHT_PX);
+            self.explorer_name_input.update(cx, |input, cx| {
+                input.set_line_height(Some(height - px(4.0)), cx)
+            });
+            if self
+                .explorer_name_edit
+                .as_ref()
+                .is_some_and(|edit| edit.reveal)
+                && let Some(index) = self
+                    .file_browser_visible_rows(cx)
+                    .iter()
+                    .position(|row| matches!(row, FileBrowserVisibleRow::NameEntry { .. }))
+            {
+                if self.collapsed_popover_section == Some(CollapsedSidebarSection::Files) {
+                    let scroll = &self.collapsed_popover_scroll;
+                    let y = height * index as f32;
+                    if y < -scroll.offset().y
+                        || y + height > -scroll.offset().y + scroll.bounds().size.height
+                    {
+                        scroll.set_offset(gpui::point(px(0.0), -y));
+                    }
+                } else {
+                    self.file_browser_scroll
+                        .scroll_to_item(index, gpui::ScrollStrategy::Nearest);
+                }
+                if let Some(edit) = &mut self.explorer_name_edit {
+                    edit.reveal = false;
+                }
+            }
+        }
+        // A drop elsewhere (or cancellation) removes the preview and refreshes
+        // the window. Clear transient targeting while that frame is rendered.
+        if !cx.has_active_drag()
+            || self
+                .explorer_drag_repo
+                .is_some_and(|id| self.active_repo_id() != Some(id))
+        {
+            self.explorer_drag_repo = None;
+            self.explorer_drop_row = None;
+            self.explorer_drop_target = None;
+            self.explorer_hover_task = None;
+            self.explorer_scroll_task = None;
+        }
         #[cfg(test)]
         {
             self.render_count += 1;

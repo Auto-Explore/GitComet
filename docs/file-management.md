@@ -5,9 +5,11 @@ previews. File operations do not stage changes.
 
 ## Explorer
 
-Click a file to preview it. Ctrl/Cmd-click toggles selection; Shift-click selects a
-range. Folder chevrons expand and collapse folders. Right-clicking an item in the
-selection preserves the selection. Keyboard focus is independent of selection.
+Click a file to preview it. Click a folder or its chevron to expand or collapse it
+while preserving the file selection. Ctrl/Cmd-click toggles selection; Shift-click
+selects a range, including folders, without toggling expansion. Right-clicking an
+item in the selection preserves the selection. Keyboard focus is independent of
+selection.
 
 The context menu provides New File, New Folder, Cut, Copy, Paste, Duplicate,
 Rename, Add to .gitignore, Trash, and Delete permanently. Creation and rename use
@@ -38,10 +40,19 @@ default, ignored files are hidden, and `.git` stays hidden. The Hidden and Ignor
 buttons change visibility. Explicit search can load ignored subtrees in the
 background; opening a hidden or ignored file explicitly reveals it.
 
+Copy and Cut use the selected items, falling back to the focused item when nothing
+is selected. Paste uses the focused folder, the focused file's parent, or the
+repository root. Clicking empty explorer space focuses the root. This lets you
+select files, click a destination folder, and copy/paste without losing the selection.
+Context-menu commands use the clicked location. Native file clipboard contents
+from other applications can also be pasted.
+
 Copy/paste uses saved disk contents. Pending cut items and descendants of cut
 folders are muted and marked until completed or cancelled. A folder receives
 items inside it; a file targets its parent; empty explorer space targets the
-repository root. Hovering expands folders and scrolls near viewport edges.
+repository root. During internal or external dragging, the destination folder and
+its visible descendants are highlighted together. Hovering expands folders and
+scrolls near viewport edges.
 
 Internal dragging moves by default; Ctrl on Windows/Linux or Option on macOS
 selects Copy. Incoming desktop file drops copy by default; Shift requests Move.

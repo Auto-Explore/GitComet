@@ -40,6 +40,10 @@ macOS-only window-management shortcuts:
 
 ## Text input shortcuts
 
+File operation shortcuts are scoped to the Files explorer. See
+[File management and Documents](file-management.md#explorer) for selection,
+clipboard, rename, and filesystem Undo/Redo bindings.
+
 These shortcuts apply when a GitComet text input has focus.
 
 ### Editing

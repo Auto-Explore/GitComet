@@ -1331,6 +1331,17 @@ fn file_browser_folder_menu_offers_tree_os_and_copy_actions(cx: &mut gpui::TestA
     ));
     let model = file_browser_folder_menu_model(cx, |_repo| {});
 
+    assert!(matches!(
+        model.items.first(),
+        Some(ContextMenuItem::Entry { .. })
+    ));
+    assert!(
+        !model
+            .items
+            .iter()
+            .any(|item| matches!(item, ContextMenuItem::Header(_) | ContextMenuItem::Label(_)))
+    );
+
     // A collapsed folder's toggle says what activating it will do.
     assert!(context_menu_has_entry(&model, "Expand"));
     assert!(!context_menu_has_entry(&model, "Collapse"));

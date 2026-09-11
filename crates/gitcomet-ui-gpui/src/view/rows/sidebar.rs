@@ -1772,6 +1772,9 @@ impl SidebarPaneView {
                         .pl(indent_px(usize::from(depth)))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .interactive_row(row_style, row_state)
+                        .when(branch_selected, |row| {
+                            row.row_accent(theme.colors.accent.foreground)
+                        })
                         .text_color(branch_text_color)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(
