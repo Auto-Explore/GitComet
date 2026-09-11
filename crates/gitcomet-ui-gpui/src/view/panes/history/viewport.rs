@@ -17,8 +17,13 @@ pub(super) struct PresentedHistory {
 }
 
 impl HistoryView {
-    pub(super) fn sync_history_viewport(&mut self, plan: &HistoryListPlan) {
+    pub(super) fn sync_history_viewport(
+        &mut self,
+        plan: &HistoryListPlan,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let Some(repo) = self.active_repo() else {
+            self.update_history_row_hover(None, None, cx);
             self.presented_history = None;
             return;
         };
@@ -27,6 +32,7 @@ impl HistoryView {
             .as_ref()
             .filter(|cache| cache.base.request.repo_id == repo.id)
         else {
+            self.update_history_row_hover(None, None, cx);
             self.presented_history = None;
             return;
         };
@@ -127,5 +133,7 @@ impl HistoryView {
         }
         drop(scroll);
         self.presented_history = Some(next);
+        // Row indices can now name different commits even at the same offset.
+        self.update_history_row_hover(None, None, cx);
     }
 }

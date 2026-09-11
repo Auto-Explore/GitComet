@@ -208,7 +208,11 @@ fn commit_details_signature_badge(
         .border_1()
         .border_color(badge.palette.border)
         .bg(badge.palette.background)
-        .child(svg_icon(badge.icon, badge.palette.foreground, px(12.0)))
+        .child(
+            svg_icon(badge.icon, badge.palette.foreground, px(12.0))
+                .size(theme.ui_text(12.0))
+                .debug_selector(|| "commit_details_signature_icon".to_string()),
+        )
         .child(
             div()
                 .text_size(theme.ui_text(12.0))

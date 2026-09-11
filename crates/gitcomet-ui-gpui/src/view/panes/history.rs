@@ -1055,6 +1055,7 @@ pub(in super::super) struct HistoryView {
     /// Which row sub-area the pointer is over, so the shared tooltip is only
     /// rewritten when the hover actually moves rather than on every pixel.
     row_hover: Option<(usize, HistoryRowHoverArea)>,
+    row_hover_scroll_offset: Point<Pixels>,
     /// Exactly what we last handed the shared host, so we only ever retract
     /// our own tooltip and never one another surface has since set.
     row_hover_tooltip: Option<SharedString>,
@@ -1122,10 +1123,11 @@ impl HistoryView {
         tooltip: Option<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.row_hover == next {
+        if self.row_hover == next && (next.is_none() || self.row_hover(cx) == next) {
             return;
         }
         self.row_hover = next;
+        self.row_hover_scroll_offset = self.history_scroll.0.borrow().base_handle.offset();
         let Some(host) = self.tooltip_host.upgrade() else {
             return;
         };
@@ -1156,8 +1158,27 @@ impl HistoryView {
         self.row_hover_tooltip = None;
     }
 
-    pub(in crate::view) fn row_hover(&self) -> Option<(usize, HistoryRowHoverArea)> {
-        self.row_hover
+    pub(in crate::view) fn row_hover(&self, cx: &App) -> Option<(usize, HistoryRowHoverArea)> {
+        let host = self.tooltip_host.upgrade()?;
+        let tooltip = self.row_hover_tooltip.as_ref()?;
+        host.read(cx)
+            .tooltip_text_matches(tooltip)
+            .then_some(self.row_hover)
+            .flatten()
+    }
+
+    /// Virtualization can remove the owning row and its mouse listener entirely.
+    /// Check the scroll handle when the list lays out, including scrollbar drags
+    /// and programmatic reveals that do not send a wheel event.
+    pub(in crate::view) fn clear_history_row_hover_if_scrolled(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.row_hover.is_some()
+            && self.history_scroll.0.borrow().base_handle.offset() != self.row_hover_scroll_offset
+        {
+            self.update_history_row_hover(None, None, cx);
+        }
     }
 
     /// The absolute, timezone-qualified rendering of a commit time, for the date
@@ -1197,9 +1218,6 @@ impl HistoryView {
             }
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
-            // Signature badges paint in the author column; without this the
-            // rows never repaint when a verification batch lands.
-            repo.history_state.commit_signatures_rev.hash(&mut hasher);
             repo.file_browser.file_browser_rev.hash(&mut hasher);
             // The linked-worktree rows live in this table: their badge counts come
             // from the dirty scan and the selected row from the worktree selection,
@@ -1243,6 +1261,18 @@ impl HistoryView {
             let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
             let changed = next_fingerprint != this.notify_fingerprint;
             let switched_repo = this.state.active_repo != next.active_repo;
+            // Badges repaint the rows without invalidating open refs menus.
+            let signatures_changed = this
+                .state
+                .repos
+                .iter()
+                .find(|repo| Some(repo.id) == this.state.active_repo)
+                .map(|repo| repo.history_state.commit_signatures_rev)
+                != next
+                    .repos
+                    .iter()
+                    .find(|repo| Some(repo.id) == next.active_repo)
+                    .map(|repo| repo.history_state.commit_signatures_rev);
             this.state = next;
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
@@ -1277,9 +1307,18 @@ impl HistoryView {
                 }
             }
 
+            if signatures_changed
+                && matches!(this.row_hover, Some((_, HistoryRowHoverArea::Signature)))
+            {
+                // Verification can remove or replace a badge under a resting
+                // pointer. Its old verdict must not survive in the tooltip.
+                this.update_history_row_hover(None, None, cx);
+            }
             if changed {
                 this.notify_fingerprint = next_fingerprint;
                 this.dismiss_history_refs_hover(cx);
+                cx.notify();
+            } else if signatures_changed {
                 cx.notify();
             }
         });
@@ -1304,6 +1343,7 @@ impl HistoryView {
             root_view,
             tooltip_host,
             row_hover: None,
+            row_hover_scroll_offset: Point::default(),
             row_hover_tooltip: None,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,

@@ -19,6 +19,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+mod signature_map;
+pub use signature_map::CommitSignatureMap;
+
 pub type Shared<T> = Arc<T>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1001,8 +1004,15 @@ pub struct HistoryState {
     /// Signature verdicts by commit, shared by the details pane and the
     /// history rows. Only badge-worthy commits appear: absent means no badge.
     /// Behind `Arc` because `AppState` is deep-copied on every dispatch.
-    pub commit_signatures: Shared<FxHashMap<CommitId, CommitSignature>>,
+    pub commit_signatures: Shared<CommitSignatureMap>,
     pub commit_signatures_rev: u64,
+    /// Invalidates batches started before a refresh or preference change.
+    pub commit_signatures_epoch: u64,
+    /// Includes queued, running, and completed no-badge commits for this epoch.
+    pub(crate) commit_signatures_requested: Shared<FxHashSet<CommitId>>,
+    pub(crate) commit_signatures_queue: VecDeque<Shared<[CommitId]>>,
+    pub(crate) commit_signatures_in_flight: bool,
+    pub(crate) commit_signatures_cancellation: gitcomet_core::services::CancellationToken,
     pub multi_selection: CommitMultiSelection,
     /// Active "compare two points" selection: when two commits are selected (or
     /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
@@ -1093,6 +1103,11 @@ impl Default for HistoryState {
             commit_details_rev: 0,
             commit_signatures: Shared::default(),
             commit_signatures_rev: 0,
+            commit_signatures_epoch: 0,
+            commit_signatures_requested: Shared::default(),
+            commit_signatures_queue: VecDeque::new(),
+            commit_signatures_in_flight: false,
+            commit_signatures_cancellation: Default::default(),
             multi_selection: CommitMultiSelection::default(),
             range_selection: None,
             worktree_selection: None,
@@ -2362,6 +2377,23 @@ impl RepoState {
             self.history_state.multi_selection = CommitMultiSelection::default();
             self.clear_range_comparison();
         }
+        if let Some(previous) = &self.history_state.selected_commit
+            && Some(previous) != v.as_ref()
+            && self.history_state.commit_signatures.contains_key(previous)
+            && let Loadable::Ready(page) = &self.log
+            && !page.commits.iter().any(|commit| &commit.id == previous)
+        {
+            Arc::make_mut(&mut self.history_state.commit_signatures).remove(previous);
+            if self
+                .history_state
+                .commit_signatures_requested
+                .contains(previous)
+            {
+                Arc::make_mut(&mut self.history_state.commit_signatures_requested).remove(previous);
+            }
+            self.history_state.commit_signatures_rev =
+                self.history_state.commit_signatures_rev.wrapping_add(1);
+        }
         self.history_state.selected_commit = v;
         self.history_state.selected_commit_rev =
             self.history_state.selected_commit_rev.wrapping_add(1);
@@ -2463,9 +2495,16 @@ impl RepoState {
             self.history_state.commit_details_rev.wrapping_add(1);
     }
 
-    /// Drops every signature verdict, so the badges disappear the moment
-    /// verification is switched off rather than lingering until the next reload.
+    /// Invalidates both verdicts and in-flight batches. Trust inputs can change
+    /// independently of commit objects, so refreshes must recheck signed commits.
     pub(crate) fn clear_commit_signatures(&mut self) {
+        self.history_state.commit_signatures_cancellation.cancel();
+        self.history_state.commit_signatures_cancellation = Default::default();
+        self.history_state.commit_signatures_requested = Shared::default();
+        self.history_state.commit_signatures_queue.clear();
+        self.history_state.commit_signatures_in_flight = false;
+        self.history_state.commit_signatures_epoch =
+            self.history_state.commit_signatures_epoch.wrapping_add(1);
         if self.history_state.commit_signatures.is_empty() {
             return;
         }
@@ -2474,15 +2513,30 @@ impl RepoState {
             self.history_state.commit_signatures_rev.wrapping_add(1);
     }
 
-    /// Merges verified signatures into the map. Merging rather than replacing is
-    /// what makes late replies harmless: batches land out of order and each one
-    /// only ever adds what it learned.
+    /// Merges batches from the current verification epoch without dropping
+    /// verdicts for other pages or selected commits.
     pub(crate) fn merge_commit_signatures(&mut self, verified: Vec<(CommitId, CommitSignature)>) {
-        if verified.is_empty() {
+        let updates: Vec<_> = verified
+            .into_iter()
+            .filter(|(id, signature)| {
+                let displayed = self.history_state.selected_commit.as_ref() == Some(id)
+                    || match &self.log {
+                        Loadable::Ready(page) => page.commits.iter().any(|commit| &commit.id == id),
+                        _ => true,
+                    };
+                // A discarded badge must be recoverable if this off-page commit
+                // is revealed again. Keep completed no-badge attempts memoized.
+                if !displayed && self.history_state.commit_signatures_requested.contains(id) {
+                    Arc::make_mut(&mut self.history_state.commit_signatures_requested).remove(id);
+                }
+                displayed && self.history_state.commit_signatures.get(id) != Some(signature)
+            })
+            .collect();
+        if updates.is_empty() {
             return;
         }
         let map = Arc::make_mut(&mut self.history_state.commit_signatures);
-        for (id, signature) in verified {
+        for (id, signature) in updates {
             map.insert(id, signature);
         }
         self.history_state.commit_signatures_rev =

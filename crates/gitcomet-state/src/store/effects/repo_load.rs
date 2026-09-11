@@ -1638,6 +1638,8 @@ pub(super) fn schedule_verify_commit_signatures(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    epoch: u64,
+    cancellation: CancellationToken,
     commit_ids: std::sync::Arc<[gitcomet_core::domain::CommitId]>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
@@ -1645,7 +1647,8 @@ pub(super) fn schedule_verify_commit_signatures(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
                 repo_id,
-                result: repo.verify_commit_signatures(&commit_ids),
+                epoch,
+                result: repo.verify_commit_signatures_cancellable(&commit_ids, &cancellation),
             }),
         );
     });

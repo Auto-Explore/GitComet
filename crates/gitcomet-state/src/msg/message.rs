@@ -1279,6 +1279,7 @@ pub enum InternalMsg {
     },
     CommitSignaturesVerified {
         repo_id: RepoId,
+        epoch: u64,
         result: Result<Vec<(CommitId, CommitSignature)>, Error>,
     },
     /// A [`Msg::RevealCommit`] reference resolved (or failed to).

@@ -22,6 +22,7 @@ impl HistoryView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        this.clear_history_row_hover_if_scrolled(cx);
         let (_, worktree_counts) = this.ensure_history_worktree_summary_cache();
         let plan = this.ensure_history_list_plan();
         let stash_ids = this.ensure_history_stash_ids_cache();

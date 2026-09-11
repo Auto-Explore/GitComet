@@ -24,30 +24,68 @@ use std::time::SystemTime;
 /// Default page size for log fetches.
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
 
-/// Asks for signature verdicts on commits we do not already have one for.
-///
-/// Commits that earned no badge are not remembered in state, so a genuine page
-/// change re-sends them; that is cheap because the backend memoizes every
-/// verdict per oid and only signed commits ever reach a subprocess. An unchanged
-/// refresh never gets here — `HistoryReadResult::Unchanged` returns earlier.
+/// Queue each commit at most once per refresh, including no-badge results.
+/// One small batch per repository runs at a time; replies start the next batch.
 pub(super) fn verify_commit_signatures_effect(
     enabled: bool,
-    repo_state: &RepoState,
+    repo_state: &mut RepoState,
     repo_id: RepoId,
     ids: impl IntoIterator<Item = CommitId>,
 ) -> Option<Effect> {
     if !enabled {
         return None;
     }
-    let known = &repo_state.history_state.commit_signatures;
-    let pending: Vec<CommitId> = ids
+    let history = &mut repo_state.history_state;
+    let mut unique = FxHashSet::default();
+    let pending: Vec<_> = ids
         .into_iter()
-        .filter(|id| !known.contains_key(id))
+        .filter(|id| {
+            !history.commit_signatures.contains_key(id)
+                && !history.commit_signatures_requested.contains(id)
+                && unique.insert(id.clone())
+        })
         .collect();
-    (!pending.is_empty()).then(|| Effect::VerifyCommitSignatures {
+    if !pending.is_empty() {
+        Arc::make_mut(&mut history.commit_signatures_requested).extend(pending.iter().cloned());
+        history
+            .commit_signatures_queue
+            .extend(pending.chunks(16).map(Arc::from));
+    }
+    if history.commit_signatures_in_flight {
+        return None;
+    }
+    let commit_ids = history.commit_signatures_queue.pop_front()?;
+    history.commit_signatures_in_flight = true;
+    Some(Effect::VerifyCommitSignatures {
         repo_id,
-        commit_ids: pending.into(),
+        epoch: history.commit_signatures_epoch,
+        cancellation: history.commit_signatures_cancellation.clone(),
+        commit_ids,
     })
+}
+
+pub(super) fn reverify_loaded_commit_signatures_effect(
+    enabled: bool,
+    repo_state: &mut RepoState,
+) -> Option<Effect> {
+    repo_state.clear_commit_signatures();
+    if !enabled {
+        return None;
+    }
+    let mut ids: Vec<CommitId> = match &repo_state.log {
+        Loadable::Ready(page) => page
+            .commits
+            .iter()
+            .map(|commit| commit.id.clone())
+            .collect(),
+        _ => Vec::new(),
+    };
+    if let Some(selected) = &repo_state.history_state.selected_commit
+        && !ids.contains(selected)
+    {
+        ids.push(selected.clone());
+    }
+    verify_commit_signatures_effect(true, repo_state, repo_state.id, ids)
 }
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;

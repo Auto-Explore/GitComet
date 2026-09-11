@@ -2254,7 +2254,7 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
         cx.run_until_parked();
     };
 
-    apply_state(cx, initial_state);
+    apply_state(cx, initial_state.clone());
 
     wait_until(cx, "history rows with displayed refs", |cx| {
         cx.debug_bounds("history_row_0").is_some() && cx.debug_bounds("history_row_1").is_some()
@@ -2305,6 +2305,37 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
                 repo_id,
                 commit_id: CommitId("tip".into())
             })
+        );
+    });
+
+    let mut badges_state = (*initial_state).clone();
+    badges_state.repos[0].history_state.commit_signatures = Arc::new(
+        [(
+            CommitId("tip".into()),
+            gitcomet_core::domain::CommitSignature {
+                status: gitcomet_core::domain::SignatureStatus::Good,
+                format: gitcomet_core::domain::SignatureFormat::Ssh,
+                signer: None,
+                key_id: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
+    badges_state.repos[0].history_state.commit_signatures_rev += 1;
+    apply_state(cx, Arc::new(badges_state));
+    cx.update(|_, app| {
+        assert!(
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app),
+            "a signature reply must not dismiss the refs card"
+        );
+        assert_eq!(
+            crate::view::test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::CommitMenu {
+                repo_id,
+                commit_id: CommitId("tip".into())
+            }),
+            "a signature reply must not dismiss the refs item menu"
         );
     });
 

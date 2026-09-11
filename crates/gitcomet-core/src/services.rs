@@ -596,6 +596,16 @@ pub trait GitRepository: Send + Sync {
             "signature verification is not implemented for this backend",
         )))
     }
+    fn verify_commit_signatures_cancellable(
+        &self,
+        ids: &[CommitId],
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        cancellation.check_cancelled()?;
+        let result = self.verify_commit_signatures(ids)?;
+        cancellation.check_cancelled()?;
+        Ok(result)
+    }
     /// Resolve a possibly abbreviated reference — or any revspec git accepts,
     /// such as a branch, tag, or `HEAD~3` — to the commit it names.
     ///

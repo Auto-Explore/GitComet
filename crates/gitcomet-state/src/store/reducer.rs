@@ -1019,21 +1019,9 @@ fn reduce_inner(
             // Turning it back on re-checks what is already loaded, so badges
             // appear without waiting for the next log reload.
             let mut effects = Vec::new();
-            for repo_state in state.repos.iter() {
-                let repo_id = repo_state.id;
-                let mut ids: Vec<gitcomet_core::domain::CommitId> = match &repo_state.log {
-                    Loadable::Ready(page) => page.commits.iter().map(|c| c.id.clone()).collect(),
-                    _ => Vec::new(),
-                };
-                // The selected commit may be a reveal target the page has not
-                // reached yet.
-                if let Some(selected) = &repo_state.history_state.selected_commit
-                    && !ids.contains(selected)
-                {
-                    ids.push(selected.clone());
-                }
-                effects.extend(util::verify_commit_signatures_effect(
-                    true, repo_state, repo_id, ids,
+            for repo_state in state.repos.iter_mut() {
+                effects.extend(util::reverify_loaded_commit_signatures_effect(
+                    true, repo_state,
                 ));
             }
             effects
@@ -2558,9 +2546,11 @@ fn reduce_inner(
             commit_id,
             result,
         }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
-        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified { repo_id, result }) => {
-            effects::commit_signatures_verified(state, repo_id, result)
-        }
+        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+            repo_id,
+            epoch,
+            result,
+        }) => effects::commit_signatures_verified(state, repo_id, epoch, result),
         Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
             repo_id,
             reference,

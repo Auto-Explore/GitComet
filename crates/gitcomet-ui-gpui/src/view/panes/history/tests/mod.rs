@@ -264,5 +264,6 @@ mod interaction;
 mod lane_attribution;
 mod refresh;
 mod reveal;
+mod row_tooltips;
 mod selection;
 mod worktree_anchors;

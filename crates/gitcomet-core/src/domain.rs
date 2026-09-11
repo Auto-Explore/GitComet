@@ -155,9 +155,9 @@ impl SignatureStatus {
         }
     }
 
-    /// Whether the signature checked out. Expired, bad and revoked did not.
+    /// Whether the signature checked out with a trusted signing identity.
     pub fn is_verified(self) -> bool {
-        matches!(self, Self::Good | Self::GoodUncertified)
+        matches!(self, Self::Good)
     }
 }
 
@@ -171,16 +171,16 @@ pub enum SignatureFormat {
 impl SignatureFormat {
     /// Reads the format off the armor header of a `gpgsig` payload.
     pub fn from_armor(signature: &[u8]) -> Option<Self> {
-        let line = signature
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(signature, |end| &signature[..end]);
-        match line.trim_ascii() {
-            b"-----BEGIN PGP SIGNATURE-----" => Some(Self::OpenPgp),
-            b"-----BEGIN SSH SIGNATURE-----" => Some(Self::Ssh),
-            b"-----BEGIN SIGNED MESSAGE-----" => Some(Self::X509),
-            _ => None,
-        }
+        // Git matches raw prefixes, including PGP MESSAGE armor. Leading
+        // whitespace is invalid and must not be sent to `git log` as signed.
+        [
+            (b"-----BEGIN PGP SIGNATURE-----".as_slice(), Self::OpenPgp),
+            (b"-----BEGIN PGP MESSAGE-----".as_slice(), Self::OpenPgp),
+            (b"-----BEGIN SSH SIGNATURE-----".as_slice(), Self::Ssh),
+            (b"-----BEGIN SIGNED MESSAGE-----".as_slice(), Self::X509),
+        ]
+        .into_iter()
+        .find_map(|(prefix, format)| signature.starts_with(prefix).then_some(format))
     }
 
     pub fn label(self) -> &'static str {

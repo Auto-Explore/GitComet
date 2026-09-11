@@ -1822,18 +1822,19 @@ fn queued_refresh_promoted_after_load_more_covers_the_grown_log() {
         }),
     );
     assert!(matches!(&state.repos[0].log, Loadable::Ready(page) if page.commits.len() == 600));
-    // A loaded page also asks for its commits' signatures; this test is about
-    // the promoted refresh, so match that effect specifically.
     assert!(
-        effects.iter().any(|effect| matches!(
-            effect,
-            Effect::LoadLog {
-                limit: 600,
-                cursor: None,
-                ..
-            }
-        )),
-        "expected the promoted refresh to cover all 600 rows, got {effects:?}"
+        matches!(
+            effects.as_slice(),
+            [
+                Effect::VerifyCommitSignatures { .. },
+                Effect::LoadLog {
+                    limit: 600,
+                    cursor: None,
+                    ..
+                },
+            ]
+        ),
+        "unexpected effects: {effects:?}"
     );
 }
 

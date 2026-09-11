@@ -1382,17 +1382,14 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
         Loadable::NotLoaded
     ));
     assert!(repo_state.diff_state.diff_preview_text_file.is_loading());
-    // Loading details also asks for the commit's signature; this test is about
-    // the diff replan, so match that effect specifically rather than the slice.
     assert!(
-        effects.iter().any(|effect| matches!(
-            effect,
-            Effect::LoadDiffPreviewTextFile {
-                repo_id: RepoId(1),
-                target: effect_target,
-                side: gitcomet_core::domain::DiffPreviewTextSide::Old,
-            } if effect_target == &target
-        )),
+        matches!(effects.as_slice(), [
+        Effect::LoadDiffPreviewTextFile {
+            repo_id: RepoId(1), target: effect_target,
+            side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+        },
+        Effect::VerifyCommitSignatures { repo_id: RepoId(1), .. },
+    ] if effect_target == &target),
         "got {effects:?}"
     );
 

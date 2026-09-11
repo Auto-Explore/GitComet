@@ -6648,7 +6648,7 @@ fn commit_details_signature_fixture(
             if let Some(signature) = signature {
                 let mut map = rustc_hash::FxHashMap::default();
                 map.insert(commit_id.clone(), signature);
-                repo.history_state.commit_signatures = Arc::new(map);
+                repo.history_state.commit_signatures = Arc::new(map.into_iter().collect());
                 // The details pane is fingerprint-gated: without this the
                 // snapshot is skipped and the badge never draws.
                 repo.history_state.commit_signatures_rev = 1;
@@ -6714,4 +6714,33 @@ fn commit_details_shows_no_badge_without_a_signature_verdict(cx: &mut gpui::Test
         cx.debug_bounds("commit_details_signature_badge").is_none(),
         "an unsigned or unverifiable commit must render no badge"
     );
+}
+
+#[gpui::test]
+fn commit_details_signature_icon_follows_ui_scale(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_view, cx) = commit_details_signature_fixture(
+        cx,
+        Some(test_signature(gitcomet_core::domain::SignatureStatus::Good)),
+    );
+    cx.update(|window, app| {
+        crate::ui_scale::apply_to_window(window, 100);
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let normal = cx
+        .debug_bounds("commit_details_signature_icon")
+        .expect("signature icon")
+        .size;
+    cx.update(|window, app| {
+        crate::ui_scale::apply_to_window(window, 200);
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let enlarged = cx
+        .debug_bounds("commit_details_signature_icon")
+        .expect("scaled signature icon")
+        .size;
+    assert_eq!(enlarged.width, normal.width * 2.0);
+    assert_eq!(enlarged.height, normal.height * 2.0);
 }

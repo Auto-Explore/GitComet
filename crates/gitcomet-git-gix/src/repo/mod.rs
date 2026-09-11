@@ -409,10 +409,10 @@ pub(crate) struct GixRepo {
     worktree_source_memo: std::sync::Mutex<rustc_hash::FxHashMap<PathBuf, WorktreeSourceMemoEntry>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
-    /// Signature verdicts by oid. `None` means "checked, earns no badge".
-    /// Needs no fingerprint: a commit's signature is immutable for its oid.
-    signature_cache:
-        std::sync::Mutex<rustc_hash::FxHashMap<gix::ObjectId, Option<CommitSignature>>>,
+    /// Immutable signature formats by oid. `None` means an unsigned commit.
+    signature_format_cache: std::sync::Mutex<
+        lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
+    >,
 }
 
 impl GixRepo {
@@ -431,7 +431,9 @@ impl GixRepo {
             worktree_source_memo: std::sync::Mutex::default(),
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
-            signature_cache: std::sync::Mutex::default(),
+            signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
+            )),
         }
     }
 
@@ -596,6 +598,14 @@ impl GitRepository for GixRepo {
         ids: &[CommitId],
     ) -> Result<Vec<(CommitId, CommitSignature)>> {
         self.verify_commit_signatures_impl(ids)
+    }
+
+    fn verify_commit_signatures_cancellable(
+        &self,
+        ids: &[CommitId],
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        self.verify_commit_signatures_cancellable_impl(ids, Some(cancellation))
     }
 
     fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {

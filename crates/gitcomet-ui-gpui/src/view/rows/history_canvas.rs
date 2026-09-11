@@ -1603,7 +1603,7 @@ pub(super) fn history_commit_row_canvas(
                         None
                     };
                     let next_hover = hovered_area.map(|area| (row_id, area));
-                    let current_hover = view.read(cx).row_hover();
+                    let current_hover = view.read(cx).row_hover(cx);
                     // Gate hard: this listener runs for every visible row on
                     // every pixel of movement. Only this row's own hover is ever
                     // retracted, so rows never fight over the host.

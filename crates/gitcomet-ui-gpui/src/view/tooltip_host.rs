@@ -58,6 +58,10 @@ impl TooltipHost {
         true
     }
 
+    pub(crate) fn tooltip_text_matches(&self, text: &SharedString) -> bool {
+        self.tooltip_text.as_ref() == Some(text)
+    }
+
     pub(crate) fn clear_tooltip_if_matches(
         &mut self,
         tooltip: &SharedString,

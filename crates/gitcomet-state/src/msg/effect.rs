@@ -161,6 +161,8 @@ pub enum Effect {
     /// shells out to `git`; the backend drops unsigned commits for free.
     VerifyCommitSignatures {
         repo_id: RepoId,
+        epoch: u64,
+        cancellation: gitcomet_core::services::CancellationToken,
         commit_ids: std::sync::Arc<[CommitId]>,
     },
     LoadHoverCommitMessage {

@@ -19,7 +19,8 @@ pub(in crate::view) struct SignatureBadge {
 
 fn status_label(status: SignatureStatus) -> &'static str {
     match status {
-        SignatureStatus::Good | SignatureStatus::GoodUncertified => "Verified",
+        SignatureStatus::Good => "Verified",
+        SignatureStatus::GoodUncertified => "Untrusted key",
         SignatureStatus::Expired => "Expired",
         SignatureStatus::ExpiredKey => "Expired key",
         SignatureStatus::Bad => "Bad signature",
@@ -29,7 +30,8 @@ fn status_label(status: SignatureStatus) -> &'static str {
 
 fn status_palette(theme: AppTheme, status: SignatureStatus) -> StatusColorSet {
     match status {
-        SignatureStatus::Good | SignatureStatus::GoodUncertified => theme.colors.status.info,
+        SignatureStatus::Good => theme.colors.status.info,
+        SignatureStatus::GoodUncertified => theme.colors.status.warning,
         SignatureStatus::Expired | SignatureStatus::ExpiredKey => theme.colors.status.warning,
         SignatureStatus::Bad | SignatureStatus::Revoked => theme.colors.status.danger,
     }
@@ -38,7 +40,11 @@ fn status_palette(theme: AppTheme, status: SignatureStatus) -> StatusColorSet {
 fn tooltip_text(signature: &CommitSignature) -> String {
     let mut lines = vec![format!(
         "{} {} signature",
-        status_label(signature.status),
+        if signature.status == SignatureStatus::Bad {
+            "Bad"
+        } else {
+            status_label(signature.status)
+        },
         signature.format.label()
     )];
     if let Some(signer) = &signature.signer {
@@ -50,7 +56,8 @@ fn tooltip_text(signature: &CommitSignature) -> String {
     if signature.status == SignatureStatus::GoodUncertified {
         // Without this the badge overstates itself: the signature is good, but
         // nothing says the key belongs to who it claims to.
-        lines.push("The signing key is not certified in your keyring.".to_string());
+        lines
+            .push("The signing key is not trusted by your verification configuration.".to_string());
     }
     lines.join("\n")
 }
@@ -106,7 +113,7 @@ mod tests {
     #[test]
     fn verified_statuses_use_the_shield_check_and_the_info_palette() {
         let theme = AppTheme::gitcomet_dark();
-        for status in [SignatureStatus::Good, SignatureStatus::GoodUncertified] {
+        for status in [SignatureStatus::Good] {
             let badge = signature_badge(theme, &signature(status));
             assert_eq!(badge.icon, SHIELD_CHECK_ICON_PATH);
             assert_eq!(badge.palette, theme.colors.status.info);
@@ -136,7 +143,22 @@ mod tests {
         let uncertified = signature_badge(theme, &signature(SignatureStatus::GoodUncertified));
 
         assert!(certified.tooltip.contains("Signed by Ada"));
-        assert!(!certified.tooltip.contains("not certified"));
-        assert!(uncertified.tooltip.contains("not certified"));
+        assert!(!certified.tooltip.contains("not trusted"));
+        assert!(uncertified.tooltip.contains("not trusted"));
+    }
+
+    #[test]
+    fn an_untrusted_key_has_its_own_warning_badge() {
+        let theme = AppTheme::gitcomet_dark();
+        let badge = signature_badge(theme, &signature(SignatureStatus::GoodUncertified));
+        assert_eq!(badge.label, "Untrusted key");
+        assert_eq!(badge.icon, SHIELD_ALERT_ICON_PATH);
+        assert_eq!(badge.palette, theme.colors.status.warning);
+    }
+
+    #[test]
+    fn a_bad_signature_tooltip_does_not_repeat_signature() {
+        let text = signature_tooltip(&signature(SignatureStatus::Bad));
+        assert_eq!(text.lines().next(), Some("Bad GPG signature"));
     }
 }

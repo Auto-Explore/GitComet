@@ -427,7 +427,8 @@ impl SettingsCategory {
             }
             Self::GitLog => {
                 "git log default history mode history columns relative dates show tags graph \
-                 author sha files tab follows selected commit browse repository file browsing start exit"
+                 author sha files tab follows selected commit browse repository file browsing start exit \
+                 verify commit signatures verification signing key trust"
             }
             Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
             Self::Tags => "tags automatically fetch tags",
