@@ -40,6 +40,8 @@ pub(crate) enum Needs {
     /// A sequencer operation with every conflict resolved.
     SequencerResolved,
     PushWithTags(TagPushMode),
+    /// A remote whose URL points at a web page.
+    RemoteWebPage,
     MacOs,
     Linux,
 }
@@ -55,6 +57,8 @@ pub(crate) struct PaletteContext {
     /// Why each tag-push mode is unavailable, indexed by `TagPushMode::index`.
     /// Computed by the push menu's own logic so the two cannot disagree.
     pub(crate) push_with_tags_unavailable: [Option<&'static str>; 2],
+    /// Why no remote can be opened in a browser, from `remote_web_request`.
+    pub(crate) remote_web_page_unavailable: Option<&'static str>,
 }
 
 /// Why a command with `needs` cannot run under `ctx`, or `None` when it can.
@@ -78,6 +82,7 @@ pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&
             }
         }
         Needs::PushWithTags(mode) => ctx.push_with_tags_unavailable[mode.index()],
+        Needs::RemoteWebPage => ctx.remote_web_page_unavailable,
         Needs::MacOs => (!cfg!(target_os = "macos")).then_some("Only available on macOS"),
         Needs::Linux => (!cfg!(any(target_os = "linux", target_os = "freebsd")))
             .then_some("Only available on Linux"),
@@ -655,6 +660,15 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         keywords: "",
         requires_repo: true,
         needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "open-remote-in-browser",
+        label: crate::menu_labels::OPEN_REMOTE_IN_BROWSER,
+        shortcut: Shortcut::Secondary("K"),
+        category: "Remotes",
+        keywords: "github gitlab bitbucket forge website url view page issues",
+        requires_repo: true,
+        needs: Needs::RemoteWebPage,
     },
     CommandEntry {
         id: "add-submodule",
@@ -1676,6 +1690,61 @@ mod tests {
         assert!(
             filtered_commands(false, "go to").is_empty(),
             "there is nothing to go to without a repository"
+        );
+    }
+
+    #[test]
+    fn open_remote_in_browser_is_findable_by_forge_words() {
+        assert_eq!(
+            filtered_commands(true, "open remote")
+                .first()
+                .map(|command| command.id),
+            Some("open-remote-in-browser")
+        );
+        for query in ["browser", "github", "gitlab", "web"] {
+            assert!(
+                filtered_commands(true, query)
+                    .iter()
+                    .any(|command| command.id == "open-remote-in-browser"),
+                "{query:?} should find Open remote in web browser"
+            );
+        }
+        assert!(
+            !filtered_commands(false, "open remote")
+                .iter()
+                .any(|command| command.id == "open-remote-in-browser"),
+            "there is no remote without a repository"
+        );
+    }
+
+    #[test]
+    fn open_remote_in_browser_shows_the_chord_it_is_bound_to() {
+        let entry = COMMANDS
+            .iter()
+            .find(|command| command.id == "open-remote-in-browser")
+            .expect("the palette offers Open remote in web browser");
+        // `bind_app_keys` binds `secondary-k`; the label is kept in sync by hand.
+        assert_eq!(entry.shortcut, Shortcut::Secondary("K"));
+        let expected = if cfg!(target_os = "macos") {
+            "Cmd+K"
+        } else {
+            "Ctrl+K"
+        };
+        assert_eq!(entry.shortcut.label().as_deref(), Some(expected));
+        assert_eq!(entry.label, crate::menu_labels::OPEN_REMOTE_IN_BROWSER);
+        assert_eq!(entry.category, "Remotes");
+        assert!(entry.requires_repo);
+        assert_eq!(entry.needs, Needs::RemoteWebPage);
+    }
+
+    #[test]
+    fn remote_web_page_need_reports_its_context_reason() {
+        let mut ctx = PaletteContext::default();
+        assert_eq!(unavailable_reason(Needs::RemoteWebPage, &ctx), None);
+        ctx.remote_web_page_unavailable = Some("Add a remote first");
+        assert_eq!(
+            unavailable_reason(Needs::RemoteWebPage, &ctx),
+            Some("Add a remote first")
         );
     }
 

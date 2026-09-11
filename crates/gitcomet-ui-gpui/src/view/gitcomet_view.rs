@@ -172,6 +172,8 @@ impl GitCometView {
             unresolved_conflicts: repo.is_some_and(|repo| repo.has_unstaged_conflicts),
             push_with_tags_unavailable: gitcomet_core::tag_push::TagPushMode::ALL
                 .map(|mode| host.push_with_tags_unavailable(mode)),
+            remote_web_page_unavailable: repo
+                .and_then(|repo| remote_web_request(repo).unavailable_reason()),
         }
     }
 
@@ -358,6 +360,11 @@ impl GitCometView {
                 }
             }
             "open-in-code-editor" => self.open_active_repo_in_external_code_editor(cx),
+            "open-remote-in-browser" => {
+                if let Some(window) = window {
+                    self.open_remote_in_browser(window, cx);
+                }
+            }
             "prune-merged-branches" => {
                 if let Some(repo_id) = self.active_repo_id() {
                     self.store.dispatch(Msg::PruneMergedBranches { repo_id });
@@ -2516,6 +2523,73 @@ impl GitCometView {
             return;
         };
         self.open_path_in_external_code_editor(workdir, cx);
+    }
+
+    /// Open the active repository's remote in the browser, or let the user pick
+    /// one when several remotes have a web page. Pressing it again with the
+    /// picker up closes the picker.
+    pub(crate) fn open_remote_in_browser(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_remote_in_browser_with(window, cx, |url| platform_open::open_url_blocking(&url));
+    }
+
+    pub(super) fn open_remote_in_browser_with(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+        open_url: impl FnOnce(String) -> Result<(), std::io::Error> + Send + 'static,
+    ) {
+        if !command_palette_available(self.view_mode) {
+            return;
+        }
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let picker = PopoverKind::remote(repo.id, RemotePopoverKind::OpenInBrowserMenu);
+        let request = remote_web_request(repo);
+        if self.popover_host.read(cx).is_kind_open(&picker) {
+            self.popover_host.update(cx, |host, cx| {
+                host.close_popover_and_restore_focus(window, cx)
+            });
+            return;
+        }
+        match request {
+            RemoteWebRequest::Open(page) => {
+                platform_open::spawn_launch(
+                    cx,
+                    move || open_url(page.url),
+                    |this, result, cx| {
+                        if let Err(err) = result {
+                            this.push_toast(
+                                components::ToastKind::Error,
+                                format!("Failed to open link: {err}"),
+                                cx,
+                            );
+                            // The banner an Error becomes never touches `cx`.
+                            cx.notify();
+                        }
+                    },
+                );
+            }
+            RemoteWebRequest::Choose(_) => {
+                // Never stack the picker's scrim on another modal's.
+                if self.command_palette_open {
+                    self.close_command_palette(window, cx);
+                }
+                if self.reveal_commit_open {
+                    self.close_reveal_commit(window, cx);
+                }
+                self.open_popover_centered(picker, window, cx);
+            }
+            unavailable => {
+                if let Some(message) = unavailable.unavailable_message() {
+                    self.push_toast(components::ToastKind::Warning, message.to_owned(), cx);
+                }
+            }
+        }
     }
 
     pub(in crate::view) fn open_path_in_external_code_editor(
