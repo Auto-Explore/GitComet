@@ -6,20 +6,25 @@
 use crate::assets::GitCometAssets;
 use crate::launch_guard::run_with_panic_guard;
 use crate::theme::AppTheme;
-use crate::view::components;
+use crate::view::diff_navigation::{
+    change_block_entries_with_transparent_rows, diff_nav_next_target, diff_nav_prev_target,
+};
+use crate::view::shortcut_labels::{next_change_tooltip, previous_change_tooltip};
+use crate::view::{GitCometTooltipExt, components, svg_icon};
 use gitcomet_state::session;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Pixels, Render, ScrollHandle,
     SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, actions,
-    div,
+    div, px,
 };
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 // ── Actions ──────────────────────────────────────────────────────────
 
-actions!(focused_diff, [Close]);
+actions!(focused_diff, [Close, PreviousChange, NextChange]);
 const FOCUSED_DIFF_EXIT_ERROR: i32 = 2;
 const FOCUSED_DIFF_MIN_WIDTH_PX: f32 = 500.0;
 const FOCUSED_DIFF_MIN_HEIGHT_PX: f32 = 300.0;
@@ -63,6 +68,10 @@ pub struct FocusedDiffConfig {
 
 struct FocusedDiffView {
     lines: Vec<DiffLine>,
+    /// First line of each change block, the F2/F3 stops.
+    change_block_starts: Vec<usize>,
+    /// Block start F2/F3 last landed on.
+    current_change: Option<usize>,
     title: String,
     diff_whitespace_mode: FocusedDiffWhitespaceMode,
     exit_code: Arc<AtomicI32>,
@@ -143,6 +152,7 @@ impl FocusedDiffView {
             .and_then(FocusedDiffWhitespaceMode::from_key)
             .unwrap_or_default();
         let lines = parse_diff_lines(&config.diff_text, diff_whitespace_mode);
+        let change_block_starts = change_block_starts(&lines);
         let title = config
             .display_path
             .unwrap_or_else(|| format!("{} vs {}", config.label_left, config.label_right));
@@ -155,6 +165,8 @@ impl FocusedDiffView {
 
         Self {
             lines,
+            change_block_starts,
+            current_change: None,
             title,
             diff_whitespace_mode,
             exit_code,
@@ -187,11 +199,44 @@ impl FocusedDiffView {
         }
         self.diff_whitespace_mode = mode;
         apply_visual_diff_line_kinds(self.lines.as_mut_slice(), mode);
+        self.change_block_starts = change_block_starts(&self.lines);
+        self.current_change = self
+            .current_change
+            .filter(|start| self.change_block_starts.binary_search(start).is_ok());
         let _ = session::persist_ui_settings(session::UiSettings {
             diff_whitespace_mode: Some(mode.key().to_string()),
             ..session::UiSettings::default()
         });
         cx.notify();
+    }
+
+    fn jump_change(&mut self, previous: bool, cx: &mut Context<Self>) {
+        let target = if previous {
+            diff_nav_prev_target(&self.change_block_starts, self.current_change)
+        } else {
+            diff_nav_next_target(&self.change_block_starts, self.current_change)
+        };
+        let Some(target) = target else {
+            return;
+        };
+        self.current_change = Some(target);
+        self.scroll_line_to_center(target);
+        cx.notify();
+    }
+
+    fn scroll_line_to_center(&self, line_ix: usize) {
+        let Some(item) = self.scroll_handle.bounds_for_item(line_ix) else {
+            // Not laid out yet; the next prepaint brings it to the top.
+            self.scroll_handle.scroll_to_top_of_item(line_ix);
+            return;
+        };
+        let mut offset = self.scroll_handle.offset();
+        offset.y = centered_scroll_offset_y(
+            item,
+            self.scroll_handle.bounds(),
+            self.scroll_handle.max_offset().y,
+        );
+        self.scroll_handle.set_offset(offset);
     }
 
     fn set_ui_scale_percent(&mut self, percent: u32, window: &mut Window, cx: &mut Context<Self>) {
@@ -313,18 +358,67 @@ fn apply_visual_diff_line_kinds(
     }
 }
 
+fn is_visual_change(line: &DiffLine) -> bool {
+    matches!(line.visual_kind, DiffLineKind::Add | DiffLineKind::Remove)
+}
+
+/// One stop per change block, the same rule as the main diff view. A
+/// `\ No newline` marker between `-` and `+` does not split the edit.
+fn change_block_starts(lines: &[DiffLine]) -> Vec<usize> {
+    change_block_entries_with_transparent_rows(
+        lines.len(),
+        |ix| is_visual_change(&lines[ix]),
+        |ix| is_no_newline_marker(&lines[ix]),
+    )
+}
+
+/// Lines of the block starting at `start`, including its no-newline markers.
+fn change_block_range(lines: &[DiffLine], start: usize) -> Range<usize> {
+    let end = lines[start..]
+        .iter()
+        .position(|line| !is_visual_change(line) && !is_no_newline_marker(line))
+        .map_or(lines.len(), |len| start + len);
+    start..end
+}
+
+/// Scroll offset (0 or negative) that centres `item` in `viewport`. Child
+/// bounds are unscrolled layout positions.
+fn centered_scroll_offset_y(
+    item: Bounds<Pixels>,
+    viewport: Bounds<Pixels>,
+    max_offset_y: Pixels,
+) -> Pixels {
+    let offset =
+        (viewport.top() + viewport.size.height / 2.0) - (item.top() + item.size.height / 2.0);
+    offset.clamp(-max_offset_y, px(0.0))
+}
+
 impl Render for FocusedDiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme.with_appearance(crate::appearance::current(cx));
         let line_count = self.lines.len();
         let scaled_px = crate::ui_scale::scaler(crate::ui_scale::UiScale::from_window(window));
         let next_whitespace_mode = self.diff_whitespace_mode.toggled();
+        let can_nav_prev =
+            diff_nav_prev_target(&self.change_block_starts, self.current_change).is_some();
+        let can_nav_next =
+            diff_nav_next_target(&self.change_block_starts, self.current_change).is_some();
+        let current_block = self
+            .current_change
+            .map(|start| change_block_range(&self.lines, start))
+            .unwrap_or_default();
 
         div()
             .id("focused-diff-root")
             .key_context("FocusedDiff")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|this, _: &Close, _window, cx| this.close(cx)))
+            .on_action(cx.listener(|this, _: &PreviousChange, _window, cx| {
+                this.jump_change(true, cx);
+            }))
+            .on_action(cx.listener(|this, _: &NextChange, _window, cx| {
+                this.jump_change(false, cx);
+            }))
             .on_action(cx.listener(|this, _: &IncreaseUiScale, window, cx| {
                 this.set_ui_scale_percent(
                     crate::ui_scale::step_up(this.ui_scale_percent),
@@ -382,6 +476,34 @@ impl Render for FocusedDiffView {
                             .child(SharedString::from(format!("{line_count} lines"))),
                     )
                     .child(
+                        components::Button::new("btn-prev-change", "")
+                            .start_slot(svg_icon(
+                                "icons/arrow_up.svg",
+                                theme.colors.foreground.primary,
+                                scaled_px(14.0),
+                            ))
+                            .style(components::ButtonStyle::Outlined)
+                            .disabled(!can_nav_prev)
+                            .on_click(theme, cx, |this, _e, _window, cx| {
+                                this.jump_change(true, cx);
+                            })
+                            .gitcomet_tooltip(theme, previous_change_tooltip().into()),
+                    )
+                    .child(
+                        components::Button::new("btn-next-change", "")
+                            .start_slot(svg_icon(
+                                "icons/arrow_down.svg",
+                                theme.colors.foreground.primary,
+                                scaled_px(14.0),
+                            ))
+                            .style(components::ButtonStyle::Outlined)
+                            .disabled(!can_nav_next)
+                            .on_click(theme, cx, |this, _e, _window, cx| {
+                                this.jump_change(false, cx);
+                            })
+                            .gitcomet_tooltip(theme, next_change_tooltip().into()),
+                    )
+                    .child(
                         components::Button::new(
                             "btn-whitespace-mode",
                             format!("Whitespace: {}", self.diff_whitespace_mode.label()),
@@ -413,12 +535,9 @@ impl Render for FocusedDiffView {
                     .line_height(scaled_px(theme.metrics.editor_line_height()))
                     .px(scaled_px(16.0))
                     .py(scaled_px(4.0))
-                    .children(
-                        self.lines
-                            .iter()
-                            .enumerate()
-                            .map(|(i, line)| render_diff_line(i, line, &theme, window)),
-                    ),
+                    .children(self.lines.iter().enumerate().map(|(i, line)| {
+                        render_diff_line(i, line, current_block.contains(&i), &theme, window)
+                    })),
             )
     }
 }
@@ -426,6 +545,7 @@ impl Render for FocusedDiffView {
 fn render_diff_line(
     index: usize,
     line: &DiffLine,
+    is_current_change: bool,
     theme: &AppTheme,
     window: &Window,
 ) -> impl IntoElement {
@@ -446,10 +566,17 @@ fn render_diff_line(
     let line_num = format!("{:>4} ", index + 1);
     let scaled_px = crate::ui_scale::scaler(crate::ui_scale::UiScale::from_window(window));
 
+    // Every row carries the bar so marking the current block shifts no text;
+    // a border because a second `.bg()` would replace the diff colour.
     let mut el = div()
         .w_full()
         .flex()
         .flex_row()
+        .border_l_2()
+        .border_color(gpui::transparent_black())
+        .when(is_current_change, |el| {
+            el.border_color(theme.colors.interaction.selected_indicator)
+        })
         .child(
             div()
                 .text_color(theme.colors.foreground.secondary)
@@ -484,6 +611,13 @@ fn bind_focused_diff_keys(cx: &mut App) {
         KeyBinding::new("secondary-=", IncreaseUiScale, Some("FocusedDiff")),
         KeyBinding::new("secondary--", DecreaseUiScale, Some("FocusedDiff")),
         KeyBinding::new("secondary-0", ResetUiScale, Some("FocusedDiff")),
+        // Same change-navigation keys as the main diff view.
+        KeyBinding::new("f2", PreviousChange, Some("FocusedDiff")),
+        KeyBinding::new("shift-f7", PreviousChange, Some("FocusedDiff")),
+        KeyBinding::new("alt-up", PreviousChange, Some("FocusedDiff")),
+        KeyBinding::new("f3", NextChange, Some("FocusedDiff")),
+        KeyBinding::new("f7", NextChange, Some("FocusedDiff")),
+        KeyBinding::new("alt-down", NextChange, Some("FocusedDiff")),
     ]);
 }
 
@@ -609,6 +743,168 @@ mod tests {
                 .on_action(cx.listener(|this, _: &Close, _window, _cx| {
                     this.record_action(Close.name());
                 }))
+                .on_action(cx.listener(|this, _: &PreviousChange, _window, _cx| {
+                    this.record_action(PreviousChange.name());
+                }))
+                .on_action(cx.listener(|this, _: &NextChange, _window, _cx| {
+                    this.record_action(NextChange.name());
+                }))
+        }
+    }
+
+    fn probe_window(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Arc<Mutex<Vec<String>>>, &mut gpui::VisualTestContext) {
+        let observed_actions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_window, cx| {
+            FocusedDiffKeyProbe::new(Arc::clone(&observed_actions), cx)
+        });
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_focused_diff_keys(app);
+            let focus = view.update(app, |view, _cx| view.focus_handle());
+            window.focus(&focus, app);
+            let _ = window.draw(app);
+        });
+        (observed_actions, cx)
+    }
+
+    fn assert_keystroke_dispatches(
+        cx: &mut gpui::VisualTestContext,
+        observed_actions: &Mutex<Vec<String>>,
+        keystroke: &str,
+        expected: &str,
+    ) {
+        observed_actions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        cx.simulate_keystrokes(keystroke);
+        let actual_action = observed_actions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last()
+            .cloned();
+        assert_eq!(
+            actual_action.as_deref(),
+            Some(expected),
+            "expected `{keystroke}` to resolve to `{expected}`",
+        );
+    }
+
+    const TWO_FILE_DIFF: &str = "\
+diff --git a/a b/a
+index 1111111..2222222 100644
+--- a/a
++++ b/a
+@@ -1,7 +1,6 @@
+ one
+-two
++TWO
+ three
+ four
+-five
+-six
++FIVE
+ seven
+diff --git a/b b/b
+index 3333333..4444444 100644
+--- a/b
++++ b/b
+@@ -1 +1 @@
+-last
+\\ No newline at end of file
++LAST
+\\ No newline at end of file
+";
+
+    #[test]
+    fn change_block_starts_mark_the_first_line_of_each_block() {
+        let lines = parse_diff_lines(TWO_FILE_DIFF, FocusedDiffWhitespaceMode::Show);
+        let starts = change_block_starts(&lines);
+
+        let texts = starts
+            .iter()
+            .map(|&ix| lines[ix].content.as_str())
+            .collect::<Vec<_>>();
+        // The no-newline markers between `-last` and `+LAST` keep it one block.
+        assert_eq!(texts, vec!["-two", "-five", "-last"]);
+        assert_eq!(
+            change_block_range(&lines, starts[2]),
+            starts[2]..lines.len(),
+            "the block runs through its trailing no-newline marker"
+        );
+        assert_eq!(change_block_range(&lines, starts[1]).len(), 3);
+    }
+
+    #[test]
+    fn change_block_starts_skip_whitespace_only_blocks_when_ignored() {
+        let diff = "\
+@@ -1,5 +1,5 @@
+ one
+-  two
++two
+ three
+-four
++FOUR
+";
+        let shown = parse_diff_lines(diff, FocusedDiffWhitespaceMode::Show);
+        assert_eq!(change_block_starts(&shown), vec![2, 5]);
+
+        let ignored = parse_diff_lines(diff, FocusedDiffWhitespaceMode::Ignore);
+        assert_eq!(change_block_starts(&ignored), vec![5]);
+    }
+
+    #[test]
+    fn change_navigation_starts_at_the_first_block_and_does_not_wrap() {
+        let lines = parse_diff_lines(TWO_FILE_DIFF, FocusedDiffWhitespaceMode::Show);
+        let starts = change_block_starts(&lines);
+
+        assert_eq!(diff_nav_next_target(&starts, None), Some(starts[0]));
+        assert_eq!(diff_nav_prev_target(&starts, None), None);
+        assert_eq!(diff_nav_next_target(&starts, Some(starts[2])), None);
+        assert_eq!(diff_nav_prev_target(&starts, Some(starts[0])), None);
+    }
+
+    #[test]
+    fn centered_scroll_offset_clamps_to_the_scroll_range() {
+        let viewport = Bounds::new(
+            gpui::point(px(0.0), px(100.0)),
+            gpui::size(px(400.0), px(200.0)),
+        );
+        let row = |top: f32| {
+            Bounds::new(
+                gpui::point(px(0.0), px(top)),
+                gpui::size(px(400.0), px(20.0)),
+            )
+        };
+
+        // Centre of the viewport is y=200; a row at 590..610 needs -400.
+        assert_eq!(
+            centered_scroll_offset_y(row(590.0), viewport, px(1000.0)),
+            px(-400.0)
+        );
+        // Near the top: never scroll past the start.
+        assert_eq!(
+            centered_scroll_offset_y(row(110.0), viewport, px(1000.0)),
+            px(0.0)
+        );
+        // Near the end: never past the last row.
+        assert_eq!(
+            centered_scroll_offset_y(row(1290.0), viewport, px(1000.0)),
+            px(-1000.0)
+        );
+    }
+
+    #[gpui::test]
+    fn focused_diff_keybindings_dispatch_change_navigation(cx: &mut gpui::TestAppContext) {
+        let (observed_actions, cx) = probe_window(cx);
+
+        for keystroke in ["f2", "shift-f7", "alt-up"] {
+            assert_keystroke_dispatches(cx, &observed_actions, keystroke, PreviousChange.name());
+        }
+        for keystroke in ["f3", "f7", "alt-down"] {
+            assert_keystroke_dispatches(cx, &observed_actions, keystroke, NextChange.name());
         }
     }
 
@@ -686,36 +982,10 @@ index 1234567..abcdef0 100644
 
     #[gpui::test]
     fn focused_diff_keybindings_dispatch_close(cx: &mut gpui::TestAppContext) {
-        let observed_actions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let (view, cx) = cx.add_window_view(|_window, cx| {
-            FocusedDiffKeyProbe::new(Arc::clone(&observed_actions), cx)
-        });
-
-        cx.update(|window, app| {
-            app.clear_key_bindings();
-            bind_focused_diff_keys(app);
-            let focus = view.update(app, |view, _cx| view.focus_handle());
-            window.focus(&focus, app);
-            let _ = window.draw(app);
-        });
+        let (observed_actions, cx) = probe_window(cx);
 
         for keystroke in ["escape", "q", "ctrl-w", "cmd-w"] {
-            observed_actions
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clear();
-            cx.simulate_keystrokes(keystroke);
-            let actual_action = observed_actions
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .last()
-                .cloned();
-            assert_eq!(
-                actual_action.as_deref(),
-                Some(Close.name()),
-                "expected `{keystroke}` to resolve to `{}`",
-                Close.name(),
-            );
+            assert_keystroke_dispatches(cx, &observed_actions, keystroke, Close.name());
         }
     }
 }

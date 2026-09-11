@@ -177,59 +177,34 @@ impl MainPaneView {
         self.diff_selection_range = None;
     }
 
-    pub(super) fn file_change_visible_indices(&self) -> Vec<usize> {
+    /// Full mode: the first row of each change block, as a visual index.
+    pub(super) fn file_change_block_starts(&self) -> Vec<usize> {
         if !self.is_file_diff_view_active() {
             return Vec::new();
         }
-        match self.diff_view {
-            DiffViewMode::Inline => {
-                if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
-                    return provider
-                        .change_visible_indices()
-                        .into_iter()
-                        .filter_map(|inline_ix| self.diff_visual_ix_for_mapped_ix(inline_ix))
-                        .collect();
-                }
-                (0..self.file_diff_inline_row_len())
-                    .filter_map(|inline_ix| {
-                        let is_change =
-                            matches!(
-                                self.file_diff_inline_visual_kind(inline_ix),
-                                gitcomet_core::domain::DiffLineKind::Add
-                                    | gitcomet_core::domain::DiffLineKind::Remove
-                            ) && self.file_diff_inline_row(inline_ix).is_some_and(|l| {
-                                matches!(
-                                    l.kind,
-                                    gitcomet_core::domain::DiffLineKind::Add
-                                        | gitcomet_core::domain::DiffLineKind::Remove
-                                )
-                            });
-                        if !is_change {
-                            return None;
-                        }
-                        self.diff_visual_ix_for_mapped_ix(inline_ix)
-                    })
-                    .collect()
-            }
-            DiffViewMode::Split => {
-                if let Some(provider) = self.file_diff_row_provider.as_ref() {
-                    return provider
-                        .change_visible_indices()
-                        .into_iter()
-                        .filter_map(|row_ix| self.diff_visual_ix_for_mapped_ix(row_ix))
-                        .collect();
-                }
-                (0..self.file_diff_split_row_len())
-                    .filter_map(|row_ix| {
-                        let is_change = !matches!(
-                            self.file_diff_split_visual_kind(row_ix),
-                            gitcomet_core::file_diff::FileDiffRowKind::Context
-                        );
-                        is_change.then(|| self.diff_visual_ix_for_mapped_ix(row_ix))?
-                    })
-                    .collect()
-            }
-        }
+        let provider_starts = match self.diff_view {
+            DiffViewMode::Inline => self
+                .file_diff_inline_row_provider
+                .as_ref()
+                .map(|provider| provider.change_block_starts()),
+            DiffViewMode::Split => self
+                .file_diff_row_provider
+                .as_ref()
+                .map(|provider| provider.change_block_starts()),
+        };
+        let starts = provider_starts.unwrap_or_else(|| {
+            let len = match self.diff_view {
+                DiffViewMode::Inline => self.file_diff_inline_row_len(),
+                DiffViewMode::Split => self.file_diff_split_row_len(),
+            };
+            diff_navigation::change_block_entries(len, |row_ix| {
+                self.file_diff_row_is_change(row_ix)
+            })
+        });
+        starts
+            .into_iter()
+            .filter_map(|row_ix| self.diff_visual_ix_for_mapped_ix(row_ix))
+            .collect()
     }
 
     pub(super) fn diff_source_visible_ix_for_mapped_ix(&self, mapped_ix: usize) -> Option<usize> {
@@ -298,89 +273,23 @@ impl MainPaneView {
         }
     }
 
-    pub(in crate::view) fn patch_hunk_entries(&self) -> Vec<(usize, usize)> {
-        if self.is_collapsed_diff_projection_active() {
-            debug_assert_eq!(
-                self.collapsed_diff_hunk_visible_indices.len(),
-                self.collapsed_diff_hunks.len()
-            );
-            return self
-                .collapsed_diff_hunk_visible_indices
-                .iter()
-                .enumerate()
-                .filter_map(|(hunk_ix, &visible_ix)| {
-                    self.collapsed_diff_hunks.get(hunk_ix).and_then(|hunk| {
-                        (hunk.has_additions || hunk.has_removals).then_some((
-                            self.diff_visual_ix_for_source_visible_ix(visible_ix),
-                            hunk.src_ix,
-                        ))
-                    })
-                })
-                .collect();
-        }
-
-        let mut out = Vec::new();
-        for visible_ix in 0..self.diff_visible_len() {
-            let Some(ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                continue;
-            };
-            match self.diff_view {
-                DiffViewMode::Inline => {
-                    let Some(line) = self.patch_diff_row(ix) else {
-                        continue;
-                    };
-                    if matches!(line.kind, gitcomet_core::domain::DiffLineKind::Hunk) && {
-                        let (has_additions, has_removals) = self.collapsed_hunk_change_summary(ix);
-                        has_additions || has_removals
-                    } {
-                        out.push((visible_ix, ix));
-                    }
-                }
-                DiffViewMode::Split => {
-                    let Some(row) = self.patch_diff_split_row(ix) else {
-                        continue;
-                    };
-                    if let PatchSplitRow::Raw {
-                        src_ix,
-                        click_kind: DiffClickKind::HunkHeader,
-                    } = row
-                    {
-                        let (has_additions, has_removals) =
-                            self.collapsed_hunk_change_summary(src_ix);
-                        if !has_additions && !has_removals {
-                            continue;
-                        }
-                        out.push((visible_ix, src_ix));
-                    }
-                }
-            }
-        }
-        out
-    }
-
+    /// Change-navigation stops as visual indices: the first row of each
+    /// change block, whatever the content mode.
     pub(in crate::view) fn diff_nav_entries(&self) -> Vec<usize> {
         if self.is_markdown_preview_active() && !self.is_file_preview_active() {
             return self.markdown_preview_change_visible_indices();
         }
         if self.is_file_diff_view_active() {
-            return self.file_change_visible_indices();
+            return self.file_change_block_starts();
         }
-        if self.is_collapsed_diff_projection_active() {
-            return self
-                .collapsed_diff_hunk_visible_indices
-                .iter()
-                .enumerate()
-                .filter_map(|(hunk_ix, visible_ix)| {
-                    self.collapsed_diff_hunks.get(hunk_ix).and_then(|hunk| {
-                        (hunk.has_additions || hunk.has_removals)
-                            .then(|| self.diff_visual_ix_for_source_visible_ix(*visible_ix))
-                    })
-                })
-                .collect();
-        }
-        self.patch_hunk_entries()
+        let source_visible_starts = if self.is_collapsed_diff_projection_active() {
+            self.collapsed_change_block_starts()
+        } else {
+            self.patch_change_block_starts()
+        };
+        source_visible_starts
             .into_iter()
-            .map(|(visible_ix, _)| visible_ix)
+            .map(|ix| self.diff_visual_ix_for_source_visible_ix(ix))
             .collect()
     }
 
@@ -395,33 +304,20 @@ impl MainPaneView {
             .or_else(|| self.diff_row_focus_visible_range())
     }
 
-    pub(in crate::view) fn diff_nav_prev_current_ix(&self) -> usize {
-        self.diff_focus_visible_range()
-            .map(|(start, _end)| start)
-            .unwrap_or(0)
+    /// Shared by the keys and the toolbar buttons so both agree on reachability.
+    pub(in crate::view) fn diff_nav_prev_target_ix(&self, entries: &[usize]) -> Option<usize> {
+        let current = self.diff_focus_visible_range().map(|(start, _end)| start);
+        diff_navigation::diff_nav_prev_target(entries, current)
     }
 
-    pub(in crate::view) fn diff_nav_next_current_ix(&self) -> usize {
-        self.diff_focus_visible_range()
-            .map(|(_start, end)| end)
-            .unwrap_or(0)
+    pub(in crate::view) fn diff_nav_next_target_ix(&self, entries: &[usize]) -> Option<usize> {
+        let current = self.diff_focus_visible_range().map(|(_start, end)| end);
+        diff_navigation::diff_nav_next_target(entries, current)
     }
 
     fn clear_diff_navigation_selection(&mut self) {
         self.clear_diff_text_selection();
         self.diff_selection_range = None;
-    }
-
-    pub(in crate::view) fn scroll_diff_to_item(
-        &mut self,
-        target: usize,
-        strategy: gpui::ScrollStrategy,
-    ) {
-        self.diff_scroll.scroll_to_item(target, strategy);
-        if self.diff_view == DiffViewMode::Split {
-            self.diff_split_right_scroll
-                .scroll_to_item(target, strategy);
-        }
     }
 
     pub(in crate::view) fn scroll_diff_to_item_strict(
@@ -509,41 +405,33 @@ impl MainPaneView {
 
     pub(in crate::view) fn diff_jump_prev(&mut self) {
         let entries = self.diff_nav_entries();
-        let focus_range = self.diff_focus_visible_range();
-        let current = focus_range.map(|(start, _end)| start).unwrap_or(0);
-        if entries.is_empty() {
-            return;
-        }
-
-        let Some(target) = diff_navigation::diff_nav_prev_target(&entries, current) else {
-            if focus_range.is_some() {
-                self.clear_diff_navigation_selection();
-                self.diff_selection_range = Some((current, current));
-            }
-            self.diff_selection_anchor = Some(current);
-            return;
-        };
-
-        self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
-        self.clear_diff_navigation_selection();
-        self.diff_selection_anchor = Some(target);
-        self.diff_selection_range = Some((target, target));
+        self.diff_jump(entries, true);
     }
 
     pub(in crate::view) fn diff_jump_next(&mut self) {
         let entries = self.diff_nav_entries();
-        let focus_range = self.diff_focus_visible_range();
-        let current = focus_range.map(|(_start, end)| end).unwrap_or(0);
+        self.diff_jump(entries, false);
+    }
+
+    fn diff_jump(&mut self, entries: Vec<usize>, previous: bool) {
         if entries.is_empty() {
             return;
         }
+        let target = if previous {
+            self.diff_nav_prev_target_ix(&entries)
+        } else {
+            self.diff_nav_next_target_ix(&entries)
+        };
 
-        let Some(target) = diff_navigation::diff_nav_next_target(&entries, current) else {
-            if focus_range.is_some() {
+        let Some(target) = target else {
+            // Past the last stop: collapse to the edge being left. With nothing
+            // focused, leave it so the first stop stays reachable.
+            if let Some((start, end)) = self.diff_focus_visible_range() {
+                let current = if previous { start } else { end };
                 self.clear_diff_navigation_selection();
                 self.diff_selection_range = Some((current, current));
+                self.diff_selection_anchor = Some(current);
             }
-            self.diff_selection_anchor = Some(current);
             return;
         };
 
@@ -573,7 +461,10 @@ impl MainPaneView {
         let entries = self.diff_nav_entries();
         let target = entries.first().copied().unwrap_or(0);
 
-        self.scroll_diff_to_item(target, gpui::ScrollStrategy::Top);
+        // Strict: the scroll offset survives a target change, and centring
+        // clamps to the top when the first block is near it, keeping a
+        // collapsed hunk's header in view.
+        self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
         self.diff_selection_anchor = Some(target);
         self.diff_selection_range = Some((target, target));
         self.diff_autoscroll_pending = false;

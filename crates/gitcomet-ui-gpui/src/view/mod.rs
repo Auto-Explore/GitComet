@@ -180,7 +180,7 @@ pub(crate) mod components;
 mod conflict_markers;
 pub(crate) mod conflict_resolver;
 mod date_time;
-mod diff_navigation;
+pub(crate) mod diff_navigation;
 mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
@@ -295,13 +295,14 @@ use panes::{
 };
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
-use tooltip::GitCometTooltipExt;
+pub(crate) use tooltip::GitCometTooltipExt;
 use tooltip_host::TooltipHost;
 
 #[cfg(test)]
 pub(crate) use chrome::window_frame;
 use color::{composite_over, with_alpha};
-use icons::{svg_icon, svg_spinner};
+pub(crate) use icons::svg_icon;
+use icons::svg_spinner;
 
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;
 const HISTORY_COL_GRAPH_PX: f32 = 80.0;

@@ -31,6 +31,16 @@ fn alt_shortcut_for(suffix: &str, is_macos: bool) -> String {
     }
 }
 
+/// Tooltip for every diff surface's previous-change button.
+pub(crate) fn previous_change_tooltip() -> String {
+    format!("Previous change (F2 / Shift+F7 / {})", alt_shortcut("Up"))
+}
+
+/// Tooltip for every diff surface's next-change button.
+pub(crate) fn next_change_tooltip() -> String {
+    format!("Next change (F3 / F7 / {})", alt_shortcut("Down"))
+}
+
 /// A displayable shortcut attached to a command-palette entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Shortcut {
