@@ -4232,6 +4232,95 @@ fn full_diff_split_pure_change_blocks_outline_only_their_side(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn full_diff_whitespace_mode_change_does_not_restore_focused_block_on_row_click(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ alpha
+-  keep
++keep
+ omega
+"
+    .to_string();
+    let entries = activate_full_diff_nav_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70641),
+        "full_diff_whitespace_focus_bar",
+        DiffViewMode::Split,
+        (
+            unified,
+            "alpha\n  keep\nomega\n".to_string(),
+            "alpha\nkeep\nomega\n".to_string(),
+        ),
+        1,
+    );
+    let row = entries[0];
+    focus_diff_panel(cx, &view);
+    press_and_assert_anchor(cx, &view, "f3", row, "F3 onto the whitespace-only block");
+    assert_focused_change_block_bar(
+        cx,
+        &view,
+        row..row + 1,
+        DiffViewMode::Split,
+        "the whitespace-only block before ignoring whitespace",
+    );
+    let visible_len = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            let visible_len = pane.diff_visible_len();
+            pane.set_diff_whitespace_mode(DiffWhitespaceMode::Ignore, cx);
+            visible_len
+        })
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the whitespace-only block becomes context",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.diff_visible_len() == visible_len
+                && pane.diff_nav_entries().is_empty()
+        },
+        |pane| {
+            (
+                pane.file_diff_cache_inflight.is_some(),
+                pane.diff_visible_len(),
+                pane.diff_nav_entries(),
+            )
+        },
+    );
+
+    // Split mode keeps the same row indices and row count. Clicking the old
+    // anchor must not revive the block captured before the mode switch.
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.clone();
+        pane.update(app, |pane, cx| {
+            assert_eq!(pane.diff_selection_anchor, None);
+            let row_ix = pane.diff_mapped_ix_for_visible_ix(row).unwrap();
+            assert!(!pane.file_diff_row_is_change(row_ix));
+            pane.handle_patch_row_click(row, DiffClickKind::Line, false);
+            assert_eq!(pane.diff_selection_anchor, Some(row));
+            cx.notify();
+        });
+    });
+    assert!(
+        painted_focused_change_block_marks(cx, &view).is_empty(),
+        "clicking the former whitespace-only block must not paint its old outline"
+    );
+    assert!(focused_change_block_rows(cx, &view).is_empty());
+}
+
+#[gpui::test]
 fn focused_change_block_bar_hides_after_the_layout_changes(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
