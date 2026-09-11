@@ -456,46 +456,76 @@ index 1111111..2222222 100644
     (unified, old_text, new_text)
 }
 
-fn build_full_diff_multi_line_change_fixture_texts() -> (String, String, String) {
-    let old_text = "alpha\nold one\nold two\nold three\nomega\n".to_string();
-    let new_text = "alpha\nnew one\nnew two\nnew three\nomega\n".to_string();
+/// Three change blocks; the first spans two lines so navigation can start mid-block.
+fn build_full_diff_multi_block_fixture_texts() -> (String, String, String) {
+    let old_text =
+        "alpha\nold one\nold two\nmiddle one\nold three\nmiddle two\nold four\nomega\n".to_string();
+    let new_text =
+        "alpha\nnew one\nnew two\nmiddle one\nnew three\nmiddle two\nnew four\nomega\n".to_string();
     let unified = "\
 diff --git a/src/lib.rs b/src/lib.rs
 index 1111111..2222222 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -1,5 +1,5 @@
+@@ -1,8 +1,8 @@
  alpha
 -old one
 -old two
--old three
 +new one
 +new two
+ middle one
+-old three
 +new three
+ middle two
+-old four
++new four
  omega
 "
     .to_string();
     (unified, old_text, new_text)
 }
 
+/// The first line is changed, so the first change block starts at row 0.
+fn build_full_diff_first_row_change_fixture_texts() -> (String, String, String) {
+    let old_text = "old first\nkeep\nold last\n".to_string();
+    let new_text = "new first\nkeep\nnew last\n".to_string();
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+-old first
++new first
+ keep
+-old last
++new last
+"
+    .to_string();
+    (unified, old_text, new_text)
+}
+
+/// Two change blocks; the first one's row wraps, so its continuation rows sit
+/// between the two navigation stops.
 fn build_full_diff_word_wrap_navigation_fixture_texts() -> (String, String, String) {
     let old_one = format!("old first {}", "left_payload_".repeat(160));
     let new_one = format!("new first {}", "right_payload_".repeat(160));
     let old_two = "old second changed row".to_string();
     let new_two = "new second changed row".to_string();
-    let old_text = format!("alpha\n{old_one}\n{old_two}\nomega\n");
-    let new_text = format!("alpha\n{new_one}\n{new_two}\nomega\n");
+    let old_text = format!("alpha\n{old_one}\nmiddle\n{old_two}\nomega\n");
+    let new_text = format!("alpha\n{new_one}\nmiddle\n{new_two}\nomega\n");
     let unified = format!(
         "\
 diff --git a/src/lib.rs b/src/lib.rs
 index 1111111..2222222 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -1,4 +1,4 @@
+@@ -1,5 +1,5 @@
  alpha
 -{old_one}
--{old_two}
 +{new_one}
+ middle
+-{old_two}
 +{new_two}
  omega
 "
@@ -924,11 +954,15 @@ fn collapsed_hunk_visible_ix_for_src_ix(
     pane: &crate::view::panes::main::MainPaneView,
     src_ix: usize,
 ) -> usize {
-    pane.patch_hunk_entries()
-        .into_iter()
-        .find_map(|(visible_ix, candidate_src_ix)| {
-            (candidate_src_ix == src_ix).then_some(visible_ix)
+    pane.collapsed_diff_hunks
+        .iter()
+        .position(|hunk| hunk.src_ix == src_ix)
+        .and_then(|hunk_ix| {
+            pane.collapsed_diff_hunk_visible_indices
+                .get(hunk_ix)
+                .copied()
         })
+        .map(|visible_ix| pane.diff_visual_ix_for_source_visible_ix(visible_ix))
         .unwrap_or_else(|| panic!("expected a collapsed hunk anchor for src_ix={src_ix}"))
 }
 
@@ -949,6 +983,20 @@ fn collapsed_file_row_visible_ix(
             )
         })
         .unwrap_or_else(|| panic!("expected a collapsed file row for row_ix={target_row_ix}"))
+}
+
+/// First changed collapsed file row at or after `from`, as a source-visible index.
+fn collapsed_first_changed_source_visible_ix(
+    pane: &crate::view::panes::main::MainPaneView,
+    from: usize,
+) -> usize {
+    (from..pane.collapsed_diff_visible_rows.len())
+        .find(|&source_visible_ix| {
+            pane.collapsed_visible_row(source_visible_ix)
+                .and_then(crate::view::panes::main::CollapsedDiffVisibleRow::row_ix)
+                .is_some_and(|row_ix| pane.file_diff_row_is_change(row_ix))
+        })
+        .unwrap_or_else(|| panic!("expected a changed collapsed file row at or after {from}"))
 }
 
 fn collapsed_diff_cache_rebuild_snapshot(pane: &crate::view::panes::main::MainPaneView) -> String {
@@ -1110,15 +1158,11 @@ fn assert_collapsed_hunk_header_hides_after_full_reveal(
             ),
             "once the upper gap is fully consumed, the hunk anchor should move to the first visible file row"
         );
-        assert_eq!(
-            pane.patch_hunk_entries(),
-            vec![(anchor_visible_ix, hunk_src_ix)],
-            "patch hunk entries should keep pointing at the merged hunk anchor after the top expansion row disappears"
-        );
+        // Line 35 is the only change: row 34 in both layouts.
         assert_eq!(
             pane.diff_nav_entries(),
-            vec![anchor_visible_ix],
-            "diff navigation should continue using the merged hunk anchor once the top expansion row disappears"
+            vec![collapsed_file_row_visible_ix(pane, 34)],
+            "diff navigation should stop on the changed row, not the hunk anchor, once the top expansion row disappears"
         );
         pane.collapsed_diff_hidden_down_rows(hunk_src_ix)
     });
@@ -1158,17 +1202,12 @@ fn assert_collapsed_hunk_header_hides_after_full_reveal(
                 pane.collapsed_visible_row(anchor_visible_ix),
                 Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow { .. })
             ),
-            "fully revealed collapsed hunks should anchor navigation to the first file row instead of a synthetic header"
-        );
-        assert_eq!(
-            pane.patch_hunk_entries(),
-            vec![(anchor_visible_ix, hunk_src_ix)],
-            "patch hunk entries should keep pointing at the same source hunk when the synthetic header disappears"
+            "fully revealed collapsed hunks should anchor to the first file row instead of a synthetic header"
         );
         assert_eq!(
             pane.diff_nav_entries(),
-            vec![anchor_visible_ix],
-            "diff navigation should continue using the fully revealed hunk anchor"
+            vec![collapsed_file_row_visible_ix(pane, 34)],
+            "diff navigation should keep stopping on the changed row once the hunk is fully revealed"
         );
     });
 
@@ -3429,21 +3468,23 @@ fn set_diff_text_selection_for_test(
     draw_and_drain_test_window(cx);
 }
 
-fn assert_full_diff_change_shortcuts_visit_each_changed_row(
+/// Loads `fixture` as a Full-mode file diff in `diff_view` with nothing
+/// selected, and returns its navigation stops once there are `expected_stops`.
+fn activate_full_diff_nav_fixture(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
     repo_id: gitcomet_state::model::RepoId,
     fixture_name: &str,
     diff_view: DiffViewMode,
-) {
-    let path = PathBuf::from("src/lib.rs");
-    let (unified, old_text, new_text) = build_full_diff_multi_line_change_fixture_texts();
+    (unified, old_text, new_text): (String, String, String),
+    expected_stops: usize,
+) -> Vec<usize> {
     let target = push_regular_diff_content_mode_state(
         cx,
         view,
         repo_id,
         fixture_name,
-        path,
+        PathBuf::from("src/lib.rs"),
         unified,
         old_text,
         new_text,
@@ -3490,12 +3531,11 @@ fn assert_full_diff_change_shortcuts_visit_each_changed_row(
     wait_for_main_pane_condition(
         cx,
         view,
-        "full diff has per-row navigation entries",
+        "full diff has one navigation stop per change block",
         |pane| {
-            let entries = pane.diff_nav_entries();
             pane.diff_content_mode == DiffContentMode::Full
                 && pane.diff_view == diff_view
-                && entries.len() >= 2
+                && pane.diff_nav_entries().len() == expected_stops
         },
         |pane| {
             (
@@ -3506,145 +3546,345 @@ fn assert_full_diff_change_shortcuts_visit_each_changed_row(
             )
         },
     );
-    let entries = cx.update(|_window, app| view.read(app).main_pane.read(app).diff_nav_entries());
-    assert_eq!(
-        entries[1],
-        entries[0].saturating_add(1),
-        "fixture should expose adjacent changed rows in one contiguous change block"
+    cx.update(|_window, app| view.read(app).main_pane.read(app).diff_nav_entries())
+}
+
+fn press_and_assert_anchor(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    keystroke: &str,
+    expected: usize,
+    message: &str,
+) {
+    cx.simulate_keystrokes(keystroke);
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_selection_anchor, Some(expected), "{message}");
+        assert_eq!(
+            pane.diff_selection_range,
+            Some((expected, expected)),
+            "{message}"
+        );
+    });
+}
+
+fn assert_full_diff_change_shortcuts_visit_each_change_block(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let entries = activate_full_diff_nav_fixture(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        diff_view,
+        build_full_diff_multi_block_fixture_texts(),
+        3,
     );
+    let (e0, e1, e2) = (entries[0], entries[1], entries[2]);
     assert!(
-        entries.len() >= 3,
-        "fixture should expose at least three changed rows to test continuing from a selection"
+        e1 > e0 + 1,
+        "fixture's first change block should span several rows in {diff_view:?}: {entries:?}"
     );
 
     focus_diff_panel(cx, view);
-    cx.simulate_keystrokes("f3");
-    draw_and_drain_test_window(cx);
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        assert_eq!(
-            pane.diff_selection_anchor,
-            Some(entries[0]),
-            "first F3 should select the first changed row in Full diff {diff_view:?}"
-        );
-    });
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        e0,
+        &format!("first F3 should land on the first change block in Full diff {diff_view:?}"),
+    );
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        e1,
+        &format!("second F3 should skip the rest of the block in Full diff {diff_view:?}"),
+    );
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f2",
+        e0,
+        &format!("F2 should move back one change block in Full diff {diff_view:?}"),
+    );
 
-    cx.simulate_keystrokes("f3");
-    draw_and_drain_test_window(cx);
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        assert_eq!(
-            pane.diff_selection_anchor,
-            Some(entries[1]),
-            "second F3 should advance within the same Full diff change block in {diff_view:?}"
-        );
-    });
-
-    cx.simulate_keystrokes("f2");
-    draw_and_drain_test_window(cx);
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        assert_eq!(
-            pane.diff_selection_anchor,
-            Some(entries[0]),
-            "F2 should move back one changed row in Full diff {diff_view:?}"
-        );
-    });
-
-    set_diff_row_selection_for_test(cx, view, entries[0], (entries[0], entries[1]));
+    // From the middle of a block, F2 goes to that block's start and F3 to the next block.
+    set_diff_row_selection_for_test(cx, view, e0 + 1, (e0 + 1, e0 + 1));
     focus_diff_panel(cx, view);
-    cx.simulate_keystrokes("f3");
-    draw_and_drain_test_window(cx);
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        assert_eq!(
-            pane.diff_selection_anchor,
-            Some(entries[2]),
-            "F3 should continue after the selected Full diff row range in {diff_view:?}"
-        );
-        assert_eq!(pane.diff_selection_range, Some((entries[2], entries[2])));
-    });
-
-    set_diff_row_selection_for_test(cx, view, entries[2], (entries[1], entries[2]));
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f2",
+        e0,
+        &format!("F2 mid-block should go to the block's start in Full diff {diff_view:?}"),
+    );
+    set_diff_row_selection_for_test(cx, view, e0 + 1, (e0 + 1, e0 + 1));
     focus_diff_panel(cx, view);
-    cx.simulate_keystrokes("f2");
-    draw_and_drain_test_window(cx);
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        assert_eq!(
-            pane.diff_selection_anchor,
-            Some(entries[0]),
-            "F2 should continue before the selected Full diff row range in {diff_view:?}"
-        );
-        assert_eq!(pane.diff_selection_range, Some((entries[0], entries[0])));
-    });
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        e1,
+        &format!("F3 mid-block should go to the next block in Full diff {diff_view:?}"),
+    );
+
+    set_diff_row_selection_for_test(cx, view, e0, (e0, e1));
+    focus_diff_panel(cx, view);
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        e2,
+        &format!("F3 should continue after the selected row range in Full diff {diff_view:?}"),
+    );
+
+    set_diff_row_selection_for_test(cx, view, e2, (e1, e2));
+    focus_diff_panel(cx, view);
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f2",
+        e0,
+        &format!("F2 should continue before the selected row range in Full diff {diff_view:?}"),
+    );
 
     let text_region = match diff_view {
         DiffViewMode::Inline => DiffTextRegion::Inline,
         DiffViewMode::Split => DiffTextRegion::SplitLeft,
     };
-    set_diff_text_selection_for_test(cx, view, entries[0], entries[1], text_region);
+    set_diff_text_selection_for_test(cx, view, e0, e0 + 1, text_region);
     focus_diff_panel(cx, view);
-    cx.simulate_keystrokes("f3");
-    draw_and_drain_test_window(cx);
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        e1,
+        &format!("F3 should continue after the selected text range in Full diff {diff_view:?}"),
+    );
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        assert_eq!(
-            pane.diff_selection_anchor,
-            Some(entries[2]),
-            "F3 should continue after the selected Full diff text range in {diff_view:?}"
-        );
-        assert_eq!(pane.diff_selection_range, Some((entries[2], entries[2])));
         assert_eq!(pane.diff_text_anchor, None);
         assert_eq!(pane.diff_text_head, None);
     });
 
-    set_diff_text_selection_for_test(cx, view, entries[1], entries[2], text_region);
+    set_diff_text_selection_for_test(cx, view, e1, e2, text_region);
     focus_diff_panel(cx, view);
-    cx.simulate_keystrokes("f2");
-    draw_and_drain_test_window(cx);
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f2",
+        e0,
+        &format!("F2 should continue before the selected text range in Full diff {diff_view:?}"),
+    );
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        assert_eq!(
-            pane.diff_selection_anchor,
-            Some(entries[0]),
-            "F2 should continue before the selected Full diff text range in {diff_view:?}"
-        );
-        assert_eq!(pane.diff_selection_range, Some((entries[0], entries[0])));
         assert_eq!(pane.diff_text_anchor, None);
         assert_eq!(pane.diff_text_head, None);
     });
+
+    // The last stop does not wrap around.
+    set_diff_row_selection_for_test(cx, view, e2, (e2, e2));
+    focus_diff_panel(cx, view);
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        e2,
+        &format!("F3 on the last block should stay put in Full diff {diff_view:?}"),
+    );
 }
 
 #[gpui::test]
-fn full_diff_inline_change_shortcuts_visit_each_changed_row(cx: &mut gpui::TestAppContext) {
+fn full_diff_inline_change_shortcuts_visit_each_change_block(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
-    assert_full_diff_change_shortcuts_visit_each_changed_row(
+    assert_full_diff_change_shortcuts_visit_each_change_block(
         cx,
         &view,
         gitcomet_state::model::RepoId(70601),
-        "full_diff_inline_row_nav",
+        "full_diff_inline_block_nav",
         DiffViewMode::Inline,
     );
 }
 
 #[gpui::test]
-fn full_diff_split_change_shortcuts_visit_each_changed_row(cx: &mut gpui::TestAppContext) {
+fn full_diff_split_change_shortcuts_visit_each_change_block(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
-    assert_full_diff_change_shortcuts_visit_each_changed_row(
+    assert_full_diff_change_shortcuts_visit_each_change_block(
         cx,
         &view,
         gitcomet_state::model::RepoId(70602),
-        "full_diff_split_row_nav",
+        "full_diff_split_block_nav",
         DiffViewMode::Split,
+    );
+}
+
+fn assert_full_diff_f3_without_selection_reaches_block_at_first_row(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let entries = activate_full_diff_nav_fixture(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        diff_view,
+        build_full_diff_first_row_change_fixture_texts(),
+        2,
+    );
+    assert_eq!(
+        entries[0], 0,
+        "fixture's first change block should start at row 0"
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_focus_visible_range(), None);
+        assert_eq!(
+            pane.diff_nav_next_target_ix(&entries),
+            Some(0),
+            "the Next button should be enabled for a block at row 0 with nothing selected"
+        );
+        assert_eq!(pane.diff_nav_prev_target_ix(&entries), None);
+    });
+
+    // F2 with nothing focused has no target and must not seed a focus that
+    // would make the next F3 skip row 0.
+    focus_diff_panel(cx, view);
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).main_pane.read(app).diff_selection_anchor,
+            None
+        );
+    });
+
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        0,
+        &format!("F3 with nothing selected should reach the block at row 0 in {diff_view:?}"),
+    );
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        entries[1],
+        &format!("F3 should then reach the next block in {diff_view:?}"),
+    );
+}
+
+#[gpui::test]
+fn full_diff_inline_f3_without_selection_reaches_block_at_first_row(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_full_diff_f3_without_selection_reaches_block_at_first_row(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70608),
+        "full_diff_inline_first_row_nav",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn full_diff_split_f3_without_selection_reaches_block_at_first_row(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_full_diff_f3_without_selection_reaches_block_at_first_row(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70609),
+        "full_diff_split_first_row_nav",
+        DiffViewMode::Split,
+    );
+}
+
+#[gpui::test]
+fn full_diff_ignore_whitespace_drops_whitespace_only_block_stop(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let old_text = "alpha\nold one\nmiddle\n  keep\nomega\n".to_string();
+    let new_text = "alpha\nnew one\nmiddle\nkeep\nomega\n".to_string();
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,5 +1,5 @@
+ alpha
+-old one
++new one
+ middle
+-  keep
++keep
+ omega
+"
+    .to_string();
+    let shown = activate_full_diff_nav_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70610),
+        "full_diff_ignore_whitespace_nav",
+        DiffViewMode::Split,
+        (unified, old_text, new_text),
+        2,
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.set_diff_whitespace_mode(DiffWhitespaceMode::Ignore, cx);
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "ignore-whitespace drops the whitespace-only block stop",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.diff_nav_entries() == vec![shown[0]]
+        },
+        |pane| {
+            (
+                pane.diff_whitespace_mode,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight.is_some(),
+                pane.diff_nav_entries(),
+            )
+        },
     );
 }
 
@@ -3743,15 +3983,15 @@ fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
         let second_row = pane.diff_wrap_visible_rows[second_entry];
         assert_eq!(
             first_row.wrap_ix, 0,
-            "first navigation entry should be the first visual row for its changed logical row"
+            "first navigation entry should be the first visual row of its change block"
         );
         assert_eq!(
             second_row.wrap_ix, 0,
-            "second navigation entry should be the first visual row for its changed logical row"
+            "second navigation entry should be the first visual row of its change block"
         );
         assert!(
             second_row.source_visible_ix > first_row.source_visible_ix,
-            "second navigation entry should advance to the next changed logical row"
+            "second navigation entry should advance to the next change block"
         );
         let has_wrapped_continuation_between_entries = pane
             .diff_wrap_visible_rows
@@ -3777,7 +4017,7 @@ fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
         assert_eq!(
             view.read(app).main_pane.read(app).diff_selection_anchor,
             Some(first_entry),
-            "first F3 should select the first changed visual row in wrapped Full diff {diff_view:?}"
+            "first F3 should select the first change block in wrapped Full diff {diff_view:?}"
         );
     });
 
@@ -3797,7 +4037,7 @@ fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
         assert_eq!(
             view.read(app).main_pane.read(app).diff_selection_anchor,
             Some(first_entry),
-            "F2 should move back to the previous changed visual row in wrapped Full diff {diff_view:?}"
+            "F2 should move back to the previous change block in wrapped Full diff {diff_view:?}"
         );
     });
 }
@@ -3897,7 +4137,7 @@ fn full_diff_word_wrap_inline_change_shortcuts_map_provider_rows_through_visible
                 && pane
                     .file_diff_inline_row_provider
                     .as_ref()
-                    .is_some_and(|provider| !provider.change_visible_indices().is_empty())
+                    .is_some_and(|provider| !provider.change_block_starts().is_empty())
         },
         |pane| {
             (
@@ -3939,7 +4179,7 @@ fn full_diff_word_wrap_inline_change_shortcuts_map_provider_rows_through_visible
             .as_ref()
             .expect("fixture should use the paged inline file provider");
         let first_changed_provider_ix = provider
-            .change_visible_indices()
+            .change_block_starts()
             .into_iter()
             .next()
             .expect("fixture should contain a changed inline row");
@@ -3991,7 +4231,7 @@ fn full_diff_word_wrap_split_change_shortcuts_skip_continuation_rows(
     );
 }
 
-fn assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_hunk_anchors(
+fn assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_block_starts(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
     repo_id: gitcomet_state::model::RepoId,
@@ -4050,37 +4290,37 @@ fn assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_hunk_anchors(
 
     let (first_entry, second_entry) = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        let raw_first_anchor = pane.collapsed_diff_hunk_visible_indices[0];
-        let raw_second_anchor = pane.collapsed_diff_hunk_visible_indices[1];
-        let expected_first = pane.diff_visual_ix_for_source_visible_ix(raw_first_anchor);
-        let expected_second = pane.diff_visual_ix_for_source_visible_ix(raw_second_anchor);
-        let entries = pane.diff_nav_entries();
+        // Each hunk holds one change; its stop is the first changed row, not
+        // the hunk's header or leading context.
+        let raw_first =
+            collapsed_first_changed_source_visible_ix(pane, pane.collapsed_diff_hunk_visible_indices[0]);
+        let raw_second =
+            collapsed_first_changed_source_visible_ix(pane, pane.collapsed_diff_hunk_visible_indices[1]);
+        let expected_first = pane.diff_visual_ix_for_source_visible_ix(raw_first);
+        let expected_second = pane.diff_visual_ix_for_source_visible_ix(raw_second);
         assert_eq!(
-            entries[0], expected_first,
-            "first collapsed hunk nav entry should use the mapped visual anchor"
-        );
-        assert_eq!(
-            entries[1], expected_second,
-            "second collapsed hunk nav entry should use the mapped visual anchor"
+            pane.diff_nav_entries(),
+            vec![expected_first, expected_second],
+            "collapsed nav entries should be the mapped visual rows of each block's first changed row"
         );
         assert_ne!(
-            expected_second, raw_second_anchor,
-            "fixture should expose the stale source-visible second hunk index regression"
+            expected_second, raw_second,
+            "fixture should expose the stale source-visible second block index regression"
         );
         let second_row = pane.diff_wrap_visible_rows[expected_second];
-        assert_eq!(second_row.source_visible_ix, raw_second_anchor);
+        assert_eq!(second_row.source_visible_ix, raw_second);
         assert_eq!(
             second_row.wrap_ix, 0,
-            "collapsed hunk navigation should land on the first visual row for the hunk anchor"
+            "collapsed navigation should land on the first visual row of the block's first row"
         );
         assert!(
             pane.diff_wrap_visible_rows
                 .iter()
                 .take(expected_second)
                 .any(|row| row.wrap_ix > 0),
-            "fixture should include wrapped visual rows before the second hunk anchor"
+            "fixture should include wrapped visual rows before the second block"
         );
-        (entries[0], entries[1])
+        (expected_first, expected_second)
     });
 
     set_diff_row_selection_for_test(cx, view, first_entry, (first_entry, first_entry));
@@ -4091,7 +4331,7 @@ fn assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_hunk_anchors(
         assert_eq!(
             view.read(app).main_pane.read(app).diff_selection_anchor,
             Some(second_entry),
-            "F3 should navigate to the mapped collapsed hunk visual anchor in {diff_view:?}"
+            "F3 should navigate to the next collapsed change block's visual row in {diff_view:?}"
         );
     });
 
@@ -4101,13 +4341,13 @@ fn assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_hunk_anchors(
         assert_eq!(
             view.read(app).main_pane.read(app).diff_selection_anchor,
             Some(first_entry),
-            "F2 should navigate back to the previous collapsed hunk visual anchor in {diff_view:?}"
+            "F2 should navigate back to the previous collapsed change block's visual row in {diff_view:?}"
         );
     });
 }
 
 #[gpui::test]
-fn collapsed_diff_word_wrap_inline_change_shortcuts_use_visual_hunk_anchors(
+fn collapsed_diff_word_wrap_inline_change_shortcuts_use_visual_block_starts(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -4115,7 +4355,7 @@ fn collapsed_diff_word_wrap_inline_change_shortcuts_use_visual_hunk_anchors(
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
-    assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_hunk_anchors(
+    assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_block_starts(
         cx,
         &view,
         gitcomet_state::model::RepoId(70605),
@@ -4125,7 +4365,7 @@ fn collapsed_diff_word_wrap_inline_change_shortcuts_use_visual_hunk_anchors(
 }
 
 #[gpui::test]
-fn collapsed_diff_word_wrap_split_change_shortcuts_use_visual_hunk_anchors(
+fn collapsed_diff_word_wrap_split_change_shortcuts_use_visual_block_starts(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -4133,12 +4373,386 @@ fn collapsed_diff_word_wrap_split_change_shortcuts_use_visual_hunk_anchors(
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
-    assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_hunk_anchors(
+    assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_block_starts(
         cx,
         &view,
         gitcomet_state::model::RepoId(70606),
         "collapsed_diff_word_wrap_split_nav",
         DiffViewMode::Split,
+    );
+}
+
+/// One git hunk (lines 17-27) holding two change runs, at lines 20 and 24.
+fn build_collapsed_diff_two_runs_in_one_hunk_fixture_texts() -> (String, String, String) {
+    let changes = [20usize, 24];
+    let line_text = |line: usize, side: &str| {
+        if changes.contains(&line) {
+            format!("{side} value {line}")
+        } else {
+            format!("line {line}")
+        }
+    };
+    let old_lines = (1..=40)
+        .map(|line| line_text(line, "old"))
+        .collect::<Vec<_>>();
+    let new_lines = (1..=40)
+        .map(|line| line_text(line, "new"))
+        .collect::<Vec<_>>();
+    let mut unified = String::from(
+        "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -17,11 +17,11 @@
+",
+    );
+    for line in 17..=27 {
+        if changes.contains(&line) {
+            unified.push_str(&format!(
+                "-{}\n+{}\n",
+                old_lines[line - 1],
+                new_lines[line - 1]
+            ));
+        } else {
+            unified.push_str(&format!(" {}\n", old_lines[line - 1]));
+        }
+    }
+    (
+        unified,
+        format!("{}\n", old_lines.join("\n")),
+        format!("{}\n", new_lines.join("\n")),
+    )
+}
+
+fn assert_collapsed_diff_hunk_with_two_change_runs_has_two_stops(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let (unified, old_text, new_text) = build_collapsed_diff_two_runs_in_one_hunk_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        diff_view,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "collapsed hunk with two change runs has two stops",
+        |pane| {
+            pane.diff_view == diff_view
+                && pane.collapsed_diff_hunk_visible_indices.len() == 1
+                && pane.diff_nav_entries().len() == 2
+        },
+        |pane| {
+            (
+                pane.diff_view,
+                pane.collapsed_diff_hunk_visible_indices.clone(),
+                pane.diff_nav_entries(),
+            )
+        },
+    );
+
+    // Lines 20 and 24: split rows 19 and 23; inline adds a `+` row after 20.
+    let (first_row, second_row) = match diff_view {
+        DiffViewMode::Inline => (19, 24),
+        DiffViewMode::Split => (19, 23),
+    };
+    let entries = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let entries = pane.diff_nav_entries();
+        assert_eq!(
+            entries,
+            vec![
+                collapsed_file_row_visible_ix(pane, first_row),
+                collapsed_file_row_visible_ix(pane, second_row),
+            ],
+            "each change run in the hunk should be its own stop, on its first changed row"
+        );
+        entries
+    });
+
+    set_diff_row_selection_for_test(cx, view, entries[0], (entries[0], entries[0]));
+    focus_diff_panel(cx, view);
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        entries[1],
+        &format!("F3 should stop on the second run inside the same hunk in {diff_view:?}"),
+    );
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f2",
+        entries[0],
+        &format!("F2 should return to the first run in {diff_view:?}"),
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_inline_hunk_with_two_change_runs_has_two_stops(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_hunk_with_two_change_runs_has_two_stops(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70611),
+        "collapsed_inline_two_runs_nav",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_split_hunk_with_two_change_runs_has_two_stops(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_hunk_with_two_change_runs_has_two_stops(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70630),
+        "collapsed_split_two_runs_nav",
+        DiffViewMode::Split,
+    );
+}
+
+fn assert_patch_diff_change_stops_land_on_first_changed_rows(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    // Two runs in one hunk of a.rs, then a last-line edit without trailing
+    // newlines in b.rs, whose markers sit between `-` and `+`.
+    let unified = "\
+diff --git a/src/a.rs b/src/a.rs
+index 1111111..2222222 100644
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,7 +1,7 @@
+ one
+-two
++TWO
+ three
+ four
+ five
+-six
++SIX
+ seven
+diff --git a/src/b.rs b/src/b.rs
+index 3333333..4444444 100644
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -1 +1 @@
+-last
+\\ No newline at end of file
++LAST
+\\ No newline at end of file
+"
+    .to_string();
+    let target =
+        push_raw_patch_diff_state_with_rev(cx, view, repo_id, fixture_name, unified, 1, true);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_view = diff_view;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "whole-commit patch diff has one stop per change block",
+        |pane| {
+            pane.rendered_diff_target() == Some(&target)
+                && pane.diff_view == diff_view
+                && !pane.is_file_diff_view_active()
+                && pane.patch_diff_row_len() > 0
+                && pane.diff_nav_entries().len() == 3
+        },
+        |pane| {
+            (
+                pane.rendered_diff_target().cloned(),
+                pane.diff_view,
+                pane.patch_diff_row_len(),
+                pane.diff_nav_entries(),
+            )
+        },
+    );
+
+    let region = match diff_view {
+        DiffViewMode::Inline => DiffTextRegion::Inline,
+        DiffViewMode::Split => DiffTextRegion::SplitLeft,
+    };
+    let entries = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let entries = pane.diff_nav_entries();
+        let texts = entries
+            .iter()
+            .map(|&ix| pane.diff_text_line_for_region(ix, region).to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            texts,
+            vec!["two", "six", "last"],
+            "patch stops should land on each block's first changed line, never on `@@` or \
+             `diff --git` rows, and a no-newline edit is one stop in {diff_view:?}"
+        );
+        entries
+    });
+
+    set_diff_row_selection_for_test(cx, view, entries[0], (entries[0], entries[0]));
+    focus_diff_panel(cx, view);
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        entries[1],
+        &format!("F3 should reach the second run of the hunk in patch {diff_view:?}"),
+    );
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f3",
+        entries[2],
+        &format!("F3 should cross into the next file in patch {diff_view:?}"),
+    );
+    press_and_assert_anchor(
+        cx,
+        view,
+        "f2",
+        entries[1],
+        &format!("F2 should step back one block in patch {diff_view:?}"),
+    );
+}
+
+#[gpui::test]
+fn patch_diff_inline_change_stops_land_on_first_changed_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_patch_diff_change_stops_land_on_first_changed_rows(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70631),
+        "patch_inline_block_nav",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn patch_diff_split_change_stops_land_on_first_changed_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_patch_diff_change_stops_land_on_first_changed_rows(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70632),
+        "patch_split_block_nav",
+        DiffViewMode::Split,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_first_open_keeps_hunk_header_visible_after_scrolled_file(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(620.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(70633);
+    let changes = [
+        (20, "old value 20", "new value 20"),
+        (40, "old value 40", "new value 40"),
+        (60, "old value 60", "new value 60"),
+        (80, "old value 80", "new value 80"),
+    ];
+    let (unified, old_text, new_text) = build_collapsed_diff_multi_hunk_fixture_texts(&changes);
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        repo_id,
+        "collapsed_stale_offset",
+        DiffViewMode::Inline,
+        unified.clone(),
+        old_text.clone(),
+        new_text.clone(),
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            let last = pane.diff_visible_len().saturating_sub(1);
+            pane.scroll_diff_to_item_strict(last, gpui::ScrollStrategy::Top);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        diff_scroll_offset_y(cx, &view) < 0.0,
+        "fixture should leave the first file scrolled down"
+    );
+
+    // Same content under another path: a new target that inherits the offset.
+    let other_path = PathBuf::from("src/other.rs");
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "collapsed_stale_offset",
+        other_path,
+        unified.replace("src/lib.rs", "src/other.rs"),
+        old_text,
+        new_text,
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "second collapsed file opens and autoscrolls",
+        |pane| {
+            pane.file_diff_cache_target == Some(target.clone())
+                && pane.is_collapsed_diff_projection_active()
+                && !pane.diff_autoscroll_pending
+        },
+        |pane| {
+            (
+                pane.file_diff_cache_target.clone(),
+                pane.is_collapsed_diff_projection_active(),
+                pane.diff_autoscroll_pending,
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(
+        diff_scroll_offset_y(cx, &view),
+        0.0,
+        "opening a collapsed diff should keep its first hunk header in view, not scroll to the \
+         first changed line"
     );
 }
 
@@ -5142,9 +5756,9 @@ fn collapsed_diff_short_gap_uses_single_expand_all_and_merges_sections(
             "merged short gaps should leave a single collapsed-section anchor"
         );
         assert_eq!(
-            pane.patch_hunk_entries().len(),
-            1,
-            "merged short gaps should behave as one change section for diff navigation"
+            pane.diff_nav_entries().len(),
+            2,
+            "merging sections keeps one navigation stop per change block (lines 20 and 34)"
         );
     });
 
@@ -5164,9 +5778,9 @@ fn collapsed_diff_short_gap_uses_single_expand_all_and_merges_sections(
             "projection rebuilds should keep a fully revealed short gap merged"
         );
         assert_eq!(
-            pane.patch_hunk_entries().len(),
-            1,
-            "projection rebuilds should not split merged short-gap navigation"
+            pane.diff_nav_entries().len(),
+            2,
+            "projection rebuilds should keep one navigation stop per change block"
         );
     });
     assert!(
