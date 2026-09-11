@@ -308,6 +308,9 @@ pub enum Effect {
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+        summary: String,
     },
     CreateBranch {
         repo_id: RepoId,

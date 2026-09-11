@@ -2227,6 +2227,8 @@ mod tests {
             vec!["rebase", "--continue"],
             vec!["cherry-pick", "abc123"],
             vec!["revert", "--no-edit", "abc123"],
+            vec!["revert", "--continue"],
+            vec!["commit", "--no-verify", "--no-edit"],
             vec!["am", "--3way"],
         ] {
             let mut cmd = Command::new("git");

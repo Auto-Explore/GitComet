@@ -106,8 +106,8 @@ pub(in crate::view) fn merge_in_progress(repo: &RepoState) -> bool {
     matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
 }
 
-/// The rebase, apply, or cherry-pick the repository is part-way through, if
-/// any. `rebase_in_progress` stands in until the sequencer state loads.
+/// The rebase, apply, cherry-pick, or revert the repository is part-way
+/// through, if any. `rebase_in_progress` stands in until the sequencer state loads.
 pub(in crate::view) fn active_sequencer_state(
     repo: &RepoState,
 ) -> gitcomet_core::services::SequencerState {

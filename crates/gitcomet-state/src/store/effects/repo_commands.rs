@@ -106,6 +106,9 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         },
         RepoCommandKind::CherryPick {
             commit_id, summary, ..
+        }
+        | RepoCommandKind::Revert {
+            commit_id, summary, ..
         } => message_subject(summary).unwrap_or_else(|| short_commit_id(commit_id.as_ref())),
         RepoCommandKind::MergeAbort => "Current merge".to_string(),
         RepoCommandKind::CreateTag { name, target, .. } => format!("{name} at {target}"),
@@ -1369,6 +1372,32 @@ pub(super) fn schedule_cherry_pick_commit(
             summary,
         },
         move |repo| repo.cherry_pick_with_output(&commit_id, commit, mainline),
+    );
+}
+
+pub(super) fn schedule_revert_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    commit: bool,
+    mainline: Option<usize>,
+    summary: String,
+) {
+    let command_commit_id = commit_id.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::Revert {
+            commit_id: command_commit_id,
+            commit,
+            mainline,
+            summary,
+        },
+        move |repo| repo.revert_with_output(&commit_id, commit, mainline),
     );
 }
 

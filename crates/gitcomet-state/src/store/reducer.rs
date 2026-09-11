@@ -531,6 +531,25 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
                 }
             }
         }
+        // A failed signing step leaves REVERT_HEAD behind; see CherryPick above.
+        RepoCommandKind::Revert {
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        } => {
+            if commit {
+                Msg::RebaseContinue { repo_id }
+            } else {
+                Msg::RevertCommit {
+                    repo_id,
+                    commit_id,
+                    commit,
+                    mainline,
+                    summary,
+                }
+            }
+        }
         RepoCommandKind::MergeAbort => Msg::MergeAbort { repo_id },
         RepoCommandKind::CreateTag {
             name,
@@ -1447,9 +1466,15 @@ fn reduce_inner(
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::cherry_pick_commit(repo_id, commit_id, commit, mainline, summary)
         }
-        Msg::RevertCommit { repo_id, commit_id } => {
+        Msg::RevertCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        } => {
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::revert_commit(repo_id, commit_id)
+            actions_emit_effects::revert_commit(repo_id, commit_id, commit, mainline, summary)
         }
         Msg::CreateBranch {
             repo_id,
