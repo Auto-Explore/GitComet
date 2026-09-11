@@ -236,30 +236,51 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn unstaged_non_utf8_paths_and_symlinks_have_counts() {
-        use std::os::unix::{ffi::OsStringExt, fs::symlink};
+    fn unstaged_symlinks_have_counts() {
+        use std::os::unix::fs::symlink;
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         init_test_repo(dir);
-        let path = PathBuf::from(std::ffi::OsString::from_vec(b"file-\xff.txt".to_vec()));
-        std::fs::write(dir.join(&path), "before\n").unwrap();
         symlink("missing-before", dir.join("link")).unwrap();
         git_success(dir, &["add", "."]);
         git_success(dir, &["commit", "-m", "seed"]);
-        std::fs::write(dir.join(&path), "after\n").unwrap();
         std::fs::remove_file(dir.join("link")).unwrap();
         symlink("missing-after", dir.join("link")).unwrap();
         let stats = open_repo(dir)
             .uncommitted_line_stats_impl(&CancellationToken::new())
             .unwrap();
-        let expected = LineStats {
-            additions: Some(1),
-            deletions: Some(1),
-        };
-        assert_eq!(stats.unstaged.get(&path), Some(&expected));
         assert_eq!(
             stats.unstaged.get(std::path::Path::new("link")),
-            Some(&expected)
+            Some(&LineStats {
+                additions: Some(1),
+                deletions: Some(1),
+            })
+        );
+    }
+
+    /// APFS and HFS+ refuse non-UTF-8 file names with `EILSEQ`, so this
+    /// fixture cannot be created on macOS.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn unstaged_non_utf8_paths_have_counts() {
+        use std::os::unix::ffi::OsStringExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        let path = PathBuf::from(std::ffi::OsString::from_vec(b"file-\xff.txt".to_vec()));
+        std::fs::write(dir.join(&path), "before\n").unwrap();
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        std::fs::write(dir.join(&path), "after\n").unwrap();
+        let stats = open_repo(dir)
+            .uncommitted_line_stats_impl(&CancellationToken::new())
+            .unwrap();
+        assert_eq!(
+            stats.unstaged.get(&path),
+            Some(&LineStats {
+                additions: Some(1),
+                deletions: Some(1),
+            })
         );
     }
 
