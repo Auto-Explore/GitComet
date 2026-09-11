@@ -220,7 +220,7 @@ pub(super) fn protect(path: &Path, recursive: bool, cancellation: &Cancellation)
     check_cancel(cancellation)?;
     if path
         .components()
-        .any(|c| c.as_os_str().eq_ignore_ascii_case(".git"))
+        .any(|c| crate::path_utils::is_git_metadata_component(c.as_os_str()))
         || path.parent().is_none()
     {
         return Err(invalid("Git metadata and filesystem roots are protected"));

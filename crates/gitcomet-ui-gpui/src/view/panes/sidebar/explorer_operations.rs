@@ -298,11 +298,7 @@ impl SidebarPaneView {
             return;
         }
         let modifiers = event.keystroke.modifiers;
-        let primary = if cfg!(target_os = "macos") {
-            modifiers.platform
-        } else {
-            modifiers.control
-        };
+        let primary = modifiers.secondary();
         let path = self
             .active_repo()
             .and_then(|r| r.file_browser.selection.focused.clone());
@@ -475,8 +471,12 @@ impl SidebarPaneView {
         if repo.file_browser.source != FileSource::WorkingDirectory {
             return;
         }
-        let external = external && !crate::view::native_transfers::mark_handled(&paths, cx);
-        let _ = crate::view::native_transfers::mark_handled(&paths, cx);
+        // A drop of our own outbound transfer arrives back through the
+        // platform, so claim it either way: the outbound side must not also
+        // remove the source. `&&` used to short-circuit the first of two calls,
+        // which read as though one of them were redundant.
+        let ours = crate::view::native_transfers::mark_handled(&paths, cx);
+        let external = external && !ours;
         let native = window.take_file_drop();
         let native_source_move = external
             && native.as_ref().is_some_and(|transfer| {
@@ -558,6 +558,13 @@ impl SidebarPaneView {
         if had_state {
             cx.notify();
         }
+    }
+
+    /// Whether the pointer is inside the row list itself, as opposed to the
+    /// search field, the visibility toggles or the scrollbar beside it.
+    pub(super) fn explorer_pointer_over_rows(&self, window: &Window) -> bool {
+        let bounds = self.file_browser_scroll.0.borrow().base_handle.bounds();
+        bounds.contains(&window.mouse_position())
     }
 
     /// Marks the row under the pointer as the drop destination.

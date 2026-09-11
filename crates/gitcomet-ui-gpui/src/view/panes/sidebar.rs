@@ -2442,6 +2442,9 @@ impl SidebarPaneView {
         let browsing_commit = self
             .active_repo()
             .is_some_and(|r| r.browsing_commit().is_some());
+        let accepts_drops = self.active_repo().is_some_and(|repo| {
+            repo.file_browser.source == gitcomet_core::domain::FileSource::WorkingDirectory
+        });
         let toggles = self.active_repo().map(|repo| {
             (
                 repo.id,
@@ -2471,33 +2474,49 @@ impl SidebarPaneView {
                     cx.stop_propagation();
                 }),
             )
-            // One autoscroll driver for the whole tree rather than one per row.
-            .on_drag_move(cx.listener(
-                |this,
-                 event: &gpui::DragMoveEvent<explorer_operations::ExplorerDrag>,
-                 window,
-                 cx| {
-                    this.explorer_drag_scroll(event.event.position, window, cx)
-                },
-            ))
-            .on_drag_move(cx.listener(
-                |this, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, window, cx| {
-                    this.explorer_drag_scroll(event.event.position, window, cx)
-                },
-            ))
-            .on_mouse_exit(cx.listener(|this, _: &gpui::MouseExitEvent, _window, cx| {
-                this.clear_explorer_drag_state(cx)
-            }))
-            .on_drop(
-                cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
-                    this.explorer_drop(paths.paths().to_vec(), None, true, window, cx)
-                }),
-            )
-            .on_drop(cx.listener(
-                |this, drag: &explorer_operations::ExplorerDrag, window, cx| {
-                    this.explorer_drop(drag.paths.clone(), None, false, window, cx)
-                },
-            ))
+            // Drops are only meaningful against the working tree; while a
+            // commit is being browsed there is nothing to write to.
+            .when(accepts_drops, |scope| {
+                scope
+                    // One autoscroll driver for the whole tree rather than one
+                    // per row.
+                    .on_drag_move(cx.listener(
+                        |this,
+                         event: &gpui::DragMoveEvent<explorer_operations::ExplorerDrag>,
+                         window,
+                         cx| {
+                            this.explorer_drag_scroll(event.event.position, window, cx)
+                        },
+                    ))
+                    .on_drag_move(cx.listener(
+                        |this, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, window, cx| {
+                            this.explorer_drag_scroll(event.event.position, window, cx)
+                        },
+                    ))
+                    .on_mouse_exit(cx.listener(|this, _: &gpui::MouseExitEvent, _window, cx| {
+                        this.clear_explorer_drag_state(cx)
+                    }))
+                    // Rows claim their own drops first, so what reaches here is
+                    // the area around them. Only the empty space under the last
+                    // row means "the repository root" -- the search field, the
+                    // visibility toggles and the scrollbar mean nothing.
+                    .on_drop(
+                        cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                            if !this.explorer_pointer_over_rows(window) {
+                                return;
+                            }
+                            this.explorer_drop(paths.paths().to_vec(), None, true, window, cx)
+                        }),
+                    )
+                    .on_drop(cx.listener(
+                        |this, drag: &explorer_operations::ExplorerDrag, window, cx| {
+                            if !this.explorer_pointer_over_rows(window) {
+                                return;
+                            }
+                            this.explorer_drop(drag.paths.clone(), None, false, window, cx)
+                        },
+                    ))
+            })
             .relative()
             .flex()
             .flex_col()
@@ -3145,65 +3164,68 @@ impl SidebarPaneView {
                                             .unwrap_or_else(|_| gpui::Task::ready(None))
                                     },
                                 )
+                                .on_drop(cx.listener(
+                                    move |this,
+                                          drag: &explorer_operations::ExplorerDrag,
+                                          window,
+                                          cx| {
+                                        this.explorer_drop(
+                                            drag.paths.clone(),
+                                            Some(drop_path.clone()),
+                                            false,
+                                            window,
+                                            cx,
+                                        )
+                                    },
+                                ))
+                                .on_drop(cx.listener(
+                                    move |this, paths: &gpui::ExternalPaths, window, cx| {
+                                        this.explorer_drop(
+                                            paths.paths().to_vec(),
+                                            Some(external_drop_path.clone()),
+                                            true,
+                                            window,
+                                            cx,
+                                        )
+                                    },
+                                ))
+                                // gpui runs every registered drag_move listener, so
+                                // each row has to decide for itself whether the pointer
+                                // is actually over it.
+                                .on_drag_move(cx.listener(
+                                    move |this,
+                                          event: &gpui::DragMoveEvent<
+                                        explorer_operations::ExplorerDrag,
+                                    >,
+                                          window,
+                                          cx| {
+                                        this.explorer_hover(
+                                            &hover_path,
+                                            is_directory,
+                                            event.bounds,
+                                            event.event.position,
+                                            window,
+                                            cx,
+                                        )
+                                    },
+                                ))
+                                .on_drag_move(cx.listener(
+                                    move |this,
+                                          event: &gpui::DragMoveEvent<gpui::ExternalPaths>,
+                                          window,
+                                          cx| {
+                                        this.explorer_hover(
+                                            &external_hover_path,
+                                            is_directory,
+                                            event.bounds,
+                                            event.event.position,
+                                            window,
+                                            cx,
+                                        )
+                                    },
+                                ))
                             },
                         )
-                        .on_drop(cx.listener(
-                            move |this, drag: &explorer_operations::ExplorerDrag, window, cx| {
-                                this.explorer_drop(
-                                    drag.paths.clone(),
-                                    Some(drop_path.clone()),
-                                    false,
-                                    window,
-                                    cx,
-                                )
-                            },
-                        ))
-                        .on_drop(cx.listener(
-                            move |this, paths: &gpui::ExternalPaths, window, cx| {
-                                this.explorer_drop(
-                                    paths.paths().to_vec(),
-                                    Some(external_drop_path.clone()),
-                                    true,
-                                    window,
-                                    cx,
-                                )
-                            },
-                        ))
-                        // gpui runs every registered drag_move listener, so
-                        // each row has to decide for itself whether the pointer
-                        // is actually over it.
-                        .on_drag_move(cx.listener(
-                            move |this,
-                                  event: &gpui::DragMoveEvent<
-                                explorer_operations::ExplorerDrag,
-                            >,
-                                  window,
-                                  cx| {
-                                this.explorer_hover(
-                                    &hover_path,
-                                    is_directory,
-                                    event.bounds,
-                                    event.event.position,
-                                    window,
-                                    cx,
-                                )
-                            },
-                        ))
-                        .on_drag_move(cx.listener(
-                            move |this,
-                                  event: &gpui::DragMoveEvent<gpui::ExternalPaths>,
-                                  window,
-                                  cx| {
-                                this.explorer_hover(
-                                    &external_hover_path,
-                                    is_directory,
-                                    event.bounds,
-                                    event.event.position,
-                                    window,
-                                    cx,
-                                )
-                            },
-                        ))
                         .when(
                             this.explorer_drop_target.as_ref() == Some(entry.path.as_ref()),
                             |row| row.bg(with_alpha(theme.colors.accent.foreground, 0.22)),

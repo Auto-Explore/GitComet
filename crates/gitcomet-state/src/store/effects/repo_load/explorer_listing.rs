@@ -41,7 +41,7 @@ pub(super) fn augment(
             cancellation.check_cancelled()?;
             let entry = entry.map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
             let name = entry.file_name();
-            if name.eq_ignore_ascii_case(".git")
+            if gitcomet_core::path_utils::is_git_metadata_component(&name)
                 || name.as_encoded_bytes().starts_with(b".gitcomet-operation-")
                 || name.as_encoded_bytes().starts_with(b".gitcomet-save-")
             {
