@@ -496,6 +496,17 @@ pub enum Msg {
     FinishCommitReveal {
         repo_id: RepoId,
     },
+    /// Resolve `reference` and report what commit it names, without selecting
+    /// anything. Backs the Reveal Commit dialog's preview row, which has to be
+    /// able to show a commit the user has not committed to jumping to yet.
+    ///
+    /// Unlike [`Msg::RevealCommit`] this never touches the selection, so it is
+    /// safe to issue on every keystroke; the reducer's request counter drops
+    /// replies a later lookup has overtaken.
+    ResolveCommitLookup {
+        repo_id: RepoId,
+        reference: CommitId,
+    },
     /// Exit file browsing and keep the explorer on the working tree.
     ResetBrowseToLive {
         repo_id: RepoId,
@@ -1266,6 +1277,15 @@ pub enum InternalMsg {
         repo_id: RepoId,
         reference: CommitId,
         result: Result<CommitDetails, Error>,
+    },
+    /// A [`Msg::ResolveCommitLookup`] reference resolved (or failed to).
+    CommitLookupResolved {
+        repo_id: RepoId,
+        reference: CommitId,
+        /// The `Effect::ResolveCommitLookup` request this answers; a reply that
+        /// lost a race against a newer lookup is dropped.
+        request: u64,
+        result: Result<Commit, Error>,
     },
     RangeFilesLoaded {
         repo_id: RepoId,

@@ -164,6 +164,16 @@ pub enum Effect {
         repo_id: RepoId,
         reference: CommitId,
     },
+    /// Resolve a commit reference for the Reveal Commit dialog's preview row.
+    /// Lighter than `ResolveCommitForReveal` — no parent diff — because it runs
+    /// while the user is still typing.
+    ResolveCommitLookup {
+        repo_id: RepoId,
+        reference: CommitId,
+        /// Echoed back on the reply so a completion that lost a race against a
+        /// newer lookup can be dropped. See `CommitLookup::request`.
+        request: u64,
+    },
     LoadRangeFiles {
         repo_id: RepoId,
         from: CommitId,

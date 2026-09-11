@@ -1357,30 +1357,10 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::PushWithTags { repo_id, mode } => {
-                let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
-                    return;
-                };
-                let Some(request) = super::tag_push::request(repo, mode) else {
-                    return;
-                };
-                if request.set_upstream {
-                    let anchor = self.popover_anchor_point();
-                    self.open_popover_at(
-                        PopoverKind::PushSetUpstreamPrompt {
-                            repo_id,
-                            remote: request.remote,
-                            configure_only_for: None,
-                        },
-                        anchor,
-                        window,
-                        cx,
-                    );
-                    self.push_upstream_tag_mode = Some(mode);
-                    self.sync_tag_push_previews(cx);
-                    cx.notify();
+                let anchor = self.popover_anchor_point();
+                if self.push_with_tags(repo_id, mode, Some(anchor), window, cx) {
                     return;
                 }
-                self.store.dispatch(Msg::PushWithTags { repo_id, request });
             }
             ContextMenuAction::Push { repo_id } => {
                 let request = self

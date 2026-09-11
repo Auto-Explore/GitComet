@@ -2256,6 +2256,187 @@ fn log_loaded_reconciles_commit_multi_selection() {
     assert_eq!(sel.anchor_log_rev, None);
 }
 
+fn lookup_commit(id: &CommitId, summary: &str) -> Commit {
+    Commit {
+        id: id.clone(),
+        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+        summary: summary.into(),
+        author: "a".into(),
+        time: SystemTime::UNIX_EPOCH,
+    }
+}
+
+fn lookup_state() -> (
+    FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    AtomicU64,
+    AppState,
+) {
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    (FxHashMap::default(), AtomicU64::new(1), state)
+}
+
+/// The Reveal Commit dialog previews a reference without committing to it, so a
+/// lookup must resolve and report without touching the selection.
+#[test]
+fn commit_lookup_resolves_without_selecting_anything() {
+    let (mut repos, id_alloc, mut state) = lookup_state();
+    let reference = CommitId("deadbee".into());
+    let full = CommitId("deadbeef0123456789abcdef0123456789abcdef".into());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveCommitLookup {
+            repo_id: RepoId(1),
+            reference: reference.clone(),
+        },
+    );
+    let request = match effects.as_slice() {
+        [
+            Effect::ResolveCommitLookup {
+                reference: r,
+                request,
+                ..
+            },
+        ] if *r == reference => *request,
+        other => panic!("expected a single lookup effect, got {other:?}"),
+    };
+    let lookup = &state.repos[0].history_state.commit_lookup;
+    assert_eq!(lookup.request, request);
+    assert!(lookup.result.is_loading());
+
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
+            repo_id: RepoId(1),
+            reference,
+            request,
+            result: Ok(lookup_commit(&full, "the reland")),
+        }),
+    );
+
+    let history = &state.repos[0].history_state;
+    assert!(
+        matches!(&history.commit_lookup.result, Loadable::Ready(commit) if commit.id == full),
+        "the lookup should hold the resolved commit, got {:?}",
+        history.commit_lookup.result
+    );
+    assert_eq!(
+        history.selected_commit, None,
+        "a preview must not move the history selection"
+    );
+    assert_eq!(history.reveal_target, None);
+}
+
+/// Every keystroke issues a lookup, so replies arrive out of order. The newest
+/// request wins; an overtaken one must not repaint the row with a stale answer.
+#[test]
+fn commit_lookup_drops_a_reply_a_newer_lookup_overtook() {
+    let (mut repos, id_alloc, mut state) = lookup_state();
+    let first = CommitId("deadb".into());
+    let second = CommitId("deadbee".into());
+
+    let first_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveCommitLookup {
+            repo_id: RepoId(1),
+            reference: first.clone(),
+        },
+    );
+    let first_request = match first_effects.as_slice() {
+        [Effect::ResolveCommitLookup { request, .. }] => *request,
+        other => panic!("expected a lookup effect, got {other:?}"),
+    };
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveCommitLookup {
+            repo_id: RepoId(1),
+            reference: second.clone(),
+        },
+    );
+
+    // The slower first lookup answers last.
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
+            repo_id: RepoId(1),
+            reference: first,
+            request: first_request,
+            result: Ok(lookup_commit(&CommitId("stale".into()), "stale")),
+        }),
+    );
+
+    let lookup = &state.repos[0].history_state.commit_lookup;
+    assert_eq!(lookup.reference.as_ref(), Some(&second));
+    assert!(
+        lookup.result.is_loading(),
+        "the overtaken reply must not land, got {:?}",
+        lookup.result
+    );
+}
+
+/// An unresolvable reference is the normal state of a half-typed one, so it is
+/// left in the lookup for the dialog to render rather than raised as a toast.
+#[test]
+fn commit_lookup_failure_stays_inline_without_a_notification() {
+    let (mut repos, id_alloc, mut state) = lookup_state();
+    let reference = CommitId("nosuchref".into());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveCommitLookup {
+            repo_id: RepoId(1),
+            reference: reference.clone(),
+        },
+    );
+    let request = match effects.as_slice() {
+        [Effect::ResolveCommitLookup { request, .. }] => *request,
+        other => panic!("expected a lookup effect, got {other:?}"),
+    };
+
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
+            repo_id: RepoId(1),
+            reference,
+            request,
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("gix rev-parse nosuchref".into()),
+            )),
+        }),
+    );
+
+    assert!(matches!(
+        state.repos[0].history_state.commit_lookup.result,
+        Loadable::Error(_)
+    ));
+    assert!(
+        state.notifications.is_empty(),
+        "a failed preview must not toast, got {:?}",
+        state.notifications
+    );
+}
+
 /// A reveal asks git to resolve the reference before touching the selection, so
 /// an abbreviation lands on the full id and the details pane fills in without
 /// the log having paged anywhere near the commit.

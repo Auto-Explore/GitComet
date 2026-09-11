@@ -871,6 +871,27 @@ impl GixRepo {
         })
     }
 
+    /// Resolve a reference (abbreviated sha, branch, tag, `HEAD~3`, …) to its
+    /// commit, without the parent diff `commit_details_impl` computes.
+    ///
+    /// `find_commit_by_id` sends anything that is not a full oid through
+    /// `rev_parse_single`, so an ambiguous prefix errors here rather than
+    /// silently picking one candidate.
+    pub(in super::super) fn resolve_commit_impl(&self, reference: &CommitId) -> Result<Commit> {
+        let repo = self.repo();
+        let spec = reference.as_ref();
+        let commit = find_commit_by_id(&repo, reference)?;
+        let id = commit.id;
+        let parent_oids = commit
+            .parent_ids()
+            .map(|parent| parent.detach())
+            .collect::<Vec<_>>();
+        let mut decode_state = CommitDecodeState::default();
+        // No author filter, so the decoder never returns `None`.
+        commit_from_walk_parts(&repo, &id, &parent_oids, None, &mut decode_state, None)?
+            .ok_or_else(|| Error::new(ErrorKind::Backend(format!("gix resolve commit {spec}"))))
+    }
+
     pub(in super::super) fn diff_range_files_impl(
         &self,
         from: &CommitId,

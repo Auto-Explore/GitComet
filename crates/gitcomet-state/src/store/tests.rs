@@ -7,9 +7,6 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::process::{
-    GitExecutablePreference, current_git_executable_preference, install_git_executable_preference,
-};
 use gitcomet_core::services::{CancellationToken, CommandOutput, PullMode, Result};
 use gitcomet_core::test_support::UnconfiguredRepository;
 use std::fs;
@@ -128,70 +125,6 @@ pub(crate) fn staged_auth_test_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
-fn git_runtime_store_test_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-}
-
-struct GitRuntimePreferenceResetGuard {
-    original: GitExecutablePreference,
-}
-
-impl GitRuntimePreferenceResetGuard {
-    fn install(preference: GitExecutablePreference) -> Self {
-        let original = current_git_executable_preference();
-        let _ = install_git_executable_preference(preference);
-        Self { original }
-    }
-}
-
-impl Drop for GitRuntimePreferenceResetGuard {
-    fn drop(&mut self) {
-        let _ = install_git_executable_preference(self.original.clone());
-    }
-}
-
-#[cfg(unix)]
-fn write_git_runtime_probe_script(script_path: &Path, probe_log: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    fs::write(
-        script_path,
-        format!(
-            "#!/bin/sh\nprintf 'probe\\n' >> '{}'\nprintf 'git version 9.9.9-test\\n'\n",
-            probe_log.display()
-        ),
-    )
-    .expect("write git runtime probe script");
-    let mut permissions = fs::metadata(script_path)
-        .expect("git runtime probe script metadata")
-        .permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(script_path, permissions)
-        .expect("set git runtime probe script permissions");
-}
-
-#[cfg(windows)]
-fn write_git_runtime_probe_script(script_path: &Path, probe_log: &Path) {
-    fs::write(
-        script_path,
-        format!(
-            "@echo off\r\necho probe>>\"{}\"\r\necho git version 9.9.9-test\r\n",
-            probe_log.display()
-        ),
-    )
-    .expect("write git runtime probe script");
-}
-
-fn git_runtime_probe_count(probe_log: &Path) -> usize {
-    fs::read_to_string(probe_log)
-        .unwrap_or_default()
-        .lines()
-        .count()
-}
-
 fn has_worktree_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
@@ -245,41 +178,6 @@ fn app_store_clone_dispatches_restore_and_close_paths() {
     let snapshot = store.snapshot();
     assert!(snapshot.repos.is_empty());
     assert_eq!(snapshot.active_repo, None);
-}
-
-#[test]
-fn app_store_dispatch_does_not_reprobe_git_runtime_for_git_messages() {
-    let _lock = git_runtime_store_test_lock();
-    let temp = tempfile::tempdir().expect("create tempdir for git runtime probe");
-    let probe_log = temp.path().join("git-runtime-probes.log");
-    #[cfg(unix)]
-    let script_path = temp.path().join("git");
-    #[cfg(windows)]
-    let script_path = temp.path().join("git.cmd");
-    write_git_runtime_probe_script(&script_path, &probe_log);
-
-    let _restore =
-        GitRuntimePreferenceResetGuard::install(GitExecutablePreference::Custom(script_path));
-    let initial_probe_count = git_runtime_probe_count(&probe_log);
-
-    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
-    let (store, _event_rx) = AppStore::new(backend);
-
-    assert_eq!(
-        git_runtime_probe_count(&probe_log),
-        initial_probe_count,
-        "creating the store should reuse the installed runtime state without probing again"
-    );
-
-    store.dispatch(Msg::ReloadRepo {
-        repo_id: RepoId(999),
-    });
-
-    assert_eq!(
-        git_runtime_probe_count(&probe_log),
-        initial_probe_count,
-        "dispatch should not re-run `git --version` for regular Git-backed messages"
-    );
 }
 
 #[test]

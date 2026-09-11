@@ -1598,6 +1598,31 @@ pub(super) fn schedule_resolve_commit_for_reveal(
     });
 }
 
+/// Resolve a reference for the Reveal Commit dialog's preview row.
+///
+/// `resolve_commit` skips the parent diff `commit_details` pays for, because
+/// this runs while the user is still typing.
+pub(super) fn schedule_resolve_commit_lookup(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    reference: gitcomet_core::domain::CommitId,
+    request: u64,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
+                repo_id,
+                reference: reference.clone(),
+                request,
+                result: repo.resolve_commit(&reference),
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_load_range_files(
     executor: &TaskExecutor,
     repos: &RepoMap,
