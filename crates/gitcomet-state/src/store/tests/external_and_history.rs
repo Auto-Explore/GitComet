@@ -4167,3 +4167,43 @@ fn a_reply_for_an_abandoned_source_still_releases_the_lane() {
         "the live rows stay up, still flagged stale, rather than being adopted as the commit's tree"
     );
 }
+
+#[test]
+fn line_stats_completion_replays_one_pending_refresh_then_settles() {
+    let mut repos = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let repo_id = RepoId(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let flag = crate::model::RepoLoadsInFlight::UNCOMMITTED_LINE_STATS;
+    assert!(state.repos[0].loads_in_flight.request(flag));
+    assert!(!state.repos[0].loads_in_flight.request(flag));
+    assert!(!state.repos[0].loads_in_flight.request(flag));
+    for expected_replays in [1, 0] {
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
+                repo_id,
+                result: Ok(Default::default()),
+            }),
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|e| matches!(e, Effect::LoadUncommittedLineStats { .. }))
+                .count(),
+            expected_replays
+        );
+        assert_eq!(
+            state.repos[0].loads_in_flight.is_in_flight(flag),
+            expected_replays == 1
+        );
+    }
+}

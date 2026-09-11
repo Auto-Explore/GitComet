@@ -1132,6 +1132,10 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<Vec<FileStatus>, Error>,
     },
+    UncommittedLineStatsLoaded {
+        repo_id: RepoId,
+        result: Result<UncommittedLineStats, Error>,
+    },
     StatusLoaded {
         repo_id: RepoId,
         result: Result<RepoStatus, Error>,

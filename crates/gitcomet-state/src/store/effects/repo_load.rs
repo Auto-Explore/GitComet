@@ -370,6 +370,42 @@ pub(super) fn schedule_load_worktree_status(
     );
 }
 
+pub(super) fn schedule_load_uncommitted_line_stats(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    cancellation: CancellationToken,
+) {
+    spawn_detached_with_repo_or_else(
+        executor,
+        "load-uncommitted-line-stats",
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
+                    repo_id,
+                    // Cancellable: this reads every changed file, so a
+                    // superseded scan must not hold the repo-load worker.
+                    result: repo.uncommitted_line_stats_cancellable(&cancellation),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_staged_status(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -1018,7 +1054,28 @@ pub(super) fn schedule_load_worktree_dirty(
                         // Only the selected worktree's files are carried back;
                         // see `WorktreeDirtySummary`.
                         let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
-                        let summary = worktree_dirty_summary(worktree, status, keep_files);
+                        // Like the file lists, only the selected worktree pays.
+                        let line_stats = if keep_files {
+                            match handle.uncommitted_line_stats_for_status_cancellable(
+                                &status,
+                                &cancellation,
+                            ) {
+                                Ok(stats) => stats,
+                                // Like the status read above: a cancelled scan
+                                // stops the walk rather than reporting a
+                                // worktree whose counts silently went missing.
+                                Err(_) if cancellation.is_cancelled() => {
+                                    return Err(Error::new(ErrorKind::Cancelled));
+                                }
+                                // Counts are decoration; a worktree that cannot
+                                // produce them still belongs in the list.
+                                Err(_) => Default::default(),
+                            }
+                        } else {
+                            Default::default()
+                        };
+                        let summary =
+                            worktree_dirty_summary(worktree, status, keep_files, line_stats);
                         if summary.is_dirty() {
                             summaries.push(summary);
                         }
@@ -1249,6 +1306,7 @@ fn worktree_dirty_summary(
     worktree: Worktree,
     status: RepoStatus,
     keep_files: bool,
+    line_stats: gitcomet_core::domain::UncommittedLineStats,
 ) -> WorktreeDirtySummary {
     let (added, modified, deleted) = count_file_statuses(&status.unstaged);
     let (staged_added, staged_modified, staged_deleted) = count_file_statuses(&status.staged);
@@ -1270,6 +1328,7 @@ fn worktree_dirty_summary(
         deleted: deleted + staged_deleted,
         staged,
         unstaged,
+        line_stats,
     }
 }
 
@@ -2289,7 +2348,7 @@ mod worktree_dirty_tests {
             ]),
         };
 
-        let summary = worktree_dirty_summary(worktree(), repo_status, true);
+        let summary = worktree_dirty_summary(worktree(), repo_status, true, Default::default());
         assert_eq!(
             (summary.added, summary.modified, summary.deleted),
             (1, 1, 1)
@@ -2307,7 +2366,8 @@ mod worktree_dirty_tests {
     /// cannot be relied on.
     #[test]
     fn a_summary_carries_the_worktrees_identity() {
-        let summary = worktree_dirty_summary(worktree(), RepoStatus::default(), true);
+        let summary =
+            worktree_dirty_summary(worktree(), RepoStatus::default(), true, Default::default());
         assert_eq!(summary.path, PathBuf::from("/wt/side"));
         assert_eq!(summary.head.as_ref().map(|id| id.as_ref()), Some("abc123"));
         assert_eq!(summary.branch.as_deref(), Some("side"));
@@ -2645,7 +2705,12 @@ mod worktree_dirty_files_tests {
     /// every row shows them.
     #[test]
     fn only_the_selected_worktree_carries_its_files() {
-        let kept = worktree_dirty_summary(worktree(), status(&["a.rs", "b.rs"]), true);
+        let kept = worktree_dirty_summary(
+            worktree(),
+            status(&["a.rs", "b.rs"]),
+            true,
+            Default::default(),
+        );
         assert_eq!((kept.added, kept.modified, kept.deleted), (0, 2, 0));
         assert_eq!(
             kept.unstaged.len(),
@@ -2653,7 +2718,12 @@ mod worktree_dirty_files_tests {
             "the selected worktree keeps its files"
         );
 
-        let counted = worktree_dirty_summary(worktree(), status(&["a.rs", "b.rs"]), false);
+        let counted = worktree_dirty_summary(
+            worktree(),
+            status(&["a.rs", "b.rs"]),
+            false,
+            Default::default(),
+        );
         assert_eq!(
             (counted.added, counted.modified, counted.deleted),
             (0, 2, 0),

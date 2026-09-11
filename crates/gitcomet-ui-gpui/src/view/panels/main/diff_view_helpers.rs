@@ -370,11 +370,9 @@ impl MainPaneView {
             return (None, None);
         };
 
-        let (has_prev, has_next) = if let Some(inline) = self.active_inline_submodule_diff() {
-            (
-                inline.selected_ix > 0,
-                inline.selected_ix + 1 < inline.entries.len(),
-            )
+        let inline_neighbors = self.inline_diff_file_neighbors(repo_id, cx);
+        let (has_prev, has_next) = if let Some((prev_ix, next_ix)) = inline_neighbors {
+            (prev_ix.is_some(), next_ix.is_some())
         } else {
             let commit_file_source_indices = self
                 .root_view
@@ -385,10 +383,12 @@ impl MainPaneView {
                 })
                 .ok()
                 .flatten();
+            let change_tracking_view = self.active_change_tracking_view(cx);
+            let status_section_order =
+                self.active_status_section_order(repo_id, change_tracking_view, cx);
             let Some(repo) = self.active_repo() else {
                 return (None, None);
             };
-            let change_tracking_view = self.active_change_tracking_view(cx);
             let Some(diff_target) = repo.diff_state.diff_target.as_ref() else {
                 return (None, None);
             };
@@ -399,6 +399,7 @@ impl MainPaneView {
                     change_tracking_view,
                     -1,
                     commit_file_source_indices.as_deref(),
+                    status_section_order.as_deref(),
                 )
                 .is_some(),
                 status_nav::adjacent_diff_file_target_for_repo(
@@ -407,6 +408,7 @@ impl MainPaneView {
                     change_tracking_view,
                     1,
                     commit_file_source_indices.as_deref(),
+                    status_section_order.as_deref(),
                 )
                 .is_some(),
             )
@@ -426,6 +428,7 @@ impl MainPaneView {
                     cx.notify();
                 }
             })
+            .debug_selector(move || id.to_string())
             .gitcomet_tooltip(theme, SharedString::from(tooltip))
             .into_any_element()
         };

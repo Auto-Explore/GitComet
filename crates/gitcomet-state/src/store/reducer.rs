@@ -2312,6 +2312,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded { repo_id, result }) => {
             effects::staged_status_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded { repo_id, result }) => {
+            effects::uncommitted_line_stats_loaded(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
             effects::status_loaded(state, repo_id, result)
         }

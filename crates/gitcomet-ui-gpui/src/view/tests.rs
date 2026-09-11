@@ -33,6 +33,31 @@ fn selected_sidebar_branch_colors_come_from_theme_interaction_tokens() {
 }
 
 #[test]
+fn status_section_shortcuts_leave_modified_app_and_text_chords_alone() {
+    for chord in ["ctrl-a", "secondary-a", "ctrl-s", "secondary-u", "space"] {
+        assert!(
+            is_status_section_shortcut(&gpui::Keystroke::parse(chord).unwrap()),
+            "{chord}"
+        );
+    }
+    for chord in [
+        "a",
+        "s",
+        "ctrl-shift-a",
+        "secondary-shift-a",
+        "alt-a",
+        "alt-space",
+        "f4",
+        "secondary-f",
+    ] {
+        assert!(
+            !is_status_section_shortcut(&gpui::Keystroke::parse(chord).unwrap()),
+            "{chord}"
+        );
+    }
+}
+
+#[test]
 fn recent_repository_shortcut_is_not_a_diff_select_all_candidate() {
     let recent = gpui::Keystroke::parse("secondary-shift-a").expect("valid shortcut");
     let select_all = gpui::Keystroke::parse("secondary-a").expect("valid shortcut");
@@ -1394,16 +1419,17 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
     };
 
     let mut selection = StatusMultiSelection {
+        explicit_section: Some(StatusSection::CombinedUnstaged),
         untracked: vec![],
         untracked_anchor: None,
         unstaged: vec![a.clone(), b.clone()],
         unstaged_anchor: Some(b),
         unstaged_anchor_index: None,
-        unstaged_anchor_status_rev: None,
+        unstaged_anchor_order_rev: None,
         staged: vec![c.clone()],
         staged_anchor: Some(c),
         staged_anchor_index: None,
-        staged_anchor_status_rev: None,
+        staged_anchor_order_rev: None,
     };
 
     reconcile_status_multi_selection(&mut selection, &status);
@@ -5533,6 +5559,64 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
     assert!(
         collapsed_after.is_empty(),
         "right-clicking a branch group must not toggle it, got {collapsed_after:?}"
+    );
+}
+
+#[test]
+fn reconciliation_releases_vanished_selection_but_preserves_intentional_empty_selection() {
+    let status = RepoStatus {
+        staged: Default::default(),
+        unstaged: Default::default(),
+    };
+    for use_repo in [false, true] {
+        let mut selection = StatusMultiSelection {
+            explicit_section: Some(StatusSection::Staged),
+            staged: vec!["gone.txt".into()],
+            ..Default::default()
+        };
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::new(),
+            },
+        );
+        repo.worktree_status = Loadable::Ready(Arc::clone(&status.unstaged));
+        repo.staged_status = Loadable::Ready(Arc::clone(&status.staged));
+        if use_repo {
+            reconcile_status_multi_selection_with_repo(&mut selection, &repo);
+        } else {
+            reconcile_status_multi_selection(&mut selection, &status);
+        }
+        assert!(selection.is_empty());
+        assert_eq!(selection.explicit_section, None);
+        selection.explicit_section = Some(StatusSection::Staged);
+        if use_repo {
+            reconcile_status_multi_selection_with_repo(&mut selection, &repo);
+        } else {
+            reconcile_status_multi_selection(&mut selection, &status);
+        }
+        assert_eq!(selection.explicit_section, Some(StatusSection::Staged));
+    }
+}
+
+#[test]
+fn untracked_content_revision_ignores_line_stats() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::new(),
+        },
+    );
+    let untracked = status_section_content_rev(&repo, StatusSection::Untracked);
+    let unstaged = status_section_content_rev(&repo, StatusSection::Unstaged);
+    repo.unstaged_line_stats_rev += 1;
+    assert_eq!(
+        status_section_content_rev(&repo, StatusSection::Untracked),
+        untracked
+    );
+    assert_ne!(
+        status_section_content_rev(&repo, StatusSection::Unstaged),
+        unstaged
     );
 }
 

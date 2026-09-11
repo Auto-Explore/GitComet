@@ -376,10 +376,13 @@ impl MainPaneView {
             let path = path.clone();
             let area = *area;
             let change_tracking_view = self.active_change_tracking_view(cx);
+            let status_section_order =
+                self.active_status_section_order(repo_id, change_tracking_view, cx);
             let next_path_in_section = status_nav::status_navigation_context_for_repo(
                 repo,
                 &diff_target,
                 change_tracking_view,
+                status_section_order.as_deref(),
             )
             .and_then(|navigation| navigation.next_or_prev_path());
             let status_ready = repo.status_entries_for_area(area).is_some();
@@ -404,17 +407,22 @@ impl MainPaneView {
                 return true;
             }
 
+            let consumes_selection =
+                self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
             if self.confirm_stage_conflict_markers(
                 repo_id,
                 area,
                 vec![path.clone()],
-                false,
+                consumes_selection,
                 window,
                 cx,
             ) {
                 return true;
             }
 
+            if consumes_selection {
+                self.clear_status_selection_for_shortcut(repo_id, cx);
+            }
             match (status_ready, area) {
                 (true, DiffArea::Unstaged) => {
                     self.store.dispatch(Msg::StagePath {
@@ -506,10 +514,13 @@ impl MainPaneView {
             match key {
                 "s" if area == DiffArea::Unstaged && !mods.shift => {
                     let change_tracking_view = self.active_change_tracking_view(cx);
+                    let status_section_order =
+                        self.active_status_section_order(repo_id, change_tracking_view, cx);
                     let next_path_in_section = status_nav::status_navigation_context_for_repo(
                         repo,
                         &diff_target,
                         change_tracking_view,
+                        status_section_order.as_deref(),
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
 
@@ -536,17 +547,22 @@ impl MainPaneView {
                         return true;
                     }
 
+                    let consumes_selection =
+                        self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
                     if self.confirm_stage_conflict_markers(
                         repo_id,
                         area,
                         vec![path.clone()],
-                        false,
+                        consumes_selection,
                         window,
                         cx,
                     ) {
                         return true;
                     }
 
+                    if consumes_selection {
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                    }
                     if status_ready {
                         self.store.dispatch(Msg::StagePath {
                             repo_id,
@@ -574,10 +590,13 @@ impl MainPaneView {
                 }
                 "u" if area == DiffArea::Staged && !mods.shift => {
                     let change_tracking_view = self.active_change_tracking_view(cx);
+                    let status_section_order =
+                        self.active_status_section_order(repo_id, change_tracking_view, cx);
                     let next_path_in_section = status_nav::status_navigation_context_for_repo(
                         repo,
                         &diff_target,
                         change_tracking_view,
+                        status_section_order.as_deref(),
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
 
@@ -602,6 +621,9 @@ impl MainPaneView {
                         return true;
                     }
 
+                    if self.status_single_selection_for_shortcut(repo_id, area, &path, cx) {
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                    }
                     if status_ready {
                         self.store.dispatch(Msg::UnstagePath {
                             repo_id,
