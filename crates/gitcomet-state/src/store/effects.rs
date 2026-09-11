@@ -19,6 +19,11 @@ use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
 use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
+/// Ceiling on how often a running filesystem operation may publish progress.
+/// Fast enough to look continuous, slow enough that the per-message AppState
+/// copy stays off the critical path.
+const FILESYSTEM_PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(50);
+
 use super::RepoId;
 use super::executor::TaskExecutor;
 use super::repo_load_trace;
@@ -1413,12 +1418,32 @@ pub(super) fn schedule_effect(
     match effect {
         Effect::Filesystem(request) => {
             super::executor::filesystem_executor().spawn(move || {
+                // The engine ticks once per item and every dispatch deep-copies
+                // AppState, so an unthrottled thousand-file drop spends longer
+                // cloning state than moving files -- and starves the progress
+                // bar the ticks exist to drive. Only the newest tick is ever
+                // read, so dropping the ones in between loses nothing; the last
+                // one is held back and flushed so the bar ends where it should.
+                let mut last_sent: Option<std::time::Instant> = None;
+                let mut withheld: Option<gitcomet_core::filesystem::Progress> = None;
                 let result = gitcomet_core::filesystem::global()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .execute(request, |progress| {
-                        util::send_or_log(&msg_tx, Msg::FilesystemProgress(progress));
+                        let now = std::time::Instant::now();
+                        if last_sent
+                            .is_none_or(|sent| now.duration_since(sent) >= FILESYSTEM_PROGRESS_TICK)
+                        {
+                            last_sent = Some(now);
+                            withheld = None;
+                            util::send_or_log(&msg_tx, Msg::FilesystemProgress(progress));
+                        } else {
+                            withheld = Some(progress);
+                        }
                     });
+                if let Some(progress) = withheld {
+                    util::send_or_log(&msg_tx, Msg::FilesystemProgress(progress));
+                }
                 util::send_or_log(&msg_tx, Msg::FilesystemFinished(result));
             });
         }

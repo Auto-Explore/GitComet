@@ -129,8 +129,13 @@ impl JournalEntry {
             .create(true)
             .append(true)
             .open(area.path().join("recovery.log"))?;
-        writeln!(file, "move\t{}\t{}", encoded_path(from), encoded_path(to))?;
-        file.sync_all()
+        // One write rather than `writeln!`'s syscall per fragment, and no
+        // fsync: `rename_exclusive` is never followed by a directory fsync
+        // either, so a power loss can lose the rename while keeping this line.
+        // The log can therefore only ever over-report, which is the right
+        // direction for something a human inspects by hand -- and an fsync per
+        // item made a large drop wait on the disk once per file.
+        file.write_all(format!("move\t{}\t{}\n", encoded_path(from), encoded_path(to)).as_bytes())
     }
 
     fn move_entry(

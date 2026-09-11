@@ -620,3 +620,35 @@ fn native_trash_restores_the_exact_entry_and_preserves_a_conflicting_file() {
         "new file at the same path"
     );
 }
+
+#[test]
+fn the_recovery_log_records_both_native_paths_of_every_move() {
+    // Nothing covered `record_intent`, which is the only record of where a
+    // parked `.gitcomet-operation-*/item` came from.
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("notes.txt");
+    fs::write(&source, b"x").unwrap();
+    let destination = directory.path().join("into");
+    fs::create_dir(&destination).unwrap();
+    let mut service = Filesystem::default();
+    success(&run(
+        &mut service,
+        Operation::Transfer {
+            sources: vec![source.clone()],
+            destination: destination.clone(),
+            intent: TransferIntent::Move,
+        },
+    ));
+    let entry = service.undo.back().expect("journal entry");
+    let area = entry.areas.first().expect("recovery area");
+    let log = fs::read_to_string(area.path().join("recovery.log")).unwrap();
+    assert_eq!(
+        log,
+        format!(
+            "move\t{}\t{}\n",
+            encoded_path(&source),
+            encoded_path(&destination.join("notes.txt"))
+        ),
+        "one tab-separated line per move, newline terminated"
+    );
+}
