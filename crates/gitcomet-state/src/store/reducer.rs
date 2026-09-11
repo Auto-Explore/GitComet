@@ -199,6 +199,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadRecentCommitMessages { .. }
             | Msg::PreviewTagPush { .. }
             | Msg::LoadHoverCommitMessage { .. }
+            | Msg::ResolveCommitLookup { .. }
             | Msg::LoadFileHistory { .. }
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
@@ -1349,6 +1350,9 @@ fn reduce_inner(
             effects::reveal_commit(state, repo_id, reference)
         }
         Msg::FinishCommitReveal { repo_id } => effects::finish_commit_reveal(state, repo_id),
+        Msg::ResolveCommitLookup { repo_id, reference } => {
+            effects::resolve_commit_lookup(state, repo_id, reference)
+        }
         Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
         Msg::ViewerNavBack { repo_id } => {
             diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
@@ -2309,6 +2313,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded { repo_id, result }) => {
             effects::staged_status_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded { repo_id, result }) => {
+            effects::uncommitted_line_stats_loaded(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
             effects::status_loaded(state, repo_id, result)
         }
@@ -2524,6 +2531,12 @@ fn reduce_inner(
             reference,
             result,
         }) => effects::commit_reveal_resolved(state, repo_id, reference, result),
+        Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
+            repo_id,
+            reference,
+            request,
+            result,
+        }) => effects::commit_lookup_resolved(state, repo_id, reference, request, result),
         Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
             repo_id,
             from,

@@ -10,7 +10,9 @@ use gpui::{
 use palette::IntoColor;
 
 use super::shortcut_labels::Shortcut;
+use super::tooltip::GitCometTooltipExt;
 use super::{GitCometView, components, restrict_scroll_to_vertical_axis};
+use gitcomet_core::tag_push::TagPushMode;
 
 pub(crate) struct CommandEntry {
     pub(crate) id: &'static str,
@@ -21,6 +23,65 @@ pub(crate) struct CommandEntry {
     /// Extra search terms, matched after the label so wording the user
     /// remembers still finds a command the label no longer spells out.
     pub(crate) keywords: &'static str,
+    /// What the command needs beyond a repository. Unlike `requires_repo`,
+    /// which hides the command, an unmet need leaves it listed but disabled.
+    pub(crate) needs: Needs,
+}
+
+/// A precondition a command can be listed without. The palette shows such a
+/// command disabled, with the reason as its tooltip, so it stays discoverable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Needs {
+    Nothing,
+    ExternalEditor,
+    Merge,
+    /// A rebase, apply, or cherry-pick in progress.
+    Sequencer,
+    /// A sequencer operation with every conflict resolved.
+    SequencerResolved,
+    PushWithTags(TagPushMode),
+    MacOs,
+    Linux,
+}
+
+/// The app state commands are enabled against, taken from the root view.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PaletteContext {
+    pub(crate) has_active_repo: bool,
+    pub(crate) external_editor: bool,
+    pub(crate) merging: bool,
+    pub(crate) sequencer: bool,
+    pub(crate) unresolved_conflicts: bool,
+    /// Why each tag-push mode is unavailable, indexed by `TagPushMode::index`.
+    /// Computed by the push menu's own logic so the two cannot disagree.
+    pub(crate) push_with_tags_unavailable: [Option<&'static str>; 2],
+}
+
+/// Why a command with `needs` cannot run under `ctx`, or `None` when it can.
+pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&'static str> {
+    const NOT_SEQUENCING: &str = "Only available while a rebase or cherry-pick is in progress";
+    match needs {
+        Needs::Nothing => None,
+        Needs::ExternalEditor => {
+            (!ctx.external_editor).then_some("Choose an external code editor in Settings first")
+        }
+        Needs::Merge => (!ctx.merging).then_some("Only available while a merge is in progress"),
+        Needs::Sequencer => (!ctx.sequencer).then_some(NOT_SEQUENCING),
+        Needs::SequencerResolved => {
+            if !ctx.sequencer {
+                Some(NOT_SEQUENCING)
+            } else if ctx.unresolved_conflicts {
+                // Same wording as the action bar's Continue button.
+                Some("Resolve all conflicts before continuing")
+            } else {
+                None
+            }
+        }
+        Needs::PushWithTags(mode) => ctx.push_with_tags_unavailable[mode.index()],
+        Needs::MacOs => (!cfg!(target_os = "macos")).then_some("Only available on macOS"),
+        Needs::Linux => (!cfg!(any(target_os = "linux", target_os = "freebsd")))
+            .then_some("Only available on Linux"),
+    }
 }
 
 pub(crate) const COMMANDS: &[CommandEntry] = &[
@@ -31,6 +92,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Commit",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "stage-all",
@@ -39,6 +101,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Working Copy",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "unstage-all",
@@ -47,6 +110,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Working Copy",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "create-branch",
@@ -55,6 +119,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Branch",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "checkout-branch",
@@ -63,6 +128,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Branch",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "delete-branch",
@@ -71,6 +137,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Branch",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "rename-branch",
@@ -79,6 +146,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Branch",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "rebase",
@@ -87,6 +155,43 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Branch",
         keywords: "rebase onto history rewrite",
         requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "prune-merged-branches",
+        label: "Prune Merged Branches",
+        shortcut: Shortcut::None,
+        category: "Branch",
+        keywords: "delete cleanup merged local branches",
+        requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "abort-merge",
+        label: "Abort Merge",
+        shortcut: Shortcut::None,
+        category: "Branch",
+        keywords: "cancel merge conflict",
+        requires_repo: true,
+        needs: Needs::Merge,
+    },
+    CommandEntry {
+        id: "continue-rebase",
+        label: "Continue Rebase or Cherry-Pick",
+        shortcut: Shortcut::None,
+        category: "Branch",
+        keywords: "continue resume rebase cherry pick apply am sequencer",
+        requires_repo: true,
+        needs: Needs::SequencerResolved,
+    },
+    CommandEntry {
+        id: "abort-rebase",
+        label: "Abort Rebase or Cherry-Pick",
+        shortcut: Shortcut::None,
+        category: "Branch",
+        keywords: "abort cancel rebase cherry pick apply am sequencer",
+        requires_repo: true,
+        needs: Needs::Sequencer,
     },
     CommandEntry {
         id: "pull",
@@ -95,6 +200,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Sync",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "push",
@@ -103,6 +209,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Sync",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "force-push",
@@ -111,6 +218,25 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Sync",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "push-with-annotated-tags",
+        label: "Push with Annotated Tags",
+        shortcut: Shortcut::None,
+        category: "Sync",
+        keywords: "push tags follow-tags annotated",
+        requires_repo: true,
+        needs: Needs::PushWithTags(TagPushMode::FollowAnnotated),
+    },
+    CommandEntry {
+        id: "push-with-all-tags",
+        label: "Push with All Tags",
+        shortcut: Shortcut::None,
+        category: "Sync",
+        keywords: "push tags all",
+        requires_repo: true,
+        needs: Needs::PushWithTags(TagPushMode::All),
     },
     CommandEntry {
         id: "stash",
@@ -119,6 +245,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Stash",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "stash-pop",
@@ -127,6 +254,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Stash",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "stash-apply",
@@ -135,6 +263,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Stash",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "stash-drop",
@@ -143,6 +272,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Stash",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "open-repository",
@@ -151,6 +281,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Repository",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "switch-repository",
@@ -162,6 +293,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Repository",
         keywords: "recent reopen",
         requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "clone-repository",
@@ -170,6 +302,16 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Repository",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "initialize-repository",
+        label: crate::menu_labels::INITIALIZE_REPOSITORY,
+        shortcut: Shortcut::None,
+        category: "Repository",
+        keywords: "init new create empty",
+        requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "close-repo-tab",
@@ -178,6 +320,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Repository",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "reload-repository",
@@ -186,6 +329,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Repository",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "fetch-all",
@@ -194,6 +338,34 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Repository",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "apply-patch",
+        label: crate::menu_labels::APPLY_PATCH,
+        shortcut: Shortcut::None,
+        category: "Repository",
+        keywords: "patch diff apply import",
+        requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "open-in-code-editor",
+        label: crate::menu_labels::OPEN_IN_CODE_EDITOR,
+        shortcut: Shortcut::Secondary("Shift+E"),
+        category: "Repository",
+        keywords: "editor ide vscode external",
+        requires_repo: true,
+        needs: Needs::ExternalEditor,
+    },
+    CommandEntry {
+        id: "open-external-terminal",
+        label: "Open in External Terminal",
+        shortcut: Shortcut::None,
+        category: "Repository",
+        keywords: "terminal shell console external",
+        requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "toggle-sidebar",
@@ -202,6 +374,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "View",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "toggle-details",
@@ -210,6 +383,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "View",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "toggle-diff-view",
@@ -218,6 +392,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "View",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "toggle-diff-word-wrap",
@@ -226,6 +401,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "View",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "toggle-line-numbers",
@@ -234,6 +410,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "View",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "toggle-whitespace-chars",
@@ -242,6 +419,16 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "View",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "toggle-terminal",
+        label: "Toggle Terminal",
+        shortcut: Shortcut::None,
+        category: "View",
+        keywords: "terminal shell console show hide panel",
+        requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "previous-repo-tab",
@@ -253,6 +440,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Navigation",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "next-repo-tab",
@@ -264,6 +452,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Navigation",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "locate-file-in-explorer",
@@ -272,6 +461,17 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Navigation",
         keywords: "show locate reveal find sidebar tree folder current",
         requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "reveal-commit",
+        label: "Go to",
+        shortcut: Shortcut::Secondary("G"),
+        category: "Navigation",
+        // "reveal commit" keeps the previous label findable.
+        keywords: "reveal commit sha hash jump find locate revision branch tag head",
+        requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "open-active-view-search",
@@ -280,6 +480,25 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Navigation",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "back",
+        label: "Navigate Back",
+        shortcut: Shortcut::Alt("Left"),
+        category: "Navigation",
+        keywords: "",
+        requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "forward",
+        label: "Navigate Forward",
+        shortcut: Shortcut::Alt("Right"),
+        category: "Navigation",
+        keywords: "",
+        requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "create-tag",
@@ -288,6 +507,16 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Tags",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "prune-local-tags",
+        label: "Prune Local Tags",
+        shortcut: Shortcut::None,
+        category: "Tags",
+        keywords: "delete cleanup tags",
+        requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "new-window",
@@ -296,6 +525,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "open-settings",
@@ -304,6 +534,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "quit",
@@ -312,6 +543,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "minimize-window",
@@ -320,6 +552,25 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "hide",
+        label: "Hide GitComet",
+        shortcut: Shortcut::MacOs("Cmd+H"),
+        category: "Window",
+        keywords: "hide application",
+        requires_repo: false,
+        needs: Needs::MacOs,
+    },
+    CommandEntry {
+        id: "hide-others",
+        label: "Hide Others",
+        shortcut: Shortcut::MacOs("Option+Cmd+H"),
+        category: "Window",
+        keywords: "hide other applications",
+        requires_repo: false,
+        needs: Needs::MacOs,
     },
     CommandEntry {
         id: "zoom-window",
@@ -328,6 +579,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "toggle-fullscreen",
@@ -339,6 +591,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "increase-ui-scale",
@@ -347,6 +600,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "decrease-ui-scale",
@@ -355,6 +609,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "reset-ui-scale",
@@ -363,6 +618,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "close-window",
@@ -371,6 +627,25 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Window",
         keywords: "",
         requires_repo: false,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "check-for-updates",
+        label: crate::menu_labels::CHECK_FOR_UPDATES,
+        shortcut: Shortcut::None,
+        category: "Window",
+        keywords: "update upgrade version release",
+        requires_repo: false,
+        needs: Needs::Nothing,
+    },
+    CommandEntry {
+        id: "install-desktop-integration",
+        label: "Install Desktop Integration",
+        shortcut: Shortcut::None,
+        category: "Window",
+        keywords: "desktop launcher menu icon linux",
+        requires_repo: false,
+        needs: Needs::Linux,
     },
     CommandEntry {
         id: "add-remote",
@@ -379,6 +654,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Remotes",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "add-submodule",
@@ -387,6 +663,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Submodules",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "update-submodules",
@@ -395,6 +672,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Submodules",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "add-worktree",
@@ -403,6 +681,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Worktrees",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "blame",
@@ -411,6 +690,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "History",
         keywords: "",
         requires_repo: true,
+        needs: Needs::Nothing,
     },
     CommandEntry {
         id: "show-reflog",
@@ -419,22 +699,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "History",
         keywords: "reflog log restore reset recover",
         requires_repo: true,
-    },
-    CommandEntry {
-        id: "back",
-        label: "Navigate Back",
-        shortcut: Shortcut::Alt("Left"),
-        category: "Navigation",
-        keywords: "",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "forward",
-        label: "Navigate Forward",
-        shortcut: Shortcut::Alt("Right"),
-        category: "Navigation",
-        keywords: "",
-        requires_repo: true,
+        needs: Needs::Nothing,
     },
     // TODO: "undo"              - Undo (Edit)
     // TODO: "redo"              - Redo (Edit)
@@ -553,7 +818,7 @@ pub(crate) struct CommandPaletteView {
     fallback_focus: Option<FocusHandle>,
     root_view: WeakEntity<GitCometView>,
     theme: AppTheme,
-    has_active_repo: bool,
+    context: PaletteContext,
     open: bool,
     query: SharedString,
     matches: Vec<CommandMatch>,
@@ -595,7 +860,10 @@ impl CommandPaletteView {
             fallback_focus: None,
             root_view,
             theme,
-            has_active_repo,
+            context: PaletteContext {
+                has_active_repo,
+                ..PaletteContext::default()
+            },
             open: false,
             query: SharedString::default(),
             matches: Vec::new(),
@@ -614,34 +882,40 @@ impl CommandPaletteView {
         cx.notify();
     }
 
-    pub(crate) fn set_has_active_repo(
-        &mut self,
-        has_active_repo: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.has_active_repo == has_active_repo {
+    /// Refresh what commands are enabled against. Only a repository change
+    /// alters which commands are listed; the rest only greys rows out.
+    pub(crate) fn set_context(&mut self, context: PaletteContext, cx: &mut gpui::Context<Self>) {
+        if self.context == context {
             return;
         }
-        self.has_active_repo = has_active_repo;
+        let relist = self.context.has_active_repo != context.has_active_repo;
+        self.context = context;
         if self.open {
-            self.rebuild_cached_results();
-            self.clamp_selection();
+            if relist {
+                self.rebuild_cached_results();
+                self.clamp_selection();
+            }
             cx.notify();
         }
+    }
+
+    /// Why `command` cannot run right now, if it cannot.
+    fn unavailable(&self, command: &CommandEntry) -> Option<&'static str> {
+        unavailable_reason(command.needs, &self.context)
     }
 
     pub(crate) fn open(
         &mut self,
         restore_focus: Option<FocusHandle>,
         fallback_focus: FocusHandle,
-        has_active_repo: bool,
+        context: PaletteContext,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         self.open = true;
         self.restore_focus = restore_focus;
         self.fallback_focus = Some(fallback_focus);
-        self.has_active_repo = has_active_repo;
+        self.context = context;
         self.query = SharedString::default();
         self.selected_index = None;
         self.rebuild_cached_results();
@@ -678,7 +952,7 @@ impl CommandPaletteView {
     }
 
     fn rebuild_cached_results(&mut self) {
-        self.matches = filtered_commands(self.has_active_repo, self.query.as_ref());
+        self.matches = filtered_commands(self.context.has_active_repo, self.query.as_ref());
         self.rows.clear();
         self.command_row_indices.clear();
 
@@ -792,11 +1066,17 @@ impl CommandPaletteView {
         }
 
         if enter_pressed {
-            let command = self
-                .selected_index
-                .and_then(|index| self.matches.get(index))
-                .or_else(|| self.matches.first())
-                .map(|command| SharedString::from(command.id));
+            // A selected but disabled command does nothing — falling through to
+            // another match would run something the user did not pick.
+            let command = match self.selected_index {
+                Some(index) => self.matches.get(index),
+                None => self
+                    .matches
+                    .iter()
+                    .find(|command| self.unavailable(command).is_none()),
+            }
+            .filter(|command| self.unavailable(command).is_none())
+            .map(|command| SharedString::from(command.id));
             if let Some(command) = command {
                 self.close_and_notify_root(Some(command), window, cx);
             }
@@ -823,6 +1103,7 @@ impl CommandPaletteView {
         &self,
         label: &str,
         positions: &[usize],
+        color: gpui::Rgba,
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
         let highlight = gpui::HighlightStyle {
@@ -840,7 +1121,7 @@ impl CommandPaletteView {
         let focus_range = ranges.first().map(|(range, _)| range.clone());
         let mut text = components::TruncatedText::new(label.to_owned(), self.theme.ui_text(14.0))
             .profile(components::TextTruncationProfile::End)
-            .text_color(self.theme.colors.foreground.primary);
+            .text_color(color);
         if let Some(focus_range) = focus_range {
             text = text.focus_range(Some(focus_range));
         }
@@ -885,41 +1166,25 @@ impl CommandPaletteView {
                         let command = self.matches.get(command_index)?;
                         let command_id: SharedString = command.id.into();
                         let command_id_for_click = command_id.clone();
+                        let selected = self.selected_index == Some(command_index);
+                        let unavailable = self.unavailable(command);
                         let command_row = div()
                             // Without an id gpui never repaints on mouse-move,
                             // so the hover fill below would be computed and
-                            // dropped every frame.
+                            // dropped every frame. The tooltip needs it too.
                             .id(("command_palette_row", command_index))
                             .h(row_height)
                             .w_full()
                             .flex()
                             .items_center()
                             .justify_between()
+                            .gap(scaled_px(12.0))
                             .px(scaled_px(10.0))
-                            .rounded(px(theme.radii.row))
-                            .hover(move |style| style.bg(hover_overlay))
-                            .cursor(CursorStyle::PointingHand);
-
-                        let label = div()
-                            .flex()
-                            .items_center()
-                            .gap(scaled_px(4.0))
-                            .overflow_hidden()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .child(self.render_label(command.label, &command.positions, cx));
-
-                        let mut content = command_row.child(label);
-                        if let Some(shortcut_text) = command.shortcut.label() {
-                            content = content.child(components::shortcut_keys(
-                                &shortcut_text,
-                                theme,
-                                ui_scale,
-                            ));
-                        }
-
-                        (
-                            content
+                            .rounded(px(theme.radii.row));
+                        let command_row = match unavailable {
+                            None => command_row
+                                .hover(move |style| style.bg(hover_overlay))
+                                .cursor(CursorStyle::PointingHand)
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _: &MouseDownEvent, window, cx| {
@@ -929,10 +1194,63 @@ impl CommandPaletteView {
                                             cx,
                                         );
                                     }),
-                                )
-                                .into_any_element(),
-                            self.selected_index == Some(command_index),
-                        )
+                                ),
+                            Some(reason) => command_row
+                                .debug_selector(move || {
+                                    format!("command_palette_disabled_{command_id}")
+                                })
+                                .gitcomet_tooltip(theme, reason.into()),
+                        };
+
+                        let label_color = if unavailable.is_some() {
+                            theme.colors.foreground.disabled
+                        } else {
+                            theme.colors.foreground.primary
+                        };
+                        let label = div()
+                            .flex()
+                            .items_center()
+                            .gap(scaled_px(4.0))
+                            .overflow_hidden()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(self.render_label(
+                                command.label,
+                                &command.positions,
+                                label_color,
+                                cx,
+                            ));
+
+                        let mut content = command_row.child(label);
+                        match unavailable {
+                            // The palette is keyboard-first and a hover tooltip
+                            // never shows for an arrow-key selection, so the
+                            // selected disabled row spells out why in place.
+                            Some(reason) if selected => {
+                                content = content.child(
+                                    div()
+                                        .debug_selector(|| {
+                                            "command_palette_unavailable_reason".to_string()
+                                        })
+                                        .flex_none()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .child(reason),
+                                );
+                            }
+                            Some(_) => {}
+                            None => {
+                                if let Some(shortcut_text) = command.shortcut.label() {
+                                    content = content.child(components::shortcut_keys(
+                                        &shortcut_text,
+                                        theme,
+                                        ui_scale,
+                                    ));
+                                }
+                            }
+                        }
+
+                        (content.into_any_element(), selected)
                     }
                 };
                 Some(
@@ -1213,6 +1531,151 @@ mod tests {
         assert!(
             filtered_commands(false, "open in file explorer").is_empty(),
             "there is no file to open without a repository"
+        );
+    }
+
+    /// The unfiltered palette prints a header each time the category changes,
+    /// so a category split across the table shows its header twice. That had
+    /// happened to Navigation before this test existed.
+    #[test]
+    fn every_category_is_one_contiguous_run() {
+        let mut seen: Vec<&str> = Vec::new();
+        for command in COMMANDS {
+            if seen.last() != Some(&command.category) {
+                assert!(
+                    !seen.contains(&command.category),
+                    "{:?} is split: its entries must sit together in COMMANDS",
+                    command.category
+                );
+                seen.push(command.category);
+            }
+        }
+    }
+
+    #[test]
+    fn unavailable_reasons_follow_the_state_they_depend_on() {
+        let ctx = PaletteContext {
+            has_active_repo: true,
+            ..PaletteContext::default()
+        };
+        assert_eq!(unavailable_reason(Needs::Nothing, &ctx), None);
+        for (needs, met) in [
+            (
+                Needs::ExternalEditor,
+                PaletteContext {
+                    external_editor: true,
+                    ..ctx.clone()
+                },
+            ),
+            (
+                Needs::Merge,
+                PaletteContext {
+                    merging: true,
+                    ..ctx.clone()
+                },
+            ),
+            (
+                Needs::Sequencer,
+                PaletteContext {
+                    sequencer: true,
+                    ..ctx.clone()
+                },
+            ),
+        ] {
+            assert!(
+                unavailable_reason(needs, &ctx).is_some(),
+                "{needs:?} should be disabled without its state"
+            );
+            assert_eq!(
+                unavailable_reason(needs, &met),
+                None,
+                "{needs:?} should be enabled once its state holds"
+            );
+        }
+    }
+
+    /// Continue has a second way to be unavailable, mirroring the action bar.
+    #[test]
+    fn continue_stays_disabled_while_conflicts_remain() {
+        let sequencing = PaletteContext {
+            sequencer: true,
+            ..PaletteContext::default()
+        };
+        assert_eq!(
+            unavailable_reason(Needs::SequencerResolved, &sequencing),
+            None
+        );
+        assert_eq!(
+            unavailable_reason(
+                Needs::SequencerResolved,
+                &PaletteContext {
+                    unresolved_conflicts: true,
+                    ..sequencing
+                }
+            ),
+            Some("Resolve all conflicts before continuing")
+        );
+        assert!(unavailable_reason(Needs::SequencerResolved, &PaletteContext::default()).is_some());
+    }
+
+    #[test]
+    fn each_tag_push_mode_has_its_own_availability() {
+        let mut ctx = PaletteContext::default();
+        ctx.push_with_tags_unavailable[TagPushMode::All.index()] = Some("no remote");
+        assert_eq!(
+            unavailable_reason(Needs::PushWithTags(TagPushMode::All), &ctx),
+            Some("no remote")
+        );
+        assert_eq!(
+            unavailable_reason(Needs::PushWithTags(TagPushMode::FollowAnnotated), &ctx),
+            None
+        );
+    }
+
+    /// Asked for explicitly: platform-only commands are listed everywhere and
+    /// greyed out where they cannot run, not hidden.
+    #[test]
+    fn platform_commands_are_listed_everywhere_and_disabled_elsewhere() {
+        let ctx = PaletteContext::default();
+        assert_eq!(
+            unavailable_reason(Needs::MacOs, &ctx).is_none(),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            unavailable_reason(Needs::Linux, &ctx).is_none(),
+            cfg!(any(target_os = "linux", target_os = "freebsd"))
+        );
+        let listed = filtered_commands(true, "")
+            .iter()
+            .map(|command| command.id)
+            .collect::<Vec<_>>();
+        for id in ["hide", "hide-others", "install-desktop-integration"] {
+            assert!(
+                listed.contains(&id),
+                "{id} should be listed on every platform"
+            );
+        }
+    }
+
+    #[test]
+    fn go_to_is_findable_by_its_label_and_by_its_old_reveal_wording() {
+        assert_eq!(
+            filtered_commands(true, "go to")
+                .first()
+                .map(|command| command.id),
+            Some("reveal-commit")
+        );
+        for query in ["reveal", "sha", "revision"] {
+            assert!(
+                filtered_commands(true, query)
+                    .iter()
+                    .any(|command| command.id == "reveal-commit"),
+                "{query:?} should still find Go to"
+            );
+        }
+        assert!(
+            filtered_commands(false, "go to").is_empty(),
+            "there is nothing to go to without a repository"
         );
     }
 

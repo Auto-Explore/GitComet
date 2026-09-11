@@ -88,9 +88,23 @@ actions!(
         TerminalSelectAll,
         ToggleCommandPalette,
         CommandPaletteDismiss,
+        ToggleRevealCommit,
         LocateFileInExplorer,
     ]
 );
+
+/// Chords owned by a focused status section, including empty sections.
+pub(crate) fn is_status_section_shortcut(keystroke: &gpui::Keystroke) -> bool {
+    let mods = keystroke.modifiers;
+    if mods.alt || mods.shift || mods.function {
+        return false;
+    }
+    if mods.control || mods.platform {
+        matches!(keystroke.key.as_str(), "a" | "s" | "u")
+    } else {
+        keystroke.key == "space"
+    }
+}
 
 pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
     let key = keystroke.key.as_str();
@@ -195,6 +209,7 @@ mod preference_sync;
 mod preferences;
 mod reflog_panel;
 mod repo_open;
+mod reveal_commit;
 pub(crate) mod rows;
 mod settings_window;
 pub(crate) mod shortcut_labels;
@@ -284,7 +299,7 @@ use tooltip_host::TooltipHost;
 
 #[cfg(test)]
 pub(crate) use chrome::window_frame;
-use color::with_alpha;
+use color::{composite_over, with_alpha};
 use icons::{svg_icon, svg_spinner};
 
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;

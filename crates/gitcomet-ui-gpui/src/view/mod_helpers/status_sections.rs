@@ -41,7 +41,7 @@ pub(crate) struct StatusSectionEntries<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StatusSectionIndexes {
     All,
-    Filtered(Vec<usize>),
+    Filtered(std::sync::Arc<[usize]>),
 }
 
 impl<'a> StatusSectionEntries<'a> {
@@ -70,11 +70,43 @@ impl<'a> StatusSectionEntries<'a> {
                         .filter_map(|(ix, entry)| {
                             status_section_filter_matches(filter, entry).then_some(ix)
                         })
-                        .collect(),
+                        .collect::<Vec<_>>()
+                        .into(),
                 )
             }
         };
         Some(Self { entries, indexes })
+    }
+
+    /// The section's entries in a caller-supplied display order. `indexes` is
+    /// in the backing slice's index space.
+    pub(crate) fn from_repo_with_order(
+        repo: &'a RepoState,
+        section: StatusSection,
+        indexes: std::sync::Arc<[usize]>,
+    ) -> Option<Self> {
+        let entries = match section {
+            StatusSection::Staged => repo.staged_status_entries()?,
+            _ => repo.worktree_status_entries()?,
+        };
+        Some(Self {
+            entries,
+            indexes: StatusSectionIndexes::Filtered(indexes),
+        })
+    }
+
+    /// The section's entries in the backing slice's own order, before any UI
+    /// sort. Callers that render or navigate must go through the pane's
+    /// ordered accessor instead, or they walk a different order than the rows.
+    pub(crate) fn source_order_indexes(
+        repo: &'a RepoState,
+        section: StatusSection,
+    ) -> Option<std::sync::Arc<[usize]>> {
+        let entries = Self::from_repo(repo, section)?;
+        Some(match &entries.indexes {
+            StatusSectionIndexes::All => (0..entries.entries.len()).collect::<Vec<_>>().into(),
+            StatusSectionIndexes::Filtered(indexes) => std::sync::Arc::clone(indexes),
+        })
     }
 
     pub(crate) fn iter(&self) -> StatusSectionIter<'a, '_> {
@@ -158,6 +190,34 @@ pub(crate) fn status_section_rev(repo: &RepoState, section: StatusSection) -> u6
     }
 }
 
+/// The rev anything derived from a section must key on: its status lane and
+/// its line-stats lane. Counts arrive without `status_section_rev` moving, so a
+/// cache keyed on that alone keeps serving pre-stats rows.
+pub(crate) fn status_section_content_rev(repo: &RepoState, section: StatusSection) -> u64 {
+    if !status_section_has_line_stats(section) {
+        return status_section_rev(repo, section);
+    }
+    gitcomet_state::model::mix_status_cache_revs([
+        status_section_rev(repo, section),
+        repo.line_stats_rev(section.diff_area()),
+    ])
+}
+
+/// `None` while unloaded, and always `None` for Untracked — those files are in
+/// neither index lane.
+pub(crate) fn status_section_line_stats(
+    repo: &RepoState,
+    section: StatusSection,
+) -> Option<&rustc_hash::FxHashMap<std::path::PathBuf, gitcomet_core::domain::LineStats>> {
+    status_section_has_line_stats(section)
+        .then(|| repo.line_stats_for_area(section.diff_area()))
+        .flatten()
+}
+
+pub(crate) const fn status_section_has_line_stats(section: StatusSection) -> bool {
+    !matches!(section, StatusSection::Untracked)
+}
+
 pub(crate) fn status_section_is_loading(repo: &RepoState, section: StatusSection) -> bool {
     match section {
         StatusSection::Staged => repo.staged_status_is_loading(),
@@ -169,19 +229,61 @@ pub(crate) fn status_section_is_loading(repo: &RepoState, section: StatusSection
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StatusMultiSelection {
+    /// An explicit empty selection must not fall back to the previewed file.
+    pub(crate) explicit_section: Option<StatusSection>,
     pub(crate) untracked: Vec<std::path::PathBuf>,
     pub(crate) untracked_anchor: Option<std::path::PathBuf>,
     pub(crate) unstaged: Vec<std::path::PathBuf>,
     pub(crate) unstaged_anchor: Option<std::path::PathBuf>,
     pub(crate) unstaged_anchor_index: Option<usize>,
-    pub(crate) unstaged_anchor_status_rev: Option<u64>,
+    pub(crate) unstaged_anchor_order_rev: Option<u64>,
     pub(crate) staged: Vec<std::path::PathBuf>,
     pub(crate) staged_anchor: Option<std::path::PathBuf>,
     pub(crate) staged_anchor_index: Option<usize>,
-    pub(crate) staged_anchor_status_rev: Option<u64>,
+    pub(crate) staged_anchor_order_rev: Option<u64>,
 }
 
 impl StatusMultiSelection {
+    pub(crate) fn select_all(
+        &mut self,
+        section: StatusSection,
+        paths: Vec<std::path::PathBuf>,
+        order_rev: u64,
+    ) {
+        let previous_anchor = match section {
+            StatusSection::CombinedUnstaged | StatusSection::Unstaged => &self.unstaged_anchor,
+            StatusSection::Untracked => &self.untracked_anchor,
+            StatusSection::Staged => &self.staged_anchor,
+        };
+        let anchor_index = previous_anchor
+            .as_ref()
+            .and_then(|anchor| paths.iter().position(|path| path == anchor))
+            .or_else(|| (!paths.is_empty()).then_some(0));
+        let anchor = anchor_index.map(|ix| paths[ix].clone());
+        *self = Self {
+            explicit_section: Some(section),
+            ..Default::default()
+        };
+        match section {
+            StatusSection::CombinedUnstaged | StatusSection::Unstaged => {
+                self.unstaged = paths;
+                self.unstaged_anchor = anchor;
+                self.unstaged_anchor_index = anchor_index;
+                self.unstaged_anchor_order_rev = Some(order_rev);
+            }
+            StatusSection::Untracked => {
+                self.untracked = paths;
+                self.untracked_anchor = anchor;
+            }
+            StatusSection::Staged => {
+                self.staged = paths;
+                self.staged_anchor = anchor;
+                self.staged_anchor_index = anchor_index;
+                self.staged_anchor_order_rev = Some(order_rev);
+            }
+        }
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.untracked.is_empty() && self.unstaged.is_empty() && self.staged.is_empty()
     }
@@ -226,6 +328,7 @@ pub(crate) fn reconcile_status_multi_selection(
     selection: &mut StatusMultiSelection,
     status: &gitcomet_core::domain::RepoStatus,
 ) {
+    let had_selection = !selection.is_empty();
     let mut untracked_paths: FxHashSet<&std::path::Path> =
         FxHashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
     let mut unstaged_paths: FxHashSet<&std::path::Path> =
@@ -258,7 +361,7 @@ pub(crate) fn reconcile_status_multi_selection(
     {
         selection.unstaged_anchor = None;
         selection.unstaged_anchor_index = None;
-        selection.unstaged_anchor_status_rev = None;
+        selection.unstaged_anchor_order_rev = None;
     }
 
     let mut staged_paths: FxHashSet<&std::path::Path> =
@@ -277,7 +380,10 @@ pub(crate) fn reconcile_status_multi_selection(
     {
         selection.staged_anchor = None;
         selection.staged_anchor_index = None;
-        selection.staged_anchor_status_rev = None;
+        selection.staged_anchor_order_rev = None;
+    }
+    if had_selection && selection.is_empty() {
+        selection.explicit_section = None;
     }
 }
 
@@ -285,6 +391,7 @@ pub(crate) fn reconcile_status_multi_selection_with_repo(
     selection: &mut StatusMultiSelection,
     repo: &RepoState,
 ) {
+    let had_selection = !selection.is_empty();
     if let Some(worktree) = repo.worktree_status_entries() {
         let mut untracked_paths: FxHashSet<&std::path::Path> =
             FxHashSet::with_capacity_and_hasher(worktree.len(), Default::default());
@@ -318,7 +425,7 @@ pub(crate) fn reconcile_status_multi_selection_with_repo(
         {
             selection.unstaged_anchor = None;
             selection.unstaged_anchor_index = None;
-            selection.unstaged_anchor_status_rev = None;
+            selection.unstaged_anchor_order_rev = None;
         }
     }
 
@@ -339,7 +446,10 @@ pub(crate) fn reconcile_status_multi_selection_with_repo(
         {
             selection.staged_anchor = None;
             selection.staged_anchor_index = None;
-            selection.staged_anchor_status_rev = None;
+            selection.staged_anchor_order_rev = None;
         }
+    }
+    if had_selection && selection.is_empty() {
+        selection.explicit_section = None;
     }
 }

@@ -96,10 +96,10 @@ const MULTI_COMMIT_ROW_HEIGHT_PX: f32 = 44.0;
 /// need it, whatever height the pane happens to have.
 const COMPARISON_CARDS_MAX_BODY_FRACTION: f32 = 0.5;
 
-/// Floor for the comparison's changed-file section — a label plus a row or two
-/// of list. Keeps the capped card block above it from claiming the whole pane
-/// when the pane is shorter than the card cap allows for.
-const RANGE_FILES_SECTION_MIN_HEIGHT_PX: f32 = 44.0;
+/// Floor for the comparison's changed-file section — a label row, the filter
+/// tabs, and a row or two of list. Keeps the capped card block above it from
+/// claiming the whole pane when the pane is shorter than the card cap allows.
+const RANGE_FILES_SECTION_MIN_HEIGHT_PX: f32 = 70.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CommitFileFilterLabels {
@@ -351,6 +351,11 @@ const STATUS_HEADER_GAP_PX: f32 = 8.0;
 /// 12px chevron.
 const STATUS_HEADER_DROPDOWN_EXTRA_PX: f32 = 24.0;
 const STATUS_HEADER_SPINNER_PX: f32 = 14.0;
+/// The layout toggle and sort menu: two icon-only buttons (`control_pad_x` each
+/// side plus a 1px border and a 14px icon), their `gap_1`, and the `gap_2` to
+/// the action buttons beside them.
+const STATUS_HEADER_CONTROLS_PX: f32 =
+    2.0 * (2.0 * components::CONTROL_PAD_X_PX + 2.0 + 14.0) + 4.0 + STATUS_HEADER_GAP_PX;
 
 fn status_action_button_width_px(
     label_chars: usize,
@@ -383,7 +388,8 @@ fn status_action_labels_for_width(
             0.0
         }
         // Between the title and the action group.
-        + STATUS_HEADER_GAP_PX;
+        + STATUS_HEADER_GAP_PX
+        + STATUS_HEADER_CONTROLS_PX;
     if has_spinner {
         needed += STATUS_HEADER_SPINNER_PX + STATUS_HEADER_GAP_PX;
     }
@@ -493,7 +499,7 @@ fn status_section_action_selection(
 ) -> StatusSectionActionSelection {
     if let Some(selection) = selection {
         let paths = explicit_status_section_action_paths(selection, section);
-        if !paths.is_empty() {
+        if selection.explicit_section == Some(section) || !paths.is_empty() {
             return StatusSectionActionSelection {
                 paths,
                 from_explicit_selection: true,
@@ -510,6 +516,68 @@ fn status_section_action_selection(
 }
 
 impl DetailsPaneView {
+    pub(in crate::view) fn handle_status_section_shortcut(
+        &mut self,
+        section: StatusSection,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if !is_status_section_shortcut(keystroke)
+            || !self.status_section_focus_handle(section).is_focused(window)
+        {
+            return false;
+        }
+        let Some(repo) = self.active_repo() else {
+            return true;
+        };
+        let repo_id = repo.id;
+        let area = section.diff_area();
+        let loading = match area {
+            DiffArea::Unstaged => repo.worktree_status_is_loading(),
+            DiffArea::Staged => repo.staged_status_is_loading(),
+        };
+        if loading || StatusSectionEntries::from_repo(repo, section).is_none() {
+            return true;
+        }
+        if keystroke.key == "a" {
+            let paths = self.status_display_order_paths(repo_id, section);
+            let order_rev = self.status_anchor_order_rev(repo, section);
+            self.status_multi_selection
+                .entry(repo_id)
+                .or_default()
+                .select_all(section, paths, order_rev);
+            cx.notify();
+            return true;
+        }
+        if repo.local_actions_in_flight > 0
+            || (keystroke.key == "s" && area != DiffArea::Unstaged)
+            || (keystroke.key == "u" && area != DiffArea::Staged)
+        {
+            return true;
+        }
+        let paths = self.status_section_action_selection(repo_id, section).paths;
+        // Empty path lists mean "all" to the backend, never "none".
+        if paths.is_empty() {
+            return true;
+        }
+        match area {
+            DiffArea::Unstaged => {
+                self.stage_all_with_conflict_confirmation(repo_id, paths, window, cx)
+            }
+            DiffArea::Staged => {
+                self.clear_status_multi_selection(repo_id);
+                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                self.store.dispatch(Msg::UnstagePaths {
+                    repo_id,
+                    paths: paths.into(),
+                });
+                cx.notify();
+            }
+        }
+        true
+    }
+
     fn status_section_action_selection(
         &self,
         repo_id: RepoId,
@@ -916,7 +984,7 @@ impl DetailsPaneView {
         self.commit_details_sha_input.update(cx, |input, cx| {
             input.set_highlights(commit_sha_field_highlights(sha, theme), cx);
         });
-        // A commit's own SHA has nowhere to navigate to.
+        // A commit's own SHA has nothing to reveal.
         let sha_links = commit_sha_field_links(sha, interactive, false);
         self.commit_details_sha_link_menu.update(cx, |menu, cx| {
             menu.sync(
@@ -1360,6 +1428,45 @@ impl DetailsPaneView {
         // those same three counts -- is always positive here. A change that
         // started reporting clean worktrees would need a branch of its own; it
         // would otherwise sit on "Loading files…" forever.
+        let worktree_inputs = self.selected_worktree_summary().map(|summary| {
+            let rev = self
+                .active_repo()
+                .map(|repo| repo.worktree_dirty_rev)
+                .unwrap_or_default();
+            (summary.path.clone(), rev)
+        });
+        let (worktree_row_count, worktree_counts) = worktree_inputs
+            .as_ref()
+            .and_then(|(path, rev)| {
+                let summary = self.selected_worktree_summary()?;
+                let inputs = self.cached_worktree_file_inputs(repo_id, *rev, summary);
+                let projection =
+                    self.cached_worktree_file_projection(repo_id, *rev, path, &inputs.files);
+                let plan = self.cached_worktree_file_plan(repo_id, *rev, path, &inputs.files);
+                Some((plan.row_len(), projection.counts))
+            })
+            .unwrap_or((loaded_file_count, Default::default()));
+        let worktree_controls = self.file_list_controls(
+            crate::view::rows::FileListId::WorktreeFiles,
+            repo_id,
+            "worktree_file",
+            loaded_file_count == 0,
+            cx,
+        );
+        let worktree_filters_width = self
+            .worktree_filter_bounds_ref
+            .borrow()
+            .as_ref()
+            .map(|b| b.size.width)
+            .unwrap_or(Pixels::MAX);
+        let worktree_filters = self.commit_file_filter_tabs(
+            crate::view::rows::FileListId::WorktreeFiles,
+            "worktree_file",
+            worktree_filters_width,
+            worktree_counts,
+            cx,
+        );
+
         let files_body: AnyElement = if loaded_file_count == 0 {
             // Counts without files means the scan carrying them is still running.
             // Saying so beats an empty list that reads as "nothing changed" while
@@ -1378,7 +1485,7 @@ impl DetailsPaneView {
                 &self.worktree_files_scroll,
                 uniform_list(
                     ("worktree_files_list", repo_id.0),
-                    loaded_file_count,
+                    worktree_row_count,
                     cx.processor(Self::render_worktree_file_rows),
                 ),
             )
@@ -1408,11 +1515,44 @@ impl DetailsPaneView {
                     .p_2()
                     .child(
                         div()
-                            .text_size(theme.ui_text(14.0))
-                            .text_color(theme.colors.foreground.secondary)
-                            .line_clamp(1)
-                            .child(SharedString::from(format!("{file_count} changed"))),
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .w_full()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_size(theme.ui_text(14.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .line_clamp(1)
+                                    .child(SharedString::from(format!("{file_count} changed"))),
+                            )
+                            .child(worktree_controls),
                     )
+                    .child({
+                        let bounds = std::rc::Rc::clone(&self.worktree_filter_bounds_ref);
+                        let pane = cx.weak_entity();
+                        div()
+                            .relative()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .on_children_prepainted(move |children, _window, app| {
+                                let next = children.first().copied();
+                                let mut measured = bounds.borrow_mut();
+                                if *measured != next {
+                                    *measured = next;
+                                    // Cached panes must be notified after prepaint.
+                                    let pane = pane.clone();
+                                    app.defer(move |app| {
+                                        let _ = pane.update(app, |_pane, cx| cx.notify());
+                                    });
+                                }
+                            })
+                            .child(visible_bounds_probe())
+                            .child(worktree_filters)
+                    })
                     .child(
                         div()
                             .flex()
@@ -1545,6 +1685,39 @@ impl DetailsPaneView {
                 (format!("{count} changed").into(), "range_files_label_count")
             }
         };
+        let (range_row_count, range_counts) = self
+            .active_repo()
+            .and_then(|repo| {
+                let Loadable::Ready(files) = &repo.history_state.range_files else {
+                    return None;
+                };
+                let rev = repo.history_state.range_files_rev;
+                let projection = self.cached_range_file_projection(repo_id, rev, files);
+                let plan = self.cached_range_file_plan(repo_id, rev, files);
+                Some((plan.row_len(), projection.counts))
+            })
+            .unwrap_or((0, Default::default()));
+        let range_controls = self.file_list_controls(
+            crate::view::rows::FileListId::RangeFiles,
+            repo_id,
+            "range_file",
+            range_counts.all == 0,
+            cx,
+        );
+        let range_filters_width = self
+            .range_filter_bounds_ref
+            .borrow()
+            .as_ref()
+            .map(|b| b.size.width)
+            .unwrap_or(Pixels::MAX);
+        let range_filters = self.commit_file_filter_tabs(
+            crate::view::rows::FileListId::RangeFiles,
+            "range_file",
+            range_filters_width,
+            range_counts,
+            cx,
+        );
+
         let files_body: AnyElement = match &files_state {
             RangeFilesState::Loading => div()
                 .debug_selector(|| "range_files_loading".to_string())
@@ -1567,14 +1740,14 @@ impl DetailsPaneView {
                 .text_color(theme.colors.foreground.secondary)
                 .child("No files.")
                 .into_any_element(),
-            RangeFilesState::Loaded(count) => Self::vertical_scroll_frame(
+            RangeFilesState::Loaded(_) => Self::vertical_scroll_frame(
                 theme,
                 ("range_files_container", repo_id.0),
                 ("range_files_scrollbar", repo_id.0),
                 &self.range_files_scroll,
                 uniform_list(
                     ("range_files_list", repo_id.0),
-                    *count,
+                    range_row_count,
                     cx.processor(Self::render_range_file_rows),
                 ),
             )
@@ -1628,11 +1801,46 @@ impl DetailsPaneView {
                             .pt_2()
                             .child(
                                 div()
-                                    .debug_selector(move || files_label_selector.to_string())
-                                    .text_size(theme.ui_text(14.0))
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child(files_label),
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .w_full()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .debug_selector(move || {
+                                                files_label_selector.to_string()
+                                            })
+                                            .text_size(theme.ui_text(14.0))
+                                            .text_color(theme.colors.foreground.secondary)
+                                            .child(files_label),
+                                    )
+                                    .child(range_controls),
                             )
+                            .child({
+                                let bounds = std::rc::Rc::clone(&self.range_filter_bounds_ref);
+                                let pane = cx.weak_entity();
+                                div()
+                                    .relative()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .on_children_prepainted(move |children, _window, app| {
+                                        let next = children.first().copied();
+                                        let mut measured = bounds.borrow_mut();
+                                        if *measured != next {
+                                            *measured = next;
+                                            // Cached panes must be notified after prepaint.
+                                            let pane = pane.clone();
+                                            app.defer(move |app| {
+                                                let _ = pane.update(app, |_pane, cx| cx.notify());
+                                            });
+                                        }
+                                    })
+                                    .child(visible_bounds_probe())
+                                    .child(range_filters)
+                            })
                             .child(files_body),
                     ),
             )
@@ -1655,17 +1863,16 @@ impl DetailsPaneView {
 
     fn commit_file_filter_tabs(
         &mut self,
+        list: crate::view::rows::FileListId,
+        id_prefix: &'static str,
+        available_width: Pixels,
         counts: crate::view::rows::CommitFileKindCounts,
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<Div> {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
-        let available_width = self
-            .commit_files_section_bounds_ref
-            .borrow()
-            .as_ref()
-            .map(|bounds| bounds.size.width)
-            .unwrap_or(Pixels::MAX);
+        // Each caller supplies its measured filter width. Keep it explicit so
+        // worktree and range controls do not read the commit list's bounds.
         let labels = commit_file_filter_labels_for_width(
             available_width,
             counts,
@@ -1676,11 +1883,11 @@ impl DetailsPaneView {
             CommitFileFilterLabels::Full => COMMIT_FILE_FILTER_TAB_FULL_GAP_PX,
             CommitFileFilterLabels::Compact => COMMIT_FILE_FILTER_TAB_COMPACT_GAP_PX,
         };
-        let current = self.commit_file_filter;
+        let current = self.file_list_filter_for(list);
 
         let mut tabs = div()
-            .id("commit_file_filter_tabs")
-            .debug_selector(|| "commit_file_filter_tabs".to_string())
+            .id(SharedString::from(format!("{id_prefix}_filter_tabs")))
+            .debug_selector(move || format!("{id_prefix}_filter_tabs"))
             .flex()
             .items_center()
             .gap(ui_scale.px(tab_gap))
@@ -1697,7 +1904,7 @@ impl DetailsPaneView {
             let selected = current == filter;
             let disabled = count == 0;
             let full_label = format!("{} ({count})", filter.label());
-            let tooltip = filter.tooltip(count);
+            let tooltip = filter.tooltip_in(list.filter_scope(), count);
             let display_label = match labels {
                 CommitFileFilterLabels::Full => full_label.clone(),
                 CommitFileFilterLabels::Compact => count.to_string(),
@@ -1709,8 +1916,8 @@ impl DetailsPaneView {
                 theme.colors.interaction.selected_indicator
             };
             let mut tab = div()
-                .id(("commit_file_filter_tab", ix))
-                .debug_selector(move || format!("commit_file_filter_tab_{ix}"))
+                .id((SharedString::from(format!("{id_prefix}_filter_tab")), ix))
+                .debug_selector(move || format!("{id_prefix}_filter_tab_{ix}"))
                 .flex()
                 .flex_none()
                 .items_center()
@@ -1757,14 +1964,14 @@ impl DetailsPaneView {
                     })
                     .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
                         if event.standard_click() {
-                            this.set_commit_file_filter(filter, cx);
+                            this.set_file_list_filter(list, filter, cx);
                         }
                     }))
                     .on_key_down(cx.listener(
                         move |this, event: &gpui::KeyDownEvent, _window, cx| {
                             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                                 cx.stop_propagation();
-                                this.set_commit_file_filter(filter, cx);
+                                this.set_file_list_filter(list, filter, cx);
                             }
                         },
                     ));
@@ -1773,6 +1980,65 @@ impl DetailsPaneView {
             tabs = tabs.child(tab);
         }
         tabs
+    }
+
+    /// Layout toggle + sort menu, the pair every changed-file list carries.
+    fn file_list_controls(
+        &mut self,
+        list: crate::view::rows::FileListId,
+        repo_id: RepoId,
+        id_prefix: &'static str,
+        disabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+        let sort = self.file_list_sort_for(list);
+        let layout = self.file_list_layout_for(repo_id, list);
+        let icon_color = theme.colors.foreground.secondary;
+
+        let layout_button = components::Button::new(format!("{id_prefix}_layout_button"), "")
+            .style(components::ButtonStyle::Transparent)
+            .disabled(disabled)
+            .start_slot(svg_icon(layout.icon(), icon_color, ui_scale.px(14.0)))
+            .on_click(theme, cx, move |this, event, _window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.toggle_file_list_layout(repo_id, list, cx);
+            })
+            .debug_selector(move || format!("{id_prefix}_layout_button"))
+            .gitcomet_tooltip(
+                theme,
+                format!("Layout: {} — click to switch", layout.label()).into(),
+            );
+
+        let sort_button = components::Button::new(format!("{id_prefix}_sort_button"), "")
+            .style(components::ButtonStyle::Transparent)
+            .disabled(disabled)
+            .start_slot(svg_icon("icons/sort.svg", icon_color, ui_scale.px(14.0)))
+            .on_click_with_bounds(theme, cx, move |this, event, bounds, window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.open_popover_for_bounds(
+                    PopoverKind::CommitFileSortMenu { list },
+                    bounds,
+                    window,
+                    cx,
+                );
+            })
+            .debug_selector(move || format!("{id_prefix}_sort_button"))
+            .gitcomet_tooltip(theme, format!("Sort: {}", sort.label()).into());
+
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_1()
+            .child(layout_button)
+            .child(sort_button)
+            .into_any_element()
     }
 
     fn commit_files_section(
@@ -1786,7 +2052,9 @@ impl DetailsPaneView {
         let ui_scale = self.ui_scale();
         let projection =
             self.cached_commit_file_projection(repo_id, commit_details_rev, &details.files);
+        let plan = self.cached_commit_file_plan(repo_id, commit_details_rev, &details.files);
         let visible_count = projection.source_indices.len();
+        let row_count = plan.row_len();
         let files = if details.files.is_empty() {
             div()
                 .text_size(theme.ui_text(14.0))
@@ -1807,7 +2075,7 @@ impl DetailsPaneView {
                 &self.commit_files_scroll,
                 uniform_list(
                     ("commit_details_files_list", repo_id.0),
-                    visible_count,
+                    row_count,
                     cx.processor(Self::render_commit_file_rows),
                 ),
             )
@@ -1818,26 +2086,13 @@ impl DetailsPaneView {
             .into_any_element()
         };
 
-        let sort = self.commit_file_sort;
-        let sort_button = components::Button::new("commit_file_sort_button", sort.control_label())
-            .style(components::ButtonStyle::Transparent)
-            .disabled(details.files.is_empty())
-            .end_slot(svg_icon(
-                "icons/chevron_down.svg",
-                theme.colors.foreground.secondary,
-                ui_scale.px(12.0),
-            ))
-            .on_click_with_bounds(theme, cx, |this, event, bounds, window, cx| {
-                if !event.standard_click() {
-                    return;
-                }
-                this.open_popover_for_bounds(PopoverKind::CommitFileSortMenu, bounds, window, cx);
-            })
-            .debug_selector(|| "commit_file_sort_button".to_string())
-            .gitcomet_tooltip(
-                theme,
-                format!("Sort committed files: {}", sort.label()).into(),
-            );
+        let controls = self.file_list_controls(
+            crate::view::rows::FileListId::CommitFiles,
+            repo_id,
+            "commit_file",
+            details.files.is_empty(),
+            cx,
+        );
 
         let heading = div()
             .flex()
@@ -1855,8 +2110,20 @@ impl DetailsPaneView {
                     .line_clamp(1)
                     .child(format!("Committed files ({})", projection.counts.all)),
             )
-            .child(sort_button);
-        let filters = self.commit_file_filter_tabs(projection.counts, cx);
+            .child(controls);
+        let filters_width = self
+            .commit_files_section_bounds_ref
+            .borrow()
+            .as_ref()
+            .map(|bounds| bounds.size.width)
+            .unwrap_or(Pixels::MAX);
+        let filters = self.commit_file_filter_tabs(
+            crate::view::rows::FileListId::CommitFiles,
+            "commit_file",
+            filters_width,
+            projection.counts,
+            cx,
+        );
 
         let section_bounds = std::rc::Rc::clone(&self.commit_files_section_bounds_ref);
         div()
@@ -2244,13 +2511,13 @@ impl DetailsPaneView {
             .active_repo()
             .map(|repo| {
                 (
-                    StatusSectionEntries::from_repo(repo, StatusSection::Staged)
+                    self.status_section_entries(repo, StatusSection::Staged)
                         .map_or(0, |entries| entries.len()),
-                    StatusSectionEntries::from_repo(repo, StatusSection::CombinedUnstaged)
+                    self.status_section_entries(repo, StatusSection::CombinedUnstaged)
                         .map_or(0, |entries| entries.len()),
-                    StatusSectionEntries::from_repo(repo, StatusSection::Untracked)
+                    self.status_section_entries(repo, StatusSection::Untracked)
                         .map_or(0, |entries| entries.len()),
-                    StatusSectionEntries::from_repo(repo, StatusSection::Unstaged)
+                    self.status_section_entries(repo, StatusSection::Unstaged)
                         .map_or(0, |entries| entries.len()),
                 )
             })
@@ -2259,9 +2526,9 @@ impl DetailsPaneView {
             .active_repo()
             .map(|repo| {
                 (
-                    StatusSectionEntries::from_repo(repo, StatusSection::Untracked)
+                    self.status_section_entries(repo, StatusSection::Untracked)
                         .map_or_else(Vec::new, |entries| entries.path_vec()),
-                    StatusSectionEntries::from_repo(repo, StatusSection::Unstaged)
+                    self.status_section_entries(repo, StatusSection::Unstaged)
                         .map_or_else(Vec::new, |entries| entries.path_vec()),
                 )
             })
@@ -2755,6 +3022,28 @@ impl DetailsPaneView {
             .into(),
         );
 
+        let section_controls = |pane: &mut Self,
+                                section: StatusSection,
+                                id_prefix: &'static str,
+                                cx: &mut gpui::Context<Self>|
+         -> Option<gpui::AnyElement> {
+            let repo_id = repo_id?;
+            Some(pane.file_list_controls(
+                crate::view::rows::FileListId::Status(section),
+                repo_id,
+                id_prefix,
+                false,
+                cx,
+            ))
+        };
+        let unstaged_controls =
+            section_controls(self, StatusSection::CombinedUnstaged, "status_unstaged", cx);
+        let untracked_controls =
+            section_controls(self, StatusSection::Untracked, "status_untracked", cx);
+        let split_unstaged_controls =
+            section_controls(self, StatusSection::Unstaged, "status_split_unstaged", cx);
+        let staged_controls = section_controls(self, StatusSection::Staged, "status_staged", cx);
+
         let section_header = |id: &'static str,
                               title: gpui::AnyElement,
                               show_action: bool,
@@ -2803,6 +3092,9 @@ impl DetailsPaneView {
 
         let unstaged_actions = {
             let mut actions = div().flex().items_center().gap_2();
+            if let Some(controls) = unstaged_controls {
+                actions = actions.child(controls);
+            }
             if local_actions_in_flight {
                 actions = actions.child(
                     spinner(
@@ -2823,6 +3115,9 @@ impl DetailsPaneView {
 
         let untracked_actions = {
             let mut actions = div().flex().items_center().gap_2();
+            if let Some(controls) = untracked_controls {
+                actions = actions.child(controls);
+            }
             if local_actions_in_flight {
                 actions = actions.child(
                     spinner(
@@ -2845,6 +3140,9 @@ impl DetailsPaneView {
 
         let split_unstaged_actions = {
             let mut actions = div().flex().items_center().gap_2();
+            if let Some(controls) = split_unstaged_controls {
+                actions = actions.child(controls);
+            }
             if local_actions_in_flight {
                 actions = actions.child(
                     spinner(
@@ -2867,6 +3165,9 @@ impl DetailsPaneView {
 
         let staged_actions = {
             let mut actions = div().flex().items_center().gap_2();
+            if let Some(controls) = staged_controls {
+                actions = actions.child(controls);
+            }
             if local_actions_in_flight {
                 actions = actions.child(
                     spinner(
@@ -3086,7 +3387,8 @@ impl DetailsPaneView {
             );
             (top_height, (total_height - top_height).max(section_min_h))
         });
-        let unstaged_section = div()
+        let unstaged_section = self
+            .status_section_container(StatusSection::CombinedUnstaged, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3107,7 +3409,8 @@ impl DetailsPaneView {
                     .child(unstaged_body),
             );
 
-        let untracked_section = div()
+        let untracked_section = self
+            .status_section_container(StatusSection::Untracked, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3128,7 +3431,8 @@ impl DetailsPaneView {
                     .child(untracked_body),
             );
 
-        let split_unstaged_section = div()
+        let split_unstaged_section = self
+            .status_section_container(StatusSection::Unstaged, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3149,7 +3453,8 @@ impl DetailsPaneView {
                     .child(split_unstaged_body),
             );
 
-        let staged_section = div()
+        let staged_section = self
+            .status_section_container(StatusSection::Staged, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3315,6 +3620,12 @@ impl DetailsPaneView {
             return components::empty_state_message(theme, "Working tree clean.")
                 .into_any_element();
         }
+        // `count` is the file count the header shows; the list is indexed in
+        // display rows, which a tree pads with directories.
+        let count = self
+            .active_repo()
+            .map(|repo| self.status_file_plan(repo, section).row_len())
+            .unwrap_or(count);
         match section {
             StatusSection::CombinedUnstaged => {
                 let list =
@@ -3789,12 +4100,13 @@ mod tests {
     /// withholds the full wording while there is visibly room for it, which is
     /// the failure this pins. The number comes from measuring the shipped font
     /// — `Stage (3)`, `Discard (3)` and `Stage all changes` plus their padding,
-    /// gaps and the `Unstaged` dropdown title need ~424px of real ink and box.
+    /// gaps, the `Unstaged` dropdown title and the layout/sort controls need
+    /// ~510px of real ink and box.
     #[test]
     fn status_action_labels_expand_as_soon_as_the_row_really_fits() {
         assert_eq!(
             status_action_labels_for_width(
-                px(430.0),
+                px(515.0),
                 "Unstaged".len(),
                 true,
                 &unstaged_header_with_selection(),
@@ -3827,7 +4139,7 @@ mod tests {
     fn status_action_labels_survive_narrower_without_a_selection() {
         // With nothing selected the header carries one button, so the width that
         // forces the three-button header to shrink is still comfortable here.
-        let width = px(260.0);
+        let width = px(340.0);
         assert_eq!(
             status_action_labels_for_width(
                 width,
@@ -3891,7 +4203,7 @@ mod tests {
 
     #[test]
     fn status_action_labels_shrink_earlier_when_zoomed_in() {
-        let width = px(500.0);
+        let width = px(580.0);
         assert_eq!(
             status_action_labels_for_width(
                 width,
@@ -4148,6 +4460,33 @@ mod tests {
     }
 
     #[test]
+    fn another_sections_selection_does_not_suppress_active_row_fallback() {
+        let repo = repo_with_status(RepoStatus {
+            unstaged: std::sync::Arc::new(vec![file_status("a.txt", FileStatusKind::Modified)]),
+            staged: std::sync::Arc::new(vec![file_status("b.txt", FileStatusKind::Modified)]),
+        });
+        let target = DiffTarget::WorkingTree {
+            path: "a.txt".into(),
+            area: DiffArea::Unstaged,
+        };
+        for staged in [vec!["b.txt".into()], Vec::new()] {
+            let selected = StatusMultiSelection {
+                explicit_section: Some(StatusSection::Staged),
+                staged,
+                ..Default::default()
+            };
+            let result = status_section_action_selection(
+                &repo,
+                Some(&target),
+                Some(&selected),
+                StatusSection::CombinedUnstaged,
+            );
+            assert_eq!(result.paths, vec![PathBuf::from("a.txt")]);
+            assert!(!result.from_explicit_selection);
+        }
+    }
+
+    #[test]
     fn status_section_action_selection_limits_active_row_to_matching_split_section() {
         let repo = repo_with_status(RepoStatus {
             unstaged: std::sync::Arc::new(vec![
@@ -4182,6 +4521,28 @@ mod tests {
             }
         );
         assert!(unstaged.paths.is_empty());
+    }
+
+    #[test]
+    fn status_explicit_empty_selection_does_not_fall_back_to_the_preview() {
+        let repo = repo_with_status(RepoStatus {
+            staged: Arc::new(vec![file_status("a.rs", FileStatusKind::Modified)]),
+            unstaged: Arc::new(vec![file_status("a.rs", FileStatusKind::Modified)]),
+        });
+        for section in [StatusSection::CombinedUnstaged, StatusSection::Staged] {
+            let selection = StatusMultiSelection {
+                explicit_section: Some(section),
+                ..Default::default()
+            };
+            let target = DiffTarget::WorkingTree {
+                path: "a.rs".into(),
+                area: section.diff_area(),
+            };
+            let action =
+                status_section_action_selection(&repo, Some(&target), Some(&selection), section);
+            assert!(action.paths.is_empty());
+            assert!(action.from_explicit_selection);
+        }
     }
 
     #[test]

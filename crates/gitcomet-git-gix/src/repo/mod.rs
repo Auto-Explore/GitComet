@@ -47,6 +47,7 @@ mod discard;
 mod file_browser;
 mod git_ops;
 mod history;
+mod line_stats;
 mod log;
 mod mergetool;
 mod mergetool_builtin;
@@ -603,12 +604,38 @@ impl GitRepository for GixRepo {
         self.commit_details_impl(id)
     }
 
+    fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {
+        self.resolve_commit_impl(reference)
+    }
+
     fn diff_range_files(
         &self,
         from: &CommitId,
         to: Option<&CommitId>,
     ) -> Result<Vec<CommitFileChange>> {
         self.diff_range_files_impl(from, to)
+    }
+
+    fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.uncommitted_line_stats_impl(&CancellationToken::new())
+    }
+
+    fn uncommitted_line_stats_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.uncommitted_line_stats_impl(cancellation)
+    }
+
+    fn uncommitted_line_stats_for_status_cancellable(
+        &self,
+        status: &RepoStatus,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.line_stats_for_entries_impl(&status.unstaged, cancellation)
     }
 
     fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {

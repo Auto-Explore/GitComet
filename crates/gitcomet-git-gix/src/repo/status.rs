@@ -411,7 +411,10 @@ fn apply_unmerged_conflicts(repo: &gix::Repository, unstaged: &mut Vec<FileStatu
     Ok(())
 }
 
-fn tree_id_for_commit(repo: &gix::Repository, commit_id: &gix::ObjectId) -> Result<gix::ObjectId> {
+pub(super) fn tree_id_for_commit(
+    repo: &gix::Repository,
+    commit_id: &gix::ObjectId,
+) -> Result<gix::ObjectId> {
     repo.find_commit(*commit_id)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit lookup: {e}"))))?
         .tree_id()
@@ -1326,7 +1329,7 @@ fn supplement_gitlink_status_from_porcelain(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use rustc_hash::FxHashMap;
 
     use super::{
@@ -1410,7 +1413,7 @@ mod tests {
             .expect("spawn git")
     }
 
-    fn git_success(workdir: &Path, args: &[&str]) {
+    pub(crate) fn git_success(workdir: &Path, args: &[&str]) {
         let output = git_output(workdir, args);
         assert!(
             output.status.success(),
@@ -1433,7 +1436,7 @@ mod tests {
         output
     }
 
-    fn init_test_repo(workdir: &Path) {
+    pub(crate) fn init_test_repo(workdir: &Path) {
         let _ = ensure_isolated_git_test_env();
         git_success(workdir, &["init"]);
         for args in [
@@ -1450,7 +1453,7 @@ mod tests {
         }
     }
 
-    fn write_file(workdir: &Path, relative: &str, contents: &str) {
+    pub(crate) fn write_file(workdir: &Path, relative: &str, contents: &str) {
         let path = workdir.join(relative);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create parent directories");
@@ -1458,7 +1461,7 @@ mod tests {
         fs::write(path, contents).expect("write file");
     }
 
-    fn open_repo(workdir: &Path) -> super::super::GixRepo {
+    pub(crate) fn open_repo(workdir: &Path) -> super::super::GixRepo {
         let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
         super::super::GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
     }
@@ -2389,5 +2392,105 @@ mod tests {
             gix_repo.worktree_status_impl().expect("worktree lane"),
             *status.unstaged
         );
+    }
+
+    /// The in-process pass has to beat two `git diff --numstat` spawns without
+    /// moving the status walk. Reports timings rather than asserting; run with
+    /// `-- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing probe"]
+    fn perf_uncommitted_line_stats_baseline() {
+        // ~10 KB per file. The `status_dirty_500_files` fixture writes ~30
+        // bytes, so it measures lstat throughput, not content I/O.
+        fn body(seed: usize, marker: &str) -> String {
+            let mut out = String::with_capacity(10_240);
+            for line in 0..200 {
+                out.push_str(&format!(
+                    "{marker} {seed:05} line {line:03} some representative source text here\n"
+                ));
+            }
+            out
+        }
+
+        for (tracked, dirty, staged) in [(500usize, 25usize, 25usize), (500, 250, 0)] {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let workdir = tmp.path();
+            init_test_repo(workdir);
+
+            for index in 0..tracked {
+                write_file(
+                    workdir,
+                    &format!("src/mod{:02}/file{index:04}.rs", index % 32),
+                    &body(index, "base"),
+                );
+            }
+            git_success(workdir, &["add", "."]);
+            git_success(workdir, &["commit", "-q", "-m", "seed"]);
+
+            for index in 0..dirty {
+                write_file(
+                    workdir,
+                    &format!("src/mod{:02}/file{index:04}.rs", index % 32),
+                    &body(index, "edit"),
+                );
+            }
+            for index in dirty..dirty + staged {
+                write_file(
+                    workdir,
+                    &format!("src/mod{:02}/file{index:04}.rs", index % 32),
+                    &body(index, "edit"),
+                );
+            }
+            if staged > 0 {
+                git_success(workdir, &["add", "src"]);
+                for index in 0..dirty {
+                    write_file(
+                        workdir,
+                        &format!("src/mod{:02}/file{index:04}.rs", index % 32),
+                        &body(index, "again"),
+                    );
+                }
+            }
+
+            let gix_repo = open_repo(workdir);
+            // Warm the caches so the numbers compare work, not first touch.
+            let _ = gix_repo.status_impl().expect("warmup status");
+            let _ = git_output(workdir, &["diff", "--numstat", "-z"]);
+
+            let _ = gix_repo
+                .uncommitted_line_stats_impl(&gitcomet_core::services::CancellationToken::new())
+                .expect("warmup line stats");
+
+            let mut status_ms = u128::MAX;
+            let mut spawn_ms = u128::MAX;
+            let mut in_process_ms = u128::MAX;
+            for _ in 0..5 {
+                let start = std::time::Instant::now();
+                let status = gix_repo.status_impl().expect("status");
+                status_ms = status_ms.min(start.elapsed().as_millis());
+                std::hint::black_box(status);
+
+                let start = std::time::Instant::now();
+                let a = git_output(workdir, &["diff", "--numstat", "-z", "--no-renames"]);
+                let b = git_output(
+                    workdir,
+                    &["diff", "--cached", "--numstat", "-z", "--no-renames"],
+                );
+                spawn_ms = spawn_ms.min(start.elapsed().as_millis());
+                std::hint::black_box((a, b));
+
+                let start = std::time::Instant::now();
+                let stats = gix_repo
+                    .uncommitted_line_stats_impl(&gitcomet_core::services::CancellationToken::new())
+                    .expect("line stats");
+                in_process_ms = in_process_ms.min(start.elapsed().as_millis());
+                std::hint::black_box(stats);
+            }
+
+            println!(
+                "tracked={tracked} dirty={dirty} staged={staged}: gix status {status_ms} ms | \
+                 two numstat spawns {spawn_ms} ms | in-process pass {in_process_ms} ms (best of 5)"
+            );
+        }
     }
 }

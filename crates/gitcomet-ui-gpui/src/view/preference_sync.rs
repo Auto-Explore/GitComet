@@ -263,6 +263,24 @@ impl GitCometView {
         self.schedule_ui_settings_persist(cx);
     }
 
+    pub(in crate::view) fn set_file_list_layout(
+        &mut self,
+        next: FileListLayout,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_list_layout == next {
+            return;
+        }
+
+        self.file_list_layout = next;
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.file_lists.layout = next;
+        });
+        self.details_pane
+            .update(cx, |pane, cx| pane.set_file_list_layout(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
     pub(in crate::view) fn set_commit_push_after_enabled(
         &mut self,
         enabled: bool,

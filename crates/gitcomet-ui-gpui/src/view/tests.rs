@@ -33,6 +33,31 @@ fn selected_sidebar_branch_colors_come_from_theme_interaction_tokens() {
 }
 
 #[test]
+fn status_section_shortcuts_leave_modified_app_and_text_chords_alone() {
+    for chord in ["ctrl-a", "secondary-a", "ctrl-s", "secondary-u", "space"] {
+        assert!(
+            is_status_section_shortcut(&gpui::Keystroke::parse(chord).unwrap()),
+            "{chord}"
+        );
+    }
+    for chord in [
+        "a",
+        "s",
+        "ctrl-shift-a",
+        "secondary-shift-a",
+        "alt-a",
+        "alt-space",
+        "f4",
+        "secondary-f",
+    ] {
+        assert!(
+            !is_status_section_shortcut(&gpui::Keystroke::parse(chord).unwrap()),
+            "{chord}"
+        );
+    }
+}
+
+#[test]
 fn recent_repository_shortcut_is_not_a_diff_select_all_candidate() {
     let recent = gpui::Keystroke::parse("secondary-shift-a").expect("valid shortcut");
     let select_all = gpui::Keystroke::parse("secondary-a").expect("valid shortcut");
@@ -194,6 +219,41 @@ fn focus_detached_window_focus(cx: &mut gpui::VisualTestContext) {
         let _ = window.draw(app);
     });
     test_support::redraw(cx);
+}
+
+fn reveal_commit_is_open(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+) -> bool {
+    cx.update(|_window, app| test_support::reveal_commit_is_open(view.read(app), app))
+}
+
+fn open_reveal_commit_dialog(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
+    cx.simulate_keystrokes("secondary-g");
+    test_support::redraw(cx);
+    assert!(
+        reveal_commit_is_open(cx, view),
+        "expected secondary-g to open the Go to dialog"
+    );
+}
+
+fn commit_lookup(store: &AppStore) -> gitcomet_state::model::CommitLookup {
+    store.snapshot().repos[0]
+        .history_state
+        .commit_lookup
+        .clone()
+}
+
+fn repo_commit_lookup(store: &AppStore, repo_id: RepoId) -> gitcomet_state::model::CommitLookup {
+    store
+        .snapshot()
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .unwrap_or_else(|| panic!("repo {repo_id:?} in snapshot"))
+        .history_state
+        .commit_lookup
+        .clone()
 }
 
 fn command_palette_input_focus(
@@ -1359,16 +1419,17 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
     };
 
     let mut selection = StatusMultiSelection {
+        explicit_section: Some(StatusSection::CombinedUnstaged),
         untracked: vec![],
         untracked_anchor: None,
         unstaged: vec![a.clone(), b.clone()],
         unstaged_anchor: Some(b),
         unstaged_anchor_index: None,
-        unstaged_anchor_status_rev: None,
+        unstaged_anchor_order_rev: None,
         staged: vec![c.clone()],
         staged_anchor: Some(c),
         staged_anchor_index: None,
-        staged_anchor_status_rev: None,
+        staged_anchor_order_rev: None,
     };
 
     reconcile_status_multi_selection(&mut selection, &status);
@@ -5499,4 +5560,440 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
         collapsed_after.is_empty(),
         "right-clicking a branch group must not toggle it, got {collapsed_after:?}"
     );
+}
+
+#[test]
+fn reconciliation_releases_vanished_selection_but_preserves_intentional_empty_selection() {
+    let status = RepoStatus {
+        staged: Default::default(),
+        unstaged: Default::default(),
+    };
+    for use_repo in [false, true] {
+        let mut selection = StatusMultiSelection {
+            explicit_section: Some(StatusSection::Staged),
+            staged: vec!["gone.txt".into()],
+            ..Default::default()
+        };
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::new(),
+            },
+        );
+        repo.worktree_status = Loadable::Ready(Arc::clone(&status.unstaged));
+        repo.staged_status = Loadable::Ready(Arc::clone(&status.staged));
+        if use_repo {
+            reconcile_status_multi_selection_with_repo(&mut selection, &repo);
+        } else {
+            reconcile_status_multi_selection(&mut selection, &status);
+        }
+        assert!(selection.is_empty());
+        assert_eq!(selection.explicit_section, None);
+        selection.explicit_section = Some(StatusSection::Staged);
+        if use_repo {
+            reconcile_status_multi_selection_with_repo(&mut selection, &repo);
+        } else {
+            reconcile_status_multi_selection(&mut selection, &status);
+        }
+        assert_eq!(selection.explicit_section, Some(StatusSection::Staged));
+    }
+}
+
+#[test]
+fn untracked_content_revision_ignores_line_stats() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::new(),
+        },
+    );
+    let untracked = status_section_content_rev(&repo, StatusSection::Untracked);
+    let unstaged = status_section_content_rev(&repo, StatusSection::Unstaged);
+    repo.unstaged_line_stats_rev += 1;
+    assert_eq!(
+        status_section_content_rev(&repo, StatusSection::Untracked),
+        untracked
+    );
+    assert_ne!(
+        status_section_content_rev(&repo, StatusSection::Unstaged),
+        unstaged
+    );
+}
+
+/// Switching repository tabs while the dialog is open leaves the typed query
+/// pointing at the *new* repository, whose lookup slot has never been asked
+/// about it. Nothing else will ask until the user edits the query, so without a
+/// re-request the row sits on "Resolving…" forever.
+#[gpui::test]
+fn reveal_commit_reissues_its_lookup_against_a_newly_active_repository(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_reveal_commit_dialog(cx, &view);
+
+    cx.simulate_input("deadbee");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert_eq!(
+        repo_commit_lookup(&store, RepoId(1)).reference,
+        Some(CommitId("deadbee".into())),
+        "the active repository should have been asked about the typed reference"
+    );
+
+    // Switch tabs by publishing the snapshot directly: `dispatch` hands the
+    // message to the store's own worker thread, which `run_until_parked` (a
+    // gpui-executor barrier) does not wait for.
+    let mut switched = (*store.snapshot()).clone();
+    switched.active_repo = Some(RepoId(2));
+    store.replace_snapshot_for_test(Arc::new(switched));
+    sync_view_snapshot(cx, &view);
+    cx.run_until_parked();
+    test_support::redraw(cx);
+
+    assert_eq!(
+        repo_commit_lookup(&store, RepoId(2)).reference,
+        Some(CommitId("deadbee".into())),
+        "the query must be re-asked of the repository that is now active"
+    );
+}
+
+/// The palette and the dialog paint on the same overlay layer, each with its
+/// own scrim. Opening one over the other would stack two scrims and strand the
+/// lower modal when the upper is dismissed.
+#[gpui::test]
+fn reveal_commit_and_the_command_palette_never_stack(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(command_palette_is_open(cx, &view), "palette should open");
+
+    cx.simulate_keystrokes("secondary-g");
+    test_support::redraw(cx);
+    assert!(
+        reveal_commit_is_open(cx, &view),
+        "the dialog should open over the palette"
+    );
+    assert!(
+        !command_palette_is_open(cx, &view),
+        "opening the dialog must close the palette rather than stack on it"
+    );
+
+    // And the other direction.
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(command_palette_is_open(cx, &view), "palette should reopen");
+    assert!(
+        !reveal_commit_is_open(cx, &view),
+        "opening the palette must close the dialog"
+    );
+
+    cx.simulate_keystrokes("escape");
+    test_support::redraw(cx);
+    assert!(
+        !command_palette_is_open(cx, &view) && !reveal_commit_is_open(cx, &view),
+        "escape should leave nothing open"
+    );
+}
+
+#[gpui::test]
+fn reveal_commit_dialog_opens_on_secondary_g_and_takes_focus(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+
+    open_reveal_commit_dialog(cx, &view);
+    assert!(
+        cx.debug_bounds("modal_scrim").is_some(),
+        "expected the dialog to use the shared modal scrim"
+    );
+    assert!(
+        cx.debug_bounds("reveal_commit_title").is_some(),
+        "expected the Go to title"
+    );
+    assert!(
+        cx.debug_bounds("reveal_commit_examples").is_some(),
+        "an empty query should show the examples"
+    );
+
+    let input_focus = cx.update(|_window, app| {
+        view.read(app)
+            .reveal_commit_dialog
+            .read(app)
+            .query_input
+            .read(app)
+            .focus_handle()
+    });
+    cx.update(|window, app| {
+        assert_eq!(
+            window.focused(app),
+            Some(input_focus),
+            "expected the query input to own window focus after opening"
+        );
+    });
+}
+
+/// Both close paths have to leave the dialog reopenable. Escape goes through the
+/// input's transient-key flag while the chord goes through the action, so they
+/// can drift apart.
+#[gpui::test]
+fn reveal_commit_dialog_toggles_and_escapes_without_latching(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+
+    open_reveal_commit_dialog(cx, &view);
+
+    cx.simulate_keystrokes("secondary-g");
+    test_support::redraw(cx);
+    assert!(
+        !reveal_commit_is_open(cx, &view),
+        "expected secondary-g to close the dialog"
+    );
+
+    open_reveal_commit_dialog(cx, &view);
+
+    cx.simulate_keystrokes("escape");
+    test_support::redraw(cx);
+    assert!(
+        !reveal_commit_is_open(cx, &view),
+        "expected escape to close the dialog"
+    );
+
+    open_reveal_commit_dialog(cx, &view);
+}
+
+/// A lookup is a git call, so a single character must not spawn one; two
+/// already can be a tag, and that is where asking starts.
+#[gpui::test]
+fn reveal_commit_asks_git_only_once_the_query_could_be_a_reference(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_reveal_commit_dialog(cx, &view);
+
+    cx.simulate_input("d");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert_eq!(
+        commit_lookup(&store).reference,
+        None,
+        "a single character must not send git looking for a reference"
+    );
+    assert!(
+        cx.debug_bounds("reveal_commit_examples").is_some(),
+        "the examples stay up until there is something to look up"
+    );
+
+    cx.simulate_input("eadbee");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+    assert_eq!(
+        commit_lookup(&store).reference,
+        Some(CommitId("deadbee".into())),
+        "the current query should be the one being resolved"
+    );
+    assert!(
+        cx.debug_bounds("reveal_commit_examples").is_none(),
+        "the examples give way once a lookup is under way"
+    );
+}
+
+/// The point of the preview is that Enter reveals the *resolved* commit: the
+/// full id, so the history walk matches loaded rows outright.
+#[gpui::test]
+fn reveal_commit_enter_reveals_the_resolved_full_id(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_reveal_commit_dialog(cx, &view);
+
+    // `install_app_shortcuts_for_test` binds only the app chords; Enter belongs
+    // to the TextInput context, which the real app binds separately.
+    cx.update(|window, app| {
+        app.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            crate::kit::Enter,
+            Some("TextInput"),
+        )]);
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_input("deadbee");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+
+    // Stand in for the backend answering the lookup the typing just issued.
+    let full = CommitId("deadbeef0123456789abcdef0123456789abcdef".into());
+    let mut state = (*store.snapshot()).clone();
+    let lookup = &mut state.repos[0].history_state.commit_lookup;
+    lookup.result = gitcomet_state::model::Loadable::Ready(gitcomet_core::domain::Commit {
+        id: full.clone(),
+        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+        summary: "the reland".into(),
+        author: "Test User".into(),
+        time: std::time::SystemTime::UNIX_EPOCH,
+    });
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    assert!(
+        cx.debug_bounds("reveal_commit_match").is_some(),
+        "expected the resolved commit to be offered as a row"
+    );
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    test_support::redraw(cx);
+
+    assert!(
+        !reveal_commit_is_open(cx, &view),
+        "activating a result should close the dialog"
+    );
+    assert_eq!(
+        store.snapshot().repos[0]
+            .history_state
+            .reveal_target
+            .as_ref(),
+        Some(&full),
+        "the reveal should target the full id, not the abbreviation that was typed"
+    );
+}
+
+fn open_palette_on_ready_repo(
+    cx: &mut gpui::TestAppContext,
+    merging: bool,
+) -> (
+    AppStore,
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    if merging {
+        state.repos[0].merge_commit_message =
+            Loadable::Ready(Some("Merge branch 'feature'".to_string()));
+    }
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    (store, view, cx)
+}
+
+/// Asked for explicitly: a command that cannot run right now stays listed,
+/// greyed out, with a hover tooltip saying why — and Enter does nothing.
+#[gpui::test]
+fn command_palette_keeps_unavailable_commands_listed_with_a_reason(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_store, view, cx) = open_palette_on_ready_repo(cx, false);
+
+    cx.simulate_input("abort merge");
+    test_support::redraw(cx);
+
+    let row = cx
+        .debug_bounds("command_palette_disabled_abort-merge")
+        .expect("Abort Merge should be listed, disabled, with no merge in progress");
+    assert!(
+        cx.debug_bounds("command_palette_unavailable_reason")
+            .is_some(),
+        "the keyboard-selected disabled row should say why in place"
+    );
+
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
+    test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some("Only available while a merge is in progress".to_string()),
+        "hovering the disabled row should explain why it is disabled"
+    );
+
+    cx.simulate_keystrokes("enter");
+    test_support::redraw(cx);
+    assert!(
+        command_palette_is_open(cx, &view),
+        "Enter on a disabled command must not run it or close the palette"
+    );
+    cx.update(|_window, app| {
+        assert!(
+            test_support::popover_kind(view.read(app), app).is_none(),
+            "no abort confirmation should open"
+        );
+    });
+}
+
+/// The same command becomes live exactly when its state holds, and runs
+/// through the action bar's own confirmation.
+#[gpui::test]
+fn command_palette_enables_abort_merge_during_a_merge(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (_store, view, cx) = open_palette_on_ready_repo(cx, true);
+
+    cx.simulate_input("abort merge");
+    test_support::redraw(cx);
+    assert!(
+        cx.debug_bounds("command_palette_disabled_abort-merge")
+            .is_none(),
+        "Abort Merge should be enabled while a merge is in progress"
+    );
+
+    cx.simulate_keystrokes("enter");
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        assert!(
+            matches!(
+                test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::MergeAbortConfirm { repo_id: RepoId(1) })
+            ),
+            "Abort Merge should open the same confirmation as the action bar"
+        );
+    });
 }

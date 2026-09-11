@@ -3915,6 +3915,35 @@ impl GitRepository for SelectedDiffSchedulingRepo {
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
         unsupported_repo_result()
     }
+    fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        // Deliberately blind to cancellation, like a backend's plain scan: the
+        // only way out is the test releasing it.
+        let _ = self.started_tx.send(self.started_repo_id);
+        if matches!(self.mode, SelectedDiffRepoMode::BlockingDiff) {
+            wait_for_release_signal(&self.release);
+        }
+        Ok(Default::default())
+    }
+    fn uncommitted_line_stats_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _ = self.started_tx.send(self.started_repo_id);
+        if matches!(self.mode, SelectedDiffRepoMode::BlockingDiff) {
+            while !cancellation.is_cancelled() {
+                let (lock, condvar) = &*self.release;
+                let released = lock.lock().expect("release mutex");
+                let (released, _) = condvar
+                    .wait_timeout(released, Duration::from_millis(10))
+                    .expect("release wait");
+                if *released {
+                    break;
+                }
+            }
+        }
+        cancellation.check_cancelled()?;
+        Ok(Default::default())
+    }
     fn diff_parsed_cancellable(
         &self,
         target: &DiffTarget,
@@ -5490,6 +5519,121 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         started_rx
             .recv_timeout(Duration::from_millis(200))
             .expect("repo B diff should start once repo A load epoch is cancelled"),
+        repo_b
+    );
+}
+
+/// The line-stats scan reads every changed file, so a superseded one must stop
+/// when its repository's loads are cancelled -- otherwise it holds the single
+/// repo-load worker and every queued load behind it waits for a result nobody
+/// will use.
+#[test]
+fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
+    let repo_a = RepoId(530);
+    let repo_b = RepoId(531);
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release_guard = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<RepoId>();
+    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = FxHashMap::default();
+        repos.insert(
+            repo_a,
+            Arc::new(SelectedDiffSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-line-stats-blocking-a"),
+                },
+                mode: SelectedDiffRepoMode::BlockingDiff,
+                started_tx: started_tx.clone(),
+                started_repo_id: repo_a,
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos.insert(
+            repo_b,
+            Arc::new(SelectedDiffSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-line-stats-ready-b"),
+                },
+                mode: SelectedDiffRepoMode::ReadyDiff,
+                started_tx,
+                started_repo_id: repo_b,
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_a,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-line-stats-state-a"),
+        },
+    ));
+    state.repos.push(RepoState::new_opening(
+        repo_b,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-line-stats-state-b"),
+        },
+    ));
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let mut repo_task_tokens = FxHashMap::default();
+    let executors = super::effects::EffectExecutors {
+        executor: &executor,
+        repo_load_executor: &repo_load_executor,
+        session_persist_executor: &executor,
+        metadata_executor: &metadata_executor,
+    };
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::LoadUncommittedLineStats { repo_id: repo_a },
+    );
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("repo A line-stats task did not start"),
+        repo_a
+    );
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::CancelRepoLoads {
+            repo_id: repo_a,
+            load_epoch: 0,
+        },
+    );
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx,
+        Effect::LoadUncommittedLineStats { repo_id: repo_b },
+    );
+
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("repo B line stats should start once repo A load epoch is cancelled"),
         repo_b
     );
 }

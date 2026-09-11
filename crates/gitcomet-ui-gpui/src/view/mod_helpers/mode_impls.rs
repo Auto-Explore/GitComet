@@ -237,7 +237,9 @@ pub(crate) enum PopoverKind {
     CommitOptionsMenu {
         repo_id: RepoId,
     },
-    CommitFileSortMenu,
+    CommitFileSortMenu {
+        list: crate::view::rows::FileListId,
+    },
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
     },
@@ -1139,6 +1141,57 @@ impl ThemeMode {
 
     pub(crate) const fn is_automatic(&self) -> bool {
         matches!(self, Self::Automatic)
+    }
+}
+
+/// Whether a changed-file list groups by directory. The global default is a
+/// persisted preference; each list may override it transiently.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum FileListLayout {
+    #[default]
+    Flat,
+    Tree,
+}
+
+impl FileListLayout {
+    pub(crate) const fn key(self) -> &'static str {
+        match self {
+            Self::Flat => "flat",
+            Self::Tree => "tree",
+        }
+    }
+
+    pub(crate) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "flat" => Some(Self::Flat),
+            "tree" => Some(Self::Tree),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Flat => "Flat list",
+            Self::Tree => "Tree",
+        }
+    }
+
+    pub(crate) const fn settings_label(self) -> &'static str {
+        self.label()
+    }
+
+    pub(crate) const fn icon(self) -> &'static str {
+        match self {
+            Self::Flat => "icons/menu.svg",
+            Self::Tree => "icons/list_tree.svg",
+        }
+    }
+
+    pub(crate) const fn toggled(self) -> Self {
+        match self {
+            Self::Flat => Self::Tree,
+            Self::Tree => Self::Flat,
+        }
     }
 }
 

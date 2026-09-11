@@ -124,6 +124,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::UncommittedLineStatsLoaded { repo_id, result } => f
+                .debug_struct("UncommittedLineStatsLoaded")
+                .field("repo_id", repo_id)
+                .field("ok", &result.is_ok())
+                .finish(),
             InternalMsg::StatusLoaded { repo_id, result } => f
                 .debug_struct("StatusLoaded")
                 .field("repo_id", repo_id)
@@ -352,6 +357,18 @@ impl std::fmt::Debug for InternalMsg {
                 .debug_struct("CommitRevealResolved")
                 .field("repo_id", repo_id)
                 .field("reference", reference)
+                .field("result", result)
+                .finish(),
+            InternalMsg::CommitLookupResolved {
+                repo_id,
+                reference,
+                request,
+                result,
+            } => f
+                .debug_struct("CommitLookupResolved")
+                .field("repo_id", repo_id)
+                .field("reference", reference)
+                .field("request", request)
                 .field("result", result)
                 .finish(),
             InternalMsg::RangeFilesLoaded {

@@ -209,6 +209,12 @@ impl MainPaneView {
                 0
             };
             status_rev.hash(&mut hasher);
+            // Edit-size sorting can change file neighbors without a status change.
+            let line_stats_rev = match repo.diff_state.diff_target.as_ref() {
+                Some(DiffTarget::WorkingTree { area, .. }) => repo.line_stats_rev(*area),
+                _ => 0,
+            };
+            line_stats_rev.hash(&mut hasher);
             let commit_details_rev = if matches!(
                 repo.diff_state.diff_target,
                 Some(DiffTarget::Commit { path: Some(_), .. })
@@ -1975,6 +1981,25 @@ impl MainPaneView {
             .flatten()
     }
 
+    /// Whether acting on this file will consume the singleton row selection.
+    /// Empty or unrelated selections must survive a shortcut in the diff pane.
+    pub(in crate::view) fn status_single_selection_for_shortcut(
+        &self,
+        repo_id: RepoId,
+        area: DiffArea,
+        path: &std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.root_view
+            .update(cx, |root, cx| {
+                root.details_pane
+                    .read(cx)
+                    .status_selected_paths_for_area(repo_id, area)
+                    == std::slice::from_ref(path)
+            })
+            .unwrap_or(false)
+    }
+
     /// Drop the row selection a shortcut has just acted on.
     pub(in crate::view) fn clear_status_selection_for_shortcut(
         &mut self,
@@ -2073,15 +2098,23 @@ impl MainPaneView {
             .unwrap_or(ChangeTrackingView::Combined)
     }
 
-    pub(in crate::view) fn scroll_status_section_to_ix(
+    /// Resolve the path against the pane's current order, including when
+    /// navigation fell back to source order while its projection was unavailable.
+    pub(in crate::view) fn scroll_status_section_to_path(
         &mut self,
         section: StatusSection,
-        ix: usize,
+        path: &std::path::Path,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    let Some(position) = pane.status_path_display_position(section, path) else {
+                        return;
+                    };
+                    let ix = pane
+                        .reveal_status_row(section, position, cx)
+                        .unwrap_or(position);
                     match section {
                         StatusSection::CombinedUnstaged | StatusSection::Unstaged => pane
                             .unstaged_scroll
@@ -2100,16 +2133,22 @@ impl MainPaneView {
 }
 
 impl MainPaneView {
+    /// `position` is an index into the tree-ordered file list, not a display
+    /// row: a tree pads the list with directory rows and may be hiding the
+    /// target entirely, so it is revealed and resolved first.
     pub(in crate::view) fn scroll_commit_details_file_to_ix(
         &mut self,
-        ix: usize,
+        position: usize,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    let row = pane
+                        .reveal_commit_file_row(position, cx)
+                        .unwrap_or(position);
                     pane.commit_files_scroll
-                        .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center);
+                        .scroll_to_item_strict(row, gpui::ScrollStrategy::Center);
                     cx.notify();
                 });
         });

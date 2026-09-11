@@ -181,7 +181,10 @@ impl Render for GitCometView {
                 self.set_hook_activity_dialog_repo(None, cx);
             } else if self.hook_activity_workflow_is_open(cx) {
                 // A manual open won the race with the queued automatic open.
-            } else if self.is_overlay_open(cx) || self.command_palette_open {
+            } else if self.is_overlay_open(cx)
+                || self.command_palette_open
+                || self.reveal_commit_open
+            {
                 self.minimize_hook_activity_chains([(repo_id, operation_id)], cx);
             } else {
                 self.open_popover_centered(
@@ -588,6 +591,14 @@ impl Render for GitCometView {
                 this.toggle_command_palette(window, cx);
                 cx.stop_propagation();
             }))
+            .on_action(cx.listener(|this, _: &ToggleRevealCommit, window, cx| {
+                // The availability gate lives in `toggle_reveal_commit`, which
+                // the app-level handler reaches too. Claiming the action either
+                // way keeps the chord from falling through to that handler and
+                // toggling the dialog a second time.
+                this.toggle_reveal_commit(window, cx);
+                cx.stop_propagation();
+            }))
             .on_action(cx.listener(|this, _: &LocateFileInExplorer, _window, cx| {
                 this.locate_open_file_in_explorer(cx);
                 cx.stop_propagation();
@@ -767,6 +778,7 @@ impl Render for GitCometView {
             .left_0()
             .size_full()
             .child(self.command_palette.clone())
+            .child(stable_overlay_view(self.reveal_commit_dialog.clone()))
             .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.commit_message_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))

@@ -13,10 +13,10 @@ use gitcomet_core::conflict_session::{
     ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
 };
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitFileChange, CommitId, EMPTY_TREE_ID, FileEntry, FileSource,
-    FileStatusKind, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
-    RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
-    WorktreeDirtySummary,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, EMPTY_TREE_ID, FileEntry,
+    FileSource, FileStatusKind, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry,
+    Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence,
+    Worktree, WorktreeDirtySummary,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
@@ -2458,6 +2458,28 @@ pub(super) fn worktree_status_loaded(
     effects
 }
 
+pub(super) fn uncommitted_line_stats_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<gitcomet_core::domain::UncommittedLineStats, Error>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        // Previous numbers stand: a cosmetic column that re-fires on every fs
+        // event should not raise a banner.
+        if let Ok(next) = result {
+            repo_state.set_uncommitted_line_stats(Loadable::Ready(std::sync::Arc::new(next)));
+        }
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::UNCOMMITTED_LINE_STATS,
+            Effect::LoadUncommittedLineStats { repo_id },
+            &mut effects,
+        );
+    }
+    effects
+}
+
 pub(super) fn staged_status_loaded(
     state: &mut AppState,
     repo_id: RepoId,
@@ -2873,6 +2895,50 @@ pub(super) fn finish_commit_reveal(state: &mut AppState, repo_id: RepoId) -> Vec
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_reveal_target(None);
     }
+    Vec::new()
+}
+
+/// Ask what commit `reference` names, for the Reveal Commit dialog's preview.
+///
+/// Nothing is selected here — that is `reveal_commit`'s job. A failure is left
+/// in the lookup for the dialog to render inline rather than raised as a
+/// notification, because a half-typed reference not resolving is the normal
+/// case while the user is still typing.
+pub(super) fn resolve_commit_lookup(
+    state: &mut AppState,
+    repo_id: RepoId,
+    reference: CommitId,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let request = repo_state.begin_commit_lookup(reference.clone());
+    vec![Effect::ResolveCommitLookup {
+        repo_id,
+        reference,
+        request,
+    }]
+}
+
+pub(super) fn commit_lookup_resolved(
+    state: &mut AppState,
+    repo_id: RepoId,
+    reference: CommitId,
+    request: u64,
+    result: std::result::Result<Commit, Error>,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    // A reply for a reference the user has already typed past.
+    if repo_state.history_state.commit_lookup.reference.as_ref() != Some(&reference) {
+        return Vec::new();
+    }
+    let value = match result {
+        Ok(commit) => Loadable::Ready(commit),
+        Err(e) => Loadable::Error(e.to_string()),
+    };
+    repo_state.finish_commit_lookup(request, value);
     Vec::new()
 }
 

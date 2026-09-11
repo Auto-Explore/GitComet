@@ -330,6 +330,12 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::LoadUncommittedLineStats { repo_id } => send(Msg::Internal(
+            crate::msg::InternalMsg::UncommittedLineStatsLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadStatus { repo_id } => {
             send(Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
                 repo_id,
@@ -543,6 +549,18 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::CommitRevealResolved {
                 repo_id,
                 reference,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::ResolveCommitLookup {
+            repo_id,
+            reference,
+            request,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::CommitLookupResolved {
+                repo_id,
+                reference,
+                request,
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -1627,6 +1645,19 @@ pub(super) fn schedule_effect(
                 );
             }
         }
+        Effect::LoadUncommittedLineStats { repo_id } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_uncommitted_line_stats(
+                    repo_load_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    cancellation,
+                );
+            }
+        }
         Effect::LoadStagedStatus { repo_id } => {
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
@@ -1984,6 +2015,19 @@ pub(super) fn schedule_effect(
             {
                 repo_load::schedule_resolve_commit_for_reveal(
                     executor, repos, msg_tx, repo_id, reference,
+                );
+            }
+        }
+        Effect::ResolveCommitLookup {
+            repo_id,
+            reference,
+            request,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_resolve_commit_lookup(
+                    executor, repos, msg_tx, repo_id, reference, request,
                 );
             }
         }
