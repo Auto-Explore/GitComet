@@ -27,6 +27,7 @@ These shortcuts apply in the normal GitComet window.
 | Toggle open and recently closed repositories | `Ctrl-Shift-A`, `Cmd-Shift-O`, `Option-Cmd-O` | `Ctrl-Shift-A`, `Ctrl-Shift-O` | In an embedded terminal on Windows/Linux, `Ctrl-Shift-A` keeps its terminal “Select All” behavior. |
 | Open active repository in external code editor | `Cmd-Shift-E` | `Ctrl-Shift-E` | Only active when an external code editor is configured. |
 | Show the open file in the file explorer | `Cmd-Shift-L` | `Ctrl-Shift-L` | Switches the sidebar to Files, expands the folders leading to the file, and scrolls it into view. |
+| Open the repository's remote in a web browser | `Cmd-K` | `Ctrl-K` | Opens the remote's page on its host (GitHub, GitLab, Bitbucket, Azure DevOps, Gitea/Codeberg, AWS CodeCommit, or a self-hosted forge). With several such remotes a menu lists them, `origin` first; `1`–`9` pick directly. Also in the command palette, the app menu, and a remote's right-click menu in the sidebar. In an embedded terminal on Windows/Linux the shell keeps `Ctrl-K`. |
 | Close the active repository tab, or close the window if no repo tab can close | `Cmd-W` | `Ctrl-W` | |
 | Close the active window | `Cmd-Shift-W` | `Ctrl-Shift-W` | |
 | Previous repository tab | `Cmd-PageUp`, `Cmd-{`, `Option-Cmd-Left` | `Ctrl-PageUp`, `Ctrl-Shift-Tab` | |
@@ -160,7 +161,7 @@ Context-menu keyboard behavior is the same on every platform:
 - `Up` / `Down`: move the selection.
 - `Enter`: activate the selected item, or the first enabled item if nothing is selected.
 - `Escape`: close the menu.
-- Single-letter shortcuts shown inline activate the matching entry.
+- Single-letter or digit shortcuts shown inline activate the matching entry.
 
 Additional note:
 - Some menus also show clipboard-style shortcuts such as `Ctrl+C`; those reflect the underlying view shortcut rather than the menu's generic single-letter dispatcher.

@@ -926,6 +926,15 @@ impl GitRepository for GixRepo {
         self.revert_impl(id)
     }
 
+    fn revert_with_output(
+        &self,
+        id: &CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        self.revert_with_output_impl(id, commit, mainline)
+    }
+
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
         self.stash_create_impl(message, include_untracked)
     }

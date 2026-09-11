@@ -67,6 +67,46 @@ const BADGE_LABEL_MAX_CHARS: usize = 28;
 const CONDENSED_BADGE_LABEL_MAX_CHARS: usize = 16;
 const COMPACT_BADGE_LABEL_MAX_CHARS: usize = 10;
 
+/// Label and control ids for a paused rebase, apply, cherry-pick, or revert.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SequencerBanner {
+    label: &'static str,
+    abort_id: &'static str,
+    continue_id: &'static str,
+    continue_tooltip: &'static str,
+}
+
+fn sequencer_banner(state: gitcomet_core::services::SequencerState) -> Option<SequencerBanner> {
+    use gitcomet_core::services::SequencerState;
+    let (label, abort_id, continue_id, continue_tooltip) = match state {
+        SequencerState::None => return None,
+        SequencerState::RebaseOrApply => (
+            "APPLY/REBASE",
+            "abort_rebase_or_apply",
+            "continue_rebase_or_apply",
+            "Continue the in-progress rebase or apply",
+        ),
+        SequencerState::CherryPick => (
+            "CHERRY-PICKING",
+            "abort_cherry_pick",
+            "continue_cherry_pick",
+            "Continue the in-progress cherry-pick",
+        ),
+        SequencerState::Revert => (
+            "REVERTING",
+            "abort_revert",
+            "continue_revert",
+            "Continue the in-progress revert",
+        ),
+    };
+    Some(SequencerBanner {
+        label,
+        abort_id,
+        continue_id,
+        continue_tooltip,
+    })
+}
+
 fn truncate_badge_label_to(label: &str, max_chars: usize) -> SharedString {
     let mut chars = label.chars();
     let head: String = chars.by_ref().take(max_chars).collect();
@@ -421,34 +461,10 @@ impl Render for ActionBarView {
             });
 
         let is_merging = self.active_repo().is_some_and(merge_in_progress);
-        let sequencer_state = self
+        let sequencer_banner = self
             .active_repo()
             .map(active_sequencer_state)
-            .unwrap_or_default();
-        let is_cherry_pick_in_progress =
-            sequencer_state == gitcomet_core::services::SequencerState::CherryPick;
-        let is_rebase_or_apply_in_progress =
-            sequencer_state == gitcomet_core::services::SequencerState::RebaseOrApply;
-        let sequencer_label = if is_cherry_pick_in_progress {
-            "CHERRY-PICKING"
-        } else {
-            "APPLY/REBASE"
-        };
-        let sequencer_abort_id = if is_cherry_pick_in_progress {
-            "abort_cherry_pick"
-        } else {
-            "abort_rebase_or_apply"
-        };
-        let sequencer_continue_id = if is_cherry_pick_in_progress {
-            "continue_cherry_pick"
-        } else {
-            "continue_rebase_or_apply"
-        };
-        let sequencer_continue_tooltip = if is_cherry_pick_in_progress {
-            "Continue the in-progress cherry-pick"
-        } else {
-            "Continue the in-progress rebase or apply"
-        };
+            .and_then(sequencer_banner);
         let rebase_has_unstaged_conflicts =
             self.active_repo().is_some_and(|r| r.has_unstaged_conflicts);
 
@@ -1030,64 +1046,54 @@ impl Render for ActionBarView {
                                 ),
                         )
                     })
-                    .when(
-                        !is_merging
-                            && (is_rebase_or_apply_in_progress || is_cherry_pick_in_progress),
-                        |d| {
-                            d.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_size(theme.ui_text(12.0))
-                                            .text_color(theme.colors.status.warning.foreground)
-                                            .font_weight(FontWeight::BOLD)
-                                            .child(sequencer_label),
-                                    )
-                                    .child(
-                                        components::Button::new(sequencer_abort_id, "Abort")
-                                            .style(components::ButtonStyle::Danger)
-                                            .on_click(
-                                                theme,
-                                                cx,
-                                                |this, e: &ClickEvent, window, cx| {
-                                                    if let Some(repo_id) = this.active_repo_id() {
-                                                        this.open_popover_at(
-                                                            PopoverKind::MergeAbortConfirm {
-                                                                repo_id,
-                                                            },
-                                                            e.position(),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }
-                                                },
-                                            ),
-                                    )
-                                    .child(
-                                        components::Button::new(sequencer_continue_id, "Continue")
-                                            .style(components::ButtonStyle::Outlined)
-                                            .disabled(rebase_has_unstaged_conflicts)
-                                            .on_click(theme, cx, |this, _e, _w, _cx| {
-                                                if let Some(repo_id) = this.active_repo_id() {
-                                                    this.store
-                                                        .dispatch(Msg::RebaseContinue { repo_id });
-                                                }
-                                            })
-                                            .gitcomet_tooltip(
-                                                theme,
-                                                if rebase_has_unstaged_conflicts {
-                                                    "Resolve all conflicts before continuing".into()
-                                                } else {
-                                                    sequencer_continue_tooltip.into()
-                                                },
-                                            ),
-                                    ),
-                            )
-                        },
-                    ),
+                    .when_some(sequencer_banner.filter(|_| !is_merging), |d, banner| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.status.warning.foreground)
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(banner.label),
+                                )
+                                .child(
+                                    components::Button::new(banner.abort_id, "Abort")
+                                        .style(components::ButtonStyle::Danger)
+                                        .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
+                                            if let Some(repo_id) = this.active_repo_id() {
+                                                this.open_popover_at(
+                                                    PopoverKind::MergeAbortConfirm { repo_id },
+                                                    e.position(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    components::Button::new(banner.continue_id, "Continue")
+                                        .style(components::ButtonStyle::Outlined)
+                                        .disabled(rebase_has_unstaged_conflicts)
+                                        .on_click(theme, cx, |this, _e, _w, _cx| {
+                                            if let Some(repo_id) = this.active_repo_id() {
+                                                this.store
+                                                    .dispatch(Msg::RebaseContinue { repo_id });
+                                            }
+                                        })
+                                        .gitcomet_tooltip(
+                                            theme,
+                                            if rebase_has_unstaged_conflicts {
+                                                "Resolve all conflicts before continuing".into()
+                                            } else {
+                                                banner.continue_tooltip.into()
+                                            },
+                                        ),
+                                ),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -1109,6 +1115,39 @@ mod tests {
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_core::domain::Upstream;
     use std::path::PathBuf;
+
+    #[test]
+    fn sequencer_banner_names_each_paused_operation() {
+        use gitcomet_core::services::SequencerState;
+
+        assert_eq!(sequencer_banner(SequencerState::None), None);
+        for (state, label, abort_id, continue_id) in [
+            (
+                SequencerState::RebaseOrApply,
+                "APPLY/REBASE",
+                "abort_rebase_or_apply",
+                "continue_rebase_or_apply",
+            ),
+            (
+                SequencerState::CherryPick,
+                "CHERRY-PICKING",
+                "abort_cherry_pick",
+                "continue_cherry_pick",
+            ),
+            (
+                SequencerState::Revert,
+                "REVERTING",
+                "abort_revert",
+                "continue_revert",
+            ),
+        ] {
+            let banner = sequencer_banner(state).expect("paused operation has a banner");
+            assert_eq!(
+                (banner.label, banner.abort_id, banner.continue_id),
+                (label, abort_id, continue_id)
+            );
+        }
+    }
 
     #[test]
     fn file_browsing_badge_stays_available_on_the_working_tree_until_exit() {

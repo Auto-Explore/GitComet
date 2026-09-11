@@ -70,6 +70,10 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             state.active_repo.hash(&mut hasher);
             if let Some(repo) = repo_for_popover(state, popover) {
                 view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
+                // The app menu enables "Open remote in web browser" from them.
+                if matches!(popover, PopoverKind::AppMenu) {
+                    repo.remotes_rev.hash(&mut hasher);
+                }
             }
         }
         PopoverKind::Repo {
@@ -178,6 +182,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
         | PopoverKind::ForcePushConfirm { repo_id }
         | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
+        | PopoverKind::RevertCommitConfirm { repo_id, .. }
         | PopoverKind::MergeCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::BranchExistsPrompt { repo_id, .. }
@@ -414,6 +419,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::RebaseReword { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
+        | PopoverKind::RevertCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::ResetPrompt { .. }
@@ -621,6 +627,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
             76u8.hash(hasher);
+            repo_id.hash(hasher);
+            commit_id.hash(hasher);
+        }
+        PopoverKind::RevertCommitConfirm { repo_id, commit_id } => {
+            108u8.hash(hasher);
             repo_id.hash(hasher);
             commit_id.hash(hasher);
         }
@@ -981,6 +992,10 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
                 remote.hash(hasher);
                 branch.hash(hasher);
             }
+            RemotePopoverKind::OpenInBrowserMenu => {
+                108u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
         },
         RepoPopoverKind::Worktree(worktree_kind) => match worktree_kind {
             WorktreePopoverKind::SectionMenu => {
@@ -1108,6 +1123,19 @@ mod tests {
     }
 
     #[test]
+    fn revert_and_cherry_pick_confirms_hash_differently() {
+        let repo_id = RepoId(7);
+        let commit_id = CommitId("deadbeef".into());
+        assert_ne!(
+            hash_kind(PopoverKind::RevertCommitConfirm {
+                repo_id,
+                commit_id: commit_id.clone(),
+            }),
+            hash_kind(PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }),
+        );
+    }
+
+    #[test]
     fn grouped_repo_popover_hash_changes_with_nested_payload() {
         let repo_id = RepoId(7);
         let hash_origin = hash_kind(PopoverKind::remote(
@@ -1178,6 +1206,83 @@ mod tests {
         let after = notify_fingerprint(&state, &PopoverKind::PullPicker);
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn app_menu_fingerprint_changes_when_the_active_repos_remotes_change() {
+        let repo_id = RepoId(9);
+        let repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_app_menu_remotes_fingerprint"),
+            },
+        );
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+        state.repos.push(repo);
+
+        let before = notify_fingerprint(&state, &PopoverKind::AppMenu);
+        state.repos[0].remotes_rev = state.repos[0].remotes_rev.wrapping_add(1);
+        let after = notify_fingerprint(&state, &PopoverKind::AppMenu);
+
+        assert_ne!(before, after, "the Open remote row reads the remotes");
+    }
+
+    #[test]
+    fn remote_picker_fingerprint_changes_when_remotes_change() {
+        let repo_id = RepoId(9);
+        let repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_remote_picker_fingerprint"),
+            },
+        );
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+        state.repos.push(repo);
+        let picker = PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu);
+
+        let before = notify_fingerprint(&state, &picker);
+        state.repos[0].remotes_rev = state.repos[0].remotes_rev.wrapping_add(1);
+        let after = notify_fingerprint(&state, &picker);
+
+        assert_ne!(before, after, "the picker's rows are the remotes");
+    }
+
+    #[test]
+    fn remote_picker_fingerprints_differ_per_repository() {
+        let state = AppState::default();
+        let picker = |repo_id| {
+            notify_fingerprint(
+                &state,
+                &PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
+            )
+        };
+        assert_ne!(picker(RepoId(1)), picker(RepoId(2)));
+    }
+
+    #[test]
+    fn remote_picker_and_remote_menu_fingerprints_differ() {
+        let repo_id = RepoId(9);
+        let state = AppState::default();
+        let picker = notify_fingerprint(
+            &state,
+            &PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
+        );
+        let menu = notify_fingerprint(
+            &state,
+            &PopoverKind::remote(
+                repo_id,
+                RemotePopoverKind::Menu {
+                    name: "origin".to_string(),
+                },
+            ),
+        );
+        assert_ne!(picker, menu);
     }
 
     #[test]

@@ -5,12 +5,13 @@ use crate::view::{
     DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevFile, DiffPrevSearchMatchOrChange,
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, LocateFileInExplorer, MainPaneView,
-    OpenActiveViewSearch, PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev,
-    PushUpstreamRemoteClose, PushUpstreamRemoteNext, PushUpstreamRemoteOpenOrSelect,
-    PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste,
-    TerminalSelectAll, TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
-    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
-    TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette, is_diff_shortcut_candidate,
+    OpenActiveViewSearch, OpenRemoteInBrowser, PopoverPromptDismiss, PopoverPromptTabNext,
+    PopoverPromptTabPrev, PushUpstreamRemoteClose, PushUpstreamRemoteNext,
+    PushUpstreamRemoteOpenOrSelect, PushUpstreamRemotePrev, SettingsWindowView, StartupCrashReport,
+    TerminalCopy, TerminalPaste, TerminalSelectAll, TextInputCommitSubmit, TextInputDiffNextChange,
+    TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange,
+    TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette,
+    is_diff_shortcut_candidate,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -706,6 +707,9 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(|_: &LocateFileInExplorer, cx| {
         cx.defer(locate_file_in_active_or_existing_normal_window);
     });
+    cx.on_action(|_: &OpenRemoteInBrowser, cx| {
+        cx.defer(open_remote_in_browser_in_active_window);
+    });
     cx.on_action(|_: &ShowReflog, cx| {
         cx.defer(|cx| {
             let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
@@ -886,6 +890,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-g", crate::view::ToggleRevealCommit, None),
         KeyBinding::new("secondary-shift-l", LocateFileInExplorer, None),
+        KeyBinding::new("secondary-k", OpenRemoteInBrowser, None),
         KeyBinding::new("secondary-w", Close, None),
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
         KeyBinding::new("secondary-pageup", PreviousRepository, None),
@@ -1008,6 +1013,10 @@ fn macos_app_menus_with_options(
         MenuItem::action(
             crate::menu_labels::OPEN_IN_FILE_EXPLORER,
             LocateFileInExplorer,
+        ),
+        MenuItem::action(
+            crate::menu_labels::OPEN_REMOTE_IN_BROWSER,
+            OpenRemoteInBrowser,
         ),
         MenuItem::action(crate::menu_labels::APPLY_PATCH, ApplyPatch),
         MenuItem::action(crate::menu_labels::CHECK_FOR_UPDATES, CheckForUpdates).disabled(
@@ -1735,6 +1744,27 @@ fn toggle_reveal_commit_in_active_window(cx: &mut App) {
     }
 }
 
+/// Open the front normal window's remote in the browser. With no normal window
+/// there is no repository, so the chord is a no-op.
+fn open_remote_in_browser_in_active_window(cx: &mut App) {
+    let Some(window) =
+        active_normal_gitcomet_window(cx).or_else(|| find_normal_gitcomet_window(cx))
+    else {
+        return;
+    };
+    let _ = window.handle.update(cx, |root_view, window, cx| {
+        let Ok(view) = root_view.downcast::<GitCometView>() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            view.open_remote_in_browser(window, cx);
+        });
+    });
+    if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
+        activate_gitcomet_window(cx, window.handle);
+    }
+}
+
 fn toggle_command_palette_in_active_existing_or_new_window(
     cx: &mut App,
     backend: Arc<dyn GitBackend>,
@@ -2257,6 +2287,10 @@ mod tests {
                     LocateFileInExplorer.name().to_string(),
                 ),
                 (
+                    crate::menu_labels::OPEN_REMOTE_IN_BROWSER.to_string(),
+                    OpenRemoteInBrowser.name().to_string(),
+                ),
+                (
                     crate::menu_labels::APPLY_PATCH.to_string(),
                     ApplyPatch.name().to_string(),
                 ),
@@ -2446,6 +2480,7 @@ mod tests {
                 .on_action(record_action_listener!(crate::view::ToggleCommandPalette))
                 .on_action(record_action_listener!(crate::view::ToggleRevealCommit))
                 .on_action(record_action_listener!(crate::view::LocateFileInExplorer))
+                .on_action(record_action_listener!(crate::view::OpenRemoteInBrowser))
                 .on_action(record_action_listener!(NewWindow))
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenInCodeEditor))
@@ -2669,6 +2704,8 @@ mod tests {
                 crate::view::TextInputDiffNextSearchMatchOrChange.name(),
             ),
             ("secondary-shift-a", SwitchRepository.name()),
+            // No text-input binding (an Emacs kill-line, say) may shadow it.
+            ("secondary-k", crate::view::OpenRemoteInBrowser.name()),
         ];
 
         for (keystroke, expected_action) in cases {
@@ -2912,6 +2949,7 @@ mod tests {
                 "secondary-shift-l",
                 crate::view::LocateFileInExplorer.name(),
             ),
+            ("secondary-k", crate::view::OpenRemoteInBrowser.name()),
             ("secondary-w", Close.name()),
             ("secondary-shift-w", CloseWindow.name()),
             ("secondary-pageup", PreviousRepository.name()),

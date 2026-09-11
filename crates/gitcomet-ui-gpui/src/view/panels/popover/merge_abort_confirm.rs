@@ -1,38 +1,40 @@
 use super::*;
 use gitcomet_core::services::SequencerState;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AbortMode {
+    Merge,
+    RebaseOrApply,
+    CherryPick,
+    Revert,
+}
+
+/// A cherry-pick or revert also reports `rebase_in_progress`, so the specific
+/// sequencer states are checked before that fallback.
+fn abort_mode(repo: &RepoState) -> AbortMode {
+    if matches!(&repo.merge_commit_message, Loadable::Ready(Some(_))) {
+        return AbortMode::Merge;
+    }
+    match &repo.sequencer_state {
+        Loadable::Ready(SequencerState::CherryPick) => AbortMode::CherryPick,
+        Loadable::Ready(SequencerState::Revert) => AbortMode::Revert,
+        _ if matches!(&repo.rebase_in_progress, Loadable::Ready(true)) => AbortMode::RebaseOrApply,
+        _ => AbortMode::Merge,
+    }
+}
+
 pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    #[derive(Clone, Copy)]
-    enum AbortMode {
-        Merge,
-        RebaseOrApply,
-        CherryPick,
-    }
-
     let mode = this
         .state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .map(|repo| {
-            if matches!(&repo.merge_commit_message, Loadable::Ready(Some(_))) {
-                AbortMode::Merge
-            } else if matches!(
-                &repo.sequencer_state,
-                Loadable::Ready(SequencerState::CherryPick)
-            ) {
-                AbortMode::CherryPick
-            } else if matches!(&repo.rebase_in_progress, Loadable::Ready(true)) {
-                AbortMode::RebaseOrApply
-            } else {
-                AbortMode::Merge
-            }
-        })
+        .map(abort_mode)
         .unwrap_or(AbortMode::Merge);
 
     let (title, body, command, button_id, button_label) = match mode {
@@ -57,6 +59,13 @@ pub(super) fn panel(
             "cherry_pick_abort_go",
             "Abort cherry-pick",
         ),
+        AbortMode::Revert => (
+            "Abort revert?",
+            "This will abort the current revert and restore the previous state. Any resolved conflicts and staged reverted changes will be lost.",
+            "git revert --abort",
+            "revert_abort_go",
+            "Abort revert",
+        ),
     };
 
     ConfirmDialog::new(title, DIALOG_360_WIDTH)
@@ -70,13 +79,41 @@ pub(super) fn panel(
                 .on_click(theme, cx, move |this, _e, _w, cx| {
                     match mode {
                         AbortMode::Merge => this.store.dispatch(Msg::MergeAbort { repo_id }),
-                        AbortMode::RebaseOrApply => {
+                        AbortMode::RebaseOrApply | AbortMode::CherryPick | AbortMode::Revert => {
                             this.store.dispatch(Msg::RebaseAbort { repo_id })
                         }
-                        AbortMode::CherryPick => this.store.dispatch(Msg::RebaseAbort { repo_id }),
                     }
                     this.close_popover(cx);
                 }),
             cx,
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::RepoSpec;
+    use std::path::PathBuf;
+
+    #[test]
+    fn abort_mode_prefers_the_specific_sequencer_over_rebase_in_progress() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.rebase_in_progress = Loadable::Ready(true);
+        for (state, expected) in [
+            (SequencerState::Revert, AbortMode::Revert),
+            (SequencerState::CherryPick, AbortMode::CherryPick),
+            (SequencerState::RebaseOrApply, AbortMode::RebaseOrApply),
+        ] {
+            repo.sequencer_state = Loadable::Ready(state);
+            assert_eq!(abort_mode(&repo), expected, "{state:?}");
+        }
+
+        repo.merge_commit_message = Loadable::Ready(Some("Merge branch 'topic'".to_string()));
+        assert_eq!(abort_mode(&repo), AbortMode::Merge);
+    }
 }

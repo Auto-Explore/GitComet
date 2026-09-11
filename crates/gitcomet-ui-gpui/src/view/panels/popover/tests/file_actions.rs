@@ -198,7 +198,7 @@ fn commit_menu_cherry_pick_action_opens_confirm_popover(cx: &mut gpui::TestAppCo
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
-                host.cherry_pick_mainline = Some(2);
+                host.commit_mainline = Some(2);
                 host.context_menu_activate_action(
                     ContextMenuAction::CherryPickCommit {
                         repo_id,
@@ -215,8 +215,53 @@ fn commit_menu_cherry_pick_action_opens_confirm_popover(cx: &mut gpui::TestAppCo
                     })
                 );
                 assert_eq!(
-                    host.cherry_pick_mainline, None,
+                    host.commit_mainline, None,
                     "opening a single cherry-pick must not reuse an earlier parent choice"
+                );
+            });
+        });
+    });
+}
+
+#[gpui::test]
+fn commit_menu_revert_action_opens_confirm_popover(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = commit_menu_test_repo(repo_id, &commit_id);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.commit_mainline = Some(2);
+                host.context_menu_activate_action(
+                    ContextMenuAction::RevertCommit {
+                        repo_id,
+                        commit_id: commit_id.clone(),
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    host.popover_kind_for_tests(),
+                    Some(PopoverKind::RevertCommitConfirm {
+                        repo_id,
+                        commit_id: commit_id.clone()
+                    }),
+                    "revert confirms first instead of dispatching immediately"
+                );
+                assert_eq!(
+                    host.commit_mainline, None,
+                    "opening a revert must not reuse an earlier parent choice"
                 );
             });
         });

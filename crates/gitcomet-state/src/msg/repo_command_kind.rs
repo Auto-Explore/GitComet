@@ -86,6 +86,13 @@ pub enum RepoCommandKind {
         mainline: Option<usize>,
         summary: String,
     },
+    Revert {
+        commit_id: CommitId,
+        commit: bool,
+        /// Git's 1-based mainline parent for a merge commit.
+        mainline: Option<usize>,
+        summary: String,
+    },
     MergeAbort,
     CreateTag {
         name: String,
@@ -206,6 +213,7 @@ impl RepoCommandKind {
             | Self::RebaseAbort
             | Self::InteractiveRebase { .. } => "Rebase",
             Self::InteractiveCherryPick { .. } | Self::CherryPick { .. } => "Cherry-pick",
+            Self::Revert { .. } => "Revert",
             Self::MergeAbort => "Abort merge",
             Self::CreateTag { .. } => "Create tag",
             Self::DeleteTag { .. } => "Delete tag",

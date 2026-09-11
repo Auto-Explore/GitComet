@@ -29,6 +29,7 @@ mod pull;
 mod push;
 mod reflog_entry;
 mod remote;
+mod remote_web_picker;
 mod repo_picker_row;
 mod repo_tab;
 mod stash;
@@ -457,6 +458,10 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { name }),
             } => Some(remote::model(self, *repo_id, name)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+            } => Some(remote_web_picker::model(self, *repo_id)),
             PopoverKind::WebLinkMenu {
                 url,
                 load_remote_image_url,
@@ -1039,8 +1044,14 @@ impl PopoverHost {
                 return;
             }
             ContextMenuAction::RevertCommit { repo_id, commit_id } => {
-                self.store
-                    .dispatch(Msg::RevertCommit { repo_id, commit_id });
+                let anchor = self.popover_anchor_point();
+                self.open_popover_at(
+                    PopoverKind::RevertCommitConfirm { repo_id, commit_id },
+                    anchor,
+                    window,
+                    cx,
+                );
+                return;
             }
             ContextMenuAction::SquashSelectedCommits { repo_id } => {
                 // PrepareSquash and the eventual SquashCommits are both

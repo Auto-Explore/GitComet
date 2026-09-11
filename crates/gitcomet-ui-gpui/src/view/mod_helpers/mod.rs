@@ -38,6 +38,39 @@ pub(in crate::view) enum PullRequest {
     NotReady,
 }
 
+/// What opening the repository's remote in a web browser should do.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum RemoteWebRequest {
+    NotReady,
+    NoRemotes,
+    NoWebPage,
+    Open(super::permalink::RemoteWebPage),
+    /// Several remotes have a page; `origin`'s comes first.
+    Choose(Vec<super::permalink::RemoteWebPage>),
+}
+
+impl RemoteWebRequest {
+    /// Why nothing can be opened, for a disabled palette or menu row.
+    pub(in crate::view) fn unavailable_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::NotReady => Some("The repository is still loading"),
+            Self::NoRemotes => Some("Add a remote first"),
+            Self::NoWebPage => Some("No remote URL points to a web page"),
+            Self::Open(_) | Self::Choose(_) => None,
+        }
+    }
+
+    /// The same, as the sentence a shortcut press shows in a toast.
+    pub(in crate::view) fn unavailable_message(&self) -> Option<&'static str> {
+        match self {
+            Self::NotReady => Some("This repository's remotes are still loading."),
+            Self::NoRemotes => Some("This repository has no remotes to open in a web browser."),
+            Self::NoWebPage => Some("None of this repository's remote URLs points to a web page."),
+            Self::Open(_) | Self::Choose(_) => None,
+        }
+    }
+}
+
 pub(in crate::view) fn head_is_detached(repo: &RepoState) -> bool {
     matches!(&repo.head_branch, Loadable::Ready(head) if head.is_empty() || head == "HEAD")
 }
@@ -106,8 +139,8 @@ pub(in crate::view) fn merge_in_progress(repo: &RepoState) -> bool {
     matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
 }
 
-/// The rebase, apply, or cherry-pick the repository is part-way through, if
-/// any. `rebase_in_progress` stands in until the sequencer state loads.
+/// The rebase, apply, cherry-pick, or revert the repository is part-way
+/// through, if any. `rebase_in_progress` stands in until the sequencer state loads.
 pub(in crate::view) fn active_sequencer_state(
     repo: &RepoState,
 ) -> gitcomet_core::services::SequencerState {
@@ -155,6 +188,23 @@ pub(in crate::view) fn push_request(repo: &RepoState) -> PushRequest {
         .name
         .clone();
     PushRequest::SetUpstream { remote }
+}
+
+/// Decide what "Open remote in web browser" does: open the one remote with a
+/// web page, or let the user choose when several have one.
+pub(in crate::view) fn remote_web_request(repo: &RepoState) -> RemoteWebRequest {
+    let Loadable::Ready(remotes) = &repo.remotes else {
+        return RemoteWebRequest::NotReady;
+    };
+    if remotes.is_empty() {
+        return RemoteWebRequest::NoRemotes;
+    }
+    let mut pages = super::permalink::remote_web_pages(remotes);
+    match pages.len() {
+        0 => RemoteWebRequest::NoWebPage,
+        1 => RemoteWebRequest::Open(pages.remove(0)),
+        _ => RemoteWebRequest::Choose(pages),
+    }
 }
 
 pub(in crate::view) fn selected_remote_branch_is_missing(
