@@ -6609,3 +6609,138 @@ fn comfortable_stage_and_commit_targets_fit_rows_at_laptop_and_4k_sizes(
         }
     }
 }
+
+/// Renders the details pane for a commit with an author, optionally carrying a
+/// signature verdict, and returns the drawn view.
+fn commit_details_signature_fixture(
+    cx: &mut gpui::TestAppContext,
+    signature: Option<gitcomet_core::domain::CommitSignature>,
+) -> (
+    gpui::Entity<crate::view::GitCometView>,
+    &mut gpui::VisualTestContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(34);
+    let commit_sha = "0123456789abcdef0123456789abcdef01234567".to_string();
+    let commit_id = gitcomet_core::domain::CommitId(commit_sha.clone().into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-signature"));
+            repo.history_state.selected_commit = Some(commit_id.clone());
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: commit_id.clone(),
+                    message: "subject".to_string(),
+                    author_name: "Ada Lovelace".to_string(),
+                    author_email: "ada@example.com".to_string(),
+                    authored_at_unix: 0,
+                    committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    committed_at_unix: 0,
+                    parent_ids: vec![],
+                    files: vec![],
+                },
+            ));
+            if let Some(signature) = signature {
+                let mut map = rustc_hash::FxHashMap::default();
+                map.insert(commit_id.clone(), signature);
+                repo.history_state.commit_signatures = Arc::new(map.into_iter().collect());
+                // The details pane is fingerprint-gated: without this the
+                // snapshot is skipped and the badge never draws.
+                repo.history_state.commit_signatures_rev = 1;
+            }
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    (view, cx)
+}
+
+fn test_signature(
+    status: gitcomet_core::domain::SignatureStatus,
+) -> gitcomet_core::domain::CommitSignature {
+    gitcomet_core::domain::CommitSignature {
+        status,
+        format: gitcomet_core::domain::SignatureFormat::OpenPgp,
+        signer: Some(Arc::from("Ada Lovelace <ada@example.com>")),
+        key_id: Some(Arc::from("DEADBEEFDEADBEEF")),
+    }
+}
+
+#[gpui::test]
+fn commit_details_shows_a_badge_for_a_verified_signature(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_view, cx) = commit_details_signature_fixture(
+        cx,
+        Some(test_signature(gitcomet_core::domain::SignatureStatus::Good)),
+    );
+
+    assert!(
+        cx.debug_bounds("commit_details_signature_badge").is_some(),
+        "a verified commit should render the signature badge"
+    );
+}
+
+#[gpui::test]
+fn commit_details_shows_a_badge_for_a_bad_signature(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_view, cx) = commit_details_signature_fixture(
+        cx,
+        Some(test_signature(gitcomet_core::domain::SignatureStatus::Bad)),
+    );
+
+    assert!(
+        cx.debug_bounds("commit_details_signature_badge").is_some(),
+        "a bad signature must be surfaced, not hidden"
+    );
+}
+
+#[gpui::test]
+fn commit_details_shows_no_badge_without_a_signature_verdict(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_view, cx) = commit_details_signature_fixture(cx, None);
+
+    assert!(
+        cx.debug_bounds("commit_details_signature_badge").is_none(),
+        "an unsigned or unverifiable commit must render no badge"
+    );
+}
+
+#[gpui::test]
+fn commit_details_signature_icon_follows_ui_scale(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (_view, cx) = commit_details_signature_fixture(
+        cx,
+        Some(test_signature(gitcomet_core::domain::SignatureStatus::Good)),
+    );
+    cx.update(|window, app| {
+        crate::ui_scale::apply_to_window(window, 100);
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let normal = cx
+        .debug_bounds("commit_details_signature_icon")
+        .expect("signature icon")
+        .size;
+    cx.update(|window, app| {
+        crate::ui_scale::apply_to_window(window, 200);
+        window.refresh();
+        let _ = window.draw(app);
+    });
+    let enlarged = cx
+        .debug_bounds("commit_details_signature_icon")
+        .expect("scaled signature icon")
+        .size;
+    assert_eq!(enlarged.width, normal.width * 2.0);
+    assert_eq!(enlarged.height, normal.height * 2.0);
+}

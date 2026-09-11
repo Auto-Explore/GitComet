@@ -2,11 +2,11 @@ mod tag_push;
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextSide,
-    DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage,
-    RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
-    RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream, UpstreamDivergence,
-    Worktree,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, Diff, DiffArea,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
+    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
+    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
+    UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -54,6 +54,7 @@ mod mergetool_builtin;
 mod patch;
 mod porcelain;
 mod remotes;
+mod signatures;
 mod status;
 mod submodules;
 mod tags;
@@ -408,6 +409,10 @@ pub(crate) struct GixRepo {
     worktree_source_memo: std::sync::Mutex<rustc_hash::FxHashMap<PathBuf, WorktreeSourceMemoEntry>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
+    /// Immutable signature formats by oid. `None` means an unsigned commit.
+    signature_format_cache: std::sync::Mutex<
+        lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
+    >,
 }
 
 impl GixRepo {
@@ -426,6 +431,9 @@ impl GixRepo {
             worktree_source_memo: std::sync::Mutex::default(),
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
+            signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
+            )),
         }
     }
 
@@ -583,6 +591,21 @@ impl GitRepository for GixRepo {
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
         self.commit_details_impl(id)
+    }
+
+    fn verify_commit_signatures(
+        &self,
+        ids: &[CommitId],
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        self.verify_commit_signatures_impl(ids)
+    }
+
+    fn verify_commit_signatures_cancellable(
+        &self,
+        ids: &[CommitId],
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        self.verify_commit_signatures_cancellable_impl(ids, Some(cancellation))
     }
 
     fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {

@@ -25,6 +25,7 @@ fn commit_details_author_row(
     theme: AppTheme,
     ui_scale: crate::ui_scale::UiScale,
     details: &gitcomet_core::domain::CommitDetails,
+    signature: Option<&gitcomet_core::domain::CommitSignature>,
 ) -> Option<Div> {
     if details.author_name.is_empty() && details.author_email.is_empty() {
         return None;
@@ -73,6 +74,9 @@ fn commit_details_author_row(
                         )
                     }),
             )
+            .when_some(signature, |row, signature| {
+                row.child(commit_details_signature_badge(theme, signature))
+            })
             .when_some(authored_relative, |row, relative| {
                 row.child(
                     div()
@@ -181,6 +185,42 @@ fn commit_file_filter_color(
             crate::view::rows::commit_file_kind_visuals(FileStatusKind::Renamed).color(&theme)
         }
     }
+}
+
+/// The signature chip shown beside the commit author.
+///
+/// Needs its own `.id()`: a stateless div computes the hover style and throws
+/// it away, and the tooltip would never attach.
+fn commit_details_signature_badge(
+    theme: AppTheme,
+    signature: &gitcomet_core::domain::CommitSignature,
+) -> gpui::Stateful<Div> {
+    let badge = crate::view::commit_signature::signature_badge(theme, signature);
+    div()
+        .id("commit_details_signature_badge")
+        .debug_selector(|| "commit_details_signature_badge".to_string())
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .rounded(px(theme.radii.control))
+        .border_1()
+        .border_color(badge.palette.border)
+        .bg(badge.palette.background)
+        .child(
+            svg_icon(badge.icon, badge.palette.foreground, px(12.0))
+                .size(theme.ui_text(12.0))
+                .debug_selector(|| "commit_details_signature_icon".to_string()),
+        )
+        .child(
+            div()
+                .text_size(theme.ui_text(12.0))
+                .text_color(badge.palette.foreground)
+                .whitespace_nowrap()
+                .child(badge.label),
+        )
+        .gitcomet_tooltip(theme, badge.tooltip)
 }
 
 fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyElement) -> Div {
@@ -2241,6 +2281,10 @@ impl DetailsPaneView {
                     repo.history_state.commit_details_rev,
                 )
             });
+            let commit_signatures = self
+                .active_repo()
+                .map(|repo| repo.history_state.commit_signatures.clone())
+                .unwrap_or_default();
             let commit_details_rev = active_commit_details
                 .as_ref()
                 .map(|(_, revision)| *revision)
@@ -2318,14 +2362,20 @@ impl DetailsPaneView {
                                         .pb_2()
                                         .child(message),
                                 )
-                                .children(commit_details_author_row(theme, ui_scale, details).map(
-                                    |row| {
+                                .children(
+                                    commit_details_author_row(
+                                        theme,
+                                        ui_scale,
+                                        details,
+                                        commit_signatures.get(&details.id),
+                                    )
+                                    .map(|row| {
                                         row.border_t_1()
                                             .border_color(theme.colors.stroke.default)
                                             .pt_2()
                                             .pb_2()
-                                    },
-                                ))
+                                    }),
+                                )
                                 .child(
                                     div()
                                         .flex()
@@ -2423,14 +2473,20 @@ impl DetailsPaneView {
                                     .pb_2()
                                     .child(message),
                             )
-                            .children(commit_details_author_row(theme, ui_scale, details).map(
-                                |row| {
+                            .children(
+                                commit_details_author_row(
+                                    theme,
+                                    ui_scale,
+                                    details,
+                                    commit_signatures.get(&details.id),
+                                )
+                                .map(|row| {
                                     row.border_t_1()
                                         .border_color(theme.colors.stroke.default)
                                         .pt_2()
                                         .pb_2()
-                                },
-                            ))
+                                }),
+                            )
                             .child(
                                 div()
                                     .flex()

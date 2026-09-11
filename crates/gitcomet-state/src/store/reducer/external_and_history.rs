@@ -617,8 +617,10 @@ pub(super) fn log_loaded(
     result: std::result::Result<gitcomet_core::services::HistoryReadResult, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
+    let verify_signatures = state.git_log_settings.verify_commit_signatures;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let is_load_more = cursor.is_some();
+        let mut appended_signature_ids = Vec::new();
 
         // Drop replies from a walk that a newer request superseded. That walk
         // was cancelled and its replacement is still running, so the in-flight
@@ -638,7 +640,12 @@ pub(super) fn log_loaded(
                 // A failed checkout may have changed the optimistic detached
                 // HEAD even though the retained history still matches Git.
                 reconcile_detached_head_from_log(repo_state, scope);
-                return finish_log_load(repo_state);
+                effects.extend(super::util::reverify_loaded_commit_signatures_effect(
+                    verify_signatures,
+                    repo_state,
+                ));
+                effects.extend(finish_log_load(repo_state));
+                return effects;
             }
             Ok(gitcomet_core::services::HistoryReadResult::Invalidated) => {
                 let request = super::util::refresh_log_request(repo_state);
@@ -646,6 +653,13 @@ pub(super) fn log_loaded(
                 return finish_log_load(repo_state);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Page { mut page, snapshot }) => {
+                if is_load_more {
+                    appended_signature_ids = page
+                        .commits
+                        .iter()
+                        .map(|commit| commit.id.clone())
+                        .collect();
+                }
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
                     // Drop the history_state copy first so the Arc's refcount
                     // goes to 1 and make_mut can mutate in-place instead of
@@ -750,6 +764,20 @@ pub(super) fn log_loaded(
 
         if is_load_more {
             repo_state.set_log_loading_more(false);
+        }
+
+        if !is_load_more {
+            effects.extend(super::util::reverify_loaded_commit_signatures_effect(
+                verify_signatures,
+                repo_state,
+            ));
+        } else {
+            effects.extend(super::util::verify_commit_signatures_effect(
+                verify_signatures,
+                repo_state,
+                repo_id,
+                appended_signature_ids,
+            ));
         }
 
         effects.extend(finish_log_load(repo_state));
