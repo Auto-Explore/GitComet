@@ -845,7 +845,7 @@ impl PopoverHost {
             hook_activity_history_scroll: ScrollHandle::new(),
             hook_activity_hooks_scroll: ScrollHandle::new(),
             hook_activity_output_scroll: ScrollHandle::new(),
-            cherry_pick_mainline: None,
+            commit_mainline: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
             popover_opened_from_diff_panel: false,
@@ -2418,8 +2418,11 @@ impl PopoverHost {
         // tooltip from re-showing on top of the popover.
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(true, cx);
         self.request_lazy_popover_repo_data(&kind);
-        if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
-            self.cherry_pick_mainline = None;
+        if matches!(
+            &kind,
+            PopoverKind::CherryPickCommitConfirm { .. } | PopoverKind::RevertCommitConfirm { .. }
+        ) {
+            self.commit_mainline = None;
         }
         self.menu_invoker_focus = if matches!(
             &kind,

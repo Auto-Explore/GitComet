@@ -175,6 +175,10 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    RevertCommitConfirm {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     MergeCommitConfirm {
         repo_id: RepoId,
         commit_id: CommitId,

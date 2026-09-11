@@ -196,6 +196,9 @@ impl PopoverHost {
             PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
                 cherry_pick_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
+            PopoverKind::RevertCommitConfirm { repo_id, commit_id } => {
+                revert_commit_confirm::panel(self, repo_id, commit_id, cx)
+            }
             PopoverKind::MergeCommitConfirm { repo_id, commit_id } => {
                 merge_commit_confirm::panel(self, repo_id, commit_id, cx)
             }

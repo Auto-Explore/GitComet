@@ -35,7 +35,7 @@ pub(crate) enum Needs {
     Nothing,
     ExternalEditor,
     Merge,
-    /// A rebase, apply, or cherry-pick in progress.
+    /// A rebase, apply, cherry-pick, or revert in progress.
     Sequencer,
     /// A sequencer operation with every conflict resolved.
     SequencerResolved,
@@ -63,7 +63,8 @@ pub(crate) struct PaletteContext {
 
 /// Why a command with `needs` cannot run under `ctx`, or `None` when it can.
 pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&'static str> {
-    const NOT_SEQUENCING: &str = "Only available while a rebase or cherry-pick is in progress";
+    const NOT_SEQUENCING: &str =
+        "Only available while a rebase, cherry-pick, or revert is in progress";
     match needs {
         Needs::Nothing => None,
         Needs::ExternalEditor => {
@@ -182,19 +183,19 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     },
     CommandEntry {
         id: "continue-rebase",
-        label: "Continue Rebase or Cherry-Pick",
+        label: "Continue Rebase, Cherry-Pick, or Revert",
         shortcut: Shortcut::None,
         category: "Branch",
-        keywords: "continue resume rebase cherry pick apply am sequencer",
+        keywords: "continue resume rebase cherry pick revert apply am sequencer",
         requires_repo: true,
         needs: Needs::SequencerResolved,
     },
     CommandEntry {
         id: "abort-rebase",
-        label: "Abort Rebase or Cherry-Pick",
+        label: "Abort Rebase, Cherry-Pick, or Revert",
         shortcut: Shortcut::None,
         category: "Branch",
-        keywords: "abort cancel rebase cherry pick apply am sequencer",
+        keywords: "abort cancel rebase cherry pick revert apply am sequencer",
         requires_repo: true,
         needs: Needs::Sequencer,
     },

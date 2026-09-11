@@ -481,7 +481,7 @@ fn hooked_repo_action_preserves_diagnostic_when_hooks_pass_before_git_fails() {
         crate::msg::InternalMsg::GitOperationStarted {
             repo_id,
             operation_id,
-            label: "Revert".to_string(),
+            label: "Checkout".to_string(),
             context: Some("01234567".to_string()),
             time: SystemTime::UNIX_EPOCH,
         },
@@ -517,7 +517,7 @@ fn hooked_repo_action_preserves_diagnostic_when_hooks_pass_before_git_fails() {
             duration: Duration::from_millis(20),
             message: Box::new(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id,
-                action: RepoActionKind::RevertCommit,
+                action: RepoActionKind::CheckoutCommit,
                 result: Err(Error::new(ErrorKind::Backend(
                     "failed to update the ref after hooks passed".to_string(),
                 ))),
@@ -589,6 +589,66 @@ fn cherry_pick_error_completion_refreshes_status_log_and_sequencer_state() {
             Effect::LoadRebaseAndMergeState { repo_id: candidate } if *candidate == repo_id
         )),
         "cherry-pick errors should refresh merge/rebase/cherry-pick state, got {effects:?}"
+    );
+}
+
+#[test]
+fn revert_error_completion_refreshes_status_log_and_sequencer_state() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].local_actions_in_flight = 1;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: crate::msg::RepoCommandKind::Revert {
+                commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+                commit: true,
+                mainline: None,
+                summary: "revert me".into(),
+            },
+            result: Err(Error::new(ErrorKind::Backend("conflict".to_string()))),
+        }),
+    );
+
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(
+        state.repos[0]
+            .feedback
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("Revert failed") && error.contains("conflict")),
+        "got {:?}",
+        state.repos[0].feedback.last_error
+    );
+    assert!(
+        has_status_refresh_effects(&effects, repo_id),
+        "revert errors should refresh status so conflicts are visible, got {effects:?}"
+    );
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::LoadLog { repo_id: candidate, .. } if *candidate == repo_id)
+        ),
+        "revert errors should refresh the log, got {effects:?}"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadRebaseAndMergeState { repo_id: candidate } if *candidate == repo_id
+        )),
+        "revert errors should refresh sequencer state, got {effects:?}"
     );
 }
 

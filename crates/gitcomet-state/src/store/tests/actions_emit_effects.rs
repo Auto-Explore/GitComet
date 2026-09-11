@@ -589,6 +589,9 @@ fn revert_commit_emits_effect() {
         Msg::RevertCommit {
             repo_id: RepoId(1),
             commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+            commit: false,
+            mainline: Some(2),
+            summary: "revert me".into(),
         },
     );
 
@@ -596,9 +599,13 @@ fn revert_commit_emits_effect() {
         effects.as_slice(),
         [Effect::RevertCommit {
             repo_id: RepoId(1),
-            commit_id: _
-        }]
+            commit_id: _,
+            commit: false,
+            mainline: Some(2),
+            summary,
+        }] if summary == "revert me"
     ));
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
 }
 
 #[test]
@@ -4055,6 +4062,66 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
         &state.repos[0].recent_commit_messages,
         Loadable::NotLoaded
     ));
+    assert_eq!(state.repos[0].pending.force_push_lease, None);
+}
+
+#[test]
+fn revert_clears_recent_messages_from_previous_head() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state
+        .repos
+        .push(repo_with_head_dependent_cached_state(repo_id));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RevertCommit {
+            repo_id,
+            commit_id: CommitId("3333333333333333333333333333333333333333".into()),
+            commit: true,
+            mainline: None,
+            summary: "revert me".into(),
+        },
+    );
+
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+    assert_eq!(state.repos[0].pending.force_push_lease, None);
+}
+
+#[test]
+fn revert_finished_releases_local_action_and_clears_stale_force_push_lease() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let mut repo_state = repo_with_head_dependent_cached_state(repo_id);
+    repo_state.local_actions_in_flight = 1;
+    state.repos.push(repo_state);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Revert {
+                commit_id: CommitId("3333333333333333333333333333333333333333".into()),
+                commit: true,
+                mainline: None,
+                summary: "revert me".into(),
+            },
+            result: Ok(CommandOutput::empty_success("git revert 3333333")),
+        }),
+    );
+
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
     assert_eq!(state.repos[0].pending.force_push_lease, None);
 }
 

@@ -2085,7 +2085,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
 
     // Each in-flight operation must disable every history-rewriting entry:
     // they all contend for git's single sequencer slot.
-    let busy_states: [(&str, fn(&mut RepoState)); 3] = [
+    let busy_states: [(&str, fn(&mut RepoState)); 4] = [
         ("pending merge", |repo| {
             repo.merge_commit_message = Loadable::Ready(Some("merge message".to_string()));
         }),
@@ -2096,7 +2096,31 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
             repo.sequencer_state =
                 Loadable::Ready(gitcomet_core::services::SequencerState::CherryPick);
         }),
+        ("revert sequencer", |repo| {
+            repo.sequencer_state = Loadable::Ready(gitcomet_core::services::SequencerState::Revert);
+        }),
     ];
+    let idle_model = {
+        apply_state(
+            cx,
+            &view,
+            app_state_with_active_repo(shortcut_fixture_repo(repo_id, &workdir, &commit_id)),
+        );
+        cx.update(|_window, app| {
+            context_menu_model_for(
+                &view,
+                app,
+                PopoverKind::CommitMenu {
+                    repo_id,
+                    commit_id: commit_id.clone(),
+                },
+            )
+        })
+    };
+    assert!(
+        !context_menu_entry_disabled_by_label(&idle_model, "Revert cafebabe…"),
+        "Revert names the clicked commit and is enabled when idle"
+    );
     for (state_name, make_busy) in busy_states {
         let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
         make_busy(&mut repo);
@@ -2116,7 +2140,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
             "Cherry-pick enabled during {state_name}"
         );
         assert!(
-            context_menu_entry_disabled_by_label(&model, "Revert"),
+            context_menu_entry_disabled_by_label_prefix(&model, "Revert "),
             "Revert enabled during {state_name}"
         );
         assert!(

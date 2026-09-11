@@ -351,6 +351,75 @@ fn unavailable_git_effect_emits_synthetic_repo_command_error() {
 }
 
 #[test]
+fn unavailable_git_revert_emits_synthetic_revert_command_error() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let state = AppState {
+        git_runtime: gitcomet_core::process::GitRuntimeState {
+            preference: gitcomet_core::process::GitExecutablePreference::Custom(PathBuf::new()),
+            availability: gitcomet_core::process::GitExecutableAvailability::Unavailable {
+                detail: "git missing".to_string(),
+            },
+        },
+        ..AppState::default()
+    };
+    let commit_id = CommitId("deadbeef".into());
+
+    schedule_effect_with_state_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        state,
+        msg_tx,
+        Effect::RevertCommit {
+            repo_id: RepoId(7),
+            commit_id: commit_id.clone(),
+            commit: false,
+            mainline: Some(1),
+            summary: "revert me".into(),
+        },
+    );
+
+    let msg = msg_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("expected synthetic unavailable-git message");
+    let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+        repo_id,
+        command,
+        result,
+    }) = msg
+    else {
+        panic!("unexpected message: {msg:?}");
+    };
+    assert_eq!(repo_id, RepoId(7));
+    assert_eq!(
+        command,
+        RepoCommandKind::Revert {
+            commit_id,
+            commit: false,
+            mainline: Some(1),
+            summary: "revert me".into(),
+        }
+    );
+    assert!(
+        result
+            .expect_err("unavailable git")
+            .to_string()
+            .contains("git missing")
+    );
+}
+
+#[test]
 fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
     let executor = super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
@@ -5947,6 +6016,9 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::RevertCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
+                commit: true,
+                mainline: None,
+                summary: "revert me".into(),
             },
             1,
         ),

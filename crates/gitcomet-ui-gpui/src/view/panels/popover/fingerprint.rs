@@ -182,6 +182,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
         | PopoverKind::ForcePushConfirm { repo_id }
         | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
+        | PopoverKind::RevertCommitConfirm { repo_id, .. }
         | PopoverKind::MergeCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::BranchExistsPrompt { repo_id, .. }
@@ -418,6 +419,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::RebaseReword { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
+        | PopoverKind::RevertCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::ResetPrompt { .. }
@@ -625,6 +627,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
             76u8.hash(hasher);
+            repo_id.hash(hasher);
+            commit_id.hash(hasher);
+        }
+        PopoverKind::RevertCommitConfirm { repo_id, commit_id } => {
+            108u8.hash(hasher);
             repo_id.hash(hasher);
             commit_id.hash(hasher);
         }
@@ -1113,6 +1120,19 @@ mod tests {
             local_branch: "main".to_string(),
             local_head: CommitId("2222222222222222222222222222222222222222".into()),
         }
+    }
+
+    #[test]
+    fn revert_and_cherry_pick_confirms_hash_differently() {
+        let repo_id = RepoId(7);
+        let commit_id = CommitId("deadbeef".into());
+        assert_ne!(
+            hash_kind(PopoverKind::RevertCommitConfirm {
+                repo_id,
+                commit_id: commit_id.clone(),
+            }),
+            hash_kind(PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }),
+        );
     }
 
     #[test]
