@@ -793,7 +793,11 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
 
 fn install_global_diff_shortcut_fallback(cx: &mut App) {
     cx.observe_keystrokes(|event, window, cx| {
-        if !is_diff_shortcut_candidate(&event.keystroke)
+        // Observers also run after a bound action handled the keystroke (gpui
+        // passes that action here); acting again would run F3 twice and skip
+        // every other change block.
+        if event.action.is_some()
+            || !is_diff_shortcut_candidate(&event.keystroke)
             || event.context_stack.iter().any(|context| {
                 context.contains("TextInput")
                     || context.contains("Terminal")

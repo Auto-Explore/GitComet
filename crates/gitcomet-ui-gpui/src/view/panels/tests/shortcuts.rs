@@ -2918,8 +2918,8 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
     );
     assert_eq!(
         diff_selection_range(cx, &view),
-        Some((third_change, third_change)),
-        "expected F3 to replace the selected diff area with the target change"
+        None,
+        "expected F3 to replace the selected diff area with an anchor on the target change"
     );
 
     set_diff_selection_area(
@@ -2937,8 +2937,8 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
     );
     assert_eq!(
         diff_selection_range(cx, &view),
-        Some((first_change, first_change)),
-        "expected F2 to replace the selected diff area with the target change"
+        None,
+        "expected F2 to replace the selected diff area with an anchor on the target change"
     );
 
     set_diff_text_selection_on_row(cx, &view, second_change);
@@ -5934,17 +5934,27 @@ fn switching_diff_content_mode_restores_diff_panel_focus_for_change_navigation(
         "expected selecting the collapsed entry to update the global diff content mode"
     );
 
+    // Nothing is focused after the mode switch, so the first F3 lands on the
+    // first change and the second on the next one.
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    let first_change = diff_selection_anchor(cx, &view)
+        .expect("expected F3 after closing diff mode settings to navigate to a change");
     cx.simulate_keystrokes("f3");
     draw_and_drain_test_window(cx);
     let next_change = diff_selection_anchor(cx, &view)
-        .expect("expected F3 after closing diff mode settings to navigate to a change");
+        .expect("expected a second F3 to navigate to the next change");
+    assert!(
+        next_change > first_change,
+        "expected each F3 to move one change forward"
+    );
 
     cx.simulate_keystrokes("f2");
     draw_and_drain_test_window(cx);
     let previous_change = diff_selection_anchor(cx, &view)
         .expect("expected F2 after closing diff mode settings to navigate to a change");
-    assert!(
-        previous_change < next_change,
+    assert_eq!(
+        previous_change, first_change,
         "expected F2 after closing diff mode settings to refresh and move to the previous change"
     );
 }

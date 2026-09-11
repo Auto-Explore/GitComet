@@ -177,34 +177,66 @@ impl MainPaneView {
         self.diff_selection_range = None;
     }
 
-    /// Full mode: the first row of each change block, as a visual index.
-    pub(super) fn file_change_block_starts(&self) -> Vec<usize> {
-        if !self.is_file_diff_view_active() {
-            return Vec::new();
-        }
-        let provider_starts = match self.diff_view {
+    /// Full mode change blocks, as source-visible rows.
+    fn file_change_blocks(&self) -> Vec<std::ops::Range<usize>> {
+        let provider_blocks = match self.diff_view {
             DiffViewMode::Inline => self
                 .file_diff_inline_row_provider
                 .as_ref()
-                .map(|provider| provider.change_block_starts()),
+                .map(|provider| provider.change_blocks()),
             DiffViewMode::Split => self
                 .file_diff_row_provider
                 .as_ref()
-                .map(|provider| provider.change_block_starts()),
+                .map(|provider| provider.change_blocks()),
         };
-        let starts = provider_starts.unwrap_or_else(|| {
+        let blocks = provider_blocks.unwrap_or_else(|| {
             let len = match self.diff_view {
                 DiffViewMode::Inline => self.file_diff_inline_row_len(),
                 DiffViewMode::Split => self.file_diff_split_row_len(),
             };
-            diff_navigation::change_block_entries(len, |row_ix| {
-                self.file_diff_row_is_change(row_ix)
-            })
+            diff_navigation::change_block_ranges(len, |row_ix| self.file_diff_row_is_change(row_ix))
         });
-        starts
+        blocks
             .into_iter()
-            .filter_map(|row_ix| self.diff_visual_ix_for_mapped_ix(row_ix))
+            .filter_map(|rows| {
+                let start = self.diff_source_visible_ix_for_mapped_ix(rows.start)?;
+                let last = self.diff_source_visible_ix_for_mapped_ix(rows.end - 1)?;
+                Some(start..last + 1)
+            })
             .collect()
+    }
+
+    /// Change blocks of the text diff, as source-visible rows.
+    fn diff_change_blocks(&self) -> Vec<std::ops::Range<usize>> {
+        if self.is_file_diff_view_active() {
+            self.file_change_blocks()
+        } else if self.is_collapsed_diff_projection_active() {
+            self.collapsed_change_blocks()
+        } else {
+            self.patch_change_blocks()
+        }
+    }
+
+    fn is_rendered_markdown_diff_active(&self) -> bool {
+        self.is_markdown_preview_active() && !self.is_file_preview_active()
+    }
+
+    /// Remembers the block navigation landed on at visual row `target`, for
+    /// the accent bar that marks it.
+    fn focus_change_block_at(&mut self, target: usize) {
+        let rows = if self.is_rendered_markdown_diff_active() {
+            None
+        } else {
+            self.diff_change_blocks()
+                .into_iter()
+                .find(|rows| self.diff_visual_ix_for_source_visible_ix(rows.start) == target)
+        };
+        self.diff_focused_change_block = rows.map(|rows| DiffFocusedChangeBlock {
+            anchor: target,
+            sides: self.diff_block_change_sides(rows.clone()),
+            rows,
+            layout: self.diff_visible_layout_key(),
+        });
     }
 
     pub(super) fn diff_source_visible_ix_for_mapped_ix(&self, mapped_ix: usize) -> Option<usize> {
@@ -226,11 +258,6 @@ impl MainPaneView {
             .get(visible_ix)
             .is_some_and(|visible_mapped_ix| *visible_mapped_ix == mapped_ix)
             .then_some(visible_ix)
-    }
-
-    fn diff_visual_ix_for_mapped_ix(&self, mapped_ix: usize) -> Option<usize> {
-        self.diff_source_visible_ix_for_mapped_ix(mapped_ix)
-            .map(|source_visible_ix| self.diff_visual_ix_for_source_visible_ix(source_visible_ix))
     }
 
     /// Translate a source row index into the row the list actually scrolls to,
@@ -276,20 +303,12 @@ impl MainPaneView {
     /// Change-navigation stops as visual indices: the first row of each
     /// change block, whatever the content mode.
     pub(in crate::view) fn diff_nav_entries(&self) -> Vec<usize> {
-        if self.is_markdown_preview_active() && !self.is_file_preview_active() {
+        if self.is_rendered_markdown_diff_active() {
             return self.markdown_preview_change_visible_indices();
         }
-        if self.is_file_diff_view_active() {
-            return self.file_change_block_starts();
-        }
-        let source_visible_starts = if self.is_collapsed_diff_projection_active() {
-            self.collapsed_change_block_starts()
-        } else {
-            self.patch_change_block_starts()
-        };
-        source_visible_starts
+        self.diff_change_blocks()
             .into_iter()
-            .map(|ix| self.diff_visual_ix_for_source_visible_ix(ix))
+            .map(|rows| self.diff_visual_ix_for_source_visible_ix(rows.start))
             .collect()
     }
 
@@ -429,16 +448,17 @@ impl MainPaneView {
             if let Some((start, end)) = self.diff_focus_visible_range() {
                 let current = if previous { start } else { end };
                 self.clear_diff_navigation_selection();
-                self.diff_selection_range = Some((current, current));
                 self.diff_selection_anchor = Some(current);
             }
             return;
         };
 
         self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
+        // Anchor only, like a line click: the block's bar and outline mark
+        // where navigation is, so its first row gets no selection wash.
         self.clear_diff_navigation_selection();
         self.diff_selection_anchor = Some(target);
-        self.diff_selection_range = Some((target, target));
+        self.focus_change_block_at(target);
     }
 
     pub(in crate::view) fn maybe_autoscroll_diff_to_first_change(&mut self) {
@@ -449,7 +469,7 @@ impl MainPaneView {
             self.diff_autoscroll_pending = false;
             return;
         }
-        let visible_len = if self.is_markdown_preview_active() && !self.is_file_preview_active() {
+        let visible_len = if self.is_rendered_markdown_diff_active() {
             self.markdown_preview_row_count().unwrap_or(0)
         } else {
             self.diff_visible_len()
@@ -466,7 +486,12 @@ impl MainPaneView {
         // collapsed hunk's header in view.
         self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
         self.diff_selection_anchor = Some(target);
-        self.diff_selection_range = Some((target, target));
+        self.diff_selection_range = None;
+        if entries.is_empty() {
+            self.diff_focused_change_block = None;
+        } else {
+            self.focus_change_block_at(target);
+        }
         self.diff_autoscroll_pending = false;
     }
 }

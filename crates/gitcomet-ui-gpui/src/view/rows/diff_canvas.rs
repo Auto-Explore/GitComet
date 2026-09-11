@@ -13,8 +13,8 @@ use super::diff_text::{
     whitespace_visible_styled_text,
 };
 use super::*;
-use crate::view::panes::main::DiffHorizontalScrollColumn;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::main::{DiffChangeSide, DiffHorizontalScrollColumn, FocusedChangeBlockRow};
 use gitcomet_core::domain::{DiffArea, DiffLineKind};
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
@@ -41,6 +41,8 @@ const DIFF_GUTTER_BASE_WIDTH_PX: f32 = 38.0;
 const DIFF_ROW_HORIZONTAL_PADDING_PX: f32 = 8.0;
 const DIFF_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 const DIFF_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
+/// Outline around the change block F2/F3 landed on.
+const FOCUSED_CHANGE_BLOCK_OUTLINE_WIDTH_PX: f32 = 1.0;
 const DIFF_ROW_BACKGROUND_OVERDRAW_PX: f32 = 1.0;
 
 /// Default width of the blame/annotate column shown to the left of the diff
@@ -1197,6 +1199,121 @@ fn focused_row_outline_color(theme: AppTheme, bg: gpui::Rgba) -> gpui::Rgba {
     with_alpha(bg, if theme.is_dark { 0.72 } else { 0.56 })
 }
 
+/// Marks a row of the change block F2/F3 landed on: the accent bar the
+/// conflict resolver puts on its active conflict, plus an outline in the
+/// change's colour that the block's first and last rows close. `left..right`
+/// is the column; both edges are pinned to the visible area so horizontal
+/// scrolling keeps the marks in view.
+#[allow(clippy::too_many_arguments)]
+fn paint_focused_change_block_marks(
+    window: &mut Window,
+    row_bounds: Bounds<Pixels>,
+    left: Pixels,
+    right: Pixels,
+    row: FocusedChangeBlockRow,
+    outline: Option<DiffChangeSide>,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) {
+    let clip = window.content_mask().bounds;
+    let left = left.max(clip.left());
+    let right = right.min(clip.right());
+    if right <= left {
+        return;
+    }
+    let top = row_bounds.top();
+    let height = row_bounds.size.height;
+    // Overdrawn like the row fill so stacked rows join, but not past the block.
+    let run_height = if row.bottom {
+        height
+    } else {
+        height + px(DIFF_ROW_BACKGROUND_OVERDRAW_PX)
+    };
+
+    if let Some(side) = outline {
+        let color = match side {
+            DiffChangeSide::Removed => theme.colors.diff.removed.foreground,
+            DiffChangeSide::Added => theme.colors.diff.added.foreground,
+        };
+        let line_w = diff_scaled_px(FOCUSED_CHANGE_BLOCK_OUTLINE_WIDTH_PX, ui_scale_percent);
+        let width = right - left;
+        window.paint_quad(fill(
+            Bounds::new(point(right - line_w, top), size(line_w, run_height)),
+            color,
+        ));
+        if row.top {
+            window.paint_quad(fill(
+                Bounds::new(point(left, top), size(width, line_w)),
+                color,
+            ));
+        }
+        if row.bottom {
+            window.paint_quad(fill(
+                Bounds::new(point(left, top + height - line_w), size(width, line_w)),
+                color,
+            ));
+        }
+    }
+
+    // The bar is the outline's left edge, painted last so it caps the corners.
+    window.paint_quad(fill(
+        Bounds::new(
+            point(left, top),
+            size(
+                diff_scaled_px(DIFF_CHANGE_BAR_WIDTH_PX, ui_scale_percent),
+                run_height,
+            ),
+        ),
+        theme.colors.accent.foreground,
+    ));
+}
+
+/// One column of one row painting the focused change block's marks.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct FocusedChangeBlockPaint {
+    pub(in crate::view) visible_ix: usize,
+    pub(in crate::view) region: DiffTextRegion,
+    pub(in crate::view) outline: Option<DiffChangeSide>,
+    pub(in crate::view) top: bool,
+    pub(in crate::view) bottom: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FOCUSED_CHANGE_BLOCK_PAINT_LOG: RefCell<Vec<FocusedChangeBlockPaint>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn record_focused_change_block_for_tests(
+    visible_ix: usize,
+    region: DiffTextRegion,
+    row: FocusedChangeBlockRow,
+    outline: Option<DiffChangeSide>,
+) {
+    FOCUSED_CHANGE_BLOCK_PAINT_LOG.with(|log| {
+        log.borrow_mut().push(FocusedChangeBlockPaint {
+            visible_ix,
+            region,
+            outline,
+            top: row.top,
+            bottom: row.bottom,
+        })
+    });
+}
+
+#[cfg(test)]
+pub(in crate::view) fn clear_focused_change_block_paint_log_for_tests() {
+    FOCUSED_CHANGE_BLOCK_PAINT_LOG.with(|log| log.borrow_mut().clear());
+}
+
+/// Focused change block marks painted since the last clear.
+#[cfg(test)]
+pub(in crate::view) fn focused_change_block_paint_log_for_tests() -> Vec<FocusedChangeBlockPaint> {
+    FOCUSED_CHANGE_BLOCK_PAINT_LOG.with(|log| log.borrow().clone())
+}
+
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::view) struct DiffPaintRecord {
@@ -2242,6 +2359,27 @@ pub(super) fn inline_diff_line_row_canvas(
                 );
             }
 
+            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+                let outline = Some(row.inline_outline());
+                paint_focused_change_block_marks(
+                    window,
+                    prepaint.bounds,
+                    prepaint.bounds.left() + prepaint.annot_w,
+                    prepaint.bounds.right(),
+                    row,
+                    outline,
+                    theme,
+                    ui_scale_percent,
+                );
+                #[cfg(test)]
+                record_focused_change_block_for_tests(
+                    visible_ix,
+                    DiffTextRegion::Inline,
+                    row,
+                    outline,
+                );
+            }
+
             if show_line_numbers {
                 paint_gutter_text_right_aligned(
                     &old,
@@ -2530,6 +2668,33 @@ pub(super) fn split_diff_line_row_canvas(
                 );
             }
 
+            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+                for (column, old_side) in [(prepaint.left_col, true), (prepaint.right_col, false)] {
+                    let outline = row.column_outline(old_side);
+                    paint_focused_change_block_marks(
+                        window,
+                        prepaint.bounds,
+                        column.left(),
+                        column.right(),
+                        row,
+                        outline,
+                        theme,
+                        ui_scale_percent,
+                    );
+                    #[cfg(test)]
+                    record_focused_change_block_for_tests(
+                        visible_ix,
+                        if old_side {
+                            DiffTextRegion::SplitLeft
+                        } else {
+                            DiffTextRegion::SplitRight
+                        },
+                        row,
+                        outline,
+                    );
+                }
+            }
+
             if show_line_numbers {
                 let gutter_total = gutter_cell_total_width(
                     prepaint.pad,
@@ -2811,6 +2976,22 @@ pub(super) fn patch_split_column_row_canvas(
                     window,
                     cx,
                 );
+            }
+
+            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+                let outline = row.column_outline(region == DiffTextRegion::SplitLeft);
+                paint_focused_change_block_marks(
+                    window,
+                    prepaint.bounds,
+                    prepaint.bounds.left() + prepaint.annot_w,
+                    prepaint.bounds.right(),
+                    row,
+                    outline,
+                    theme,
+                    ui_scale_percent,
+                );
+                #[cfg(test)]
+                record_focused_change_block_for_tests(visible_ix, region, row, outline);
             }
 
             if show_line_numbers {

@@ -7,7 +7,7 @@ use crate::assets::GitCometAssets;
 use crate::launch_guard::run_with_panic_guard;
 use crate::theme::AppTheme;
 use crate::view::diff_navigation::{
-    change_block_entries_with_transparent_rows, diff_nav_next_target, diff_nav_prev_target,
+    change_block_ranges_with_transparent_rows, diff_nav_next_target, diff_nav_prev_target,
 };
 use crate::view::shortcut_labels::{next_change_tooltip, previous_change_tooltip};
 use crate::view::{GitCometTooltipExt, components, svg_icon};
@@ -30,6 +30,8 @@ const FOCUSED_DIFF_MIN_WIDTH_PX: f32 = 500.0;
 const FOCUSED_DIFF_MIN_HEIGHT_PX: f32 = 300.0;
 const FOCUSED_DIFF_DEFAULT_WIDTH_PX: f32 = 900.0;
 const FOCUSED_DIFF_DEFAULT_HEIGHT_PX: f32 = 650.0;
+/// Matches the accent bar the diff and conflict rows put on their focused block.
+const CHANGE_BLOCK_BAR_WIDTH_PX: f32 = 3.0;
 
 actions!(
     focused_diff_scale,
@@ -68,8 +70,8 @@ pub struct FocusedDiffConfig {
 
 struct FocusedDiffView {
     lines: Vec<DiffLine>,
-    /// First line of each change block, the F2/F3 stops.
-    change_block_starts: Vec<usize>,
+    /// Line ranges of the change blocks F2/F3 step through.
+    change_blocks: Vec<Range<usize>>,
     /// Block start F2/F3 last landed on.
     current_change: Option<usize>,
     title: String,
@@ -152,7 +154,7 @@ impl FocusedDiffView {
             .and_then(FocusedDiffWhitespaceMode::from_key)
             .unwrap_or_default();
         let lines = parse_diff_lines(&config.diff_text, diff_whitespace_mode);
-        let change_block_starts = change_block_starts(&lines);
+        let change_blocks = change_blocks(&lines);
         let title = config
             .display_path
             .unwrap_or_else(|| format!("{} vs {}", config.label_left, config.label_right));
@@ -165,7 +167,7 @@ impl FocusedDiffView {
 
         Self {
             lines,
-            change_block_starts,
+            change_blocks,
             current_change: None,
             title,
             diff_whitespace_mode,
@@ -199,10 +201,10 @@ impl FocusedDiffView {
         }
         self.diff_whitespace_mode = mode;
         apply_visual_diff_line_kinds(self.lines.as_mut_slice(), mode);
-        self.change_block_starts = change_block_starts(&self.lines);
+        self.change_blocks = change_blocks(&self.lines);
         self.current_change = self
             .current_change
-            .filter(|start| self.change_block_starts.binary_search(start).is_ok());
+            .filter(|&start| self.change_blocks.iter().any(|block| block.start == start));
         let _ = session::persist_ui_settings(session::UiSettings {
             diff_whitespace_mode: Some(mode.key().to_string()),
             ..session::UiSettings::default()
@@ -210,11 +212,24 @@ impl FocusedDiffView {
         cx.notify();
     }
 
+    fn change_block_starts(&self) -> Vec<usize> {
+        self.change_blocks.iter().map(|block| block.start).collect()
+    }
+
+    fn current_change_block(&self) -> Option<Range<usize>> {
+        let start = self.current_change?;
+        self.change_blocks
+            .iter()
+            .find(|block| block.start == start)
+            .cloned()
+    }
+
     fn jump_change(&mut self, previous: bool, cx: &mut Context<Self>) {
+        let starts = self.change_block_starts();
         let target = if previous {
-            diff_nav_prev_target(&self.change_block_starts, self.current_change)
+            diff_nav_prev_target(&starts, self.current_change)
         } else {
-            diff_nav_next_target(&self.change_block_starts, self.current_change)
+            diff_nav_next_target(&starts, self.current_change)
         };
         let Some(target) = target else {
             return;
@@ -363,22 +378,14 @@ fn is_visual_change(line: &DiffLine) -> bool {
 }
 
 /// One stop per change block, the same rule as the main diff view. A
-/// `\ No newline` marker between `-` and `+` does not split the edit.
-fn change_block_starts(lines: &[DiffLine]) -> Vec<usize> {
-    change_block_entries_with_transparent_rows(
+/// `\ No newline` marker between `-` and `+` does not split the edit, and one
+/// trailing a block belongs to it.
+fn change_blocks(lines: &[DiffLine]) -> Vec<Range<usize>> {
+    change_block_ranges_with_transparent_rows(
         lines.len(),
         |ix| is_visual_change(&lines[ix]),
         |ix| is_no_newline_marker(&lines[ix]),
     )
-}
-
-/// Lines of the block starting at `start`, including its no-newline markers.
-fn change_block_range(lines: &[DiffLine], start: usize) -> Range<usize> {
-    let end = lines[start..]
-        .iter()
-        .position(|line| !is_visual_change(line) && !is_no_newline_marker(line))
-        .map_or(lines.len(), |len| start + len);
-    start..end
 }
 
 /// Scroll offset (0 or negative) that centres `item` in `viewport`. Child
@@ -399,14 +406,10 @@ impl Render for FocusedDiffView {
         let line_count = self.lines.len();
         let scaled_px = crate::ui_scale::scaler(crate::ui_scale::UiScale::from_window(window));
         let next_whitespace_mode = self.diff_whitespace_mode.toggled();
-        let can_nav_prev =
-            diff_nav_prev_target(&self.change_block_starts, self.current_change).is_some();
-        let can_nav_next =
-            diff_nav_next_target(&self.change_block_starts, self.current_change).is_some();
-        let current_block = self
-            .current_change
-            .map(|start| change_block_range(&self.lines, start))
-            .unwrap_or_default();
+        let starts = self.change_block_starts();
+        let can_nav_prev = diff_nav_prev_target(&starts, self.current_change).is_some();
+        let can_nav_next = diff_nav_next_target(&starts, self.current_change).is_some();
+        let current_block = self.current_change_block().unwrap_or_default();
 
         div()
             .id("focused-diff-root")
@@ -572,10 +575,10 @@ fn render_diff_line(
         .w_full()
         .flex()
         .flex_row()
-        .border_l_2()
+        .border_l(scaled_px(CHANGE_BLOCK_BAR_WIDTH_PX))
         .border_color(gpui::transparent_black())
         .when(is_current_change, |el| {
-            el.border_color(theme.colors.interaction.selected_indicator)
+            el.border_color(theme.colors.accent.foreground)
         })
         .child(
             div()
@@ -819,26 +822,22 @@ index 3333333..4444444 100644
 ";
 
     #[test]
-    fn change_block_starts_mark_the_first_line_of_each_block() {
+    fn change_blocks_span_each_block_of_the_diff() {
         let lines = parse_diff_lines(TWO_FILE_DIFF, FocusedDiffWhitespaceMode::Show);
-        let starts = change_block_starts(&lines);
+        let blocks = change_blocks(&lines);
 
-        let texts = starts
+        let texts = blocks
             .iter()
-            .map(|&ix| lines[ix].content.as_str())
+            .map(|block| lines[block.start].content.as_str())
             .collect::<Vec<_>>();
-        // The no-newline markers between `-last` and `+LAST` keep it one block.
         assert_eq!(texts, vec!["-two", "-five", "-last"]);
-        assert_eq!(
-            change_block_range(&lines, starts[2]),
-            starts[2]..lines.len(),
-            "the block runs through its trailing no-newline marker"
-        );
-        assert_eq!(change_block_range(&lines, starts[1]).len(), 3);
+        // The markers between `-last` and `+LAST` keep it one block, and the
+        // trailing one belongs to it.
+        assert_eq!(blocks, vec![6..8, 10..13, 19..lines.len()]);
     }
 
     #[test]
-    fn change_block_starts_skip_whitespace_only_blocks_when_ignored() {
+    fn change_blocks_skip_whitespace_only_blocks_when_ignored() {
         let diff = "\
 @@ -1,5 +1,5 @@
  one
@@ -849,16 +848,19 @@ index 3333333..4444444 100644
 +FOUR
 ";
         let shown = parse_diff_lines(diff, FocusedDiffWhitespaceMode::Show);
-        assert_eq!(change_block_starts(&shown), vec![2, 5]);
+        assert_eq!(change_blocks(&shown), vec![2..4, 5..7]);
 
         let ignored = parse_diff_lines(diff, FocusedDiffWhitespaceMode::Ignore);
-        assert_eq!(change_block_starts(&ignored), vec![5]);
+        assert_eq!(change_blocks(&ignored), vec![5..7]);
     }
 
     #[test]
     fn change_navigation_starts_at_the_first_block_and_does_not_wrap() {
         let lines = parse_diff_lines(TWO_FILE_DIFF, FocusedDiffWhitespaceMode::Show);
-        let starts = change_block_starts(&lines);
+        let starts = change_blocks(&lines)
+            .into_iter()
+            .map(|block| block.start)
+            .collect::<Vec<_>>();
 
         assert_eq!(diff_nav_next_target(&starts, None), Some(starts[0]));
         assert_eq!(diff_nav_prev_target(&starts, None), None);

@@ -1,6 +1,8 @@
 //! Change navigation shared by every diff surface: one stop per change block,
 //! landing on the block's first row.
 
+use std::ops::Range;
+
 /// `current` is the focused row; with nothing focused there is no previous stop.
 pub(crate) fn diff_nav_prev_target(entries: &[usize], current: Option<usize>) -> Option<usize> {
     let current = current?;
@@ -17,29 +19,43 @@ pub(crate) fn diff_nav_next_target(entries: &[usize], current: Option<usize>) ->
 
 /// First row of each contiguous run of changed rows.
 pub(crate) fn change_block_entries(len: usize, is_change: impl FnMut(usize) -> bool) -> Vec<usize> {
-    change_block_entries_with_transparent_rows(len, is_change, |_| false)
+    change_block_ranges(len, is_change)
+        .into_iter()
+        .map(|block| block.start)
+        .collect()
 }
 
-/// Like [`change_block_entries`], but a transparent row keeps an open block
+/// Each contiguous run of changed rows.
+pub(crate) fn change_block_ranges(
+    len: usize,
+    is_change: impl FnMut(usize) -> bool,
+) -> Vec<Range<usize>> {
+    change_block_ranges_with_transparent_rows(len, is_change, |_| false)
+}
+
+/// Like [`change_block_ranges`], but a transparent row keeps an open block
 /// open, e.g. a `\ No newline` marker between the `-` and `+` sides of one
-/// edit. `is_transparent` is only asked inside a block, for unchanged rows.
-pub(crate) fn change_block_entries_with_transparent_rows(
+/// edit; one trailing a block belongs to it. `is_transparent` is only asked
+/// inside a block, for unchanged rows.
+pub(crate) fn change_block_ranges_with_transparent_rows(
     len: usize,
     mut is_change: impl FnMut(usize) -> bool,
     mut is_transparent: impl FnMut(usize) -> bool,
-) -> Vec<usize> {
+) -> Vec<Range<usize>> {
     let mut out = Vec::new();
-    let mut in_block = false;
+    let mut open: Option<Range<usize>> = None;
     for ix in 0..len {
         if is_change(ix) {
-            if !in_block {
-                out.push(ix);
-                in_block = true;
+            open.get_or_insert(ix..ix).end = ix + 1;
+        } else if let Some(block) = open.as_mut() {
+            if is_transparent(ix) {
+                block.end = ix + 1;
+            } else {
+                out.extend(open.take());
             }
-        } else if in_block && !is_transparent(ix) {
-            in_block = false;
         }
     }
+    out.extend(open);
     out
 }
 
@@ -81,12 +97,21 @@ mod tests {
     }
 
     #[test]
+    fn change_block_ranges_span_each_run() {
+        let changed = [false, true, true, false, true];
+        assert_eq!(
+            change_block_ranges(changed.len(), |ix| changed[ix]),
+            vec![1..3, 4..5]
+        );
+    }
+
+    #[test]
     fn transparent_rows_neither_start_nor_split_a_block() {
         // `-`, marker, `+`, marker, context, marker, `+`
         let changed = [true, false, true, false, false, false, true];
         let transparent = [false, true, false, true, false, true, false];
         let mut asked = Vec::new();
-        let entries = change_block_entries_with_transparent_rows(
+        let blocks = change_block_ranges_with_transparent_rows(
             changed.len(),
             |ix| changed[ix],
             |ix| {
@@ -95,7 +120,8 @@ mod tests {
             },
         );
 
-        assert_eq!(entries, vec![0, 6]);
+        // The trailing marker (row 3) belongs to the first block.
+        assert_eq!(blocks, vec![0..4, 6..7]);
         // Row 5 is a marker outside any block, so it is never looked up.
         assert_eq!(asked, vec![1, 3, 4]);
     }

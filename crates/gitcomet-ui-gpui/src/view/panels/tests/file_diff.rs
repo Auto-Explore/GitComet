@@ -2,6 +2,7 @@
 #![allow(clippy::type_complexity)]
 
 use super::*;
+use crate::view::panes::main::DiffChangeSide;
 use crate::view::panes::main::diff_cache::PatchInlineVisibleMap;
 use std::path::PathBuf;
 
@@ -3561,11 +3562,8 @@ fn press_and_assert_anchor(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.diff_selection_anchor, Some(expected), "{message}");
-        assert_eq!(
-            pane.diff_selection_range,
-            Some((expected, expected)),
-            "{message}"
-        );
+        // Anchor only: the landed row gets no selection wash.
+        assert_eq!(pane.diff_selection_range, None, "{message}");
     });
 }
 
@@ -3732,6 +3730,82 @@ fn full_diff_split_change_shortcuts_visit_each_change_block(cx: &mut gpui::TestA
     );
 }
 
+/// The real app binds F2/F3 globally *and* observes keystrokes for a diff
+/// shortcut fallback; a press must still move exactly one block.
+fn assert_full_diff_app_keys_move_one_block_per_press(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let entries = activate_full_diff_nav_fixture(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        diff_view,
+        build_full_diff_multi_block_fixture_texts(),
+        3,
+    );
+    cx.update(|_window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_app_keys_for_test(app);
+        crate::app::install_global_diff_shortcut_fallback_for_test(app);
+    });
+
+    focus_diff_panel(cx, view);
+    for (keystroke, expected, message) in [
+        ("f3", entries[0], "first F3"),
+        ("f3", entries[1], "second F3"),
+        ("f2", entries[0], "F2"),
+        ("f7", entries[1], "F7"),
+        ("shift-f7", entries[0], "Shift+F7"),
+    ] {
+        cx.simulate_keystrokes(keystroke);
+        draw_and_drain_test_window(cx);
+        cx.update(|_window, app| {
+            assert_eq!(
+                view.read(app).main_pane.read(app).diff_selection_anchor,
+                Some(expected),
+                "{message} should move exactly one change block in {diff_view:?}"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn full_diff_inline_app_keys_move_one_block_per_press(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_full_diff_app_keys_move_one_block_per_press(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70637),
+        "full_diff_inline_app_keys_nav",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn full_diff_split_app_keys_move_one_block_per_press(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_full_diff_app_keys_move_one_block_per_press(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70638),
+        "full_diff_split_app_keys_nav",
+        DiffViewMode::Split,
+    );
+}
+
 fn assert_full_diff_f3_without_selection_reaches_block_at_first_row(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -3888,6 +3962,325 @@ index 1111111..2222222 100644
     );
 }
 
+/// Visual rows the pane reports as inside the focused change block.
+fn focused_change_block_rows(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Vec<usize> {
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (0..pane.diff_visible_len())
+            .filter(|&visible_ix| pane.diff_focused_change_block_row(visible_ix).is_some())
+            .collect()
+    })
+}
+
+/// Focused change block marks painted on a fresh draw, by row then column.
+fn painted_focused_change_block_marks(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Vec<rows::FocusedChangeBlockPaint> {
+    cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |_pane, cx| cx.notify());
+        rows::clear_focused_change_block_paint_log_for_tests();
+        let _ = window.draw(app);
+        let mut painted = rows::focused_change_block_paint_log_for_tests();
+        painted.sort_by_key(|mark| (mark.visible_ix, mark.region as u8));
+        painted.dedup();
+        painted
+    })
+}
+
+/// Asserts the focused block covers `expected` rows, each column painting the
+/// bar with the outline closed on the first and last rows, and returns the
+/// outline side each column painted, row by row.
+fn assert_focused_change_block_bar(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    expected: std::ops::Range<usize>,
+    diff_view: DiffViewMode,
+    message: &str,
+) -> Vec<Vec<Option<DiffChangeSide>>> {
+    assert_eq!(
+        focused_change_block_rows(cx, view),
+        expected.clone().collect::<Vec<_>>(),
+        "{message}: focused block rows in {diff_view:?}"
+    );
+    let regions: &[DiffTextRegion] = match diff_view {
+        DiffViewMode::Inline => &[DiffTextRegion::Inline],
+        DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
+    };
+    let painted = painted_focused_change_block_marks(cx, view);
+    let painted_cells = painted
+        .iter()
+        .map(|mark| (mark.visible_ix, mark.region, mark.top, mark.bottom))
+        .collect::<Vec<_>>();
+    let expected_cells = expected
+        .clone()
+        .flat_map(|visible_ix| {
+            let top = visible_ix == expected.start;
+            let bottom = visible_ix + 1 == expected.end;
+            regions
+                .iter()
+                .map(move |&region| (visible_ix, region, top, bottom))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        painted_cells, expected_cells,
+        "{message}: painted marks in {diff_view:?}"
+    );
+    regions
+        .iter()
+        .map(|&region| {
+            painted
+                .iter()
+                .filter(|mark| mark.region == region)
+                .map(|mark| mark.outline)
+                .collect()
+        })
+        .collect()
+}
+
+fn assert_full_diff_focused_change_block_shows_accent_bar(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    let entries = activate_full_diff_nav_fixture(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        diff_view,
+        build_full_diff_multi_block_fixture_texts(),
+        3,
+    );
+    let (e0, e1, e2) = (entries[0], entries[1], entries[2]);
+    assert!(
+        painted_focused_change_block_marks(cx, view).is_empty(),
+        "no block is focused before navigating in {diff_view:?}"
+    );
+
+    // One unchanged row ("middle one", "middle two") separates the blocks.
+    focus_diff_panel(cx, view);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    let outlines =
+        assert_focused_change_block_bar(cx, view, e0..e1 - 1, diff_view, "F3 onto block one");
+    // Every block modifies lines: inline alternates `-`/`+` rows, each in its
+    // own colour; split outlines the old column red and the new one green.
+    use DiffChangeSide::{Added, Removed};
+    let expected_outlines = match diff_view {
+        DiffViewMode::Inline => vec![vec![Some(Removed), Some(Added), Some(Removed), Some(Added)]],
+        DiffViewMode::Split => vec![vec![Some(Removed); 2], vec![Some(Added); 2]],
+    };
+    assert_eq!(
+        outlines, expected_outlines,
+        "outline colours in {diff_view:?}"
+    );
+
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    assert_focused_change_block_bar(cx, view, e1..e2 - 1, diff_view, "F3 onto block two");
+
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    assert_focused_change_block_bar(cx, view, e0..e1 - 1, diff_view, "F2 back to block one");
+
+    // Moving the selection elsewhere takes the marks away.
+    set_diff_row_selection_for_test(cx, view, 0, (0, 0));
+    assert!(
+        painted_focused_change_block_marks(cx, view).is_empty(),
+        "the marks should follow the selection off the block in {diff_view:?}"
+    );
+}
+
+#[gpui::test]
+fn full_diff_inline_focused_change_block_shows_accent_bar(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_full_diff_focused_change_block_shows_accent_bar(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70634),
+        "full_diff_inline_focus_bar",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn full_diff_split_focused_change_block_shows_accent_bar(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_full_diff_focused_change_block_shows_accent_bar(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70635),
+        "full_diff_split_focus_bar",
+        DiffViewMode::Split,
+    );
+}
+
+fn assert_pure_change_blocks_outline_only_their_side(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    // An inserted line, then a deleted one.
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,4 @@
+ a
++NEW
+ b
+-c
+ d
+"
+    .to_string();
+    let fixture = (
+        unified,
+        "a\nb\nc\nd\n".to_string(),
+        "a\nNEW\nb\nd\n".to_string(),
+    );
+    let entries =
+        activate_full_diff_nav_fixture(cx, view, repo_id, fixture_name, diff_view, fixture, 2);
+
+    use DiffChangeSide::{Added, Removed};
+    focus_diff_panel(cx, view);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    let added = assert_focused_change_block_bar(
+        cx,
+        view,
+        entries[0]..entries[0] + 1,
+        diff_view,
+        "the inserted line",
+    );
+    let expected_added = match diff_view {
+        DiffViewMode::Inline => vec![vec![Some(Added)]],
+        // Nothing was removed, so the old column's empty filler gets no outline.
+        DiffViewMode::Split => vec![vec![None], vec![Some(Added)]],
+    };
+    assert_eq!(
+        added, expected_added,
+        "an addition outlines green in {diff_view:?}"
+    );
+
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    let removed = assert_focused_change_block_bar(
+        cx,
+        view,
+        entries[1]..entries[1] + 1,
+        diff_view,
+        "the deleted line",
+    );
+    let expected_removed = match diff_view {
+        DiffViewMode::Inline => vec![vec![Some(Removed)]],
+        DiffViewMode::Split => vec![vec![Some(Removed)], vec![None]],
+    };
+    assert_eq!(
+        removed, expected_removed,
+        "a removal outlines red in {diff_view:?}"
+    );
+}
+
+#[gpui::test]
+fn full_diff_inline_pure_change_blocks_outline_only_their_side(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_pure_change_blocks_outline_only_their_side(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70639),
+        "full_diff_inline_pure_outline",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn full_diff_split_pure_change_blocks_outline_only_their_side(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_pure_change_blocks_outline_only_their_side(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70640),
+        "full_diff_split_pure_outline",
+        DiffViewMode::Split,
+    );
+}
+
+#[gpui::test]
+fn focused_change_block_bar_hides_after_the_layout_changes(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let entries = activate_full_diff_nav_fixture(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70636),
+        "full_diff_focus_bar_relayout",
+        DiffViewMode::Inline,
+        build_full_diff_multi_block_fixture_texts(),
+        3,
+    );
+    focus_diff_panel(cx, &view);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        focused_change_block_rows(cx, &view).first().copied(),
+        Some(entries[0])
+    );
+
+    // Inline and split number their rows differently; the captured rows no
+    // longer describe the block, even though the anchor index is unchanged.
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).main_pane.read(app).diff_selection_anchor,
+            Some(entries[0]),
+            "fixture should keep the anchor so only the layout check can hide the bar"
+        );
+    });
+    assert!(
+        focused_change_block_rows(cx, &view).is_empty(),
+        "a relayout should hide the bar rather than mark whatever rows now sit there"
+    );
+}
+
 fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -4020,6 +4413,25 @@ fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
             "first F3 should select the first change block in wrapped Full diff {diff_view:?}"
         );
     });
+    let expected_bar_rows = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let rows = &pane.diff_wrap_visible_rows;
+        // One unchanged row ("middle") separates the two blocks.
+        let block = rows[first_entry].source_visible_ix..rows[second_entry].source_visible_ix - 1;
+        let expected = (0..rows.len())
+            .filter(|&ix| block.contains(&rows[ix].source_visible_ix))
+            .collect::<Vec<_>>();
+        assert!(
+            expected.iter().any(|&ix| rows[ix].wrap_ix > 0),
+            "fixture's first block should wrap in {diff_view:?}"
+        );
+        expected
+    });
+    assert_eq!(
+        focused_change_block_rows(cx, view),
+        expected_bar_rows,
+        "the focus bar should cover the block's wrapped continuation rows in {diff_view:?}"
+    );
 
     cx.simulate_keystrokes("f3");
     draw_and_drain_test_window(cx);
@@ -4137,7 +4549,7 @@ fn full_diff_word_wrap_inline_change_shortcuts_map_provider_rows_through_visible
                 && pane
                     .file_diff_inline_row_provider
                     .as_ref()
-                    .is_some_and(|provider| !provider.change_block_starts().is_empty())
+                    .is_some_and(|provider| !provider.change_blocks().is_empty())
         },
         |pane| {
             (
@@ -4179,9 +4591,9 @@ fn full_diff_word_wrap_inline_change_shortcuts_map_provider_rows_through_visible
             .as_ref()
             .expect("fixture should use the paged inline file provider");
         let first_changed_provider_ix = provider
-            .change_block_starts()
-            .into_iter()
-            .next()
+            .change_blocks()
+            .first()
+            .map(|block| block.start)
             .expect("fixture should contain a changed inline row");
         let visible_map = pane
             .diff_visible_inline_map
@@ -4497,6 +4909,27 @@ fn assert_collapsed_diff_hunk_with_two_change_runs_has_two_stops(
         entries[0],
         &format!("F2 should return to the first run in {diff_view:?}"),
     );
+    // Line 20 is one split row, or a `-`/`+` pair inline.
+    let run_len = match diff_view {
+        DiffViewMode::Inline => 2,
+        DiffViewMode::Split => 1,
+    };
+    let outlines = assert_focused_change_block_bar(
+        cx,
+        view,
+        entries[0]..entries[0] + run_len,
+        diff_view,
+        "the marks cover only the focused run, not the whole hunk",
+    );
+    use DiffChangeSide::{Added, Removed};
+    let expected_outlines = match diff_view {
+        DiffViewMode::Inline => vec![vec![Some(Removed), Some(Added)]],
+        DiffViewMode::Split => vec![vec![Some(Removed)], vec![Some(Added)]],
+    };
+    assert_eq!(
+        outlines, expected_outlines,
+        "outline colours in {diff_view:?}"
+    );
 }
 
 #[gpui::test]
@@ -4633,6 +5066,24 @@ index 3333333..4444444 100644
         "f3",
         entries[2],
         &format!("F3 should cross into the next file in patch {diff_view:?}"),
+    );
+    // `-last`, its marker, `+LAST` and its marker; each marker takes the
+    // colour of the line it belongs to.
+    let outlines = assert_focused_change_block_bar(
+        cx,
+        view,
+        entries[2]..entries[2] + 4,
+        diff_view,
+        "the no-newline edit's marks should cover its markers",
+    );
+    use DiffChangeSide::{Added, Removed};
+    let expected_outlines = match diff_view {
+        DiffViewMode::Inline => vec![vec![Some(Removed), Some(Removed), Some(Added), Some(Added)]],
+        DiffViewMode::Split => vec![vec![Some(Removed); 4], vec![Some(Added); 4]],
+    };
+    assert_eq!(
+        outlines, expected_outlines,
+        "outline colours in {diff_view:?}"
     );
     press_and_assert_anchor(
         cx,

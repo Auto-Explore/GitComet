@@ -1077,9 +1077,9 @@ impl StreamedFileDiffSource {
 
     // Grouped by visual kind, not by plan run: ignore-whitespace turns whole
     // runs back into context.
-    fn split_change_block_starts(&self) -> Vec<usize> {
+    fn split_change_blocks(&self) -> Vec<Range<usize>> {
         let kinds = &self.split_visual_kinds;
-        crate::view::diff_navigation::change_block_entries(kinds.len(), |row_ix| {
+        crate::view::diff_navigation::change_block_ranges(kinds.len(), |row_ix| {
             !matches!(
                 kinds[row_ix],
                 gitcomet_core::file_diff::FileDiffRowKind::Context
@@ -1087,9 +1087,9 @@ impl StreamedFileDiffSource {
         })
     }
 
-    fn inline_change_block_starts(&self) -> Vec<usize> {
+    fn inline_change_blocks(&self) -> Vec<Range<usize>> {
         let kinds = &self.inline_visual_kinds;
-        crate::view::diff_navigation::change_block_entries(kinds.len(), |inline_ix| {
+        crate::view::diff_navigation::change_block_ranges(kinds.len(), |inline_ix| {
             matches!(
                 kinds[inline_ix],
                 gitcomet_core::domain::DiffLineKind::Add
@@ -1365,8 +1365,8 @@ impl PagedFileDiffRows {
         page.get(page_row_ix).cloned()
     }
 
-    pub(in crate::view) fn change_block_starts(&self) -> Vec<usize> {
-        self.source.split_change_block_starts()
+    pub(in crate::view) fn change_blocks(&self) -> Vec<Range<usize>> {
+        self.source.split_change_blocks()
     }
 
     pub(in crate::view) fn scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
@@ -1489,8 +1489,8 @@ impl PagedFileDiffInlineRows {
         page.get(page_row_ix).cloned()
     }
 
-    pub(in crate::view) fn change_block_starts(&self) -> Vec<usize> {
-        self.source.inline_change_block_starts()
+    pub(in crate::view) fn change_blocks(&self) -> Vec<Range<usize>> {
+        self.source.inline_change_blocks()
     }
 
     pub(in crate::view) fn scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
@@ -2143,8 +2143,8 @@ mod tests {
                 gitcomet_core::domain::DiffLineKind::Context
             ]
         );
-        assert!(split.change_block_starts().is_empty());
-        assert!(inline.change_block_starts().is_empty());
+        assert!(split.change_blocks().is_empty());
+        assert!(inline.change_blocks().is_empty());
         assert!(split.scrollbar_markers().is_empty());
         assert!(inline.scrollbar_markers().is_empty());
     }
@@ -2178,12 +2178,12 @@ mod tests {
                 .iter()
                 .all(|kind| *kind == gitcomet_core::domain::DiffLineKind::Context)
         );
-        assert!(split.change_block_starts().is_empty());
-        assert!(inline.change_block_starts().is_empty());
+        assert!(split.change_blocks().is_empty());
+        assert!(inline.change_blocks().is_empty());
     }
 
     #[test]
-    fn file_diff_change_block_starts_mark_first_row_of_each_block() {
+    fn file_diff_change_blocks_span_each_contiguous_run() {
         let source = streamed_file_diff_source_for_test(
             "alpha\nold one\nold two\nmiddle\nold three\nomega\n",
             "alpha\nnew one\nnew two\nmiddle\nnew three\nomega\n",
@@ -2191,21 +2191,23 @@ mod tests {
         let split = PagedFileDiffRows::new(Arc::clone(&source), 1);
         let inline = PagedFileDiffInlineRows::new(Arc::clone(&source), 1);
 
-        assert_eq!(split.change_block_starts(), vec![1, 4]);
-        // Inline interleaves each modified pair as `-`/`+`, so block two starts at 6.
-        assert_eq!(inline.change_block_starts(), vec![1, 6]);
+        assert_eq!(split.change_blocks(), vec![1..3, 4..5]);
+        // Inline interleaves each modified pair as `-`/`+`.
+        assert_eq!(inline.change_blocks(), vec![1..5, 6..8]);
     }
 
     #[test]
-    fn file_diff_change_block_starts_drop_whitespace_only_blocks_when_ignored() {
+    fn file_diff_change_blocks_drop_whitespace_only_blocks_when_ignored() {
         let old_text = "alpha\nold one\nmiddle\n  keep\nomega\n";
         let new_text = "alpha\nnew one\nmiddle\nkeep\nomega\n";
 
         let shown = streamed_file_diff_source_for_test(old_text, new_text);
-        assert_eq!(
-            PagedFileDiffRows::new(Arc::clone(&shown), 1).change_block_starts(),
-            vec![1, 3]
-        );
+        let shown_starts = PagedFileDiffRows::new(Arc::clone(&shown), 1)
+            .change_blocks()
+            .into_iter()
+            .map(|block| block.start)
+            .collect::<Vec<_>>();
+        assert_eq!(shown_starts, vec![1, 3]);
 
         let ignored = streamed_file_diff_source_for_test_with_mode(
             old_text,
@@ -2213,12 +2215,12 @@ mod tests {
             DiffWhitespaceMode::Ignore,
         );
         assert_eq!(
-            PagedFileDiffRows::new(Arc::clone(&ignored), 1).change_block_starts(),
-            vec![1]
+            PagedFileDiffRows::new(Arc::clone(&ignored), 1).change_blocks(),
+            vec![1..2]
         );
         assert_eq!(
-            PagedFileDiffInlineRows::new(Arc::clone(&ignored), 1).change_block_starts(),
-            vec![1]
+            PagedFileDiffInlineRows::new(Arc::clone(&ignored), 1).change_blocks(),
+            vec![1..3]
         );
     }
 
