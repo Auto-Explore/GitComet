@@ -899,6 +899,7 @@ impl GitCometView {
         store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: history_show_tags,
             tag_fetch_mode: history_tag_fetch_mode,
+            verify_commit_signatures: ui_preferences.history.verify_commit_signatures,
         });
         store.dispatch(Msg::SetDefaultTagType(default_tag_type));
         store.dispatch(Msg::SetRemoteSettings(remote_settings));

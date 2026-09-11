@@ -528,6 +528,12 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::VerifyCommitSignatures { repo_id, .. } => send(Msg::Internal(
+            crate::msg::InternalMsg::CommitSignaturesVerified {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadHoverCommitMessage { repo_id, commit_id } => send(Msg::Internal(
             crate::msg::InternalMsg::HoverCommitMessageLoaded {
                 repo_id,
@@ -1954,6 +1960,18 @@ pub(super) fn schedule_effect(
             {
                 repo_load::schedule_load_commit_details(
                     executor, repos, msg_tx, repo_id, commit_id,
+                );
+            }
+        }
+        Effect::VerifyCommitSignatures {
+            repo_id,
+            commit_ids,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_verify_commit_signatures(
+                    executor, repos, msg_tx, repo_id, commit_ids,
                 );
             }
         }

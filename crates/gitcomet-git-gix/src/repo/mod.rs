@@ -2,11 +2,11 @@ mod tag_push;
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextSide,
-    DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage,
-    RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
-    RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream, UpstreamDivergence,
-    Worktree,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, Diff, DiffArea,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
+    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
+    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
+    UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -53,6 +53,7 @@ mod mergetool_builtin;
 mod patch;
 mod porcelain;
 mod remotes;
+mod signatures;
 mod status;
 mod submodules;
 mod tags;
@@ -407,6 +408,10 @@ pub(crate) struct GixRepo {
     worktree_source_memo: std::sync::Mutex<rustc_hash::FxHashMap<PathBuf, WorktreeSourceMemoEntry>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
+    /// Signature verdicts by oid. `None` means "checked, earns no badge".
+    /// Needs no fingerprint: a commit's signature is immutable for its oid.
+    signature_cache:
+        std::sync::Mutex<rustc_hash::FxHashMap<gix::ObjectId, Option<CommitSignature>>>,
 }
 
 impl GixRepo {
@@ -425,6 +430,7 @@ impl GixRepo {
             worktree_source_memo: std::sync::Mutex::default(),
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
+            signature_cache: std::sync::Mutex::default(),
         }
     }
 
@@ -582,6 +588,13 @@ impl GitRepository for GixRepo {
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
         self.commit_details_impl(id)
+    }
+
+    fn verify_commit_signatures(
+        &self,
+        ids: &[CommitId],
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        self.verify_commit_signatures_impl(ids)
     }
 
     fn diff_range_files(

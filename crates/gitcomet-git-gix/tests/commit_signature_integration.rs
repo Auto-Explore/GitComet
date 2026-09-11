@@ -1,0 +1,260 @@
+//! End-to-end coverage for commit signature verification.
+//!
+//! Uses SSH signing rather than GPG: generating a throwaway ed25519 key is fast
+//! and hermetic, while a GPG keypair needs entropy and an agent.
+
+use gitcomet_core::domain::{CommitId, SignatureFormat, SignatureStatus};
+use gitcomet_core::services::{GitBackend, GitRepository};
+use gitcomet_git_gix::GixBackend;
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+
+#[path = "support/test_git_env.rs"]
+mod test_git_env;
+
+fn run_git(repo: &Path, args: &[&str]) {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo).args(args);
+    test_git_env::apply(&mut cmd);
+    let output = cmd.output().expect("run git command");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn git_stdout(repo: &Path, args: &[&str]) -> String {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo).args(args);
+    test_git_env::apply(&mut cmd);
+    let output = cmd.output().expect("run git command");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn ssh_signing_available() -> bool {
+    Command::new("ssh-keygen")
+        .arg("-?")
+        .output()
+        .is_ok_and(|output| {
+            String::from_utf8_lossy(&output.stderr).contains("-Y")
+                || String::from_utf8_lossy(&output.stdout).contains("-Y")
+        })
+}
+
+struct SigningRepo {
+    repo: std::path::PathBuf,
+    allowed_signers: std::path::PathBuf,
+}
+
+/// A repository that signs every commit with a throwaway SSH key. The allowed
+/// signers file is written but not yet configured, so the caller chooses whether
+/// signatures are verifiable.
+fn init_signing_repo(dir: &Path) -> SigningRepo {
+    let repo = dir.join("repo");
+    fs::create_dir_all(&repo).expect("create repository directory");
+    let key = dir.join("signing_key");
+
+    let status = Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-q", "-C", "gitcomet-test", "-N", ""])
+        .arg("-f")
+        .arg(&key)
+        .status()
+        .expect("generate SSH signing key");
+    assert!(status.success(), "ssh-keygen key generation failed");
+
+    let public_key = fs::read_to_string(key.with_extension("pub")).expect("read public key");
+    let allowed_signers = dir.join("allowed_signers");
+    fs::write(
+        &allowed_signers,
+        format!("test@example.com {}", public_key.trim()),
+    )
+    .expect("write allowed signers");
+
+    run_git(&repo, &["init"]);
+    run_git(&repo, &["config", "user.name", "Test"]);
+    run_git(&repo, &["config", "user.email", "test@example.com"]);
+    run_git(&repo, &["config", "gpg.format", "ssh"]);
+    run_git(
+        &repo,
+        &["config", "user.signingkey", &key.display().to_string()],
+    );
+    run_git(&repo, &["config", "commit.gpgsign", "true"]);
+
+    SigningRepo {
+        repo,
+        allowed_signers,
+    }
+}
+
+fn trust_signatures(fixture: &SigningRepo) {
+    run_git(
+        &fixture.repo,
+        &[
+            "config",
+            "gpg.ssh.allowedSignersFile",
+            &fixture.allowed_signers.display().to_string(),
+        ],
+    );
+}
+
+fn commit(repo: &Path, name: &str, signed: bool) -> CommitId {
+    fs::write(repo.join(name), name).expect("write file");
+    run_git(repo, &["add", "."]);
+    if signed {
+        run_git(repo, &["commit", "-m", name]);
+    } else {
+        run_git(repo, &["commit", "--no-gpg-sign", "-m", name]);
+    }
+    CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into())
+}
+
+fn open(repo: &Path) -> std::sync::Arc<dyn GitRepository> {
+    GixBackend.open(repo).expect("open repository")
+}
+
+#[test]
+fn a_trusted_ssh_signature_verifies_and_an_unsigned_commit_earns_no_entry() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y verify` is unavailable");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let fixture = init_signing_repo(dir.path());
+    trust_signatures(&fixture);
+
+    let signed = commit(&fixture.repo, "signed.txt", true);
+    let unsigned = commit(&fixture.repo, "unsigned.txt", false);
+
+    let repo = open(&fixture.repo);
+    let results = repo
+        .verify_commit_signatures(&[signed.clone(), unsigned.clone()])
+        .expect("verify signatures");
+
+    assert_eq!(
+        results.len(),
+        1,
+        "only the signed commit should earn an entry, got {results:?}"
+    );
+    let (id, signature) = &results[0];
+    assert_eq!(id, &signed);
+    assert_eq!(signature.format, SignatureFormat::Ssh);
+    assert!(
+        signature.status.is_verified(),
+        "expected a verified status, got {:?}",
+        signature.status
+    );
+}
+
+#[test]
+fn an_untrusted_ssh_signature_earns_no_entry() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y verify` is unavailable");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let fixture = init_signing_repo(dir.path());
+    // No allowed-signers file: git can see the signature but cannot judge it.
+
+    let signed = commit(&fixture.repo, "signed.txt", true);
+
+    let repo = open(&fixture.repo);
+    let results = repo
+        .verify_commit_signatures(&[signed])
+        .expect("verify signatures");
+
+    assert!(
+        results.is_empty(),
+        "an unverifiable signature must earn no badge, got {results:?}"
+    );
+}
+
+#[test]
+fn results_preserve_input_order_and_repeat_calls_hit_the_cache() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y verify` is unavailable");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let fixture = init_signing_repo(dir.path());
+    trust_signatures(&fixture);
+
+    let first = commit(&fixture.repo, "a.txt", true);
+    let second = commit(&fixture.repo, "b.txt", true);
+    let third = commit(&fixture.repo, "c.txt", true);
+
+    let repo = open(&fixture.repo);
+    let ids = [third.clone(), first.clone(), second.clone()];
+    let results = repo
+        .verify_commit_signatures(&ids)
+        .expect("verify signatures");
+
+    assert_eq!(
+        results.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+        vec![&third, &first, &second],
+        "git log reorders by date; the backend must restore input order"
+    );
+
+    // Second call is served entirely from the per-repo cache.
+    let cached = repo
+        .verify_commit_signatures(&ids)
+        .expect("verify signatures again");
+    assert_eq!(cached, results);
+}
+
+#[test]
+fn a_tampered_commit_reports_a_bad_signature() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y verify` is unavailable");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let fixture = init_signing_repo(dir.path());
+    trust_signatures(&fixture);
+
+    let signed = commit(&fixture.repo, "signed.txt", true);
+
+    // Re-wrap the signed commit around a different message, keeping the original
+    // signature header: the payload no longer matches what was signed.
+    let raw = git_stdout(&fixture.repo, &["cat-file", "commit", signed.as_ref()]);
+    let tampered_raw = format!("{raw}\ntampered\n");
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(&fixture.repo)
+        .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped());
+    test_git_env::apply(&mut cmd);
+    let mut child = cmd.spawn().expect("spawn git hash-object");
+    {
+        use std::io::Write as _;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(tampered_raw.as_bytes())
+            .expect("write commit object");
+    }
+    let output = child.wait_with_output().expect("hash-object output");
+    assert!(output.status.success(), "git hash-object failed");
+    let tampered = CommitId(
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .to_string()
+            .into(),
+    );
+
+    let repo = open(&fixture.repo);
+    let results = repo
+        .verify_commit_signatures(&[tampered])
+        .expect("verify signatures");
+
+    assert_eq!(results.len(), 1, "a bad signature still earns a badge");
+    assert_eq!(results[0].1.status, SignatureStatus::Bad);
+}

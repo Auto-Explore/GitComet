@@ -54,6 +54,7 @@ pub struct UiSettings {
     pub terminal_external_args: Option<Vec<String>>,
     pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
+    pub history_verify_commit_signatures: Option<bool>,
     pub history_relative_dates: Option<bool>,
     pub history_highlight_commit_chain: Option<bool>,
     pub file_browser_follow_selected_commit: Option<bool>,
@@ -152,6 +153,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         apply_setting!(settings, file, terminal_action_bar_target);
         apply_setting!(settings, file, history_show_tags);
+        apply_setting!(settings, file, history_verify_commit_signatures);
         apply_setting!(settings, file, history_highlight_commit_chain);
         apply_setting!(settings, file, file_browser_follow_selected_commit);
         apply_setting!(settings, file, history_relative_dates);

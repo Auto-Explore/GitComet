@@ -562,6 +562,20 @@ impl Render for SettingsWindowView {
                             this.set_history_relative_dates(!this.history_relative_dates, cx);
                         }));
 
+                    let verify_commit_signatures_row = self
+                        .toggle_row(
+                            "settings_window_git_log_verify_signatures",
+                            "Verify commit signatures",
+                            self.history_verify_commit_signatures,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_verify_commit_signatures(
+                                !this.history_verify_commit_signatures,
+                                cx,
+                            );
+                        }));
+
                     let show_history_tags_row = self
                         .toggle_row(
                             "settings_window_git_log_show_tags",
@@ -1722,6 +1736,7 @@ impl Render for SettingsWindowView {
                     git_log_card = git_log_card.child(highlight_commit_chain_row);
                     git_log_card = git_log_card.child(files_follow_selected_commit_row);
                     git_log_card = git_log_card.child(relative_dates_row);
+                    git_log_card = git_log_card.child(verify_commit_signatures_row);
                     git_log_card = git_log_card.child(show_history_tags_row);
                     if self.history_show_tags {
                         git_log_card = git_log_card.child(auto_fetch_tags_row);

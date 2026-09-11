@@ -241,6 +241,7 @@ impl DetailsPaneView {
             repo.ops_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
+            repo.history_state.commit_signatures_rev.hash(&mut hasher);
             repo.history_state.worktree_selection_rev.hash(&mut hasher);
             repo.history_state.range_files_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);

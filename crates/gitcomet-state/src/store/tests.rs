@@ -327,6 +327,7 @@ fn app_store_open_repo_effect_propagates_open_error_into_state() {
 
 mod actions_emit_effects;
 mod auth_prompt;
+mod commit_signatures;
 mod conflict_session;
 mod conflict_telemetry;
 mod diff_selection;

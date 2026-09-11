@@ -72,6 +72,7 @@ impl SettingsWindowView {
             history_highlight_commit_chain: Some(self.history_highlight_commit_chain),
             file_browser_follow_selected_commit: Some(self.files_follow_selected_commit),
             history_show_tags: Some(self.history_show_tags),
+            history_verify_commit_signatures: Some(self.history_verify_commit_signatures),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
             default_history_mode: Some(self.default_history_mode),
             default_tag_type: Some(self.default_tag_type),
@@ -926,6 +927,23 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_history_tag_preferences(enabled, tag_fetch_mode, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_verify_commit_signatures(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_verify_commit_signatures == enabled {
+            return;
+        }
+
+        self.history_verify_commit_signatures = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_verify_commit_signatures_preference(enabled, cx);
         });
         cx.notify();
     }

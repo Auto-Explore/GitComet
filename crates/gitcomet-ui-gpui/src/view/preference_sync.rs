@@ -664,9 +664,16 @@ impl GitCometView {
         self.main_pane.update(cx, |pane, cx| {
             pane.set_history_tag_preferences(show_tags, auto_fetch_tags_on_repo_activation, cx);
         });
+        let verify_commit_signatures = self
+            .ui_model
+            .read(cx)
+            .preferences
+            .history
+            .verify_commit_signatures;
         self.store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: show_tags,
             tag_fetch_mode,
+            verify_commit_signatures,
         });
         if show_tags
             && auto_fetch_tags_on_repo_activation
@@ -680,6 +687,26 @@ impl GitCometView {
                     .dispatch(Msg::LoadRemoteTags { repo_id: repo.id });
             }
         }
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_verify_commit_signatures_preference(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.verify_commit_signatures = enabled;
+        });
+        let (show_history_tags, tag_fetch_mode) = {
+            let history = &self.ui_model.read(cx).preferences.history;
+            (history.show_tags, history.tag_fetch_mode)
+        };
+        self.store.dispatch(Msg::SetGitLogSettings {
+            show_history_tags,
+            tag_fetch_mode,
+            verify_commit_signatures: enabled,
+        });
         self.schedule_ui_settings_persist(cx);
     }
 

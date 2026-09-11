@@ -998,10 +998,44 @@ fn reduce_inner(
         Msg::SetGitLogSettings {
             show_history_tags,
             tag_fetch_mode,
+            verify_commit_signatures,
         } => {
             state.git_log_settings.show_history_tags = show_history_tags;
             state.git_log_settings.tag_fetch_mode = tag_fetch_mode;
-            Vec::new()
+            let verification_toggled =
+                state.git_log_settings.verify_commit_signatures != verify_commit_signatures;
+            state.git_log_settings.verify_commit_signatures = verify_commit_signatures;
+            if !verification_toggled {
+                return Vec::new();
+            }
+            if !verify_commit_signatures {
+                // Drop the verdicts so every badge clears on the next paint.
+                for repo_state in state.repos.iter_mut() {
+                    repo_state.clear_commit_signatures();
+                }
+                return Vec::new();
+            }
+            // Turning it back on re-checks what is already loaded, so badges
+            // appear without waiting for the next log reload.
+            let mut effects = Vec::new();
+            for repo_state in state.repos.iter() {
+                let repo_id = repo_state.id;
+                let mut ids: Vec<gitcomet_core::domain::CommitId> = match &repo_state.log {
+                    Loadable::Ready(page) => page.commits.iter().map(|c| c.id.clone()).collect(),
+                    _ => Vec::new(),
+                };
+                // The selected commit may be a reveal target the page has not
+                // reached yet.
+                if let Some(selected) = &repo_state.history_state.selected_commit
+                    && !ids.contains(selected)
+                {
+                    ids.push(selected.clone());
+                }
+                effects.extend(util::verify_commit_signatures_effect(
+                    true, repo_state, repo_id, ids,
+                ));
+            }
+            effects
         }
         Msg::SetRemoteSettings(settings) => {
             state.remote_settings = settings;
@@ -2517,6 +2551,9 @@ fn reduce_inner(
             commit_id,
             result,
         }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
+        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified { repo_id, result }) => {
+            effects::commit_signatures_verified(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
             repo_id,
             reference,

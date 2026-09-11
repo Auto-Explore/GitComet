@@ -48,6 +48,9 @@ pub enum GitLogTagFetchMode {
 pub struct GitLogSettings {
     pub show_history_tags: bool,
     pub tag_fetch_mode: GitLogTagFetchMode,
+    /// Escape hatch: a misconfigured `gpg.program` or a wedged `gpg-agent`
+    /// would otherwise slow every history page with no way to turn it off.
+    pub verify_commit_signatures: bool,
 }
 
 impl Default for GitLogSettings {
@@ -55,6 +58,7 @@ impl Default for GitLogSettings {
         Self {
             show_history_tags: true,
             tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
+            verify_commit_signatures: true,
         }
     }
 }
@@ -990,6 +994,11 @@ pub struct HistoryState {
     pub reveal_target: Option<CommitId>,
     pub commit_details: Loadable<Shared<CommitDetails>>,
     pub commit_details_rev: u64,
+    /// Signature verdicts by commit, shared by the details pane and the
+    /// history rows. Only badge-worthy commits appear: absent means no badge.
+    /// Behind `Arc` because `AppState` is deep-copied on every dispatch.
+    pub commit_signatures: Shared<FxHashMap<CommitId, CommitSignature>>,
+    pub commit_signatures_rev: u64,
     pub multi_selection: CommitMultiSelection,
     /// Active "compare two points" selection: when two commits are selected (or
     /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
@@ -1048,6 +1057,8 @@ impl Default for HistoryState {
             reveal_target: None,
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
+            commit_signatures: Shared::default(),
+            commit_signatures_rev: 0,
             multi_selection: CommitMultiSelection::default(),
             range_selection: None,
             worktree_selection: None,
@@ -2349,6 +2360,32 @@ impl RepoState {
         self.history_state.commit_details = v;
         self.history_state.commit_details_rev =
             self.history_state.commit_details_rev.wrapping_add(1);
+    }
+
+    /// Drops every signature verdict, so the badges disappear the moment
+    /// verification is switched off rather than lingering until the next reload.
+    pub(crate) fn clear_commit_signatures(&mut self) {
+        if self.history_state.commit_signatures.is_empty() {
+            return;
+        }
+        self.history_state.commit_signatures = Shared::default();
+        self.history_state.commit_signatures_rev =
+            self.history_state.commit_signatures_rev.wrapping_add(1);
+    }
+
+    /// Merges verified signatures into the map. Merging rather than replacing is
+    /// what makes late replies harmless: batches land out of order and each one
+    /// only ever adds what it learned.
+    pub(crate) fn merge_commit_signatures(&mut self, verified: Vec<(CommitId, CommitSignature)>) {
+        if verified.is_empty() {
+            return;
+        }
+        let map = Arc::make_mut(&mut self.history_state.commit_signatures);
+        for (id, signature) in verified {
+            map.insert(id, signature);
+        }
+        self.history_state.commit_signatures_rev =
+            self.history_state.commit_signatures_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_hover_commit_message(

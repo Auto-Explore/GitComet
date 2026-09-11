@@ -344,6 +344,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("commit_id", commit_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::CommitSignaturesVerified { repo_id, result } => f
+                .debug_struct("CommitSignaturesVerified")
+                .field("repo_id", repo_id)
+                .field("verified", &result.as_ref().map(Vec::len))
+                .finish(),
             InternalMsg::CommitRevealResolved {
                 repo_id,
                 reference,

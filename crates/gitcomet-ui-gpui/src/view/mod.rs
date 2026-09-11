@@ -161,6 +161,7 @@ mod color;
 mod command_palette;
 mod commit_message_hover;
 mod commit_message_text;
+mod commit_signature;
 pub(crate) mod components;
 mod conflict_markers;
 pub(crate) mod conflict_resolver;

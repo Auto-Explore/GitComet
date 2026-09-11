@@ -582,6 +582,20 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    /// Verifies the signatures of `ids`, returning an entry only for commits
+    /// that earn a badge. Unsigned commits, and signatures that cannot be
+    /// checked because the key is missing, are simply omitted.
+    ///
+    /// Batched on purpose: verification shells out to `git`, and one process per
+    /// commit costs roughly ten times a single batched call.
+    fn verify_commit_signatures(
+        &self,
+        _ids: &[CommitId],
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "signature verification is not implemented for this backend",
+        )))
+    }
     /// Files that differ between two points (`from` → `to`), for the
     /// compare-selected-commits feature. `from` is the base/older side, so the
     /// result reads as "what `to` adds/removes relative to `from`". `to = None`

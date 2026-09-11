@@ -617,6 +617,7 @@ pub(super) fn log_loaded(
     result: std::result::Result<gitcomet_core::services::HistoryReadResult, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
+    let verify_signatures = state.git_log_settings.verify_commit_signatures;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let is_load_more = cursor.is_some();
 
@@ -750,6 +751,17 @@ pub(super) fn log_loaded(
 
         if is_load_more {
             repo_state.set_log_loading_more(false);
+        }
+
+        if let Loadable::Ready(page) = &repo_state.log {
+            let ids: Vec<gitcomet_core::domain::CommitId> =
+                page.commits.iter().map(|c| c.id.clone()).collect();
+            effects.extend(super::util::verify_commit_signatures_effect(
+                verify_signatures,
+                repo_state,
+                repo_id,
+                ids,
+            ));
         }
 
         effects.extend(finish_log_load(repo_state));

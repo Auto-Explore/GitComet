@@ -527,6 +527,7 @@ pub(crate) struct SettingsWindowView {
     history_highlight_commit_chain: bool,
     files_follow_selected_commit: bool,
     history_show_tags: bool,
+    history_verify_commit_signatures: bool,
     history_tag_fetch_mode: GitLogTagFetchMode,
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
@@ -901,6 +902,7 @@ impl SettingsWindowView {
         let history_highlight_commit_chain = ui_preferences.history.highlight_commit_chain;
         let files_follow_selected_commit = ui_preferences.history.files_follow_selected_commit;
         let history_show_tags = ui_preferences.history.show_tags;
+        let history_verify_commit_signatures = ui_preferences.history.verify_commit_signatures;
         let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
         let default_history_mode = ui_preferences.history.default_mode;
         let default_tag_type = ui_preferences.repository.default_tag_type;
@@ -1181,6 +1183,7 @@ impl SettingsWindowView {
             history_highlight_commit_chain,
             files_follow_selected_commit,
             history_show_tags,
+            history_verify_commit_signatures,
             history_tag_fetch_mode,
             default_history_mode,
             default_tag_type,

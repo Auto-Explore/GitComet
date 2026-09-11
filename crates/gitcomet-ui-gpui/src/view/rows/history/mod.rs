@@ -370,6 +370,7 @@ fn history_table_row(
         author,
         summary,
         when,
+        commit.time,
         short_sha,
         active_context_menu_invoker.cloned(),
         row_bg_overlay,

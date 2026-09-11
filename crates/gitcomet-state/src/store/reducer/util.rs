@@ -11,7 +11,7 @@ use gitcomet_core::auth::{
 };
 #[cfg(test)]
 use gitcomet_core::domain::Upstream;
-use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
+use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
@@ -23,6 +23,32 @@ use std::time::SystemTime;
 
 /// Default page size for log fetches.
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
+
+/// Asks for signature verdicts on commits we do not already have one for.
+///
+/// Commits that earned no badge are not remembered in state, so a genuine page
+/// change re-sends them; that is cheap because the backend memoizes every
+/// verdict per oid and only signed commits ever reach a subprocess. An unchanged
+/// refresh never gets here — `HistoryReadResult::Unchanged` returns earlier.
+pub(super) fn verify_commit_signatures_effect(
+    enabled: bool,
+    repo_state: &RepoState,
+    repo_id: RepoId,
+    ids: impl IntoIterator<Item = CommitId>,
+) -> Option<Effect> {
+    if !enabled {
+        return None;
+    }
+    let known = &repo_state.history_state.commit_signatures;
+    let pending: Vec<CommitId> = ids
+        .into_iter()
+        .filter(|id| !known.contains_key(id))
+        .collect();
+    (!pending.is_empty()).then(|| Effect::VerifyCommitSignatures {
+        repo_id,
+        commit_ids: pending.into(),
+    })
+}
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
 const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;
