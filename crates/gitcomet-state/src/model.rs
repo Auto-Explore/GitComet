@@ -959,6 +959,7 @@ pub struct PendingCommitRetry {
 
 #[derive(Clone, Debug)]
 pub struct HistoryState {
+    pub indexed: crate::indexed_history::IndexedHistoryState,
     pub history_scope: LogScope,
     /// Case-insensitive author filter for the history, or `None` for all
     /// authors. Matches the author name shown in the UI.
@@ -991,6 +992,7 @@ pub struct HistoryState {
     pub commit_details: Loadable<Shared<CommitDetails>>,
     pub commit_details_rev: u64,
     pub multi_selection: CommitMultiSelection,
+    selected_ids: Arc<FxHashSet<CommitId>>,
     /// Active "compare two points" selection: when two commits are selected (or
     /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
     /// and the changed-file list between them. `None` when no comparison is
@@ -1026,9 +1028,20 @@ pub struct HistoryState {
     pub squash_preview_pending: Option<(CommitId, CommitId)>,
 }
 
+impl HistoryState {
+    pub fn selection_contains(&self, id: &CommitId) -> bool {
+        if self.selected_ids.len() == self.multi_selection.commits.len() {
+            self.selected_ids.contains(id)
+        } else {
+            self.multi_selection.contains(id)
+        }
+    }
+}
+
 impl Default for HistoryState {
     fn default() -> Self {
         Self {
+            indexed: Default::default(),
             history_scope: LogScope::default(),
             history_author_filter: None,
             log: Loadable::NotLoaded,
@@ -1049,6 +1062,7 @@ impl Default for HistoryState {
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
             multi_selection: CommitMultiSelection::default(),
+            selected_ids: Arc::new(FxHashSet::default()),
             range_selection: None,
             worktree_selection: None,
             worktree_selection_rev: 0,
@@ -2196,6 +2210,7 @@ impl RepoState {
         if self.history_state.history_scope == scope {
             return;
         }
+        self.history_state.indexed.reset_query();
         self.history_state.history_scope = scope;
         self.bump_log_revs();
     }
@@ -2204,6 +2219,7 @@ impl RepoState {
         if self.history_state.history_author_filter == author {
             return;
         }
+        self.history_state.indexed.reset_query();
         self.history_state.history_author_filter = author;
         self.bump_log_revs();
     }
@@ -2248,6 +2264,7 @@ impl RepoState {
             // relies on this. A range comparison is likewise a form of
             // selection, so it must dissolve here as well.
             self.history_state.multi_selection = CommitMultiSelection::default();
+            self.history_state.selected_ids = Arc::new(FxHashSet::default());
             self.clear_range_comparison();
         }
         self.history_state.selected_commit = v;
@@ -2317,10 +2334,36 @@ impl RepoState {
         self.history_state.range_files_rev = self.history_state.range_files_rev.wrapping_add(1);
     }
 
+    pub fn history_squash_plan(&self) -> Option<gitcomet_core::squash::SquashPlan> {
+        let head = self.head_commit_id()?;
+        if let Some(index) = self
+            .history_state
+            .indexed
+            .index
+            .as_ref()
+            .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+        {
+            return gitcomet_core::squash::squash_eligibility_indexed(
+                index,
+                &self.history_state.multi_selection.commits,
+                &head,
+            );
+        }
+        let Loadable::Ready(page) = &self.log else {
+            return None;
+        };
+        gitcomet_core::squash::squash_eligibility(
+            &page.commits,
+            &self.history_state.multi_selection.commits,
+            &head,
+        )
+    }
+
     pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {
         if self.history_state.multi_selection == v {
             return;
         }
+        self.history_state.selected_ids = Arc::new(v.commits.iter().cloned().collect());
         self.history_state.multi_selection = v;
         self.history_state.selected_commit_rev =
             self.history_state.selected_commit_rev.wrapping_add(1);
@@ -2462,6 +2505,7 @@ impl RepoState {
     pub(crate) fn bump_load_epoch(&mut self) -> u64 {
         let previous = self.load_epoch;
         self.load_epoch = self.load_epoch.wrapping_add(1);
+        self.history_state.indexed.cancel();
         previous
     }
 }

@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 mod commit_stats;
 mod decode;
+mod index;
 mod reflog;
 mod repo_impl;
 mod snapshot;

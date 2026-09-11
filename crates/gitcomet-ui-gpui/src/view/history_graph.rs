@@ -82,14 +82,14 @@ impl LanePaint {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GraphEdge {
     pub from_col: u16,
     pub to_col: u16,
     pub color_ix: LaneColorIx,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GraphRow {
     pub lanes_now: LanePaints,
     pub lanes_next: LanePaints,
@@ -377,53 +377,108 @@ where
         }
     }
 
-    let mut next_id: u32 = 1;
-    let mut next_color: usize = 0;
-    let mut lanes: Lanes = SmallVec::new();
-    let mut rows: Vec<GraphRow> = Vec::with_capacity(commits.len());
-    let mut main_lane_id: Option<LaneId> = None;
-    let mut hits: SmallVec<[usize; 4]> = SmallVec::new();
+    let mut walk = GraphWalk::new(main_target_ix);
+    let mut rows = Vec::with_capacity(commits.len());
     let mut parent_ixs: SmallVec<[usize; 4]> = SmallVec::new();
-    // Colours of lanes that ended on the current row. They are gone from `lanes`
-    // by the time later lanes on the same row pick a colour, but their incoming
-    // segment is still drawn above the node, so a new lane reusing the colour
-    // would read as a continuation of the lane that just ended.
-    let mut ended_colors: SmallVec<[LaneColorIx; 4]> = SmallVec::new();
-    let mut seeded_main_lane_pending = false;
+    for (commit_ix, commit) in commits.iter().enumerate() {
+        let is_merge = commit.parent_ids().len() > 1;
+        parent_ixs.clear();
+        for (parent_pos, parent) in commit.parent_ids().iter().enumerate() {
+            let parent_ix = if parent_pos == 0 {
+                resolve_first_parent_ix(commits, &id_to_index, commit_ix, parent.as_ref())
+            } else {
+                id_to_index.get(parent.as_ref()).copied()
+            };
+            if let Some(parent_ix) = parent_ix.filter(|&parent_ix| parent_ix > commit_ix) {
+                parent_ixs.push(parent_ix);
+            }
+        }
+        rows.push(walk.step(
+            commit_ix,
+            &parent_ixs,
+            is_merge,
+            branch_head_mask.get(commit_ix).copied().unwrap_or(false),
+        ));
+    }
+    rows
+}
 
-    if let Some(main_target_ix) = main_target_ix {
-        let id = LaneId(next_id);
-        next_id += 1;
-        lanes.push(Some(LaneState {
-            id,
-            color_ix: 0,
-            target_ix: main_target_ix,
-            carried_in: false,
-            home_col: 0,
-        }));
-        main_lane_id = Some(id);
-        next_color = 1;
-        seeded_main_lane_pending = true;
+/// State immediately before a row. Checkpoints retain this small lane frontier,
+/// never the paint rows preceding it.
+#[derive(Clone, Debug)]
+pub(in crate::view) struct GraphWalk {
+    next_id: u32,
+    next_color: usize,
+    lanes: Lanes,
+    main_lane_id: Option<LaneId>,
+    main_target_ix: Option<usize>,
+    seeded_main_lane_pending: bool,
+}
+
+impl GraphWalk {
+    pub(in crate::view) fn new(main_target_ix: Option<usize>) -> Self {
+        let mut next_id = 1;
+        let mut next_color = 0;
+        let mut lanes = Lanes::new();
+        let mut main_lane_id = None;
+        let mut seeded_main_lane_pending = false;
+        if let Some(main_target_ix) = main_target_ix {
+            let id = LaneId(next_id);
+            next_id += 1;
+            lanes.push(Some(LaneState {
+                id,
+                color_ix: 0,
+                target_ix: main_target_ix,
+                carried_in: false,
+                home_col: 0,
+            }));
+            main_lane_id = Some(id);
+            next_color = 1;
+            seeded_main_lane_pending = true;
+        }
+
+        Self {
+            next_id,
+            next_color,
+            lanes,
+            main_lane_id,
+            main_target_ix,
+            seeded_main_lane_pending,
+        }
     }
 
-    let mut pick_lane_color_ix =
-        |lanes: &[Option<LaneState>], avoid: &[LaneColorIx]| -> LaneColorIx {
-            let start = next_color;
-            for offset in 0..LANE_COLOR_PALETTE_SIZE {
-                let candidate = ((start + offset) % LANE_COLOR_PALETTE_SIZE) as LaneColorIx;
-                if lanes.iter().flatten().all(|l| l.color_ix != candidate)
-                    && !avoid.contains(&candidate)
-                {
-                    next_color = start + offset + 1;
-                    return candidate;
+    pub(in crate::view) fn step(
+        &mut self,
+        commit_ix: usize,
+        parent_ixs: &[usize],
+        is_merge: bool,
+        is_branch_head: bool,
+    ) -> GraphRow {
+        let mut next_id = self.next_id;
+        let mut next_color = self.next_color;
+        let mut lanes = std::mem::take(&mut self.lanes);
+        let main_lane_id = self.main_lane_id;
+        let main_target_ix = self.main_target_ix;
+        let seeded_main_lane_pending = self.seeded_main_lane_pending;
+        let mut hits: SmallVec<[usize; 4]> = SmallVec::new();
+        let mut ended_colors: SmallVec<[LaneColorIx; 4]> = SmallVec::new();
+        let mut pick_lane_color_ix =
+            |lanes: &[Option<LaneState>], avoid: &[LaneColorIx]| -> LaneColorIx {
+                let start = next_color;
+                for offset in 0..LANE_COLOR_PALETTE_SIZE {
+                    let candidate = ((start + offset) % LANE_COLOR_PALETTE_SIZE) as LaneColorIx;
+                    if lanes.iter().flatten().all(|l| l.color_ix != candidate)
+                        && !avoid.contains(&candidate)
+                    {
+                        next_color = start + offset + 1;
+                        return candidate;
+                    }
                 }
-            }
-            let candidate = (start % LANE_COLOR_PALETTE_SIZE) as LaneColorIx;
-            next_color = start + 1;
-            candidate
-        };
+                let candidate = (start % LANE_COLOR_PALETTE_SIZE) as LaneColorIx;
+                next_color = start + 1;
+                candidate
+            };
 
-    for (commit_ix, commit) in commits.iter().enumerate() {
         // One pass: every surviving lane is now carried in from the row above,
         // its column is re-verified, and lanes aimed at this commit are gathered.
         hits.clear();
@@ -442,18 +497,6 @@ where
         }
         let had_hit_lanes = !hits.is_empty();
 
-        let is_merge = commit.parent_ids().len() > 1;
-        parent_ixs.clear();
-        for (parent_pos, parent) in commit.parent_ids().iter().enumerate() {
-            let parent_ix = if parent_pos == 0 {
-                resolve_first_parent_ix(commits, &id_to_index, commit_ix, parent.as_ref())
-            } else {
-                id_to_index.get(parent.as_ref()).copied()
-            };
-            if let Some(parent_ix) = parent_ix.filter(|&parent_ix| parent_ix > commit_ix) {
-                parent_ixs.push(parent_ix);
-            }
-        }
         if hits.is_empty() {
             let id = LaneId(next_id);
             next_id += 1;
@@ -481,10 +524,9 @@ where
         // lane assignment.
         let only_hit_is_main_lane = hits.len() == 1
             && main_lane_id.is_some_and(|id| lane_at(&lanes, hits[0]).is_some_and(|l| l.id == id));
-        let force_branch_head_lane = has_branch_heads
+        let force_branch_head_lane = is_branch_head
             && had_hit_lanes
             && hits.len() == 1
-            && branch_head_mask[commit_ix]
             && parent_ixs.len() <= 1
             && !(main_target_ix == Some(commit_ix) && only_hit_is_main_lane);
 
@@ -692,7 +734,7 @@ where
             }
         }
 
-        rows.push(GraphRow {
+        let row = GraphRow {
             lanes_now,
             lanes_next,
             joins_in,
@@ -700,12 +742,14 @@ where
             node_col: lane_col(node_col),
             node_color_ix,
             is_merge,
-        });
+        };
 
-        seeded_main_lane_pending = false;
+        self.next_id = next_id;
+        self.next_color = next_color;
+        self.lanes = lanes;
+        self.seeded_main_lane_pending = false;
+        row
     }
-
-    rows
 }
 
 pub fn compute_graph<'a, I>(

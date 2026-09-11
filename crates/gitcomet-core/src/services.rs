@@ -12,6 +12,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
+    parent: Option<Arc<CancellationToken>>,
 }
 
 impl CancellationToken {
@@ -25,6 +26,17 @@ impl CancellationToken {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.is_cancelled())
+    }
+
+    /// Also stop when the repository closes without cancelling other requests
+    /// when this request is superseded.
+    pub fn with_parent(mut self, parent: CancellationToken) -> Self {
+        self.parent = Some(Arc::new(parent));
+        self
     }
 
     pub fn check_cancelled(&self) -> Result<()> {
@@ -394,6 +406,32 @@ pub enum SafePushAfterCommitDecision {
 
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
+
+    /// Optional indexed access to history. `None` keeps older backends on the
+    /// paged reader. Construction is background work; range reads never walk
+    /// from the branch tip to the requested offset.
+    fn build_history_index(
+        &self,
+        _mode: HistoryMode,
+        _author: Option<&str>,
+        cancellation: &CancellationToken,
+        _on_progress: &mut dyn FnMut(crate::history_index::HistoryIndexProgress),
+    ) -> Result<Option<crate::history_index::HistoryIndexHandle>> {
+        cancellation.check_cancelled()?;
+        Ok(None)
+    }
+
+    fn read_history_range(
+        &self,
+        _index: &crate::history_index::HistoryIndexHandle,
+        _range: std::ops::Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<crate::history_index::HistoryRange> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Backend(
+            "indexed history is unavailable".into(),
+        )))
+    }
 
     /// Read or refresh a history snapshot. Backends without snapshot support
     /// conservatively rebuild and never claim an unchanged result.

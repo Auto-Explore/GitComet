@@ -1199,15 +1199,7 @@ impl PopoverHost {
         repo_id: RepoId,
     ) -> Option<gitcomet_core::squash::SquashPlan> {
         let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
-        let Loadable::Ready(page) = &repo.log else {
-            return None;
-        };
-        let head = repo.head_commit_id()?;
-        gitcomet_core::squash::squash_eligibility(
-            &page.commits,
-            &repo.history_state.multi_selection.commits,
-            &head,
-        )
+        repo.history_squash_plan()
     }
 
     /// Populates the squash prompt's inputs from the loaded message preview.

@@ -316,6 +316,51 @@ pub fn build_squash_message(messages_oldest_first: &[String]) -> String {
     out
 }
 
+/// The same eligibility rules over a complete compact snapshot. Commit text
+/// need not be loaded to validate a distant selection.
+pub fn squash_eligibility_indexed(
+    index: &crate::history_index::HistoryIndex,
+    selected: &[CommitId],
+    actual_head: &CommitId,
+) -> Option<SquashPlan> {
+    if selected.len() < 2 {
+        return None;
+    }
+    let selected_rows: Option<FxHashSet<usize>> = selected
+        .iter()
+        .map(|id| index.position(id.as_ref()))
+        .collect();
+    let selected_rows = selected_rows?;
+    if selected_rows.len() != selected.len() {
+        return None;
+    }
+    let mut row = index.position(actual_head.as_ref())?;
+    let mut ordered_ids = Vec::with_capacity(selected.len());
+    for _ in 0..index.len() {
+        let parents = index.parents(row);
+        if parents.len() != 1 {
+            return None;
+        }
+        if selected_rows.contains(&row) {
+            ordered_ids.push(index.commit_id(row)?);
+            if ordered_ids.len() == selected.len() {
+                return Some(SquashPlan {
+                    actual_head: actual_head.clone(),
+                    head: ordered_ids[0].clone(),
+                    oldest: index.commit_id(row)?,
+                    oldest_parent: index.parent_commit_id(row, 0)?,
+                    commit_count: selected.len(),
+                    ordered_ids,
+                });
+            }
+        } else if !ordered_ids.is_empty() {
+            return None;
+        }
+        row = parents[0] as usize;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

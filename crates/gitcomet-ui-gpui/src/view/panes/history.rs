@@ -13,6 +13,9 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 mod history_panel;
+mod indexed;
+mod indexed_graph;
+mod scroll;
 mod viewport;
 
 pub(in super::super) fn history_scrollbar_gutter() -> Pixels {
@@ -1087,6 +1090,8 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     history_list_plan_cache: Option<HistoryListPlanCache>,
     presented_history: Option<viewport::PresentedHistory>,
+    scroll_interaction: scroll::SharedScrollInteraction,
+    pub(in crate::view) indexed: indexed::IndexedViewState,
     history_selected_lane_color_cache: Option<HistorySelectedLaneColorCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
@@ -1116,6 +1121,7 @@ impl HistoryView {
             }
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
+            repo.history_state.indexed.rev.hash(&mut hasher);
             repo.file_browser.file_browser_rev.hash(&mut hasher);
             // The linked-worktree rows live in this table: their badge counts come
             // from the dirty scan and the selected row from the worktree selection,
@@ -1250,6 +1256,8 @@ impl HistoryView {
             history_worktree_summary_cache: None,
             history_list_plan_cache: None,
             presented_history: None,
+            scroll_interaction: Default::default(),
+            indexed: Default::default(),
             history_selected_lane_color_cache: None,
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
@@ -1520,8 +1528,12 @@ impl HistoryView {
             self.store.dispatch(Msg::ClearDiffSelection { repo_id });
         }
         self.dismiss_history_refs_hover(cx);
-        self.history_scroll
-            .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
+        if let Some(logical) = &mut self.scroll_interaction.borrow_mut().logical {
+            logical.set_position(0.0);
+        } else {
+            self.history_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
+        }
         cx.notify();
     }
 
@@ -1857,6 +1869,9 @@ impl HistoryView {
     }
 
     pub(in crate::view) fn drive_pending_history_reveal(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.reveal_indexed(cx) {
+            return;
+        }
         let Some(pending) = self.pending_history_reveal.clone() else {
             return;
         };
@@ -2017,7 +2032,11 @@ impl HistoryView {
             self.dismiss_history_refs_hover(cx);
             self.history_scroll
                 .scroll_to_item_strict(list_ix, gpui::ScrollStrategy::Center);
-        } else if decision.load_more {
+        } else if decision.load_more
+            && self.active_repo().is_none_or(|repo| {
+                !repo.history_state.indexed.loading && repo.history_state.indexed.index.is_none()
+            })
+        {
             self.store.dispatch(Msg::LoadMoreHistory {
                 repo_id: pending.repo_id,
             });
@@ -2060,6 +2079,13 @@ impl HistoryView {
         if !self.history_highlight_commit_chain {
             return None;
         }
+        if self.indexed.presentation.is_some() {
+            return self
+                .indexed
+                .window
+                .as_ref()
+                .and_then(|window| window.selected_lane);
+        }
 
         let (repo_id, anchor) = {
             let repo = self.active_repo()?;
@@ -2090,10 +2116,12 @@ impl HistoryView {
             (repo.id, anchor)
         };
 
-        let cache = self
-            .history_cache
-            .as_ref()
-            .filter(|cache| cache.base.request.repo_id == repo_id)?;
+        let cache = if self.indexed.presentation.is_some() {
+            self.indexed.window.as_ref().map(|window| &window.cache)
+        } else {
+            self.history_cache.as_ref()
+        }
+        .filter(|cache| cache.base.request.repo_id == repo_id)?;
         let base_request = &cache.base.request;
 
         if let Some(memo) = &self.history_selected_lane_color_cache
@@ -2148,6 +2176,9 @@ impl HistoryView {
     /// of the loaded page, or that are on a branch outside the current scope,
     /// simply do not appear.
     pub(in super::super) fn ensure_history_list_plan(&mut self) -> HistoryListPlan {
+        if self.indexed.presentation.is_some() {
+            return self.indexed.plan.clone();
+        }
         let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
 
         let Some(repo) = self.active_repo() else {
@@ -2562,6 +2593,9 @@ impl HistoryView {
     }
 
     fn apply_pending_history_cache(&mut self) {
+        if self.scroll_interaction.borrow().dragging {
+            return;
+        }
         let Some(rebuild) = self.pending_history_cache.take() else {
             return;
         };

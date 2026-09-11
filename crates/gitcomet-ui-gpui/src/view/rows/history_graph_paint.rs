@@ -251,11 +251,22 @@ pub(super) fn paint_graph_fade(
 /// detached worktree and one on a branch that has fallen behind resolving
 /// differently on the very same row, so the answer always comes from the row
 /// above's own summary, never from the row asking.
+#[cfg(test)]
 pub(in crate::view) fn worktree_band_connect_from_top_col(
     plan: &crate::view::caches::HistoryListPlan,
     graph_rows: &[history_graph::GraphRow],
     worktree_dirty: &[gitcomet_core::domain::WorktreeDirtySummary],
     list_ix: usize,
+) -> Option<usize> {
+    worktree_band_connect_from_top_col_in_window(plan, graph_rows, worktree_dirty, list_ix, 0)
+}
+
+pub(in crate::view) fn worktree_band_connect_from_top_col_in_window(
+    plan: &crate::view::caches::HistoryListPlan,
+    graph_rows: &[history_graph::GraphRow],
+    worktree_dirty: &[gitcomet_core::domain::WorktreeDirtySummary],
+    list_ix: usize,
+    graph_start: usize,
 ) -> Option<usize> {
     use crate::view::caches::HistoryListRow;
 
@@ -265,7 +276,7 @@ pub(in crate::view) fn worktree_band_connect_from_top_col(
             visible_ix,
             worktree_ix,
         }) => {
-            let above_row = graph_rows.get(visible_ix)?;
+            let above_row = graph_rows.get(visible_ix.checked_sub(graph_start)?)?;
             let above = worktree_dirty.get(worktree_ix)?;
             let on_branch = above.branch.is_some() && !above.detached;
             Some(usize::from(band_node_for(above_row, on_branch).exit_col))
@@ -294,6 +305,17 @@ pub(in crate::view) struct SelectedLane {
 }
 
 impl SelectedLane {
+    pub(in crate::view) fn span(
+        color_ix: history_graph::LaneColorIx,
+        first_row: usize,
+        last_row: usize,
+    ) -> Self {
+        Self {
+            color_ix,
+            first_row,
+            last_row,
+        }
+    }
     /// Whether the lane drawn in `color_ix` on visible row `row_ix` is this one.
     pub(in crate::view) fn covers(
         self,
@@ -329,7 +351,7 @@ impl SelectedLane {
 /// one row and carries the same colour as the real lane starting below it.
 /// Resolving to the whisker collapsed the span to the anchor row alone, and every
 /// row of the branch the highlight was meant to light washed out instead.
-fn lane_col_for_color(
+pub(in crate::view) fn lane_col_for_color(
     row: &history_graph::GraphRow,
     color_ix: history_graph::LaneColorIx,
 ) -> Option<usize> {

@@ -40,6 +40,13 @@ pub struct ScrollbarMarker {
 /// - GPUI `UniformListScrollHandle`
 /// - Alacritty terminal scroll model
 pub trait ScrollbarDriver: 'static {
+    /// Invalidate a custom viewport after an input gesture changes its driver.
+    fn interaction_changed(&self, _cx: &mut gpui::App) {}
+    /// Logical lists can describe their extent without converting millions of
+    /// rows to an imprecise `Pixels` coordinate. Both fractions are in [0, 1].
+    fn logical_metrics(&self, _axis: ScrollbarAxis) -> Option<(f64, f64)> {
+        None
+    }
     /// Maximum scroll extent in pixels for the given axis.
     fn max_offset(&self, axis: ScrollbarAxis) -> Pixels;
 
@@ -288,14 +295,27 @@ impl Scrollbar {
                     raw_offset.max(px(0.0)).min(max_offset)
                 };
 
-                let metrics = match axis {
-                    ScrollbarAxis::Vertical => {
-                        vertical_thumb_metrics(viewport_size, max_offset, scroll)?
-                    }
-                    ScrollbarAxis::Horizontal => {
-                        horizontal_thumb_metrics(viewport_size, max_offset, scroll)?
-                    }
-                };
+                let metrics =
+                    if let Some((position, visible)) = prepaint_driver.logical_metrics(axis) {
+                        let track = (viewport_size - margin * 2.0).max(px(0.0));
+                        let length = (track * visible.clamp(0.0, 1.0) as f32)
+                            .max(px(24.0))
+                            .min(track);
+                        ThumbMetrics {
+                            length,
+                            thickness: px(SCROLLBAR_THUMB_THICKNESS_PX),
+                            offset: margin + (track - length) * position.clamp(0.0, 1.0) as f32,
+                        }
+                    } else {
+                        match axis {
+                            ScrollbarAxis::Vertical => {
+                                vertical_thumb_metrics(viewport_size, max_offset, scroll)?
+                            }
+                            ScrollbarAxis::Horizontal => {
+                                horizontal_thumb_metrics(viewport_size, max_offset, scroll)?
+                            }
+                        }
+                    };
 
                 let (track_bounds, thumb_bounds) = match axis {
                     ScrollbarAxis::Vertical => {
@@ -552,6 +572,7 @@ impl Scrollbar {
                             driver.set_axis_offset(axis, new_offset);
                         }
 
+                        driver.interaction_changed(cx);
                         window.refresh();
                         cx.stop_propagation();
                     }
@@ -597,6 +618,7 @@ impl Scrollbar {
                         if !always_visible {
                             interaction.update(cx, |state, _cx| state.showing = true);
                         }
+                        driver.interaction_changed(cx);
                         _window.refresh();
                         cx.stop_propagation();
                     }
@@ -614,6 +636,7 @@ impl Scrollbar {
                         }
                         driver.drag_ended(axis);
                         interaction.update(cx, |state, _cx| state.drag_offset = None);
+                        driver.interaction_changed(cx);
                         window.refresh();
                         cx.stop_propagation();
                     }

@@ -462,6 +462,25 @@ impl GitRepository for GixRepo {
         &self.spec
     }
 
+    fn build_history_index(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        cancellation: &CancellationToken,
+        on_progress: &mut dyn FnMut(gitcomet_core::history_index::HistoryIndexProgress),
+    ) -> Result<Option<gitcomet_core::history_index::HistoryIndexHandle>> {
+        self.build_history_index_impl(mode, author, cancellation, on_progress)
+    }
+
+    fn read_history_range(
+        &self,
+        index: &gitcomet_core::history_index::HistoryIndexHandle,
+        range: std::ops::Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::history_index::HistoryRange> {
+        self.read_history_range_impl(index, range, cancellation)
+    }
+
     fn read_history(
         &self,
         mode: HistoryMode,

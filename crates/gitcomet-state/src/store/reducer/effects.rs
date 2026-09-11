@@ -1011,6 +1011,22 @@ fn merged_selection_range(
     repo_state: &RepoState,
     selected: &[CommitId],
 ) -> Option<(CommitId, CommitId)> {
+    if let Some(index) = &repo_state.history_state.indexed.range_index {
+        let positions: Option<Vec<usize>> = selected
+            .iter()
+            .map(|id| index.position(id.as_ref()))
+            .collect();
+        if let Some(positions) = positions {
+            let newest = *positions.iter().min()?;
+            let oldest = *positions.iter().max()?;
+            return Some((
+                index
+                    .parent_commit_id(oldest, 0)
+                    .unwrap_or_else(|| CommitId(EMPTY_TREE_ID.into())),
+                index.commit_id(newest)?,
+            ));
+        }
+    }
     let Loadable::Ready(page) = &repo_state.history_state.log else {
         return None;
     };
@@ -2696,15 +2712,7 @@ pub(super) fn reflog_loaded(
 pub(super) fn squash_plan_for_repo(
     repo_state: &RepoState,
 ) -> Option<gitcomet_core::squash::SquashPlan> {
-    let Loadable::Ready(page) = &repo_state.log else {
-        return None;
-    };
-    let head = repo_state.head_commit_id()?;
-    gitcomet_core::squash::squash_eligibility(
-        &page.commits,
-        &repo_state.history_state.multi_selection.commits,
-        &head,
-    )
+    repo_state.history_squash_plan()
 }
 
 pub(super) fn prepare_squash(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {

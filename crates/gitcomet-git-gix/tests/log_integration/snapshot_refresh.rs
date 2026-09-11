@@ -295,3 +295,211 @@ fn snapshot_refresh_real_repository() {
     );
     assert_unchanged(repo.as_ref(), mode, loaded, snapshot);
 }
+
+fn assert_index_matches(repo: &dyn GitRepository, mode: HistoryMode, author: Option<&str>) {
+    let cancellation = CancellationToken::new();
+    let index = repo
+        .build_history_index(mode, author, &cancellation, &mut |_| {})
+        .unwrap()
+        .unwrap();
+    let (page, snapshot) = first(repo, mode, author, 10_000);
+    assert_eq!(Some(&index.snapshot), snapshot.as_ref());
+    assert_eq!(index.len(), page.commits.len(), "{mode:?} {author:?}");
+    // Exercise direct reads in reverse block order, including a tail shorter
+    // than a block. No parked traversal cursor participates in these reads.
+    for start in (0..index.len()).step_by(256).rev() {
+        let end = (start + 256).min(index.len());
+        let range = repo
+            .read_history_range(&index, start..end, &cancellation)
+            .unwrap();
+        assert_eq!(
+            range.commits,
+            page.commits[start..end],
+            "{mode:?} {author:?} at {start}"
+        );
+    }
+    assert!(
+        repo.read_history_range(&index, index.len()..index.len() + 1, &cancellation)
+            .is_err()
+    );
+}
+
+#[test]
+fn indexed_history_matches_queries_and_retains_immutable_ranges() {
+    let dir = tempfile::tempdir().unwrap();
+    run_git(dir.path(), &["init", "-q", "-b", "master"]);
+    fast_import_linear_history_with_authors(dir.path(), 1100, |ix| {
+        if ix % 3 == 0 {
+            "Alice <alice@example.com>"
+        } else {
+            "Bob <bob@example.com>"
+        }
+    });
+    run_git(dir.path(), &["checkout", "-q", "-b", "feature", "HEAD~40"]);
+    run_git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=Alice",
+            "-c",
+            "user.email=alice@example.com",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "feature",
+        ],
+    );
+    run_git(dir.path(), &["checkout", "-q", "master"]);
+    run_git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=Bob",
+            "-c",
+            "user.email=bob@example.com",
+            "merge",
+            "--no-ff",
+            "-qm",
+            "merge feature",
+            "feature",
+        ],
+    );
+    run_git(dir.path(), &["checkout", "-q", "--", "."]);
+    std::fs::write(dir.path().join("file.txt"), "stash changes").unwrap();
+    run_git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=Bob",
+            "-c",
+            "user.email=bob@example.com",
+            "stash",
+            "push",
+            "-qm",
+            "stashed",
+        ],
+    );
+    let repo = GixBackend.open(dir.path()).unwrap();
+    for mode in [
+        HistoryMode::FullReachable,
+        HistoryMode::FirstParent,
+        HistoryMode::NoMerges,
+        HistoryMode::MergesOnly,
+        HistoryMode::AllBranches,
+    ] {
+        for author in [None, Some("aLiCe"), Some("no such author")] {
+            assert_index_matches(repo.as_ref(), mode, author);
+        }
+    }
+    let cancellation = CancellationToken::new();
+    let index = repo
+        .build_history_index(HistoryMode::AllBranches, None, &cancellation, &mut |_| {})
+        .unwrap()
+        .unwrap();
+    let before = repo
+        .read_history_range(&index, 700..710, &cancellation)
+        .unwrap();
+    run_git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=Bob",
+            "-c",
+            "user.email=bob@example.com",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "new head",
+        ],
+    );
+    assert_eq!(
+        before,
+        repo.read_history_range(&index, 700..710, &cancellation)
+            .unwrap()
+    );
+    cancellation.cancel();
+    assert!(matches!(
+        repo.read_history_range(&index, 0..1, &cancellation)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Cancelled
+    ));
+}
+
+#[test]
+fn indexed_history_matches_empty_and_shallow_repositories() {
+    let dir = tempfile::tempdir().unwrap();
+    run_git(dir.path(), &["init", "-q", "-b", "master"]);
+    let repo = GixBackend.open(dir.path()).unwrap();
+    assert_index_matches(repo.as_ref(), HistoryMode::FullReachable, None);
+    fast_import_linear_history(dir.path(), 40);
+    let clone = tempfile::tempdir().unwrap();
+    run_git(
+        clone.path(),
+        &[
+            "clone",
+            "-q",
+            "--depth=10",
+            &git_force_file_transport_url(dir.path()),
+            ".",
+        ],
+    );
+    let repo = GixBackend.open(clone.path()).unwrap();
+    for mode in [
+        HistoryMode::FullReachable,
+        HistoryMode::FirstParent,
+        HistoryMode::AllBranches,
+    ] {
+        assert_index_matches(repo.as_ref(), mode, None);
+    }
+}
+
+#[test]
+#[ignore = "set GITCOMET_HISTORY_BENCH_REPO to benchmark a real repository"]
+fn indexed_history_large_repository_benchmark() {
+    use std::time::Instant;
+    let path = std::env::var("GITCOMET_HISTORY_BENCH_REPO").expect("GITCOMET_HISTORY_BENCH_REPO");
+    let repo = GixBackend.open(Path::new(&path)).unwrap();
+    let cancellation = CancellationToken::new();
+    let started = Instant::now();
+    let index = repo
+        .build_history_index(HistoryMode::AllBranches, None, &cancellation, &mut |_| {})
+        .unwrap()
+        .unwrap();
+    eprintln!(
+        "index commits={} seconds={:.3} estimated_mib={:.1}",
+        index.len(),
+        started.elapsed().as_secs_f64(),
+        index.estimated_bytes() as f64 / 1048576.0
+    );
+    let _capture = gitcomet_core::git_ops_trace::capture();
+    let mut samples = Vec::new();
+    for round in 0..4 {
+        for fraction in [0, 9, 1, 7, 2, 8, 4, 6, 3, 5] {
+            let start = index.len().saturating_sub(256) * fraction / 10;
+            let started = Instant::now();
+            let range = repo
+                .read_history_range(&index, start..(start + 256).min(index.len()), &cancellation)
+                .unwrap();
+            assert_eq!(
+                range.commits.first().map(|commit| &commit.id),
+                index.commit_id(start).as_ref()
+            );
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        if round == 0 {
+            eprintln!("first ten block reads ms={samples:?}");
+        }
+    }
+    samples.sort_by(f64::total_cmp);
+    eprintln!(
+        "256-commit range reads p50_ms={:.2} p95_ms={:.2}",
+        samples[samples.len() / 2],
+        samples[samples.len() * 95 / 100]
+    );
+    assert_eq!(
+        gitcomet_core::git_ops_trace::snapshot().log_walk.calls,
+        0,
+        "direct range reads must not walk history"
+    );
+}

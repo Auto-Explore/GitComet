@@ -11,6 +11,7 @@ pub mod git_operation;
 pub mod git_ops_trace;
 pub mod gitignore;
 pub mod hex;
+pub mod history_index;
 pub mod merge;
 pub mod merge_extraction;
 pub mod mergetool_trace;

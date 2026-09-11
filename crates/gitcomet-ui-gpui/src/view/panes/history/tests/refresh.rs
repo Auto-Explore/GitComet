@@ -409,3 +409,258 @@ fn activation_through_store_to_render_preserves_the_oldest_commit(cx: &mut gpui:
         );
     }
 }
+
+fn indexed_fixture(
+    count: usize,
+) -> (
+    gitcomet_core::history_index::HistoryIndexHandle,
+    Vec<Commit>,
+) {
+    use gitcomet_core::history_index::HistoryIndexBuilder;
+    use gitcomet_core::services::HistorySnapshot;
+    let mut builder = HistoryIndexBuilder::new(
+        HistorySnapshot(format!("fixture-{count}").into()),
+        LogScope::AllBranches,
+        20,
+    )
+    .unwrap();
+    let raw = |number: usize| {
+        let mut id = [0u8; 20];
+        id[..8].copy_from_slice(&(number as u64).to_be_bytes());
+        id
+    };
+    let mut commits = Vec::new();
+    for row in 0..count {
+        let id = raw(count - row);
+        let parents: Vec<_> = (row + 1 < count)
+            .then(|| raw(count - row - 1))
+            .into_iter()
+            .collect();
+        builder
+            .push(&id, parents.iter().map(|id| id.as_slice()), 0, false)
+            .unwrap();
+        commits.push(Commit {
+            id: CommitId(gitcomet_core::hex::encode(&id).into()),
+            parent_ids: parents
+                .iter()
+                .map(|id| CommitId(gitcomet_core::hex::encode(id).into()))
+                .collect(),
+            author: "author".into(),
+            summary: "commit".into(),
+            time: SystemTime::UNIX_EPOCH,
+        });
+    }
+    (builder.finish(&CancellationToken::new()).unwrap(), commits)
+}
+
+fn install_index(state: &mut AppState, index: gitcomet_core::history_index::HistoryIndexHandle) {
+    let history = &mut state.repos[0].history_state;
+    history.log_snapshot = Some(index.snapshot.clone());
+    history.indexed.requested = Some(index.snapshot.clone());
+    history.indexed.index = Some(index);
+    history.indexed.rev += 1;
+}
+
+fn logical_top(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+) -> (usize, f64, usize) {
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        let scroll = history.scroll_interaction.borrow();
+        let logical = scroll.logical.as_ref().unwrap();
+        (logical.top, logical.within, logical.total)
+    })
+}
+
+#[gpui::test]
+fn indexed_history_real_wheel_and_thumb_keep_position_during_refresh(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(5000);
+    let (view, cx, mut state, store) = mount(
+        cx,
+        Arc::new(LogPage {
+            commits: commits[..200].to_vec(),
+            next_cursor: None,
+        }),
+    );
+    install_index(&mut state, index.clone());
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let bounds = cx.debug_bounds("indexed_history_viewport").unwrap();
+    cx.update(|_, app| {
+        let entity = view.read(app).main_pane.read(app).history_view.clone();
+        entity.update(app, |history, _| {
+            history.pending_history_reveal = Some(PendingHistoryReveal {
+                repo_id: RepoId(1),
+                commit_id: index.commit_id(0).unwrap(),
+                fallback_scope: None,
+                worktree_path: None,
+            })
+        });
+    });
+    for _ in 0..25 {
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: bounds.center(),
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-2000.25))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+    }
+    let after_wheel = logical_top(cx, &view);
+    assert!(after_wheel.0 > 1000);
+    assert_eq!(after_wheel.2, 5000);
+    cx.update(|_, app| {
+        assert!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .history_view
+                .read(app)
+                .pending_history_reveal
+                .is_none()
+        )
+    });
+    // A late block response hydrates the current viewport without touching it.
+    let block = after_wheel.0 / 256 * 256;
+    state.repos[0].history_state.indexed.range_index = Some(index.clone());
+    state.repos[0].history_state.indexed.ranges.insert(
+        block,
+        Arc::new(gitcomet_core::history_index::HistoryRange {
+            snapshot: index.snapshot.clone(),
+            start: block,
+            commits: commits[block..(block + 256).min(commits.len())].to_vec(),
+        }),
+    );
+    state.repos[0].history_state.indexed.rev += 1;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    cx.run_until_parked();
+    assert_eq!(logical_top(cx, &view), after_wheel);
+
+    // Drag the actual thumb using the production f64 logical metrics.
+    let track = f32::from(bounds.size.height) - 8.0;
+    let height = cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        let scroll = history.scroll_interaction.borrow();
+        let logical = scroll.logical.as_ref().unwrap();
+        (logical.position() / logical.max()) as f32
+    });
+    let thumb = point(
+        bounds.right() - px(8.0),
+        bounds.top() + px(4.0 + (track - 24.0) * height + 12.0),
+    );
+    cx.simulate_mouse_down(thumb, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_move(
+        point(thumb.x, bounds.bottom() - px(40.0)),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    let during = logical_top(cx, &view);
+    assert!(during.0 > after_wheel.0);
+    let (next, _) = indexed_fixture(5010);
+    install_index(&mut state, next);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    // Let the background graph complete while the mouse remains down.
+    for _ in 0..15 {
+        std::thread::sleep(Duration::from_millis(10));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    assert_eq!(
+        logical_top(cx, &view),
+        during,
+        "refresh must not resize a dragged history"
+    );
+    cx.simulate_mouse_up(
+        point(thumb.x, bounds.bottom() - px(40.0)),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    wait_until(cx, "new indexed snapshot", |cx| {
+        logical_top(cx, &view).2 == 5010
+    });
+    let after = logical_top(cx, &view);
+    assert_eq!(after.0, during.0 + 10, "the same commit remains at the top");
+    assert!((after.1 - during.1).abs() < 0.001);
+
+    // With no explicit selection, arrows start at HEAD even when another
+    // branch has thousands of newer commits above it.
+    let head = state.repos[0]
+        .history_state
+        .indexed
+        .index
+        .as_ref()
+        .unwrap()
+        .commit_id(4000)
+        .unwrap();
+    state.repos[0].head_branch = Loadable::Ready("main".to_owned());
+    state.repos[0].head_branch_rev += 1;
+    state.repos[0].branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: "main".to_owned(),
+        target: head.clone(),
+        upstream: None,
+        divergence: None,
+    }]));
+    state.repos[0].branches_rev += 1;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "HEAD attribution", |cx| {
+        cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .history_view
+                .read(app)
+                .indexed
+                .presentation
+                .as_ref()
+                .is_some_and(|shown| shown.head.as_deref() == Some(head.as_ref()))
+        })
+    });
+    cx.update(|window, app| {
+        let entity = view.read(app).main_pane.read(app).history_view.clone();
+        let focus = entity.read(app).history_panel_focus_handle.clone();
+        window.focus(&focus, app);
+    });
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(logical_top(cx, &view).0, 4001);
+}
+
+#[gpui::test]
+fn indexed_history_bootstrap_preserves_worktree_row_anchor(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(5000);
+    let (view, cx, mut state, store) = mount(
+        cx,
+        Arc::new(LogPage {
+            commits: commits[..200].to_vec(),
+            next_cursor: None,
+        }),
+    );
+    state.repos[0].worktree_dirty = Loadable::Ready(Arc::new(vec![dirty(
+        "/tmp/indexed-worktree",
+        commits[50].id.as_ref(),
+    )]));
+    state.repos[0].worktree_dirty_rev += 1;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    scroll(cx, &view, Some(50));
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    assert_eq!(logical_top(cx, &view), (50, 7.0, 5001));
+}

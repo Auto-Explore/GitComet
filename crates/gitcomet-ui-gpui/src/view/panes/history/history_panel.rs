@@ -34,19 +34,34 @@ impl HistoryView {
     fn history_view_inner(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let scrollbar_gutter = super::history_scrollbar_gutter();
-        self.apply_pending_history_cache();
-        self.ensure_history_cache(cx);
+        let manual = std::mem::take(&mut self.scroll_interaction.borrow_mut().manual_pending);
+        if manual {
+            self.cancel_history_scroll_reveal();
+        }
+        self.ensure_indexed_history(cx);
+        self.apply_indexed_history();
+        if self.indexed.presentation.is_none() {
+            self.apply_pending_history_cache();
+            self.ensure_history_cache(cx);
+        }
+        self.sync_indexed_plan();
+        self.prepare_indexed_window(cx);
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
         let plan = self.ensure_history_list_plan();
-        self.sync_history_viewport(&plan);
+        if self.indexed.presentation.is_none() {
+            self.sync_history_viewport(&plan);
+        }
         let repo = self.active_repo();
         let commits_count = self
             .history_cache
             .as_ref()
             .map(|cache| cache.base.visible_indices.len())
             .unwrap_or(0);
-        let count = plan.list_len(commits_count);
+        let count = self.indexed.presentation.as_ref().map_or_else(
+            || plan.list_len(commits_count),
+            |shown| self.indexed.plan.list_len(shown.graph.projection.len()),
+        );
 
         let bg = theme.colors.surface.canvas;
 
@@ -63,8 +78,9 @@ impl HistoryView {
                     components::empty_state(theme, "History", "No commits.").into_any_element()
                 }
             }
+        } else if self.indexed.presentation.is_some() {
+            self.indexed_history_body(cx).into_any_element()
         } else {
-            let root_view_for_scroll = self.root_view.clone();
             let list = uniform_list(
                 "history_main",
                 count,
@@ -72,14 +88,7 @@ impl HistoryView {
             )
             .h_full()
             .track_scroll(&self.history_scroll)
-            .on_scroll_wheel(move |_event, _window, cx| {
-                let _ = root_view_for_scroll.update(cx, |root, cx| {
-                    root.close_history_refs_hover(cx);
-                    // Rows move out from under the pointer while scrolling, so
-                    // an open card would end up describing a different commit.
-                    root.dismiss_commit_message_hover(cx);
-                });
-            });
+            .on_scroll_wheel(cx.listener(Self::history_wheel));
             let list = restrict_scroll_to_vertical_axis(list);
             let should_load_more = {
                 let state = self.history_scroll.0.borrow();
@@ -98,6 +107,8 @@ impl HistoryView {
                 state.last_item_size.is_some()
                     && repo.is_some_and(|repo| {
                         !repo.log_loading_more
+                            && !repo.history_state.indexed.loading
+                            && repo.history_state.indexed.index.is_none()
                             && matches!(
                                 &repo.log,
                                 Loadable::Ready(page) if page.next_cursor.is_some()
@@ -123,7 +134,11 @@ impl HistoryView {
                 .child(
                     components::Scrollbar::new(
                         "history_main_scrollbar",
-                        self.history_scroll.clone(),
+                        super::scroll::HistoryScrollDriver {
+                            view: cx.entity().downgrade(),
+                            handle: self.history_scroll.clone(),
+                            interaction: self.scroll_interaction.clone(),
+                        },
                     )
                     .always_visible()
                     .render(theme),
@@ -212,6 +227,9 @@ impl HistoryView {
         direction: i8,
         _cx: &mut gpui::Context<Self>,
     ) -> bool {
+        if self.indexed.presentation.is_some() {
+            return self.select_adjacent_indexed(direction, _cx);
+        }
         let Some(repo_id) = self.active_repo_id() else {
             return false;
         };
@@ -415,6 +433,28 @@ impl HistoryView {
             })
             .into();
         let scope_repo_id = self.active_repo_id();
+        let index_error = self
+            .active_repo()
+            .is_some_and(|repo| repo.history_state.indexed.error.is_some());
+        let message_label: SharedString = if index_error {
+            "Full history unavailable · retry".into()
+        } else if self
+            .active_repo()
+            .is_some_and(|repo| repo.history_state.indexed.loading)
+        {
+            self.active_repo()
+                .and_then(|repo| repo.history_state.indexed.progress.as_ref())
+                .map(|progress| format!("Indexing history · {} commits", progress.matched))
+                .unwrap_or_else(|| "Indexing history…".to_owned())
+                .into()
+        } else if self.indexed.presentation.is_none() && self.indexed_is_building() {
+            "Preparing history…".into()
+        } else if let Some(shown) = &self.indexed.presentation {
+            format!("MESSAGE · {} commits", shown.graph.projection.len()).into()
+        } else {
+            "MESSAGE".into()
+        };
+
         let scope_invoker: SharedString = "history_mode_header".into();
         let scope_anchor_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
         let scope_anchor_bounds_for_prepaint = Rc::clone(&scope_anchor_bounds);
@@ -691,7 +731,11 @@ impl HistoryView {
                             .min_w(px(0.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
-                            .child("MESSAGE"),
+                            .id("history_index_status")
+                            .child(message_label)
+                            .when(index_error, |label| label.cursor_pointer().on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, _| {
+                                if let Some(repo_id) = scope_repo_id { this.store.dispatch(Msg::IndexedHistory(gitcomet_state::indexed_history::IndexedHistoryMsg::Retry { repo_id })); }
+                            }))),
                     ),
             )
             .when(show_author, |header| {
