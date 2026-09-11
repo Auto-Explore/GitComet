@@ -105,8 +105,9 @@ fn reset_widths_clamp_default_graph_in_narrow_windows() {
         100,
     );
 
-    assert_eq!(widths.branch, px(116.0));
-    assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
+    // The graph gives way first; the branch column keeps its default.
+    assert_eq!(widths.branch, px(HISTORY_COL_BRANCH_PX));
+    assert_eq!(widths.graph, px(30.0));
 }
 
 #[test]
@@ -119,7 +120,7 @@ fn reset_widths_clamp_branch_after_graph_reaches_minimum() {
     );
 
     assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
-    assert_eq!(widths.branch, px(80.0));
+    assert_eq!(widths.branch, px(104.0));
 }
 
 #[test]

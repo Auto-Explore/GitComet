@@ -45,10 +45,27 @@ pub(super) fn paint_history_graph(
     let y_center = bounds.top() + bounds.size.height / 2.0;
     let y_bottom = bounds.bottom();
 
-    let x_for_col = |col: usize| margin_x + col_gap * (col as f32);
+    // Columns past the edge all land on the edge x, icons included.
+    let x_for_col = |col: usize| graph_col_x(col, margin_x, col_gap, bounds.size.width);
+    let edge_x = graph_edge_x(margin_x, bounds.size.width);
     let left = bounds.left();
 
     let node_x = x_for_col(usize::from(row.node_col));
+    let node_color = lane(row.node_color_ix);
+    // Beside a node on the edge line, the line matches the node's dot and
+    // gradient; elsewhere on it the selected lane is painted on top.
+    let segment_color = |x: Pixels, color_ix| {
+        if edge_takes_node_colour(node_x, x, edge_x) {
+            node_color
+        } else {
+            lane(color_ix)
+        }
+    };
+    let paints_last = |col: usize, color_ix| {
+        edge_paint_last(same_x(x_for_col(col), edge_x), || {
+            selected_lane.is_some_and(|lane| lane.covers(theme, row_ix, color_ix))
+        })
+    };
 
     // Whether column `col` draws a vertical down from the top edge of this row.
     let has_incoming_vertical = |col: usize| {
@@ -58,39 +75,44 @@ pub(super) fn paint_history_graph(
             || connect_from_top_col == Some(col)
     };
     // A join whose source column also has an incoming vertical is drawn as one
-    // continuous elbow, so the plain vertical pass must not draw it twice.
+    // continuous elbow, so the plain vertical pass must not draw it twice. A join
+    // collapsed onto one x is no elbow; the vertical pass draws its lane.
     let joins_out_of = |col: usize| {
-        row.joins_in
-            .iter()
-            .any(|edge| usize::from(edge.from_col) == col && edge.from_col != edge.to_col)
+        row.joins_in.iter().any(|edge| {
+            usize::from(edge.from_col) == col
+                && !same_x(x_for_col(col), x_for_col(usize::from(edge.to_col)))
+        })
     };
 
     // Incoming vertical segments.
-    for (col, lane_paint) in row.lanes_now.iter().enumerate() {
-        if !lane_paint.is_active() {
-            continue;
-        }
-        if !(lane_paint.incoming() || connect_from_top_col == Some(col)) {
-            continue;
-        }
-        if joins_out_of(col) {
-            continue;
-        }
+    let mut incoming: SmallVec<[(usize, history_graph::LanePaint); 8]> = row
+        .lanes_now
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|&(col, lane)| {
+            lane.is_active()
+                && (lane.incoming() || connect_from_top_col == Some(col))
+                && !joins_out_of(col)
+        })
+        .collect();
+    incoming.sort_by_key(|&(col, lane)| paints_last(col, lane.color_ix));
+    for (col, lane_paint) in incoming {
         let x = x_for_col(col);
         let mut path = PathBuilder::stroke(stroke_width);
         path.move_to(point(left + x, y_top));
         path.line_to(point(left + x, y_center));
         if let Ok(p) = path.build() {
-            window.paint_path(p, lane(lane_paint.color_ix));
+            window.paint_path(p, segment_color(x, lane_paint.color_ix));
         }
     }
 
     // Incoming join edges into the node (used both for merge commits and fork points).
     for edge in row.joins_in.iter() {
-        if edge.from_col == edge.to_col {
+        let from = usize::from(edge.from_col);
+        if same_x(x_for_col(from), x_for_col(usize::from(edge.to_col))) {
             continue;
         }
-        let from = usize::from(edge.from_col);
         let color = lane(edge.color_ix);
         if has_incoming_vertical(from) {
             paint_lane_to_node(
@@ -116,12 +138,17 @@ pub(super) fn paint_history_graph(
     }
 
     // Continuations from current row to next row.
-    for (out_col, lane_paint) in row.lanes_next.iter().enumerate() {
-        if !lane_paint.is_active() {
-            continue;
-        }
+    let mut continuing: SmallVec<[(usize, history_graph::LanePaint); 8]> = row
+        .lanes_next
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, lane)| lane.is_active())
+        .collect();
+    continuing.sort_by_key(|&(col, lane)| paints_last(col, lane.color_ix));
+    for (out_col, lane_paint) in continuing {
         let x_out = x_for_col(out_col);
-        let color = lane(lane_paint.color_ix);
+        let color = segment_color(x_out, lane_paint.color_ix);
         if lane_paint.starts_at_node() {
             paint_node_to_lane(
                 left,
@@ -145,14 +172,16 @@ pub(super) fn paint_history_graph(
     }
 
     // Additional merge edges from the node into lanes that were re-targeted to secondary parents.
+    // Collapsed onto the node's x, the target lane's own continuation covers it.
     for edge in row.edges_out.iter() {
-        if edge.from_col == edge.to_col {
+        let x_to = x_for_col(usize::from(edge.to_col));
+        if same_x(node_x, x_to) {
             continue;
         }
         paint_node_to_lane(
             left,
             node_x,
-            x_for_col(usize::from(edge.to_col)),
+            x_to,
             y_center,
             y_bottom,
             elbow_radius,
@@ -161,8 +190,6 @@ pub(super) fn paint_history_graph(
             window,
         );
     }
-
-    let node_color = lane(row.node_color_ix);
 
     // Within one paint layer gpui draws all quads before any path, so the
     // node (a quad) would sit under the lane lines no matter the call
@@ -598,7 +625,9 @@ pub(super) fn paint_history_graph_band(
     let y_top = bounds.top();
     let y_center = bounds.top() + bounds.size.height / 2.0;
     let y_bottom = bounds.bottom();
-    let x_for_col = |col: usize| margin_x + col_gap * (col as f32);
+    // Same edge pinning as the commit rows, or the edge line breaks at a band.
+    let x_for_col = |col: usize| graph_col_x(col, margin_x, col_gap, bounds.size.width);
+    let edge_x = graph_edge_x(margin_x, bounds.size.width);
 
     // The same wash the commit rows carry into their message border, painted
     // before the lanes so the strokes stay crisp on top of it.
@@ -611,8 +640,18 @@ pub(super) fn paint_history_graph_band(
         );
     }
 
-    for segment in band_lane_segments(lanes, usize::from(node.col), connect_from_top_col) {
-        let x = left + x_for_col(segment.col);
+    // A pushed-out node sits one column past the last lane, which in a narrow
+    // column is the edge x.
+    let node_x_offset = x_for_col(usize::from(node.col));
+
+    let mut segments = band_lane_segments(lanes, usize::from(node.col), connect_from_top_col);
+    segments.sort_by_key(|segment| {
+        edge_paint_last(same_x(x_for_col(segment.col), edge_x), || {
+            selected_lane.is_some_and(|lane| lane.covers(theme, row_ix, segment.color_ix))
+        })
+    });
+    for segment in segments {
+        let x = x_for_col(segment.col);
         let from_y = if segment.has_top { y_top } else { y_center };
         let to_y = if segment.has_bottom {
             y_bottom
@@ -620,48 +659,32 @@ pub(super) fn paint_history_graph_band(
             y_center
         };
         let mut path = PathBuilder::stroke(stroke_width);
-        path.move_to(point(x, from_y));
-        path.line_to(point(x, to_y));
+        path.move_to(point(left + x, from_y));
+        path.line_to(point(left + x, to_y));
         if let Ok(p) = path.build() {
             // The lane's own colour, not the node's: a branch head keeps the
             // descendant lane's colour above the node, and the commit below
             // paints its matching stub the same way -- including its wash, or the
-            // seam between the two rows reappears.
-            window.paint_path(
-                p,
-                lane_wash_color(theme, segment.color_ix, row_ix, selected_lane),
-            );
+            // seam between the two rows reappears. The exception is the edge line
+            // beside a node on it, which matches the node like a commit row's.
+            let color = if edge_takes_node_colour(node_x_offset, x, edge_x) {
+                node.color
+            } else {
+                lane_wash_color(theme, segment.color_ix, row_ix, selected_lane)
+            };
+            window.paint_path(p, color);
         }
     }
 
-    // A pushed-out node sits one column past the last lane. The graph column has
-    // a fixed, user-sized width and the cell is `overflow_hidden` -- past the
-    // edge the node and its connector are not clipped so much as deleted,
-    // leaving a band of bare lanes with nothing marking the changes. Holding it
-    // at the last position that fits keeps it on screen. It can only be pulled
-    // back onto a lane's column when the column is already too narrow to draw
-    // that lane either, so nothing legible is lost.
-    let node_x_offset = band_node_x_offset(node.col, margin_x, col_gap, bounds.size.width);
-
     // The node sits on a column no lane runs through, so it reaches the commit
     // below by leaving horizontally and turning down -- the same shape a branch
-    // head's whisker takes.
+    // head's whisker takes. Both ends are pinned, so one past the edge collapses
+    // into a straight drop instead of turning out through the clipped edge.
     if let Some(exit_col) = node.exit_col {
         paint_node_to_lane(
             left,
             node_x_offset,
-            // Both endpoints, not just the node. `paint_node_to_lane` takes the
-            // elbow's direction from the sign of `x_to - x_from`, so holding the
-            // node back while the target keeps its full offset turns a leftward
-            // connector rightward, into the `overflow_hidden` edge -- deleting
-            // the connector, which is the case the clamp exists to prevent. Held
-            // inside the cell as well, a target that no longer fits collapses to
-            // the same x and the connector degenerates to a straight drop.
-            clamp_x_into_cell(
-                x_for_col(usize::from(exit_col)),
-                margin_x,
-                bounds.size.width,
-            ),
+            x_for_col(usize::from(exit_col)),
             y_center,
             y_bottom,
             elbow_radius,
@@ -692,21 +715,38 @@ pub(super) fn paint_history_graph_band(
     });
 }
 
-/// Where a band's node is drawn, in pixels from the graph cell's left edge.
+/// Where column `col` is drawn, in pixels from the graph cell's left edge.
 ///
-/// Its natural place is `margin_x + col_gap * col`, one column past the last
-/// lane in the pushed-out case (`col == lanes.len()`). The column's width is
-/// fixed rather than fitted to the lanes, so the offset is held inside the cell
-/// here -- a node past the edge is invisible, and the cell clips rather than
-/// overflows.
-fn band_node_x_offset(col: u16, margin_x: Pixels, col_gap: Pixels, width: Pixels) -> Pixels {
-    clamp_x_into_cell(margin_x + col_gap * (f32::from(col)), margin_x, width)
+/// The column's width is fixed rather than fitted to the lanes, and the cell
+/// clips, so every column past the edge is pinned to [`graph_edge_x`]: its
+/// lanes merge into one edge line and its nodes sit on it instead of vanishing.
+fn graph_col_x(col: usize, margin_x: Pixels, col_gap: Pixels, width: Pixels) -> Pixels {
+    (margin_x + col_gap * (col as f32)).min(graph_edge_x(margin_x, width))
 }
 
-/// Holds an x-offset inside the graph cell, so what is drawn at it survives the
-/// cell's `overflow_hidden`. See [`band_node_x_offset`] for why that matters.
-fn clamp_x_into_cell(x: Pixels, margin_x: Pixels, width: Pixels) -> Pixels {
-    x.min((width - margin_x).max(margin_x))
+/// The right-most x a lane or node is drawn at: one margin in from the edge,
+/// which leaves a 16px icon whole.
+fn graph_edge_x(margin_x: Pixels, width: Pixels) -> Pixels {
+    (width - margin_x).max(margin_x)
+}
+
+/// Whether two x-offsets draw as one line. A connector between them is no elbow.
+fn same_x(a: Pixels, b: Pixels) -> bool {
+    (a - b).abs() < px(0.5)
+}
+
+/// Paint order key for a lane. Lanes pinned to the edge share one x and the last
+/// one painted wins, so there the selected lane goes last. Everywhere else lanes
+/// keep column order.
+fn edge_paint_last(on_edge: bool, selected: impl FnOnce() -> bool) -> bool {
+    on_edge && selected()
+}
+
+/// Whether a segment at `x` takes the node's colour instead of its lane's: both
+/// sit on the edge line, so the collapsed line matches the node's dot and
+/// gradient rather than whichever lane was painted last.
+fn edge_takes_node_colour(node_x: Pixels, x: Pixels, edge_x: Pixels) -> bool {
+    same_x(node_x, edge_x) && same_x(x, edge_x)
 }
 
 /// Control-point ratio for approximating a circular quarter-arc with a cubic
@@ -740,7 +780,7 @@ fn paint_node_to_lane(
     path.move_to(point(left + x_from, y_center));
 
     let dx = x_to - x_from;
-    if dx.abs() < px(0.5) {
+    if same_x(x_from, x_to) {
         path.line_to(point(left + x_to, y_bottom));
     } else {
         let dir = if dx > px(0.0) { 1.0 } else { -1.0 };
@@ -1435,7 +1475,7 @@ mod tests {
         let clamped_width = px(crate::view::HISTORY_COL_GRAPH_MAX_PX);
 
         // 20 lanes wants x = 330 in a column the clamp holds at 240.
-        let offset = band_node_x_offset(20, margin, gap, clamped_width);
+        let offset = graph_col_x(20, margin, gap, clamped_width);
         assert!(
             offset < clamped_width,
             "the node must stay inside the clipped cell, got {offset:?}"
@@ -1444,7 +1484,7 @@ mod tests {
 
         // A column dragged narrower than one margin still yields a drawable
         // offset rather than a negative one.
-        let offset = band_node_x_offset(3, margin, gap, px(4.0));
+        let offset = graph_col_x(3, margin, gap, px(4.0));
         assert!(offset >= px(0.0), "got {offset:?}");
     }
 
@@ -1456,13 +1496,12 @@ mod tests {
     fn a_narrow_column_clamps_the_connector_as_well_as_the_node() {
         let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
         let gap = px(HISTORY_GRAPH_COL_GAP_PX);
-        let x_for_col = |col: usize| margin + gap * (col as f32);
 
         // Wide enough for both: the node sits right of its exit lane, so the
         // connector runs leftwards into it.
         let wide = px(400.0);
-        let node_x = band_node_x_offset(6, margin, gap, wide);
-        let exit_x = clamp_x_into_cell(x_for_col(2), margin, wide);
+        let node_x = graph_col_x(6, margin, gap, wide);
+        let exit_x = graph_col_x(2, margin, gap, wide);
         assert!(
             exit_x < node_x,
             "the connector should still run left, got {exit_x:?} vs {node_x:?}"
@@ -1472,10 +1511,103 @@ mod tests {
         // `paint_node_to_lane` renders as a straight drop rather than an elbow
         // aimed off-screen.
         let narrow = px(4.0);
-        let node_x = band_node_x_offset(6, margin, gap, narrow);
-        let exit_x = clamp_x_into_cell(x_for_col(2), margin, narrow);
+        let node_x = graph_col_x(6, margin, gap, narrow);
+        let exit_x = graph_col_x(2, margin, gap, narrow);
         assert_eq!(exit_x, node_x);
-        assert!((exit_x - node_x).abs() < px(0.5), "must not turn at all");
+        assert!(same_x(exit_x, node_x), "must not turn at all");
+    }
+
+    /// Columns that fit keep their place; every one past the edge shares the
+    /// edge x, far enough in that a 16px icon centred there is not clipped.
+    #[test]
+    fn columns_past_the_edge_share_one_x_inside_the_cell() {
+        let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
+        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
+        let width = px(crate::view::HISTORY_COL_GRAPH_PX);
+        let edge = width - margin;
+
+        let xs: Vec<_> = (0..20)
+            .map(|col| graph_col_x(col, margin, gap, width))
+            .collect();
+        for (col, &x) in xs.iter().enumerate() {
+            let natural = margin + gap * (col as f32);
+            if natural <= edge {
+                assert_eq!(x, natural, "column {col} fits and must not move");
+            } else {
+                assert_eq!(x, edge, "column {col} must pin to the edge");
+            }
+            assert!(
+                x + px(8.0) <= width,
+                "a 16px icon on column {col} is clipped"
+            );
+        }
+        assert!(xs.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(xs.iter().filter(|&&x| x == edge).count() > 10);
+    }
+
+    /// At its minimum the column shows exactly one lane: every column lands on
+    /// column 0's x, with room for a 16px icon.
+    #[test]
+    fn the_minimum_graph_column_draws_one_lane() {
+        let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
+        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
+        let width = px(crate::view::HISTORY_COL_GRAPH_MIN_PX);
+        for col in 0..20 {
+            assert_eq!(graph_col_x(col, margin, gap, width), margin, "column {col}");
+        }
+        assert!(margin + px(8.0) <= width, "a 16px icon is clipped");
+    }
+
+    /// On the edge line the selected lane is painted last; lanes elsewhere keep
+    /// column order.
+    #[test]
+    fn the_edge_line_paints_the_selected_lane_last() {
+        // (col, on_edge, selected), in the column order painted.
+        let mut lanes = [
+            (1, false, true),
+            (2, false, false),
+            (4, true, true),
+            (5, true, false),
+            (6, true, false),
+        ];
+        lanes.sort_by_key(|&(_, on_edge, selected)| edge_paint_last(on_edge, || selected));
+        let order: Vec<_> = lanes.iter().map(|&(col, ..)| col).collect();
+        assert_eq!(order, [1, 2, 5, 6, 4]);
+    }
+
+    /// Beside a node on the edge line the line takes the node's colour: in a
+    /// one-lane column that is every row, so the line matches each row's dot.
+    /// A node that still has a column of its own never recolours the edge.
+    #[test]
+    fn a_node_on_the_edge_line_colours_the_line_beside_it() {
+        let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
+        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
+        let takes = |node: usize, segment: usize, width: Pixels| {
+            edge_takes_node_colour(
+                graph_col_x(node, margin, gap, width),
+                graph_col_x(segment, margin, gap, width),
+                graph_edge_x(margin, width),
+            )
+        };
+
+        let one_lane = px(crate::view::HISTORY_COL_GRAPH_MIN_PX);
+        for node in 0..20 {
+            for segment in 0..20 {
+                assert!(
+                    takes(node, segment, one_lane),
+                    "node {node}, segment {segment}"
+                );
+            }
+        }
+
+        // Four lanes' room: column 6 is pinned, column 1 is not.
+        let wide = px(80.0);
+        assert!(takes(6, 8, wide), "a pinned node colours the edge line");
+        assert!(!takes(6, 1, wide), "but not a lane that has its own column");
+        assert!(
+            !takes(1, 8, wide),
+            "an on-screen node leaves the edge line alone"
+        );
     }
 
     #[test]

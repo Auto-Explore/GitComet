@@ -312,7 +312,8 @@ const HISTORY_COL_HANDLE_PX: f32 = 8.0;
 
 const HISTORY_COL_BRANCH_MIN_PX: f32 = 60.0;
 const HISTORY_COL_BRANCH_MAX_PX: f32 = 320.0;
-const HISTORY_COL_GRAPH_MIN_PX: f32 = 44.0;
+/// One lane: a margin either side of column 0; every other lane pins onto it.
+const HISTORY_COL_GRAPH_MIN_PX: f32 = HISTORY_GRAPH_MARGIN_X_PX * 2.0;
 const HISTORY_COL_AUTHOR_MIN_PX: f32 = 80.0;
 const HISTORY_COL_AUTHOR_MAX_PX: f32 = 260.0;
 const HISTORY_COL_DATE_MIN_PX: f32 = 110.0;
