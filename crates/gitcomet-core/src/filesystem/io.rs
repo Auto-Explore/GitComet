@@ -183,6 +183,8 @@ fn hash_entry(path: &Path, hasher: &mut Sha256, cancellation: &Cancellation) -> 
             if len == 0 {
                 break;
             }
+            #[cfg(test)]
+            CONTENT_BYTES_HASHED.with(|counted| counted.set(counted.get() + len as u64));
             hasher.update(&buffer[..len]);
         }
     } else if m.is_dir() {
@@ -214,6 +216,15 @@ pub(super) fn children(path: &Path) -> io::Result<Vec<PathBuf>> {
         .collect::<io::Result<Vec<_>>>()?;
     paths.sort();
     Ok(paths)
+}
+
+/// Bytes of file content hashed, so tests can pin how many full passes an
+/// operation makes over the trees it touches. Thread-local: `execute` hashes on
+/// its caller's thread, and a process-wide counter would pick up every other
+/// test hashing in parallel.
+#[cfg(test)]
+thread_local! {
+    pub(super) static CONTENT_BYTES_HASHED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 pub(super) fn protect(path: &Path, recursive: bool, cancellation: &Cancellation) -> io::Result<()> {

@@ -652,3 +652,55 @@ fn the_recovery_log_records_both_native_paths_of_every_move() {
         "one tab-separated line per move, newline terminated"
     );
 }
+
+/// Pins how many times each transfer shape walks the bytes it moves. These
+/// counts are the whole reason a large drag-and-drop used to stall, so a
+/// regression here is a user-visible one.
+#[test]
+fn transfers_hash_their_trees_a_bounded_number_of_times() {
+    const SIZE: u64 = 512 * 1024;
+
+    let passes = |operation: Operation, service: &mut Filesystem| -> u64 {
+        CONTENT_BYTES_HASHED.with(|counted| counted.set(0));
+        let result = service.execute(Request::new(operation), |_| {});
+        success(&result);
+        CONTENT_BYTES_HASHED
+            .with(|counted| counted.get())
+            .div_ceil(SIZE)
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let payload = vec![b'x'; SIZE as usize];
+
+    let move_source = directory.path().join("moved.bin");
+    fs::write(&move_source, &payload).unwrap();
+    let into = directory.path().join("into");
+    fs::create_dir(&into).unwrap();
+    let mut service = Filesystem::default();
+    let move_passes = passes(
+        Operation::Transfer {
+            sources: vec![move_source],
+            destination: into.clone(),
+            intent: TransferIntent::Move,
+        },
+        &mut service,
+    );
+
+    let copy_source = directory.path().join("copied.bin");
+    fs::write(&copy_source, &payload).unwrap();
+    let copy_passes = passes(
+        Operation::Transfer {
+            sources: vec![copy_source],
+            destination: into,
+            intent: TransferIntent::Copy,
+        },
+        &mut service,
+    );
+
+    // A same-device move is a rename: one pass to record what moved, one for
+    // the version open editors re-adopt their baseline from.
+    assert_eq!(move_passes, 2, "same-device move");
+    // Copy reads the source, re-reads it to prove it held still, and reads the
+    // copy back. `copy_tree`'s own read is not hashed and so not counted.
+    assert_eq!(copy_passes, 3, "copy");
+}

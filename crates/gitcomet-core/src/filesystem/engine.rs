@@ -138,6 +138,24 @@ impl JournalEntry {
         file.write_all(format!("move\t{}\t{}\n", encoded_path(from), encoded_path(to)).as_bytes())
     }
 
+    /// Move an entry whose current version the caller already holds. A rename
+    /// preserves both contents and inode, so a version read at `from` still
+    /// describes the entry once it sits at `to`.
+    fn move_known(
+        &mut self,
+        from: PathBuf,
+        to: PathBuf,
+        version: DiskVersion,
+        change: Option<PathChange>,
+    ) -> io::Result<()> {
+        self.record_intent(&from, &to)?;
+        let step = Step::new(from, to, version, change)?;
+        rename_exclusive(&step.from, &step.to)?;
+        self.steps.push(step);
+        self.applied = self.steps.len();
+        Ok(())
+    }
+
     fn move_entry(
         &mut self,
         from: PathBuf,
@@ -145,12 +163,7 @@ impl JournalEntry {
         change: Option<PathChange>,
     ) -> io::Result<()> {
         let version = DiskVersion::read(&from)?;
-        self.record_intent(&from, &to)?;
-        let step = Step::new(from, to, version, change)?;
-        rename_exclusive(&step.from, &step.to)?;
-        self.steps.push(step);
-        self.applied = self.steps.len();
-        Ok(())
+        self.move_known(from, to, version, change)
     }
 }
 
@@ -1066,66 +1079,77 @@ fn transfer_inner(
         let staged = journal.reserve(destination.parent().unwrap())?;
         copy_tree(source, &staged, &request.cancellation)?;
         before.matches(source)?;
-        if !before.same_contents(&DiskVersion::read_cancellable(
-            &staged,
-            &request.cancellation,
-        )?) {
+        let staged_version = DiskVersion::read_cancellable(&staged, &request.cancellation)?;
+        if !before.same_contents(&staged_version) {
             return Err(invalid("Source changed while copying"));
         }
-        Some((staged, before))
+        Some((staged, before, staged_version))
     } else {
         None
     };
     if replacing {
         // Re-check the version shown in the prompt immediately before parking.
-        request
+        let expected = &request
             .resolutions
             .get(&destination)
             .ok_or_else(|| invalid("Destination changed while copying"))?
-            .expected
-            .matches(&destination)?;
+            .expected;
+        expected.matches(&destination)?;
         let parked = journal.reserve(destination.parent().unwrap())?;
-        journal.move_entry(destination.clone(), parked, None)?;
+        journal.move_known(destination.clone(), parked, expected.clone(), None)?;
     }
     let change = PathChange {
         old: (intent == TransferIntent::Move).then(|| source.to_path_buf()),
         new: Some(destination.clone()),
     };
-    if let Some((staged, before)) = staged {
-        journal.move_entry(
+    if let Some((staged, before, staged_version)) = staged {
+        journal.move_known(
             staged,
             destination,
+            staged_version,
             (intent == TransferIntent::Copy).then(|| change.clone()),
         )?;
         if intent == TransferIntent::Move {
             let parked = journal.reserve(source.parent().unwrap())?;
-            journal.move_entry(source.to_path_buf(), parked.clone(), Some(change))?;
+            journal.move_known(
+                source.to_path_buf(),
+                parked.clone(),
+                before.clone(),
+                Some(change),
+            )?;
             before.matches(&parked)?;
         }
     } else {
+        // Read once, up here: the plain rename needs it, and so does the
+        // cross-device fallback, which used to read the whole tree again after
+        // `move_entry` had already read and discarded it.
+        let before = DiskVersion::read_cancellable(source, &request.cancellation)?;
         if journal.areas.is_empty() {
             journal.reserve(source.parent().unwrap())?;
         }
-        match journal.move_entry(
+        match journal.move_known(
             source.to_path_buf(),
             destination.clone(),
+            before.clone(),
             Some(change.clone()),
         ) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
-                let before = DiskVersion::read_cancellable(source, &request.cancellation)?;
                 let staged = journal.reserve(destination.parent().unwrap())?;
                 copy_tree(source, &staged, &request.cancellation)?;
                 before.matches(source)?;
-                if !before.same_contents(&DiskVersion::read_cancellable(
-                    &staged,
-                    &request.cancellation,
-                )?) {
+                let staged_version = DiskVersion::read_cancellable(&staged, &request.cancellation)?;
+                if !before.same_contents(&staged_version) {
                     return Err(invalid("Source changed while copying"));
                 }
-                journal.move_entry(staged, destination, None)?;
+                journal.move_known(staged, destination, staged_version, None)?;
                 let parked = journal.reserve(source.parent().unwrap())?;
-                journal.move_entry(source.to_path_buf(), parked.clone(), Some(change))?;
+                journal.move_known(
+                    source.to_path_buf(),
+                    parked.clone(),
+                    before.clone(),
+                    Some(change),
+                )?;
                 before.matches(&parked)?;
             }
             Err(e) => return Err(e),
