@@ -88,6 +88,7 @@ actions!(
         TerminalSelectAll,
         ToggleCommandPalette,
         CommandPaletteDismiss,
+        ToggleRevealCommit,
         LocateFileInExplorer,
     ]
 );
@@ -208,6 +209,7 @@ mod preference_sync;
 mod preferences;
 mod reflog_panel;
 mod repo_open;
+mod reveal_commit;
 pub(crate) mod rows;
 mod settings_window;
 pub(crate) mod shortcut_labels;

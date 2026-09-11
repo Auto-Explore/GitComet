@@ -585,6 +585,10 @@ impl GitRepository for GixRepo {
         self.commit_details_impl(id)
     }
 
+    fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {
+        self.resolve_commit_impl(reference)
+    }
+
     fn diff_range_files(
         &self,
         from: &CommitId,

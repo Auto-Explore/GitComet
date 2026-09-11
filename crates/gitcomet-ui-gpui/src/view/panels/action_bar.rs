@@ -420,18 +420,10 @@ impl Render for ActionBarView {
                     .gitcomet_tooltip(theme, tooltip)
             });
 
-        let is_merging = self
-            .active_repo()
-            .is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))));
+        let is_merging = self.active_repo().is_some_and(merge_in_progress);
         let sequencer_state = self
             .active_repo()
-            .map(|repo| match repo.sequencer_state {
-                Loadable::Ready(state) => state,
-                _ if matches!(&repo.rebase_in_progress, Loadable::Ready(true)) => {
-                    gitcomet_core::services::SequencerState::RebaseOrApply
-                }
-                _ => gitcomet_core::services::SequencerState::None,
-            })
+            .map(active_sequencer_state)
             .unwrap_or_default();
         let is_cherry_pick_in_progress =
             sequencer_state == gitcomet_core::services::SequencerState::CherryPick;

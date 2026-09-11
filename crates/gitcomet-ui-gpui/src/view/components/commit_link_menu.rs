@@ -15,8 +15,8 @@ use std::sync::Arc;
 pub enum LinkTarget {
     Commit {
         commit_id: CommitId,
-        /// Whether the link may offer "Navigate". A commit's own SHA field
-        /// cannot navigate to itself.
+        /// Whether the link may offer "Reveal commit". A commit's own SHA
+        /// field cannot reveal itself.
         allow_navigate: bool,
     },
     Url(SharedString),

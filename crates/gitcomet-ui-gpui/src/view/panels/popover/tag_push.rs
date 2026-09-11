@@ -3,6 +3,67 @@ use gitcomet_core::services::CancellationToken;
 use gitcomet_core::tag_push::{TagPushMode, TagPushPreview, TagPushRequest};
 use std::hash::{Hash, Hasher};
 
+impl PopoverHost {
+    /// Why a push with tags in `mode` cannot start for the active repository,
+    /// or `None` when it can — the conditions the push menu disables it on.
+    pub(in crate::view) fn push_with_tags_unavailable(
+        &self,
+        mode: TagPushMode,
+    ) -> Option<&'static str> {
+        let Some(repo) = self.active_repo() else {
+            return Some("No repository is open");
+        };
+        if repo.detached_head_commit.is_some() {
+            return Some("HEAD is detached — check out a branch first");
+        }
+        match push_request(repo) {
+            PushRequest::NotReady => Some("The repository is still loading"),
+            PushRequest::NoRemotes => Some("Add a remote to push to first"),
+            PushRequest::Push | PushRequest::SetUpstream { .. } => request(repo, mode)
+                .is_none()
+                .then_some("The current branch cannot be pushed"),
+        }
+    }
+
+    /// Starts a push with tags, opening the set-upstream prompt first when the
+    /// branch has no upstream. `anchor` places that prompt; `None` centres it.
+    ///
+    /// Returns true when the caller should leave its popover alone: the
+    /// prompt replaced it, or there was nothing to push.
+    pub(in crate::view) fn push_with_tags(
+        &mut self,
+        repo_id: RepoId,
+        mode: TagPushMode,
+        anchor: Option<Point<Pixels>>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return true;
+        };
+        let Some(request) = request(repo, mode) else {
+            return true;
+        };
+        if request.set_upstream {
+            let kind = PopoverKind::PushSetUpstreamPrompt {
+                repo_id,
+                remote: request.remote,
+                configure_only_for: None,
+            };
+            match anchor {
+                Some(anchor) => self.open_popover_at(kind, anchor, window, cx),
+                None => self.open_popover_centered(kind, window, cx),
+            }
+            self.push_upstream_tag_mode = Some(mode);
+            self.sync_tag_push_previews(cx);
+            cx.notify();
+            return true;
+        }
+        self.store.dispatch(Msg::PushWithTags { repo_id, request });
+        false
+    }
+}
+
 pub(super) fn request(repo: &RepoState, mode: TagPushMode) -> Option<TagPushRequest> {
     if repo.detached_head_commit.is_some() {
         return None;

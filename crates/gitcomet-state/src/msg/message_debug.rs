@@ -359,6 +359,18 @@ impl std::fmt::Debug for InternalMsg {
                 .field("reference", reference)
                 .field("result", result)
                 .finish(),
+            InternalMsg::CommitLookupResolved {
+                repo_id,
+                reference,
+                request,
+                result,
+            } => f
+                .debug_struct("CommitLookupResolved")
+                .field("repo_id", repo_id)
+                .field("reference", reference)
+                .field("request", request)
+                .field("result", result)
+                .finish(),
             InternalMsg::RangeFilesLoaded {
                 repo_id,
                 from,

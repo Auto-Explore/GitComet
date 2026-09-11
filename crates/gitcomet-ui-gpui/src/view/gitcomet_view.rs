@@ -137,15 +137,42 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Both are scrim-backed modals over the same overlay layer, so opening
+        // one on top of the other stacks two scrims and leaves the lower one
+        // behind when the upper is dismissed. Closing first also means the
+        // focus captured below is the one the closed modal handed back, not its
+        // own input.
+        if self.reveal_commit_open {
+            self.close_reveal_commit(window, cx);
+        }
         self.command_palette_open = true;
         let restore_focus = window
             .focused(cx)
             .or_else(|| self.pre_palette_focus.clone());
         let fallback_focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
-        let has_active_repo = self.active_repo_id().is_some();
+        let context = self.command_palette_context(cx);
         self.command_palette.update(cx, |palette, cx| {
-            palette.open(restore_focus, fallback_focus, has_active_repo, window, cx);
+            palette.open(restore_focus, fallback_focus, context, window, cx);
         });
+    }
+
+    /// The state palette commands are enabled against. Mirrors the conditions
+    /// the action bar and menus use, so a command is greyed out exactly when
+    /// its button or menu entry would be.
+    pub(super) fn command_palette_context(&self, cx: &App) -> command_palette::PaletteContext {
+        let repo = self.active_repo();
+        let host = self.popover_host.read(cx);
+        command_palette::PaletteContext {
+            has_active_repo: repo.is_some(),
+            external_editor: crate::external_editor::configured_setting().is_some(),
+            merging: repo.is_some_and(merge_in_progress),
+            sequencer: repo.is_some_and(|repo| {
+                active_sequencer_state(repo) != gitcomet_core::services::SequencerState::None
+            }),
+            unresolved_conflicts: repo.is_some_and(|repo| repo.has_unstaged_conflicts),
+            push_with_tags_unavailable: gitcomet_core::tag_push::TagPushMode::ALL
+                .map(|mode| host.push_with_tags_unavailable(mode)),
+        }
     }
 
     pub(super) fn close_command_palette(
@@ -180,6 +207,68 @@ impl GitCometView {
         } else {
             self.open_command_palette(window, cx);
         }
+    }
+
+    pub(super) fn open_reveal_commit(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        // See `open_command_palette`: two stacked modal scrims are never right.
+        if self.command_palette_open {
+            self.close_command_palette(window, cx);
+        }
+        self.reveal_commit_open = true;
+        let restore_focus = window
+            .focused(cx)
+            .or_else(|| self.pre_palette_focus.clone());
+        let fallback_focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+        let repo_id = self.active_repo_id();
+        self.reveal_commit_dialog.update(cx, |dialog, cx| {
+            dialog.open(restore_focus, fallback_focus, repo_id, window, cx);
+        });
+    }
+
+    pub(super) fn close_reveal_commit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.reveal_commit_open = false;
+        self.reveal_commit_dialog
+            .update(cx, |dialog, cx| dialog.close(window, cx));
+    }
+
+    pub(super) fn reveal_commit_did_close(
+        &mut self,
+        target: Option<CommitId>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.reveal_commit_open = false;
+        let (Some(repo_id), Some(target)) = (self.active_repo_id(), target) else {
+            return;
+        };
+        self.main_pane.update(cx, |main, cx| {
+            main.reveal_history_commit(
+                repo_id,
+                target,
+                Some(gitcomet_core::domain::LogScope::AllBranches),
+                cx,
+            );
+        });
+    }
+
+    pub(crate) fn toggle_reveal_commit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.reveal_commit_open {
+            self.close_reveal_commit(window, cx);
+            return;
+        }
+        // Nothing to reveal outside a normal window, or without a repository.
+        if !command_palette_available(self.view_mode) || self.active_repo_id().is_none() {
+            return;
+        }
+        self.open_reveal_commit(window, cx);
     }
 
     pub(super) fn execute_command(
@@ -245,6 +334,73 @@ impl GitCometView {
                 self.activate_next_repo_tab(cx);
             }
             "open-active-view-search" => cx.defer(|cx| cx.dispatch_action(&OpenActiveViewSearch)),
+            // Routed through the action so this takes the same path — and the
+            // same availability gate — as the hotkey.
+            "reveal-commit" => cx.defer(|cx| cx.dispatch_action(&ToggleRevealCommit)),
+            // The app-level `CheckForUpdates` and `InitializeRepository` actions
+            // only have handlers on macOS, so these call what the menus call.
+            "check-for-updates" => self.check_for_updates_manually(cx),
+            "initialize-repository" => {
+                if let Some(window) = window
+                    && !self.blocks_repository_management_actions()
+                {
+                    self.prompt_init_repo(window, cx);
+                }
+            }
+            "toggle-terminal" => {
+                if let Some(window) = window {
+                    self.toggle_terminal_for_active_repo(window, cx);
+                }
+            }
+            "open-external-terminal" => {
+                if let (Some(repo_id), Some(window)) = (self.active_repo_id(), window) {
+                    self.open_external_terminal_from_menu(repo_id, window, cx);
+                }
+            }
+            "open-in-code-editor" => self.open_active_repo_in_external_code_editor(cx),
+            "prune-merged-branches" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::PruneMergedBranches { repo_id });
+                }
+            }
+            "prune-local-tags" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::PruneLocalTags { repo_id });
+                }
+            }
+            "push-with-annotated-tags" | "push-with-all-tags" => {
+                let mode = if command_id == "push-with-all-tags" {
+                    gitcomet_core::tag_push::TagPushMode::All
+                } else {
+                    gitcomet_core::tag_push::TagPushMode::FollowAnnotated
+                };
+                if let (Some(repo_id), Some(window)) = (self.active_repo_id(), window) {
+                    self.popover_host.update(cx, |host, cx| {
+                        host.push_with_tags(repo_id, mode, None, window, cx);
+                    });
+                }
+            }
+            // Both abort through the action bar's confirmation.
+            "abort-merge" | "abort-rebase" => {
+                if let (Some(repo_id), Some(window)) = (self.active_repo_id(), window) {
+                    self.open_popover_centered(
+                        PopoverKind::MergeAbortConfirm { repo_id },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "continue-rebase" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::RebaseContinue { repo_id });
+                }
+            }
+            "hide" => cx.defer(|cx| cx.hide()),
+            "hide-others" => cx.defer(|cx| cx.hide_other_apps()),
+            "install-desktop-integration" => {
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                self.install_linux_desktop_integration(cx);
+            }
             "toggle-sidebar" => {
                 self.set_sidebar_collapsed(!self.sidebar_collapsed, cx);
             }
@@ -1135,6 +1291,17 @@ impl GitCometView {
             )
         });
 
+        let reveal_commit_dialog = cx.new(|cx| {
+            reveal_commit::RevealCommitView::new(
+                initial_theme,
+                initial_state.active_repo,
+                weak_view.clone(),
+                Arc::clone(&store),
+                window,
+                cx,
+            )
+        });
+
         let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
             let now = Instant::now();
             if !window.is_window_active() {
@@ -1356,6 +1523,8 @@ impl GitCometView {
             popover_host,
             command_palette,
             command_palette_open: false,
+            reveal_commit_dialog,
+            reveal_commit_open: false,
             pre_palette_focus: None,
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
@@ -1512,6 +1681,8 @@ impl GitCometView {
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.command_palette
             .update(cx, |palette, cx| palette.set_theme(theme, cx));
+        self.reveal_commit_dialog
+            .update(cx, |dialog, cx| dialog.set_theme(theme, cx));
         self.open_repo_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.error_banner_input

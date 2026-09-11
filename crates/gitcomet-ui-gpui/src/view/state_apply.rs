@@ -352,8 +352,26 @@ impl GitCometView {
         }
 
         self.state = next;
-        self.command_palette.update(cx, |palette, cx| {
-            palette.set_has_active_repo(self.state.active_repo.is_some(), cx);
+        // Only an open palette shows enablement; `open` takes a fresh context.
+        if self.command_palette_open {
+            let context = self.command_palette_context(cx);
+            self.command_palette.update(cx, |palette, cx| {
+                palette.set_context(context, cx);
+            });
+        }
+        let active_repo_id = self.state.active_repo;
+        // The lookup only feeds the dialog's result row, and the dialog clears
+        // its query when it opens — so copying it on every snapshot while the
+        // dialog is closed would buy nothing.
+        let commit_lookup = self
+            .reveal_commit_open
+            .then(|| {
+                self.active_repo()
+                    .map(|repo| repo.history_state.commit_lookup.clone())
+            })
+            .flatten();
+        self.reveal_commit_dialog.update(cx, |dialog, cx| {
+            dialog.sync_from_state(active_repo_id, commit_lookup.as_ref(), cx);
         });
         match (self.sidebar_collapsed_before_merge_view, merge_view_active) {
             (None, true) => {
