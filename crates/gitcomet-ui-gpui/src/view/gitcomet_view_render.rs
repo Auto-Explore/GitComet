@@ -568,7 +568,7 @@ impl Render for GitCometView {
                     .completion
                     .complete(Some(gpui::FileTransferOperation::Copy));
             }
-            this.open_document_paths(drag.paths.clone(), cx);
+            this.open_document_paths(drag.paths.to_vec(), cx);
             cx.stop_propagation();
         }));
         if external_repo_drop_enabled {

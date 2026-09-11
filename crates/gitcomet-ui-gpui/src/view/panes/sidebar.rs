@@ -2520,7 +2520,7 @@ impl SidebarPaneView {
                             if !this.explorer_pointer_over_rows(window) {
                                 return;
                             }
-                            this.explorer_drop(drag.paths.clone(), None, false, window, cx)
+                            this.explorer_drop(drag.paths.to_vec(), None, false, window, cx)
                         },
                     ))
             })
@@ -2879,6 +2879,9 @@ impl SidebarPaneView {
 
         let visible_rows = this.file_browser_visible_rows(cx);
         let cut_paths = this.explorer_cut_paths(cx);
+        // Every selected row drags the whole selection, so build it once rather
+        // than joining and cloning it per row per frame.
+        let selection_sources: Rc<[PathBuf]> = Rc::from(this.explorer_sources(None));
         let repo = this.active_repo();
         // The file the main pane is showing, so the tree can mark it. Read
         // whatever the target names — a diff of a file is still "this file is
@@ -3131,10 +3134,12 @@ impl SidebarPaneView {
                     let hover_path = drop_path.clone();
                     let external_hover_path = drop_path.clone();
                     let paths = if selected {
-                        this.explorer_sources(Some(entry.path.as_path()))
+                        Rc::clone(&selection_sources)
                     } else {
-                        repo.map(|r| vec![r.spec.workdir.join(entry.path.as_ref())])
-                            .unwrap_or_default()
+                        Rc::from(
+                            repo.map(|r| vec![r.spec.workdir.join(entry.path.as_ref())])
+                                .unwrap_or_default(),
+                        )
                     };
                     let native_root = this.root_view.clone();
                     row_div = row_div
@@ -3162,7 +3167,7 @@ impl SidebarPaneView {
                                         native_root
                                             .update(cx, |root, cx| {
                                                 root.prepare_native_drag(
-                                                    drag.paths.clone(),
+                                                    drag.paths.to_vec(),
                                                     intent,
                                                     cx,
                                                 )
@@ -3176,7 +3181,7 @@ impl SidebarPaneView {
                                           window,
                                           cx| {
                                         this.explorer_drop(
-                                            drag.paths.clone(),
+                                            drag.paths.to_vec(),
                                             Some(drop_path.clone()),
                                             false,
                                             window,

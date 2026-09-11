@@ -41,7 +41,9 @@ pub(super) struct NameEdit {
 
 #[derive(Clone)]
 pub(in crate::view) struct ExplorerDrag {
-    pub paths: Vec<PathBuf>,
+    /// Shared: every selected row builds this payload on every frame, and gpui
+    /// re-renders on each mouse move during a drag.
+    pub paths: Rc<[PathBuf]>,
 }
 
 impl Render for ExplorerDrag {
