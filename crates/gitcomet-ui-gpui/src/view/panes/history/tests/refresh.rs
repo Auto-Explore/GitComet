@@ -664,3 +664,337 @@ fn indexed_history_bootstrap_preserves_worktree_row_anchor(cx: &mut gpui::TestAp
     });
     assert_eq!(logical_top(cx, &view), (50, 7.0, 5001));
 }
+
+#[gpui::test]
+fn indexed_history_handoff_never_replaces_visible_commits_with_placeholders(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(5000);
+    let (view, cx, mut state, store) = mount(
+        cx,
+        Arc::new(LogPage {
+            commits: commits[..200].to_vec(),
+            next_cursor: None,
+        }),
+    );
+    scroll(cx, &view, Some(40));
+    for (total, next) in [(5000, index), (5010, indexed_fixture(5010).0)] {
+        install_index(&mut state, next);
+        store.replace_snapshot_for_test(Arc::new(state.clone()));
+        set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+        wait_until(cx, "hydrated atomic handoff", |cx| {
+            cx.update(|_, app| {
+                let history = view.read(app).main_pane.read(app).history_view.read(app);
+                if history.indexed.presentation.is_none() {
+                    return false;
+                }
+                let logical = history.scroll_interaction.borrow().logical.clone().unwrap();
+                let window = history
+                    .indexed
+                    .window
+                    .as_ref()
+                    .expect("published index must include a window");
+                for row in logical.visible_range() {
+                    if let Some(crate::view::caches::HistoryListRow::Commit { visible_ix }) =
+                        history.indexed.plan.row_at(row)
+                    {
+                        let ix = visible_ix - window.start;
+                        assert!(
+                            window.loaded[ix],
+                            "visible commit {row} became a placeholder"
+                        );
+                        assert_eq!(window.cache.page.commits[ix].summary.as_ref(), "commit");
+                    }
+                }
+                logical.total == total
+            })
+        });
+    }
+    assert_eq!(logical_top(cx, &view), (50, 7.0, 5010));
+}
+
+#[gpui::test]
+fn indexed_history_skeleton_waits_300ms_and_hydrates_without_a_minimum_dwell(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(5000);
+    let (view, cx, mut state, store) = mount(
+        cx,
+        Arc::new(LogPage {
+            commits: commits[..200].to_vec(),
+            next_cursor: None,
+        }),
+    );
+    install_index(&mut state, index.clone());
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    cx.update(|window, app| {
+        let entity = view.read(app).main_pane.read(app).history_view.clone();
+        entity.update(app, |history, cx| {
+            let mut scroll = history.scroll_interaction.borrow_mut();
+            let logical = scroll.logical.as_mut().unwrap();
+            logical.set_position(650.0 * logical.height + 7.0);
+            cx.notify();
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("history_skeleton_650").is_none());
+    cx.executor().advance_clock(Duration::from_millis(299));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(cx.debug_bounds("history_skeleton_650").is_none());
+    cx.executor().advance_clock(Duration::from_millis(1));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let placeholder = cx
+        .debug_bounds("history_skeleton_650")
+        .expect("skeleton deadline must repaint without more input");
+    state.repos[0]
+        .history_state
+        .indexed
+        .range_errors
+        .insert(512, "read failed".to_owned());
+    state.repos[0].history_state.indexed.rev += 1;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    assert!(cx.debug_bounds("history_loading_error_650").is_some());
+    assert!(cx.debug_bounds("history_skeleton_650").is_none());
+    state.repos[0].history_state.indexed.range_errors.clear();
+    let before = logical_top(cx, &view);
+    state.repos[0].history_state.indexed.range_index = Some(index.clone());
+    state.repos[0].history_state.indexed.ranges.insert(
+        512,
+        Arc::new(gitcomet_core::history_index::HistoryRange {
+            snapshot: index.snapshot.clone(),
+            start: 512,
+            commits: commits[512..768].to_vec(),
+        }),
+    );
+    state.repos[0].history_state.indexed.rev += 1;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "commit replaces skeleton immediately", |cx| {
+        cx.debug_bounds("history_row_650").is_some()
+    });
+    let real = cx.debug_bounds("history_row_650").unwrap();
+    assert_eq!(real.size.height, placeholder.size.height);
+    assert_eq!(real.origin.y, placeholder.origin.y);
+    assert!(cx.debug_bounds("history_skeleton_650").is_none());
+    assert_eq!(logical_top(cx, &view), before);
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(
+        cx.debug_bounds("history_skeleton_650").is_none(),
+        "obsolete timer resurrected loading rows"
+    );
+}
+
+#[gpui::test]
+fn history_startup_keeps_recent_rows_interactive_with_a_capped_draggable_thumb(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(5000);
+    let (view, cx, mut state, store) = mount(
+        cx,
+        Arc::new(LogPage {
+            commits: commits[..200].to_vec(),
+            next_cursor: Some(LogCursor {
+                last_seen: commits[199].id.clone(),
+                resume_from: None,
+                resume_token: None,
+            }),
+        }),
+    );
+    state.repos[0].history_state.indexed.loading = true;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    let first = cx
+        .debug_bounds("history_row_0")
+        .expect("first page is already interactive");
+    let thumb = point(first.right() + px(8.0), first.top() + px(28.0));
+    cx.simulate_mouse_down(thumb, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.update(|_, app| {
+        assert!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .history_view
+                .read(app)
+                .scroll_interaction
+                .borrow()
+                .dragging
+        );
+    });
+    cx.simulate_mouse_move(
+        point(thumb.x, thumb.y + px(100.0)),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    let before = top(cx, &view);
+    assert_ne!(before.0, commits[0].id);
+    install_index(&mut state, index);
+    state.repos[0].history_state.indexed.loading = false;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    cx.run_until_parked();
+    assert_eq!(
+        top(cx, &view),
+        before,
+        "held thumb cannot publish a new extent"
+    );
+    cx.simulate_mouse_up(
+        point(thumb.x, thumb.y + px(100.0)),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    wait_until(cx, "full range after releasing thumb", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        let scroll = history.scroll_interaction.borrow();
+        let logical = scroll.logical.as_ref().unwrap();
+        assert_eq!(
+            history
+                .indexed
+                .presentation
+                .as_ref()
+                .unwrap()
+                .graph
+                .projection
+                .commit_id(logical.top),
+            Some(before.0.clone())
+        );
+    });
+}
+
+#[gpui::test]
+fn history_initial_skeleton_is_decorative_and_old_query_timers_are_cancelled(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (view, cx, mut state, store) = mount(
+        cx,
+        Arc::new(LogPage {
+            commits: commits(100),
+            next_cursor: None,
+        }),
+    );
+    state.repos[0].log = Loadable::Loading;
+    state.repos[0].history_state.log = Loadable::Loading;
+    state.repos[0].log_rev += 1;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    assert!(cx.debug_bounds("history_skeleton_0").is_none());
+    cx.executor().advance_clock(Duration::from_millis(300));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(cx.debug_bounds("history_skeleton_0").is_some());
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(history.history_cache.is_none());
+        assert!(
+            history.scroll_interaction.borrow().logical.is_none(),
+            "decorations must not invent an indexed extent"
+        );
+    });
+    state.repos[0].history_state.history_author_filter = Some("another author".to_owned());
+    state.repos[0].log_rev += 1;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    assert!(
+        cx.debug_bounds("history_skeleton_0").is_none(),
+        "a new query starts its own grace period"
+    );
+    cx.executor().advance_clock(Duration::from_millis(299));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(cx.debug_bounds("history_skeleton_0").is_none());
+    let page = Arc::new(LogPage {
+        commits: Vec::new(),
+        next_cursor: None,
+    });
+    state.repos[0].log = Loadable::Ready(page.clone());
+    state.repos[0].history_state.log = Loadable::Ready(page);
+    state.repos[0].log_rev += 1;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    cx.executor().advance_clock(Duration::from_secs(2));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    assert!(cx.debug_bounds("history_skeleton_0").is_none());
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(
+            !history
+                .loading
+                .status_visible(app.background_executor().now())
+        );
+    });
+}
+
+#[gpui::test]
+fn graph_column_width_holds_through_bootstrap_and_indexed_publish(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(5000);
+    let (view, cx, mut state, store) = mount(
+        cx,
+        Arc::new(LogPage {
+            commits: commits[..200].to_vec(),
+            next_cursor: None,
+        }),
+    );
+    let graph_width = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .history_view
+                .read(app)
+                .history_col_graph_design
+        })
+    };
+    assert_eq!(
+        graph_width(cx),
+        HISTORY_COL_GRAPH_PX,
+        "the bootstrap page must not resize the graph column"
+    );
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed presentation", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+            && cx.update(|_, app| {
+                view.read(app)
+                    .main_pane
+                    .read(app)
+                    .history_view
+                    .read(app)
+                    .indexed
+                    .presentation
+                    .is_some()
+            })
+    });
+    assert_eq!(
+        graph_width(cx),
+        HISTORY_COL_GRAPH_PX,
+        "the indexed publish must not resize the graph column"
+    );
+}

@@ -15,6 +15,7 @@ use std::path::PathBuf;
 mod history_panel;
 mod indexed;
 mod indexed_graph;
+mod loading;
 mod scroll;
 mod viewport;
 
@@ -1077,7 +1078,6 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_show_sha: bool,
     pub(in super::super) history_show_tags: bool,
     pub(in super::super) history_auto_fetch_tags_on_repo_activation: bool,
-    pub(in super::super) history_col_graph_auto: bool,
     pub(in super::super) history_col_resize: Option<HistoryColResizeState>,
     pub(in super::super) history_cache: Option<HistoryCache>,
     pending_history_cache: Option<HistoryCache>,
@@ -1092,6 +1092,7 @@ pub(in super::super) struct HistoryView {
     presented_history: Option<viewport::PresentedHistory>,
     scroll_interaction: scroll::SharedScrollInteraction,
     pub(in crate::view) indexed: indexed::IndexedViewState,
+    pub(in crate::view) loading: loading::HistoryLoading,
     history_selected_lane_color_cache: Option<HistorySelectedLaneColorCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
@@ -1245,7 +1246,6 @@ impl HistoryView {
             history_show_sha,
             history_show_tags,
             history_auto_fetch_tags_on_repo_activation,
-            history_col_graph_auto: true,
             history_col_resize: None,
             history_cache: None,
             pending_history_cache: None,
@@ -1258,6 +1258,7 @@ impl HistoryView {
             presented_history: None,
             scroll_interaction: Default::default(),
             indexed: Default::default(),
+            loading: Default::default(),
             history_selected_lane_color_cache: None,
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
@@ -1652,7 +1653,6 @@ impl HistoryView {
         self.history_col_date = widths.date;
         self.history_col_sha = widths.sha;
         self.sync_history_column_design_widths_from_pixels();
-        self.history_col_graph_auto = true;
         self.history_col_resize = None;
     }
 
@@ -2542,41 +2542,6 @@ impl HistoryView {
                         return;
                     }
 
-                    if this.history_col_graph_auto && this.history_col_resize.is_none() {
-                        let required = history_scaled_px(
-                            HISTORY_GRAPH_MARGIN_X_PX * 2.0
-                                + HISTORY_GRAPH_COL_GAP_PX * (rebuild.base.max_lanes as f32),
-                            this.ui_scale_percent,
-                        );
-                        if this.history_show_graph {
-                            this.history_col_graph = history_column_drag_next_width(
-                                HistoryColResizeHandle::Graph,
-                                required.min(history_scaled_px(
-                                    HISTORY_COL_GRAPH_MAX_PX,
-                                    this.ui_scale_percent,
-                                )),
-                                this.history_content_width,
-                                this.history_show_graph,
-                                (
-                                    this.history_show_author,
-                                    this.history_show_date,
-                                    this.history_show_sha,
-                                ),
-                                HistoryColumnWidths {
-                                    branch: this.history_col_branch,
-                                    graph: this.history_col_graph,
-                                    author: this.history_col_author,
-                                    date: this.history_col_date,
-                                    sha: this.history_col_sha,
-                                },
-                                this.ui_scale_percent,
-                            );
-                            this.history_col_graph_design = this
-                                .ui_scale()
-                                .design_units_from_pixels(this.history_col_graph);
-                        }
-                    }
-
                     this.history_cache_inflight = None;
                     this.replace_history_cache(rebuild);
                     cx.notify();
@@ -2693,12 +2658,6 @@ fn build_history_base_cache(
         history_graph::compute_graph_refs(&visible_commit_refs, theme, branch_heads, head_target)
             .into()
     };
-    let max_lanes = graph_rows
-        .iter()
-        .map(|row| row.lanes_now.len().max(row.lanes_next.len()))
-        .max()
-        .unwrap_or(1);
-
     let has_stash_tips = !stash_tips.is_empty();
     let mut author_cache: FxHashMap<&str, HistoryTextVm> =
         FxHashMap::with_capacity_and_hasher(64, Default::default());
@@ -2777,7 +2736,6 @@ fn build_history_base_cache(
         visible_indices,
         visible_ix_by_commit: Arc::new(visible_ix_by_commit),
         graph_rows,
-        max_lanes,
         row_vms,
     }
 }

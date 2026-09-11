@@ -6,6 +6,28 @@ progress. Once graph checkpoints are ready, the scrollbar represents the entire
 visible history. Wheel and trackpad input stays linear; thumb dragging can jump
 directly to any position. Nonlinear scrolling and disk persistence are deferred.
 
+## Loading presentation
+
+The recent page remains usable while indexing runs. Its provisional scrollbar
+thumb is capped at 48 logical pixels, with the existing 24-pixel minimum. Once
+the full presentation is ready, normal proportional sizing resumes. The cap and
+scroll range stay tied to the displayed page and cannot change during a drag.
+Complete short histories use normal sizing; histories that fit have no thumb.
+
+Missing rows reserve their normal height immediately. Only rows still missing
+after 300 ms show static, theme-aware skeleton bars aligned with visible columns.
+Ready content replaces them immediately, without animation or minimum dwell.
+One view-owned timer handles visible-row deadlines and a one-second delay for
+the secondary header status. Scrolling out of view, changing query, or loading
+the row cancels its pending indicator. Initial skeletons are decorative and never
+contribute to the list's scroll extent. Errors keep their clickable retry rows.
+
+An indexed presentation is published together with its first viewport cache.
+Already-loaded commit objects seed that cache by immutable ID, so switching from
+the recent page or refreshing the index does not blank surviving visible rows.
+The latest viewport anchor is rechecked before publication; the old presentation
+stays interactive while the new graph window is prepared in the background.
+
 ## Data and rendering
 
 - `gitcomet-core::history_index` stores binary object IDs, ordered parent ranks,

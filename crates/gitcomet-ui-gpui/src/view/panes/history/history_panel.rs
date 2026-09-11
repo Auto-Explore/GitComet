@@ -39,13 +39,14 @@ impl HistoryView {
             self.cancel_history_scroll_reveal();
         }
         self.ensure_indexed_history(cx);
-        self.apply_indexed_history();
+        self.apply_indexed_history(cx);
         if self.indexed.presentation.is_none() {
             self.apply_pending_history_cache();
             self.ensure_history_cache(cx);
         }
         self.sync_indexed_plan();
         self.prepare_indexed_window(cx);
+        self.sync_history_loading(cx);
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
         let plan = self.ensure_history_list_plan();
@@ -65,7 +66,23 @@ impl HistoryView {
 
         let bg = theme.colors.surface.canvas;
 
-        let body: AnyElement = if count == 0 {
+        let body: AnyElement = if count == 0 && self.history_initial_loading() {
+            // Decorative only: these boxes never contribute a fabricated scroll range.
+            let height = crate::view::rows::history_row_height(self.ui_scale());
+            let rows =
+                (f32::from(self.last_window_size.height) / f32::from(height)).ceil() as usize;
+            div()
+                .h_full()
+                .min_h(px(0.0))
+                .overflow_hidden()
+                .pr(scrollbar_gutter)
+                .when(
+                    self.loading
+                        .initial_skeleton_visible(cx.background_executor().now()),
+                    |body| body.children((0..rows).map(|row| self.history_skeleton_row(row))),
+                )
+                .into_any_element()
+        } else if count == 0 {
             match repo.map(|r| &r.log) {
                 None => {
                     components::empty_state(theme, "History", "No repository.").into_any_element()
@@ -131,8 +148,8 @@ impl HistoryView {
                         .pr(scrollbar_gutter)
                         .child(list),
                 )
-                .child(
-                    components::Scrollbar::new(
+                .child({
+                    let mut scrollbar = components::Scrollbar::new(
                         "history_main_scrollbar",
                         super::scroll::HistoryScrollDriver {
                             view: cx.entity().downgrade(),
@@ -140,9 +157,16 @@ impl HistoryView {
                             interaction: self.scroll_interaction.clone(),
                         },
                     )
-                    .always_visible()
-                    .render(theme),
-                )
+                    .always_visible();
+                    if self
+                        .history_cache
+                        .as_ref()
+                        .is_some_and(|cache| cache.page.next_cursor.is_some())
+                    {
+                        scrollbar = scrollbar.max_thumb_length(px(48.0));
+                    }
+                    scrollbar.render(theme)
+                })
                 .into_any_element()
         };
 
@@ -436,23 +460,22 @@ impl HistoryView {
         let index_error = self
             .active_repo()
             .is_some_and(|repo| repo.history_state.indexed.error.is_some());
-        let message_label: SharedString = if index_error {
-            "Full history unavailable · retry".into()
-        } else if self
-            .active_repo()
-            .is_some_and(|repo| repo.history_state.indexed.loading)
-        {
-            self.active_repo()
-                .and_then(|repo| repo.history_state.indexed.progress.as_ref())
-                .map(|progress| format!("Indexing history · {} commits", progress.matched))
-                .unwrap_or_else(|| "Indexing history…".to_owned())
-                .into()
-        } else if self.indexed.presentation.is_none() && self.indexed_is_building() {
-            "Preparing history…".into()
-        } else if let Some(shown) = &self.indexed.presentation {
-            format!("MESSAGE · {} commits", shown.graph.projection.len()).into()
+        let message_label: Option<SharedString> = if index_error {
+            Some("Full history unavailable · retry".into())
+        } else if self.loading.status_visible(cx.background_executor().now()) {
+            Some(
+                self.active_repo()
+                    .filter(|repo| repo.history_state.indexed.loading)
+                    .and_then(|repo| repo.history_state.indexed.progress.as_ref())
+                    .map(|progress| format!("Loading history · {} commits found", progress.matched))
+                    .unwrap_or_else(|| "Loading history…".to_owned())
+                    .into(),
+            )
         } else {
-            "MESSAGE".into()
+            self.indexed
+                .presentation
+                .as_ref()
+                .map(|shown| format!("{} commits", shown.graph.projection.len()).into())
         };
 
         let scope_invoker: SharedString = "history_mode_header".into();
@@ -521,9 +544,6 @@ impl HistoryView {
                         cx.stop_propagation();
                         crate::press_gesture::claim_press(cx);
                         crate::text_selection_owner::preserve(cx);
-                        if handle == HistoryColResizeHandle::Graph {
-                            this.history_col_graph_auto = false;
-                        }
                         let available_width = this.history_content_width;
                         let drag_layout = super::HistoryColumnDragLayout {
                             show_graph: this.history_show_graph,
@@ -725,18 +745,17 @@ impl HistoryView {
                     .px(cell_pad)
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .child(
+                    .child(div().flex_none().child("MESSAGE"))
+                    .when_some(message_label, |cell, label| cell.child(
                         div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .line_clamp(1)
-                            .whitespace_nowrap()
+                            .flex_1().min_w(px(0.0)).line_clamp(1).whitespace_nowrap()
+                            .font_weight(FontWeight::NORMAL)
                             .id("history_index_status")
-                            .child(message_label)
+                            .child(format!(" · {label}"))
                             .when(index_error, |label| label.cursor_pointer().on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, _| {
                                 if let Some(repo_id) = scope_repo_id { this.store.dispatch(Msg::IndexedHistory(gitcomet_state::indexed_history::IndexedHistoryMsg::Retry { repo_id })); }
                             }))),
-                    ),
+                    )),
             )
             .when(show_author, |header| {
                 header.child(

@@ -40,6 +40,7 @@ struct PendingPresentation {
     presentation: Arc<Presentation>,
     old_presentation: Option<usize>,
     nearest_survivors: Vec<u32>,
+    window: Option<WindowCache>,
 }
 
 #[derive(Default)]
@@ -66,9 +67,29 @@ impl Drop for IndexedViewState {
     }
 }
 
+fn window_commit_range(
+    shown: &Presentation,
+    plan: &HistoryListPlan,
+    logical: &super::scroll::LogicalViewport,
+) -> (usize, usize) {
+    let visible = logical.visible_range();
+    let to_commit = |list| match plan.row_at(list) {
+        Some(
+            HistoryListRow::Commit { visible_ix }
+            | HistoryListRow::WorktreeUncommitted { visible_ix, .. },
+        ) => visible_ix,
+        _ => 0,
+    };
+    let first = to_commit(visible.start).min(shown.graph.projection.len());
+    let last = to_commit(visible.end.saturating_sub(1))
+        .saturating_add(1)
+        .min(shown.graph.projection.len());
+    (first, last)
+}
+
 impl HistoryView {
     pub(super) fn indexed_is_building(&self) -> bool {
-        self.indexed.building.is_some()
+        self.indexed.building.is_some() || self.indexed.pending.is_some()
     }
     fn index_key(&self, repo: &RepoState, index: &HistoryIndexHandle) -> HistoryBaseCacheRequest {
         HistoryBaseCacheRequest {
@@ -213,6 +234,7 @@ impl HistoryView {
                         presentation,
                         old_presentation: previous.as_ref().map(|old| Arc::as_ptr(old) as usize),
                         nearest_survivors,
+                        window: None,
                     })
                 })
                 .await;
@@ -235,14 +257,14 @@ impl HistoryView {
         .detach();
     }
 
-    pub(super) fn apply_indexed_history(&mut self) {
+    pub(super) fn apply_indexed_history(&mut self, cx: &mut gpui::Context<Self>) {
         if self.scroll_interaction.borrow().dragging {
             return;
         }
-        let Some(pending) = self.indexed.pending.take() else {
+        let Some(mut pending) = self.indexed.pending.take() else {
             return;
         };
-        let next = pending.presentation;
+        let next = pending.presentation.clone();
         let Some(repo) = self.active_repo() else {
             return;
         };
@@ -343,29 +365,74 @@ impl HistoryView {
                     .filter(|&row| row != gitcomet_core::history_index::MISSING_PARENT)
                     .map(|row| row as usize)
             });
+        let show_summary = self.ensure_history_worktree_summary_cache().0;
+        let repo = self.active_repo().unwrap();
+        let dirty = match &repo.worktree_dirty {
+            Loadable::Ready(rows) => rows.clone(),
+            _ => Arc::new(Vec::new()),
+        };
+        let plan_key = (
+            Arc::as_ptr(&next) as usize,
+            repo.worktree_dirty_rev,
+            show_summary,
+        );
+        let anchors = dirty
+            .iter()
+            .enumerate()
+            .filter_map(|(worktree_ix, summary)| {
+                Some(HistoryWorktreeRowAnchor {
+                    visible_ix: next
+                        .graph
+                        .projection
+                        .position(summary.head.as_ref()?.as_ref())?,
+                    worktree_ix,
+                })
+            })
+            .collect();
+        let plan = HistoryListPlan::new(show_summary, anchors);
+        let mut logical = super::scroll::LogicalViewport::new(
+            plan.list_len(next.graph.projection.len()),
+            height,
+            viewport,
+        );
+        let top = synthetic_path
+            .as_ref()
+            .and_then(|path| dirty.iter().position(|summary| &summary.path == path))
+            .and_then(|ix| plan.list_ix_for_worktree(ix))
+            .or_else(|| survivor.map(|visible| plan.list_ix_for_visible(visible)))
+            .unwrap_or(old_top);
+        logical.set_position(top as f64 * height + within);
+        let (first, last) = window_commit_range(&next, &plan, &logical);
+        let ready = pending.window.as_ref().is_some_and(|window| {
+            window.start <= first
+                && window.start + window.loaded.len() >= last
+                && (first..last).all(|row| {
+                    window.loaded[row - window.start]
+                        || next
+                            .graph
+                            .projection
+                            .commit_id(row)
+                            .is_none_or(|id| self.cached_history_commit(&id).is_none())
+                })
+        });
+        if !ready {
+            // Keep the existing rows interactive until the replacement graph and
+            // viewport can be published together. Re-evaluate the latest anchor
+            // on every frame; a user may scroll while this work is in flight.
+            self.indexed.pending = Some(pending);
+            self.prepare_window_for(next, plan, dirty, logical, true, cx);
+            return;
+        }
         self.indexed.presentation = Some(next.clone());
-        self.indexed.window = None;
+        self.indexed.window = pending.window.take().map(Rc::new);
         self.indexed
             .window_building
             .take()
             .inspect(|(_, token)| token.cancel());
         self.indexed.requested_blocks = None;
-        self.indexed.plan_key = None;
-        self.sync_indexed_plan();
-        let total = self.indexed.plan.list_len(next.graph.projection.len());
-        let mut logical = super::scroll::LogicalViewport::new(total, height, viewport);
-        let top = synthetic_path
-            .as_ref()
-            .and_then(|path| {
-                self.indexed
-                    .worktrees
-                    .iter()
-                    .position(|summary| &summary.path == path)
-            })
-            .and_then(|ix| self.indexed.plan.list_ix_for_worktree(ix))
-            .or_else(|| survivor.map(|visible| self.indexed.plan.list_ix_for_visible(visible)))
-            .unwrap_or(old_top);
-        logical.set_position(top as f64 * height + within);
+        self.indexed.plan = plan;
+        self.indexed.worktrees = dirty;
+        self.indexed.plan_key = Some(plan_key);
         self.scroll_interaction.borrow_mut().logical = Some(logical);
         // The bootstrap page is no longer a presentation or a selection index.
         self.history_cache_seq = self.history_cache_seq.wrapping_add(1);
@@ -373,41 +440,6 @@ impl HistoryView {
         self.history_cache = None;
         self.pending_history_cache = None;
         super::scroll::trace(&self.scroll_interaction.borrow(), "snapshot-published");
-        if self.history_col_graph_auto
-            && self.history_col_resize.is_none()
-            && self.history_show_graph
-        {
-            let required = history_scaled_px(
-                HISTORY_GRAPH_MARGIN_X_PX * 2.0
-                    + HISTORY_GRAPH_COL_GAP_PX * next.graph.max_lanes as f32,
-                self.ui_scale_percent,
-            );
-            self.history_col_graph = history_column_drag_next_width(
-                HistoryColResizeHandle::Graph,
-                required.min(history_scaled_px(
-                    HISTORY_COL_GRAPH_MAX_PX,
-                    self.ui_scale_percent,
-                )),
-                self.history_content_width,
-                self.history_show_graph,
-                (
-                    self.history_show_author,
-                    self.history_show_date,
-                    self.history_show_sha,
-                ),
-                HistoryColumnWidths {
-                    branch: self.history_col_branch,
-                    graph: self.history_col_graph,
-                    author: self.history_col_author,
-                    date: self.history_col_date,
-                    sha: self.history_col_sha,
-                },
-                self.ui_scale_percent,
-            );
-            self.history_col_graph_design = self
-                .ui_scale()
-                .design_units_from_pixels(self.history_col_graph);
-        }
         self.presented_history = None;
     }
 
@@ -484,18 +516,46 @@ impl HistoryView {
         let Some(logical) = self.scroll_interaction.borrow().logical.clone() else {
             return;
         };
-        let visible = logical.visible_range();
-        let to_commit = |list| match self.indexed.plan.row_at(list) {
-            Some(
-                HistoryListRow::Commit { visible_ix }
-                | HistoryListRow::WorktreeUncommitted { visible_ix, .. },
-            ) => visible_ix,
-            _ => 0,
+        if self.indexed.pending.is_some() && !self.scroll_interaction.borrow().dragging {
+            return;
+        }
+        self.prepare_window_for(
+            shown,
+            self.indexed.plan.clone(),
+            self.indexed.worktrees.clone(),
+            logical,
+            false,
+            cx,
+        );
+    }
+
+    fn cached_history_commit(&self, id: &CommitId) -> Option<&Commit> {
+        let (cache, window) = if let Some(window) = &self.indexed.window {
+            (&window.cache, Some(window))
+        } else {
+            (self.history_cache.as_ref()?, None)
         };
-        let first = to_commit(visible.start).min(shown.graph.projection.len());
-        let last = to_commit(visible.end.saturating_sub(1))
-            .saturating_add(1)
-            .min(shown.graph.projection.len());
+        let visible = *cache.base.visible_ix_by_commit.get(id)?;
+        if window.is_some_and(|window| !window.loaded.get(visible).copied().unwrap_or(false)) {
+            return None;
+        }
+        cache
+            .page
+            .commits
+            .get(cache.base.visible_indices.get(visible)?)
+    }
+
+    fn prepare_window_for(
+        &mut self,
+        shown: Arc<Presentation>,
+        plan: HistoryListPlan,
+        worktrees: Arc<Vec<WorktreeDirtySummary>>,
+        logical: super::scroll::LogicalViewport,
+        handoff: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let visible = logical.visible_range();
+        let (first, last) = window_commit_range(&shown, &plan, &logical);
         let screen = visible.len().max(1);
         let ahead = if logical.down { 2 } else { 1 };
         let behind = if logical.down { 1 } else { 2 };
@@ -537,8 +597,7 @@ impl HistoryView {
         let selection = if self.history_highlight_commit_chain
             && !repo.history_state.multi_selection.is_multi()
         {
-            match history_primary_selection(repo, self.indexed.plan.show_working_tree_summary_row())
-            {
+            match history_primary_selection(repo, plan.show_working_tree_summary_row()) {
                 Some(HistoryPrimarySelection::Commit(id)) => shown
                     .graph
                     .projection
@@ -549,9 +608,7 @@ impl HistoryView {
                     .as_ref()
                     .and_then(|head| shown.graph.projection.position(head))
                     .map(|row| (row, None)),
-                Some(HistoryPrimarySelection::Worktree(path)) => self
-                    .indexed
-                    .worktrees
+                Some(HistoryPrimarySelection::Worktree(path)) => worktrees
                     .iter()
                     .find(|summary| summary.path == path)
                     .and_then(|summary| {
@@ -578,11 +635,12 @@ impl HistoryView {
                 0
             },
         };
-        if self
-            .indexed
-            .window
-            .as_ref()
-            .is_some_and(|window| window.key == key)
+        if (!handoff
+            && self
+                .indexed
+                .window
+                .as_ref()
+                .is_some_and(|window| window.key == key))
             || self
                 .indexed
                 .window_building
@@ -591,6 +649,15 @@ impl HistoryView {
         {
             return;
         }
+        // Seed only this target window by immutable object ID. Missing objects
+        // remain placeholders; an existing visible commit never regresses to one.
+        let seed: std::collections::HashMap<_, _> = (start..end)
+            .filter_map(|row| {
+                let id = shown.graph.projection.commit_id(row)?;
+                let commit = self.cached_history_commit(&id)?.clone();
+                Some((id, commit))
+            })
+            .collect();
         let ranges = repo.history_state.indexed.ranges.clone();
         let range_snapshot = repo
             .history_state
@@ -631,18 +698,20 @@ impl HistoryView {
                         cancellation.check_cancelled()?;
                         let raw = shown.graph.projection.raw_position(row).unwrap();
                         let block = raw / HISTORY_BLOCK_SIZE * HISTORY_BLOCK_SIZE;
+                        let id = shown.graph.projection.index.commit_id(raw).unwrap();
                         let commit = (range_snapshot.as_ref() == Some(&snapshot))
                             .then(|| {
                                 ranges
                                     .get(&block)
                                     .and_then(|range| range.commits.get(raw - block))
                             })
-                            .flatten();
+                            .flatten()
+                            .or_else(|| seed.get(&id));
                         loaded.push(commit.is_some());
                         commits.push(commit.cloned().unwrap_or_else(|| Commit {
-                            id: shown.graph.projection.index.commit_id(raw).unwrap(),
+                            id,
                             parent_ids: Default::default(),
-                            summary: Arc::from("Loading history…"),
+                            summary: Arc::from(""),
                             author: Arc::from(""),
                             time: std::time::UNIX_EPOCH,
                         }));
@@ -693,7 +762,6 @@ impl HistoryView {
                                 .collect(),
                         ),
                         graph_rows: graph.rows,
-                        max_lanes: shown.graph.max_lanes,
                         row_vms,
                     };
                     let decorations = build_history_decoration_cache(
@@ -740,7 +808,15 @@ impl HistoryView {
                 }
                 this.indexed.window_building = None;
                 if let Ok(window) = result {
-                    this.indexed.window = Some(Rc::new(window));
+                    if handoff {
+                        if let Some(pending) = &mut this.indexed.pending
+                            && Arc::as_ptr(&pending.presentation) as usize == key.presentation
+                        {
+                            pending.window = Some(window);
+                        }
+                    } else {
+                        this.indexed.window = Some(Rc::new(window));
+                    }
                 }
                 cx.notify();
             });

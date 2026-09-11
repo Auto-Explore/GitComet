@@ -12,7 +12,6 @@ struct Checkpoint {
 
 pub(in crate::view) struct IndexedGraph {
     pub projection: HistoryProjection,
-    pub max_lanes: usize,
     checkpoints: Vec<Checkpoint>,
     branch_heads: FxHashSet<usize>,
     direct_labels: FxHashMap<usize, u16>,
@@ -125,7 +124,6 @@ impl IndexedGraph {
         };
         let mut graph = Self {
             projection,
-            max_lanes: 1,
             checkpoints: Vec::new(),
             branch_heads,
             direct_labels,
@@ -162,11 +160,6 @@ impl IndexedGraph {
                     });
                 }
             }
-
-            graph.max_lanes = graph
-                .max_lanes
-                .max(paint.lanes_now.len())
-                .max(paint.lanes_next.len());
         }
         cancellation.check_cancelled()?;
         Ok(graph)
@@ -509,10 +502,9 @@ mod benchmarks {
         let started = Instant::now();
         let graph = IndexedGraph::build(index, &[], &[], &[], None, None, &cancellation).unwrap();
         eprintln!(
-            "graph rows={count} seconds={:.3} checkpoints={} lanes={}",
+            "graph rows={count} seconds={:.3} checkpoints={}",
             started.elapsed().as_secs_f64(),
-            graph.checkpoints.len(),
-            graph.max_lanes
+            graph.checkpoints.len()
         );
         let mut samples = Vec::new();
         for ix in 0..100 {

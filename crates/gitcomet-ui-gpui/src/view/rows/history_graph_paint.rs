@@ -634,15 +634,13 @@ pub(super) fn paint_history_graph_band(
         }
     }
 
-    // A pushed-out node sits one column past the last lane. The auto width budgets
-    // exactly that column's worth of trailing margin, but it is clamped at
-    // `HISTORY_COL_GRAPH_MAX_PX` and the user can drag the column narrower still
-    // (`history_col_graph_auto == false`), and the graph cell is `overflow_hidden`
-    // -- past the edge the node and its connector are not clipped so much as
-    // deleted, leaving a band of bare lanes with nothing marking the changes.
-    // Holding it at the last position that fits keeps it on screen. It can only
-    // be pulled back onto a lane's column when the column is already too narrow
-    // to draw that lane either, so nothing legible is lost.
+    // A pushed-out node sits one column past the last lane. The graph column has
+    // a fixed, user-sized width and the cell is `overflow_hidden` -- past the
+    // edge the node and its connector are not clipped so much as deleted,
+    // leaving a band of bare lanes with nothing marking the changes. Holding it
+    // at the last position that fits keeps it on screen. It can only be pulled
+    // back onto a lane's column when the column is already too narrow to draw
+    // that lane either, so nothing legible is lost.
     let node_x_offset = band_node_x_offset(node.col, margin_x, col_gap, bounds.size.width);
 
     // The node sits on a column no lane runs through, so it reaches the commit
@@ -696,11 +694,10 @@ pub(super) fn paint_history_graph_band(
 
 /// Where a band's node is drawn, in pixels from the graph cell's left edge.
 ///
-/// Its natural place is `margin_x + col_gap * col`, which for the pushed-out case
-/// (`col == lanes.len()`) lands exactly on the trailing margin the auto width
-/// budgets for it. That budget is only honoured while the auto width applies and
-/// stays under its clamp, so the offset is held inside the cell here rather than
-/// trusted -- a node past the edge is invisible, and the cell clips rather than
+/// Its natural place is `margin_x + col_gap * col`, one column past the last
+/// lane in the pushed-out case (`col == lanes.len()`). The column's width is
+/// fixed rather than fitted to the lanes, so the offset is held inside the cell
+/// here -- a node past the edge is invisible, and the cell clips rather than
 /// overflows.
 fn band_node_x_offset(col: u16, margin_x: Pixels, col_gap: Pixels, width: Pixels) -> Pixels {
     clamp_x_into_cell(margin_x + col_gap * (f32::from(col)), margin_x, width)
@@ -1427,27 +1424,9 @@ mod tests {
     const COL_GAP: f32 = HISTORY_GRAPH_COL_GAP_PX;
     const HALF_ROW: f32 = 14.0;
 
-    /// The auto width is `MARGIN_X * 2 + COL_GAP * max_lanes`, and a pushed-out
-    /// node sits on column `max_lanes` -- exactly on the trailing margin. This
-    /// pins that arithmetic: if either constant moves, the node starts landing
-    /// outside the cell on every busiest row.
-    #[test]
-    fn a_pushed_out_node_fits_the_auto_sized_graph_column() {
-        let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
-        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
-        for max_lanes in 1u16..14 {
-            let width = margin * 2.0 + gap * f32::from(max_lanes);
-            assert_eq!(
-                band_node_x_offset(max_lanes, margin, gap, width),
-                margin + gap * f32::from(max_lanes),
-                "auto width for {max_lanes} lanes must leave the node its column"
-            );
-        }
-    }
-
-    /// Past the auto width's clamp -- or after the user drags the column narrower
-    /// -- the node's natural column is outside a cell that clips rather than
-    /// overflows, so it would not be drawn at all. It has to come back inside.
+    /// In a column narrower than the graph, the node's natural column is outside
+    /// a cell that clips rather than overflows, so it would not be drawn at all.
+    /// It has to come back inside.
     #[test]
     fn a_pushed_out_node_stays_inside_a_column_too_narrow_for_it() {
         let margin = px(HISTORY_GRAPH_MARGIN_X_PX);

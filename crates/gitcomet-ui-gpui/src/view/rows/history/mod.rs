@@ -30,6 +30,7 @@ impl HistoryView {
         range: Range<usize>,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        this.sync_history_loading_rows(range.clone(), cx);
         let (_, worktree_counts) = this.ensure_history_worktree_summary_cache();
         let indexed = this.indexed.presentation.is_some();
         let indexed_window = this.indexed.window.clone();
@@ -290,19 +291,30 @@ impl HistoryView {
         });
         let repo_id = shown.key.repo_id;
         let snapshot = shown.graph.projection.index.snapshot.clone();
+        if !failed {
+            return if self
+                .loading
+                .skeleton_visible(list_ix, cx.background_executor().now())
+            {
+                self.history_skeleton_row(list_ix).into_any_element()
+            } else {
+                div()
+                    .id(("history_loading", list_ix))
+                    .h(height)
+                    .w_full()
+                    .into_any_element()
+            };
+        }
         div()
             .id(("history_loading", list_ix))
+            .debug_selector(move || format!("history_loading_error_{list_ix}"))
             .h(height)
             .w_full()
             .flex()
             .items_center()
             .px_3()
             .text_color(self.theme.colors.foreground.secondary)
-            .child(if failed {
-                "Could not load commits. Click to retry."
-            } else {
-                "Loading history…"
-            })
+            .child("Could not load commits. Click to retry.")
             .when(failed, |row| {
                 row.cursor_pointer().on_mouse_down(
                     MouseButton::Left,
@@ -311,6 +323,56 @@ impl HistoryView {
                     }),
                 )
             })
+            .into_any_element()
+    }
+
+    pub(in crate::view) fn history_skeleton_row(&self, list_ix: usize) -> AnyElement {
+        let scale = self.ui_scale();
+        let (graph, author, date, sha) = self.history_visible_columns();
+        let pad = scale.px(HISTORY_COL_HANDLE_PX / 2.0);
+        let message_pad = scale.px(history_message_text_left_px(
+            self.active_repo().is_some_and(|repo| {
+                history_scope_shows_graph_color_marker(repo.history_state.history_scope)
+            }),
+        ));
+        let bar = |width: Pixels| {
+            components::skeleton(self.theme)
+                .h(scale.px(8.0))
+                .w(width)
+                .max_w_full()
+        };
+        let cell = |width: Pixels, content_width: f32| {
+            div()
+                .w(width)
+                .flex_none()
+                .px(pad)
+                .overflow_hidden()
+                .child(bar(scale.px(content_width)))
+        };
+        div()
+            .id(("history_skeleton", list_ix))
+            .debug_selector(move || format!("history_skeleton_{list_ix}"))
+            .h(history_row_height(scale))
+            .w_full()
+            .flex()
+            .items_center()
+            .px_2()
+            .child(div().w(self.history_col_branch).flex_none())
+            .when(graph, |row| {
+                row.child(div().w(self.history_col_graph).flex_none())
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .pl(message_pad)
+                    .pr(pad)
+                    .overflow_hidden()
+                    .child(bar(scale.px(220.0))),
+            )
+            .when(author, |row| row.child(cell(self.history_col_author, 80.0)))
+            .when(date, |row| row.child(cell(self.history_col_date, 64.0)))
+            .when(sha, |row| row.child(cell(self.history_col_sha, 48.0)))
             .into_any_element()
     }
 }
