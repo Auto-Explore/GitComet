@@ -1020,7 +1020,7 @@ impl DetailsPaneView {
         self.commit_details_sha_input.update(cx, |input, cx| {
             input.set_highlights(commit_sha_field_highlights(sha, theme), cx);
         });
-        // A commit's own SHA has nowhere to navigate to.
+        // A commit's own SHA has nothing to reveal.
         let sha_links = commit_sha_field_links(sha, interactive, false);
         self.commit_details_sha_link_menu.update(cx, |menu, cx| {
             menu.sync(

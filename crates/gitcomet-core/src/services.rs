@@ -596,6 +596,19 @@ pub trait GitRepository: Send + Sync {
             "signature verification is not implemented for this backend",
         )))
     }
+    /// Resolve a possibly abbreviated reference — or any revspec git accepts,
+    /// such as a branch, tag, or `HEAD~3` — to the commit it names.
+    ///
+    /// Deliberately lighter than [`GitRepository::commit_details`], which also
+    /// diffs the commit against its parent: this is meant to run per keystroke
+    /// behind the Reveal Commit dialog. The returned [`Commit::id`] is the full
+    /// oid, *not* the spec that was passed in, so callers can hand it straight
+    /// to code that compares against loaded log rows.
+    fn resolve_commit(&self, _reference: &CommitId) -> Result<Commit> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "commit reference resolution is not implemented for this backend",
+        )))
+    }
     /// Files that differ between two points (`from` → `to`), for the
     /// compare-selected-commits feature. `from` is the base/older side, so the
     /// result reads as "what `to` adds/removes relative to `from`". `to = None`

@@ -598,6 +598,10 @@ impl GitRepository for GixRepo {
         self.verify_commit_signatures_impl(ids)
     }
 
+    fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {
+        self.resolve_commit_impl(reference)
+    }
+
     fn diff_range_files(
         &self,
         from: &CommitId,

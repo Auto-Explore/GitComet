@@ -101,6 +101,25 @@ pub(in crate::view) fn pull_request(repo: &RepoState) -> PullRequest {
     PullRequest::Pull
 }
 
+/// Whether the repository is part-way through a merge.
+pub(in crate::view) fn merge_in_progress(repo: &RepoState) -> bool {
+    matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
+}
+
+/// The rebase, apply, or cherry-pick the repository is part-way through, if
+/// any. `rebase_in_progress` stands in until the sequencer state loads.
+pub(in crate::view) fn active_sequencer_state(
+    repo: &RepoState,
+) -> gitcomet_core::services::SequencerState {
+    match repo.sequencer_state {
+        Loadable::Ready(state) => state,
+        _ if matches!(&repo.rebase_in_progress, Loadable::Ready(true)) => {
+            gitcomet_core::services::SequencerState::RebaseOrApply
+        }
+        _ => gitcomet_core::services::SequencerState::None,
+    }
+}
+
 /// Decide whether an interactive Push can run immediately or first needs the
 /// existing set-upstream prompt. A configured upstream can name a branch that
 /// has not been pushed yet; that still gives Push an exact destination.
@@ -921,6 +940,10 @@ pub struct GitCometView {
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) command_palette: Entity<super::command_palette::CommandPaletteView>,
     pub(super) command_palette_open: bool,
+    pub(super) reveal_commit_dialog: Entity<super::reveal_commit::RevealCommitView>,
+    pub(super) reveal_commit_open: bool,
+    /// Focus to hand back when an overlay opened from a background window
+    /// closes. Shared by the command palette and the Reveal Commit dialog.
     pub(super) pre_palette_focus: Option<FocusHandle>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,

@@ -1037,6 +1037,36 @@ pub struct HistoryState {
     /// plan is transiently invalid (e.g. HEAD momentarily unresolved during a
     /// concurrent reload), as long as the range still matches what was asked.
     pub squash_preview_pending: Option<(CommitId, CommitId)>,
+    /// The Reveal Commit dialog's current reference lookup. Preview only: it
+    /// never selects anything, so typing in the dialog cannot move the main
+    /// view the way `reveal_target` does.
+    ///
+    /// Carries no `_rev` counterpart because no pane fingerprints it: the
+    /// dialog is its own entity and repaints itself when this changes.
+    pub commit_lookup: CommitLookup,
+}
+
+/// A resolved-or-failed answer to "what commit does this reference name?".
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitLookup {
+    /// Monotonic id of the newest issued lookup. A reply carrying an older id
+    /// is dropped, so an out-of-order completion cannot overwrite a newer
+    /// answer — the same guard `range_files_request` uses.
+    pub request: u64,
+    /// The reference `result` answers, so a caller can tell whether the answer
+    /// is about what the user has typed *now*.
+    pub reference: Option<CommitId>,
+    pub result: Loadable<Commit>,
+}
+
+impl Default for CommitLookup {
+    fn default() -> Self {
+        Self {
+            request: 0,
+            reference: None,
+            result: Loadable::NotLoaded,
+        }
+    }
 }
 
 impl Default for HistoryState {
@@ -1075,6 +1105,7 @@ impl Default for HistoryState {
             squash_preview: Loadable::NotLoaded,
             squash_preview_rev: 0,
             squash_preview_pending: None,
+            commit_lookup: CommitLookup::default(),
         }
     }
 }
@@ -2273,6 +2304,24 @@ impl RepoState {
 
     pub(crate) fn set_reveal_target(&mut self, v: Option<CommitId>) {
         self.history_state.reveal_target = v;
+    }
+
+    /// Start a new Reveal Commit lookup, returning the request id the reply has
+    /// to carry to be accepted.
+    pub(crate) fn begin_commit_lookup(&mut self, reference: CommitId) -> u64 {
+        let lookup = &mut self.history_state.commit_lookup;
+        lookup.request = lookup.request.wrapping_add(1);
+        lookup.reference = Some(reference);
+        lookup.result = Loadable::Loading;
+        lookup.request
+    }
+
+    /// Record a lookup reply, ignoring one that a newer lookup has overtaken.
+    pub(crate) fn finish_commit_lookup(&mut self, request: u64, result: Loadable<Commit>) {
+        if self.history_state.commit_lookup.request != request {
+            return;
+        }
+        self.history_state.commit_lookup.result = result;
     }
 
     /// Selecting a worktree row takes the details pane over, so the commit

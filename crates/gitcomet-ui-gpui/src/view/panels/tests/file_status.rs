@@ -2153,10 +2153,10 @@ fn commit_details_message_sha_click_menu_navigate_reveals_referenced_commit(
         "clicking a commit id should open its menu, got {popover:?}"
     );
 
-    let navigate_bounds = cx
-        .debug_bounds("context_menu_navigate")
-        .expect("expected navigate entry");
-    simulate_counted_click(cx, navigate_bounds.center(), 1);
+    let reveal_bounds = cx
+        .debug_bounds("context_menu_reveal_commit")
+        .expect("expected reveal commit entry");
+    simulate_counted_click(cx, reveal_bounds.center(), 1);
     cx.run_until_parked();
     cx.update(|window, app| {
         view.update(app, |this, cx| {
@@ -2630,10 +2630,10 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
         "clicking the parent id should open its menu, got {popover:?}"
     );
 
-    let navigate_bounds = cx
-        .debug_bounds("context_menu_navigate")
-        .expect("expected parent navigate entry");
-    simulate_counted_click(cx, navigate_bounds.center(), 1);
+    let reveal_bounds = cx
+        .debug_bounds("context_menu_reveal_commit")
+        .expect("expected parent reveal commit entry");
+    simulate_counted_click(cx, reveal_bounds.center(), 1);
     cx.run_until_parked();
     cx.update(|window, app| {
         view.update(app, |this, cx| {
