@@ -582,6 +582,43 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    /// Verifies the signatures of `ids`, returning an entry only for commits
+    /// that earn a badge. Unsigned commits, and signatures that cannot be
+    /// checked because the key is missing, are simply omitted.
+    ///
+    /// Batched on purpose: verification shells out to `git`, and one process per
+    /// commit costs roughly ten times a single batched call.
+    fn verify_commit_signatures(
+        &self,
+        _ids: &[CommitId],
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "signature verification is not implemented for this backend",
+        )))
+    }
+    fn verify_commit_signatures_cancellable(
+        &self,
+        ids: &[CommitId],
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        cancellation.check_cancelled()?;
+        let result = self.verify_commit_signatures(ids)?;
+        cancellation.check_cancelled()?;
+        Ok(result)
+    }
+    /// Resolve a possibly abbreviated reference — or any revspec git accepts,
+    /// such as a branch, tag, or `HEAD~3` — to the commit it names.
+    ///
+    /// Deliberately lighter than [`GitRepository::commit_details`], which also
+    /// diffs the commit against its parent: this is meant to run per keystroke
+    /// behind the Reveal Commit dialog. The returned [`Commit::id`] is the full
+    /// oid, *not* the spec that was passed in, so callers can hand it straight
+    /// to code that compares against loaded log rows.
+    fn resolve_commit(&self, _reference: &CommitId) -> Result<Commit> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "commit reference resolution is not implemented for this backend",
+        )))
+    }
     /// Files that differ between two points (`from` → `to`), for the
     /// compare-selected-commits feature. `from` is the base/older side, so the
     /// result reads as "what `to` adds/removes relative to `from`". `to = None`
@@ -596,6 +633,37 @@ pub trait GitRepository: Send + Sync {
             "range file listing is not implemented for this backend",
         )))
     }
+    /// Added/removed line counts for every uncommitted change, both lanes.
+    ///
+    /// Separate from `status`, which decides most entries from stat data alone
+    /// and never reads content. Counting reads both sides of every changed
+    /// file, so keeping them apart leaves status latency untouched.
+    fn uncommitted_line_stats(&self) -> Result<UncommittedLineStats> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "uncommitted line stats are not implemented for this backend",
+        )))
+    }
+    /// Cancellable [`Self::uncommitted_line_stats`]. It reads every changed
+    /// file, so on a large dirty tree it is the load most worth interrupting.
+    fn uncommitted_line_stats_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<UncommittedLineStats> {
+        cancellation.check_cancelled()?;
+        let stats = self.uncommitted_line_stats()?;
+        cancellation.check_cancelled()?;
+        Ok(stats)
+    }
+    /// Count the files from a status snapshot the caller just collected, avoiding
+    /// another worktree traversal. Contents are read at call time, as with status.
+    fn uncommitted_line_stats_for_status_cancellable(
+        &self,
+        _status: &RepoStatus,
+        cancellation: &CancellationToken,
+    ) -> Result<UncommittedLineStats> {
+        self.uncommitted_line_stats_cancellable(cancellation)
+    }
+
     /// Full `%B` messages of the given commits, in input order. Message-only
     /// on purpose: callers like the cherry-pick editor need nothing else, and
     /// implementations should skip the per-commit tree diff `commit_details`
@@ -1075,6 +1143,23 @@ pub trait GitRepository: Send + Sync {
     fn fetch_all(&self) -> Result<()>;
     fn pull(&self, mode: PullMode) -> Result<()>;
     fn push(&self) -> Result<()>;
+
+    fn push_with_tags(&self, _request: &crate::tag_push::TagPushRequest) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pushing with tags is not implemented for this backend",
+        )))
+    }
+
+    fn preview_tag_push(
+        &self,
+        _request: &crate::tag_push::TagPushRequest,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::tag_push::TagPushPreview> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "tag push preview is not implemented for this backend",
+        )))
+    }
+
     fn push_force(&self) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "force push is not implemented for this backend",

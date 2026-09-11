@@ -9,6 +9,20 @@ use super::CONTROL_HEIGHT_PX;
 #[cfg(test)]
 use gpui::IntoElement;
 
+/// A pane's header bar: standard height for the density, raised surface, and
+/// the rule under it.
+pub fn content_header_bar(theme: AppTheme, ui_scale: impl Into<crate::ui_scale::UiScale>) -> Div {
+    let ui_scale = ui_scale.into().with_appearance(theme.metrics);
+    div()
+        .flex()
+        .items_center()
+        .h(super::content_header_height(ui_scale))
+        .px_2()
+        .bg(theme.colors.surface.raised)
+        .border_b_1()
+        .border_color(theme.colors.stroke.default)
+}
+
 #[cfg(test)]
 pub fn panel(
     theme: AppTheme,
@@ -27,12 +41,17 @@ pub fn panel(
         .border_b_1()
         .border_color(theme.colors.stroke.default)
         .bg(theme.colors.surface.raised)
-        .child(div().text_sm().font_weight(FontWeight::BOLD).child(title));
+        .child(
+            div()
+                .text_size(theme.ui_text(14.0))
+                .font_weight(FontWeight::BOLD)
+                .child(title),
+        );
 
     if let Some(subtitle) = subtitle {
         header = header.child(
             div()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(subtitle),
         );
@@ -66,7 +85,7 @@ pub fn pill(theme: AppTheme, label: impl Into<SharedString>, bg: gpui::Rgba) -> 
         .py_1()
         .rounded(px(theme.radii.pill))
         .bg(bg)
-        .text_xs()
+        .text_size(theme.ui_text(12.0))
         .text_color(theme.colors.foreground.primary)
         .child(label.into())
 }
@@ -83,7 +102,7 @@ pub fn empty_state_message(theme: AppTheme, message: impl Into<SharedString>) ->
         .py_4()
         .child(
             div()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(message.into()),
         )
@@ -104,14 +123,14 @@ pub fn empty_state(
         .py_4()
         .child(
             div()
-                .text_lg()
+                .text_size(theme.ui_text(18.0))
                 .font_weight(FontWeight::BOLD)
                 .text_color(theme.colors.foreground.primary)
                 .child(title.into()),
         )
         .child(
             div()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(message.into()),
         )
@@ -200,7 +219,7 @@ pub fn split_columns_header(
         ))
         .flex()
         .items_center()
-        .text_xs()
+        .text_size(theme.ui_text(12.0))
         .text_color(theme.colors.foreground.secondary)
         .child(div().flex_1().min_w(px(0.0)).px_2().child(left.into()))
         .child(div().flex_1().min_w(px(0.0)).px_2().child(right.into()))

@@ -10,7 +10,7 @@ mod util;
 
 use crate::model::{
     AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, BranchExistsPromptOperation,
-    PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
+    Loadable, PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
     SubmoduleTrustCheckState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
 use crate::msg::{
@@ -197,7 +197,9 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadConflictFile { .. }
             | Msg::LoadReflog { .. }
             | Msg::LoadRecentCommitMessages { .. }
+            | Msg::PreviewTagPush { .. }
             | Msg::LoadHoverCommitMessage { .. }
+            | Msg::ResolveCommitLookup { .. }
             | Msg::LoadFileHistory { .. }
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
@@ -263,6 +265,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::PullBranch { .. }
             | Msg::MergeRef { .. }
             | Msg::SquashRef { .. }
+            | Msg::PushWithTags { .. }
             | Msg::Push { .. }
             | Msg::PushAfterCommit { .. }
             | Msg::ForcePush { .. }
@@ -449,6 +452,7 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::MergeRef { reference } => Msg::MergeRef { repo_id, reference },
         RepoCommandKind::SquashRef { reference } => Msg::SquashRef { repo_id, reference },
         RepoCommandKind::Push => Msg::Push { repo_id },
+        RepoCommandKind::PushWithTags { request } => Msg::PushWithTags { repo_id, request },
         RepoCommandKind::PushAfterCommit {
             target,
             set_upstream,
@@ -654,6 +658,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::FetchAll { auth: slot, .. }
         | Effect::Pull { auth: slot, .. }
         | Effect::PullBranch { auth: slot, .. }
+        | Effect::PushWithTags { auth: slot, .. }
         | Effect::Push { auth: slot, .. }
         | Effect::PushAfterCommit { auth: slot, .. }
         | Effect::ForcePush { auth: slot, .. }
@@ -1095,10 +1100,32 @@ fn reduce_inner(
         Msg::SetGitLogSettings {
             show_history_tags,
             tag_fetch_mode,
+            verify_commit_signatures,
         } => {
             state.git_log_settings.show_history_tags = show_history_tags;
             state.git_log_settings.tag_fetch_mode = tag_fetch_mode;
-            Vec::new()
+            let verification_toggled =
+                state.git_log_settings.verify_commit_signatures != verify_commit_signatures;
+            state.git_log_settings.verify_commit_signatures = verify_commit_signatures;
+            if !verification_toggled {
+                return Vec::new();
+            }
+            if !verify_commit_signatures {
+                // Drop the verdicts so every badge clears on the next paint.
+                for repo_state in state.repos.iter_mut() {
+                    repo_state.clear_commit_signatures();
+                }
+                return Vec::new();
+            }
+            // Turning it back on re-checks what is already loaded, so badges
+            // appear without waiting for the next log reload.
+            let mut effects = Vec::new();
+            for repo_state in state.repos.iter_mut() {
+                effects.extend(util::reverify_loaded_commit_signatures_effect(
+                    true, repo_state,
+                ));
+            }
+            effects
         }
         Msg::SetRemoteSettings(settings) => {
             state.remote_settings = settings;
@@ -1445,6 +1472,9 @@ fn reduce_inner(
             effects::reveal_commit(state, repo_id, reference)
         }
         Msg::FinishCommitReveal { repo_id } => effects::finish_commit_reveal(state, repo_id),
+        Msg::ResolveCommitLookup { repo_id, reference } => {
+            effects::resolve_commit_lookup(state, repo_id, reference)
+        }
         Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
         Msg::ViewerNavBack { repo_id } => {
             diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
@@ -1964,6 +1994,56 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             actions_emit_effects::squash_ref(repo_id, reference)
         }
+        Msg::PushWithTags { repo_id, request } => {
+            actions_emit_effects::push_with_tags(repos, state, repo_id, request)
+        }
+        Msg::PreviewTagPush {
+            repo_id,
+            request,
+            cancellation,
+        } => {
+            let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+                return vec![];
+            };
+            let slot = &mut repo.tag_push_previews[request.mode.index()];
+            let generation = slot.as_ref().map_or(1, |previous| {
+                previous.cancellation.cancel();
+                previous.generation.wrapping_add(1)
+            });
+            *slot = Some(crate::model::TagPushPreviewState {
+                request: request.clone(),
+                generation,
+                cancellation: cancellation.clone(),
+                result: Loadable::Loading,
+            });
+            vec![Effect::PreviewTagPush {
+                repo_id,
+                request,
+                generation,
+                cancellation,
+            }]
+        }
+        Msg::Internal(crate::msg::InternalMsg::TagPushPreviewLoaded {
+            repo_id,
+            mode,
+            generation,
+            result,
+        }) => {
+            if let Some(slot) = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.tag_push_previews[mode.index()].as_mut())
+                && slot.generation == generation
+                && !slot.cancellation.is_cancelled()
+            {
+                slot.result = match result {
+                    Ok(preview) => Loadable::Ready(Arc::new(preview)),
+                    Err(error) => Loadable::Error(error.to_string()),
+                };
+            }
+            vec![]
+        }
         Msg::Push { repo_id } => actions_emit_effects::push(repos, state, repo_id),
         Msg::PushAfterCommit {
             repo_id,
@@ -2373,6 +2453,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded { repo_id, result }) => {
             effects::staged_status_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded { repo_id, result }) => {
+            effects::uncommitted_line_stats_loaded(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
             effects::status_loaded(state, repo_id, result)
         }
@@ -2589,11 +2672,22 @@ fn reduce_inner(
             commit_id,
             result,
         }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
+        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+            repo_id,
+            epoch,
+            result,
+        }) => effects::commit_signatures_verified(state, repo_id, epoch, result),
         Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
             repo_id,
             reference,
             result,
         }) => effects::commit_reveal_resolved(state, repo_id, reference, result),
+        Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
+            repo_id,
+            reference,
+            request,
+            result,
+        }) => effects::commit_lookup_resolved(state, repo_id, reference, request, result),
         Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
             repo_id,
             from,

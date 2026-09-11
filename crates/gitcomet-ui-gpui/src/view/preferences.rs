@@ -14,6 +14,7 @@ pub(super) struct WindowPreferences {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct AppearancePreferences {
+    pub(super) metrics: crate::appearance::Appearance,
     pub(super) theme_mode: ThemeMode,
     pub(super) ui_scale_percent: u32,
     pub(super) date_time_format: DateTimeFormat,
@@ -24,6 +25,7 @@ pub(super) struct AppearancePreferences {
 impl Default for AppearancePreferences {
     fn default() -> Self {
         Self {
+            metrics: crate::appearance::Appearance::default(),
             theme_mode: ThemeMode::default(),
             ui_scale_percent: 100,
             date_time_format: DateTimeFormat::YmdHm,
@@ -38,6 +40,13 @@ pub(super) struct ChangeTrackingPreferences {
     pub(super) view: ChangeTrackingView,
     pub(super) height: Option<u32>,
     pub(super) untracked_height: Option<u32>,
+}
+
+/// Defaults for every changed-file list. Kept out of
+/// [`ChangeTrackingPreferences`], which is about untracked grouping alone.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct FileListPreferences {
+    pub(super) layout: FileListLayout,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -158,6 +167,7 @@ pub(super) struct HistoryPreferences {
     /// The Files tab browses whichever history row is selected.
     pub(super) files_follow_selected_commit: bool,
     pub(super) show_tags: bool,
+    pub(super) verify_commit_signatures: bool,
     pub(super) tag_fetch_mode: GitLogTagFetchMode,
     pub(super) default_mode: HistoryMode,
 }
@@ -173,6 +183,7 @@ impl Default for HistoryPreferences {
             highlight_commit_chain: true,
             files_follow_selected_commit: true,
             show_tags: true,
+            verify_commit_signatures: true,
             tag_fetch_mode: GitLogTagFetchMode::default(),
             default_mode: HistoryMode::default(),
         }
@@ -213,6 +224,7 @@ pub(super) struct UiPreferences {
     pub(super) window: WindowPreferences,
     pub(super) appearance: AppearancePreferences,
     pub(super) change_tracking: ChangeTrackingPreferences,
+    pub(super) file_lists: FileListPreferences,
     pub(super) diff: DiffPreferences,
     pub(super) security: SecurityPreferences,
     pub(super) merge_tool: MergeToolPreferences,
@@ -234,6 +246,7 @@ impl UiPreferences {
                 sidebar_collapsed: session.sidebar_collapsed.unwrap_or(false),
             },
             appearance: AppearancePreferences {
+                metrics: crate::appearance::Appearance::from_session(session),
                 theme_mode: session
                     .theme_mode
                     .as_deref()
@@ -260,6 +273,13 @@ impl UiPreferences {
                     .unwrap_or_default(),
                 height: session.change_tracking_height,
                 untracked_height: session.untracked_height,
+            },
+            file_lists: FileListPreferences {
+                layout: session
+                    .file_list_layout
+                    .as_deref()
+                    .and_then(FileListLayout::from_key)
+                    .unwrap_or_default(),
             },
             diff: DiffPreferences {
                 scroll_sync: session
@@ -320,6 +340,7 @@ impl UiPreferences {
                     .file_browser_follow_selected_commit
                     .unwrap_or(true),
                 show_tags: session.history_show_tags.unwrap_or(true),
+                verify_commit_signatures: session.history_verify_commit_signatures.unwrap_or(true),
                 tag_fetch_mode: session.history_tag_fetch_mode.unwrap_or_default(),
                 default_mode: session.default_history_mode.unwrap_or_default(),
             },

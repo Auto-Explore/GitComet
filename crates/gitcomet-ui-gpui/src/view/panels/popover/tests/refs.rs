@@ -246,7 +246,7 @@ fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) 
 }
 
 #[gpui::test]
-fn tag_ref_menu_scopes_actions_to_clicked_tag(cx: &mut gpui::TestAppContext) {
+fn combined_ref_menu_scopes_actions_to_expanded_tag(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -308,11 +308,11 @@ fn tag_ref_menu_scopes_actions_to_clicked_tag(cx: &mut gpui::TestAppContext) {
         let model = view
             .update(app, |this, cx| {
                 this.popover_host.update(cx, |host, cx| {
+                    host.expanded_history_ref = Some(HistoryMenuRef::Tag("release".into()));
                     host.context_menu_model(
-                        &PopoverKind::TagRefMenu {
+                        &PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
-                            name: "release".to_string(),
                         },
                         cx,
                     )
@@ -334,8 +334,11 @@ fn tag_ref_menu_scopes_actions_to_clicked_tag(cx: &mut gpui::TestAppContext) {
         assert!(labels.contains(&"Push tag release to upstream".to_string()));
         assert!(labels.contains(&"Delete tag release from origin".to_string()));
         assert!(
-            labels.iter().all(|label| !label.contains("v1.0.0")),
-            "single tag menu should exclude sibling tags on the same commit"
+            labels
+                .iter()
+                .filter(|label| label.contains("v1.0.0"))
+                .all(|label| label == "Tag v1.0.0"),
+            "sibling groups remain visible, with only the chosen tag's actions expanded"
         );
     });
 }
@@ -377,10 +380,9 @@ fn tag_ref_menu_requests_remote_tags_when_not_loaded(cx: &mut gpui::TestAppConte
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::TagRefMenu {
+                    PopoverKind::CommitMenu {
                         repo_id,
                         commit_id: commit_id.clone(),
-                        name: "release".to_string(),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -390,7 +392,7 @@ fn tag_ref_menu_requests_remote_tags_when_not_loaded(cx: &mut gpui::TestAppConte
         });
     });
 
-    wait_until("TagRefMenu to request remote tags", || {
+    wait_until("CommitMenu to request remote tags", || {
         store
             .snapshot()
             .repos

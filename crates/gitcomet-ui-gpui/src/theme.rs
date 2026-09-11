@@ -34,6 +34,8 @@ static EMBEDDED_THEME_CACHE: OnceLock<FxHashMap<String, RuntimeThemeSpec>> = Onc
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AppTheme {
+    /// Resolved application typography and density; not part of a theme file.
+    pub(crate) metrics: crate::appearance::Appearance,
     pub is_dark: bool,
     pub colors: Colors,
     pub syntax: SyntaxColors,
@@ -365,6 +367,33 @@ fn default_radius_window() -> f32 {
 }
 
 impl AppTheme {
+    pub(crate) fn with_appearance(mut self, metrics: crate::appearance::Appearance) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    pub(crate) fn editor_row_height(self, scale_percent: u32) -> gpui::Pixels {
+        crate::ui_scale::design_px_from_percent(self.metrics.editor_line_height(), scale_percent)
+    }
+
+    pub(crate) fn editor_font_size(self, scale_percent: u32) -> gpui::Pixels {
+        crate::ui_scale::design_px_from_percent(
+            self.metrics.editor_font_size_px as f32,
+            scale_percent,
+        )
+    }
+
+    pub(crate) fn markdown_px(self, value: f32, scale_percent: u32) -> gpui::Pixels {
+        crate::ui_scale::design_px_from_percent(
+            value * self.metrics.markdown_preview_font_size_px as f32 / 13.0,
+            scale_percent,
+        )
+    }
+
+    pub(crate) fn ui_text(self, pixels: f32) -> gpui::Rems {
+        gpui::rems(self.metrics.ui_text(pixels) / 16.0)
+    }
+
     /// Canonical translucent background for hovered standard controls.
     pub fn hover_overlay(&self) -> Rgba {
         self.colors.interaction.hover_overlay
@@ -1028,6 +1057,7 @@ impl From<ThemeFile> for AppTheme {
         let syntax = resolve_syntax_colors(is_dark, &colors, syntax.as_ref());
 
         Self {
+            metrics: crate::appearance::Appearance::default(),
             is_dark,
             colors,
             syntax,
@@ -3614,5 +3644,58 @@ mod tests {
                 "README.md theme section should mention `{snippet}`"
             );
         }
+    }
+
+    /// A theme built here carries the default `Appearance`, so any render path
+    /// that constructs one silently sizes itself for a 13px editor font and a
+    /// Compact density. Rendering code must take the caller's theme.
+    #[test]
+    fn render_code_never_builds_its_own_theme() {
+        fn walk(dir: &std::path::Path, offenders: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).expect("read src") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    if path
+                        .file_name()
+                        .is_some_and(|name| name == "tests" || name == "benchmarks")
+                    {
+                        continue;
+                    }
+                    walk(&path, offenders);
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if !name.ends_with(".rs")
+                    || name.ends_with("tests.rs")
+                    || name == "theme.rs"
+                    || name == "smoke_tests.rs"
+                {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).expect("read source");
+                let production = match source.find("#[cfg(test)]") {
+                    Some(cut) => &source[..cut],
+                    None => &source[..],
+                };
+                for (ix, line) in production.lines().enumerate() {
+                    if line.contains("AppTheme::gitcomet_") {
+                        offenders.push(format!("{}:{}", path.display(), ix + 1));
+                    }
+                }
+            }
+        }
+
+        let mut offenders = Vec::new();
+        walk(std::path::Path::new("src"), &mut offenders);
+        offenders.retain(|site| !site.contains("kit/text_input/editing.rs"));
+
+        assert!(
+            offenders.is_empty(),
+            "these must take the theme they are handed: {offenders:?}"
+        );
     }
 }

@@ -43,12 +43,14 @@ pub(super) fn panel(
         )
         .render(
             theme,
-            dialog_cancel_button(
+            cancel_button(
                 "stage_conflict_markers_cancel",
                 "stage_conflict_markers_cancel_hint",
                 theme,
-                cx,
-            ),
+            )
+            .on_click(theme, cx, |this, _event, window, cx| {
+                this.close_popover_and_restore_focus(window, cx);
+            }),
             components::Button::new("stage_conflict_markers_go", "Stage anyway")
                 .style(components::ButtonStyle::Danger)
                 .on_click(theme, cx, move |this, _e, _w, cx| {

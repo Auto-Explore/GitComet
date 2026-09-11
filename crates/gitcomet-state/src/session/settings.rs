@@ -11,6 +11,10 @@ pub struct UiSettings {
     pub repo_sidebar_pinned_branches: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
+    pub ui_density: Option<String>,
+    pub ui_font_size_px: Option<u32>,
+    pub editor_font_size_px: Option<u32>,
+    pub markdown_preview_font_size_px: Option<u32>,
     pub ui_font_family: Option<String>,
     pub editor_font_family: Option<String>,
     pub use_font_ligatures: Option<bool>,
@@ -18,6 +22,7 @@ pub struct UiSettings {
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
+    pub file_list_layout: Option<String>,
     pub repo_picker_sort: Option<String>,
     /// Whole replacement set — the repository picker owns it and always writes
     /// every collapsed section it knows about.
@@ -50,6 +55,7 @@ pub struct UiSettings {
     pub terminal_external_args: Option<Vec<String>>,
     pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
+    pub history_verify_commit_signatures: Option<bool>,
     pub history_relative_dates: Option<bool>,
     pub history_highlight_commit_chain: Option<bool>,
     pub file_browser_follow_selected_commit: Option<bool>,
@@ -99,6 +105,10 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         apply_setting!(settings, file, theme_mode);
         apply_setting!(settings, file, ui_scale_percent);
+        apply_setting!(settings, file, ui_density);
+        apply_setting!(settings, file, ui_font_size_px);
+        apply_setting!(settings, file, editor_font_size_px);
+        apply_setting!(settings, file, markdown_preview_font_size_px);
         apply_setting!(settings, file, ui_font_family);
         apply_setting!(settings, file, editor_font_family);
         apply_setting!(settings, file, use_font_ligatures);
@@ -106,6 +116,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, timezone);
         apply_setting!(settings, file, show_timezone);
         apply_setting!(settings, file, change_tracking_view);
+        apply_setting!(settings, file, file_list_layout);
         apply_setting!(settings, file, repo_picker_sort);
         // Owned by the repository picker (`repo_picker::persist_collapsed_sections`).
         apply_setting!(settings, file, repo_picker_collapsed_sections);
@@ -144,6 +155,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         apply_setting!(settings, file, terminal_action_bar_target);
         apply_setting!(settings, file, history_show_tags);
+        apply_setting!(settings, file, history_verify_commit_signatures);
         apply_setting!(settings, file, history_highlight_commit_chain);
         apply_setting!(settings, file, file_browser_follow_selected_commit);
         apply_setting!(settings, file, history_relative_dates);

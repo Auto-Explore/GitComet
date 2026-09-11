@@ -210,6 +210,7 @@ fn dirty(path: &str, head: &str) -> WorktreeDirtySummary {
         deleted: 0,
         staged: Vec::new(),
         unstaged: Vec::new(),
+        line_stats: Default::default(),
     }
 }
 

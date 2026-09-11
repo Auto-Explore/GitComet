@@ -835,7 +835,7 @@ impl SidebarPaneView {
             } else {
                 (
                     scroll.bounds().origin,
-                    ui_scale::UiScale::current(cx).px(FILE_BROWSER_ROW_HEIGHT_PX),
+                    ui_scale::UiScale::current(cx).px(sidebar_list_row_height_px(self.theme)),
                 )
             };
         if height <= px(0.0) {

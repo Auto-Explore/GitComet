@@ -48,6 +48,7 @@ mod submodule_change_pointer_prompt;
 mod submodule_picker;
 mod submodule_remove_confirm;
 mod submodule_trust_confirm;
+mod tag_push;
 mod terminal_shutdown_confirm;
 mod unsaved_file_edits_confirm;
 mod upstream_picker;
@@ -102,6 +103,10 @@ impl PopoverWidthSpec {
 
 const DEFAULT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 180.0, 380.0);
 const NARROW_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 220.0);
+/// The sort menu's labels name both what is ordered and which way ("File type:
+/// Descending"), which is wider than `NARROW` leaves room for -- at 220px the
+/// icon column and padding leave ~150px of ink and the longest label ellipsises.
+const SORT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 220.0, 300.0);
 const REBASE_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(110.0);
 const REBASE_AUTOSQUASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(190.0);
 const CHANGE_TRACKING_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 220.0, 320.0);
@@ -202,6 +207,9 @@ pub(in super::super) struct PopoverHost {
     /// Mirror of the sidebar's branch filter, for the same reason.
     branch_filter_query: String,
 
+    tag_push_preview_key: Option<u64>,
+    tag_push_cancellations: Vec<gitcomet_core::services::CancellationToken>,
+    push_upstream_tag_mode: Option<gitcomet_core::tag_push::TagPushMode>,
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
     hook_activity_selected: Option<GitOperationId>,
@@ -213,8 +221,8 @@ pub(in super::super) struct PopoverHost {
     /// opens; drafts are intentionally session-local.
     cherry_pick_mainline: Option<usize>,
     context_menu_focus_handle: FocusHandle,
-    /// Focus held by the App/Add Repository menu invoker, restored when that
-    /// menu is dismissed without replacing it with another prompt.
+    /// Focus held by the App/Add Repository menu or staging confirmation invoker,
+    /// restored when dismissed without replacing it with another prompt.
     menu_invoker_focus: Option<FocusHandle>,
     /// Whether the open popover was invoked from inside the diff panel.
     ///
@@ -225,6 +233,9 @@ pub(in super::super) struct PopoverHost {
     prompt_tab_group_focus_handle: FocusHandle,
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
+    context_menu_scroll: ScrollHandle,
+    context_menu_scroll_anchors: Vec<gpui::ScrollAnchor>,
+    expanded_history_ref: Option<HistoryMenuRef>,
     repo_picker_selected_index: Option<usize>,
     /// Last trimmed query handled by the repository picker. Kept separately
     /// from the input so text edits can reset keyboard selection without
@@ -418,28 +429,13 @@ pub(in super::super) fn popover_ui_scale_percent(cx: &mut gpui::Context<PopoverH
     popover_ui_scale(cx).percent()
 }
 
-pub(in super::super) fn popover_scaled_px(
-    value: f32,
-    ui_scale: impl Into<ui_scale::UiScale>,
-) -> Pixels {
-    ui_scale.into().px(value)
-}
-
-pub(in super::super) fn popover_scaled_px_from_percent(
-    value: f32,
-    ui_scale_percent: u32,
-) -> Pixels {
-    popover_scaled_px(value, ui_scale_percent)
-}
-
 /// One-line replacement for the per-panel `ui_scale_percent` + closure
 /// preamble: returns a copyable `f32 -> Pixels` scaler for the current
 /// UI scale.
 pub(super) fn popover_scaled_px_fn(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> impl Fn(f32) -> Pixels + Copy + use<> {
-    let ui_scale = popover_ui_scale(cx);
-    move |value: f32| ui_scale.px(value)
+    ui_scale::scaler(popover_ui_scale(cx))
 }
 
 pub(in super::super) fn focusable_toggle_row<V: 'static>(
@@ -498,7 +494,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::MergetoolSettingsMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
-            | PopoverKind::CommitFileSortMenu
+            | PopoverKind::CommitFileSortMenu { .. }
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
             | PopoverKind::TerminalMenu { .. }
@@ -510,10 +506,8 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::CommitMenu { .. }
             | PopoverKind::ReflogEntryMenu { .. }
             | PopoverKind::TagMenu { .. }
-            | PopoverKind::TagRefMenu { .. }
             | PopoverKind::StatusFileMenu { .. }
             | PopoverKind::BranchMenu { .. }
-            | PopoverKind::BranchRefsMenu { .. }
             | PopoverKind::BranchSectionMenu { .. }
             | PopoverKind::SubmoduleInnerDiffMenu { .. }
             | PopoverKind::Repo {
@@ -590,7 +584,7 @@ pub(super) fn hotkey_hint(
     div()
         .debug_selector(move || debug_selector.to_string())
         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-        .text_xs()
+        .text_size(theme.ui_text(12.0))
         .text_color(theme.colors.foreground.secondary)
         .child(label.into())
 }
@@ -629,10 +623,6 @@ pub(super) fn dialog_cancel_button(
     })
 }
 
-pub(super) fn dialog_divider(theme: AppTheme) -> gpui::Div {
-    div().border_t_1().border_color(theme.colors.stroke.default)
-}
-
 /// Shared scaffolding for confirm-style dialogs: title, divider, body
 /// sections, divider, then a footer with a cancel button on the left and the
 /// action button(s) on the right. Width comes from the same `PopoverWidthSpec`
@@ -658,7 +648,7 @@ impl ConfirmDialog {
             div()
                 .px_2()
                 .py_1()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(text.into())
                 .into_any_element(),
@@ -672,7 +662,7 @@ impl ConfirmDialog {
             div()
                 .px_2()
                 .pb_1()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(text.into())
                 .into_any_element(),
@@ -686,7 +676,7 @@ impl ConfirmDialog {
             div()
                 .px_2()
                 .py_1()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .child(
                     div()
                         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
@@ -704,7 +694,7 @@ impl ConfirmDialog {
             div()
                 .px_2()
                 .pb_1()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                 .text_color(theme.colors.foreground.secondary)
                 .child(text.into())
@@ -714,7 +704,7 @@ impl ConfirmDialog {
     }
 
     pub(super) fn divider(mut self, theme: AppTheme) -> Self {
-        self.sections.push(dialog_divider(theme).into_any_element());
+        self.sections.push(popover_rule(theme).into_any_element());
         self
     }
 
@@ -736,20 +726,11 @@ impl ConfirmDialog {
             .flex()
             .flex_col()
             .min_w(self.width.preferred_px(ui_scale))
-            .child(popover_title(self.title))
-            .child(dialog_divider(theme))
+            .child(popover_title(theme, self.title))
+            .child(popover_rule(theme))
             .children(self.sections)
-            .child(dialog_divider(theme))
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(cancel)
-                    .child(actions),
-            )
+            .child(popover_rule(theme))
+            .child(prompt_footer_row().child(cancel).child(actions))
     }
 }
 
@@ -765,21 +746,43 @@ pub(super) fn is_submittable_branch_name(name: &str) -> bool {
     !name.is_empty() && !name.ends_with('/')
 }
 
-pub(super) fn popover_title(title: impl Into<SharedString>) -> gpui::Div {
+pub(super) fn popover_title(theme: AppTheme, title: impl Into<SharedString>) -> gpui::Div {
     let title: SharedString = title.into();
     div()
         .px_2()
         .py_1()
-        .text_sm()
+        .text_size(theme.ui_text(14.0))
         .font_weight(FontWeight::BOLD)
         .child(title)
+}
+
+/// A prompt's action row: cancel on the left, the action button(s) on the
+/// right. The caller adds those two as children.
+pub(super) fn prompt_footer_row() -> gpui::Div {
+    div().px_2().py_1().flex().items_center().justify_between()
+}
+
+/// The rule between a prompt's sections.
+pub(super) fn popover_rule(theme: AppTheme) -> gpui::Div {
+    div().border_t_1().border_color(theme.colors.stroke.default)
+}
+
+/// The line under a prompt's title naming what it acts on. Bigger than an
+/// [`input_label`], which names a field rather than the subject.
+pub(super) fn popover_detail(theme: AppTheme, text: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .px_2()
+        .py_1()
+        .text_size(theme.ui_text(14.0))
+        .text_color(theme.colors.foreground.secondary)
+        .child(text.into())
 }
 
 pub(super) fn input_label(theme: AppTheme, label: &'static str) -> gpui::Div {
     div()
         .px_2()
         .py_1()
-        .text_xs()
+        .text_size(theme.ui_text(12.0))
         .text_color(theme.colors.foreground.secondary)
         .child(label)
 }
@@ -852,7 +855,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::HistoryAuthorFilter { .. }
         | PopoverKind::DiffContentModeSettings
-        | PopoverKind::CommitFileSortMenu
+        | PopoverKind::CommitFileSortMenu { .. }
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::UiScalePicker => Anchor::TopRight,
@@ -976,10 +979,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::TagMenu { .. }
-        | PopoverKind::TagRefMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::BranchMenu { .. }
-        | PopoverKind::BranchRefsMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::Repo {
@@ -1008,9 +1009,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
+        PopoverKind::CommitFileSortMenu { .. } => Some(SORT_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
-        | PopoverKind::CommitFileSortMenu
         | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryAuthorFilter { .. } => Some(HISTORY_AUTHOR_FILTER_WIDTH),

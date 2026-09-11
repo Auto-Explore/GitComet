@@ -44,6 +44,17 @@ pub(crate) fn command_palette_is_open(view: &GitCometView) -> bool {
     view.command_palette_open
 }
 
+/// The Reveal Commit dialog reports two things: the root's flag, and the
+/// dialog's own. They only disagree if a close path forgot one of them.
+pub(crate) fn reveal_commit_is_open(view: &GitCometView, app: &App) -> bool {
+    let dialog_open = view.reveal_commit_dialog.read(app).is_open();
+    assert_eq!(
+        view.reveal_commit_open, dialog_open,
+        "the root flag and the dialog disagree about being open"
+    );
+    dialog_open
+}
+
 /// `(scrolled, max_scroll)` of the repository tab strip, in pixels.
 pub(crate) fn repo_tab_scroll(view: &GitCometView, app: &App) -> (Pixels, Pixels) {
     view.repo_tabs_bar.read(app).tab_scroll_for_tests()

@@ -1,11 +1,12 @@
+mod tag_push;
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextSide,
-    DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage,
-    RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
-    RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream, UpstreamDivergence,
-    Worktree,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, Diff, DiffArea,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
+    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
+    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
+    UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -46,12 +47,14 @@ mod discard;
 mod file_browser;
 mod git_ops;
 mod history;
+mod line_stats;
 mod log;
 mod mergetool;
 mod mergetool_builtin;
 mod patch;
 mod porcelain;
 mod remotes;
+mod signatures;
 mod status;
 mod submodules;
 mod tags;
@@ -406,6 +409,10 @@ pub(crate) struct GixRepo {
     worktree_source_memo: std::sync::Mutex<rustc_hash::FxHashMap<PathBuf, WorktreeSourceMemoEntry>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
+    /// Immutable signature formats by oid. `None` means an unsigned commit.
+    signature_format_cache: std::sync::Mutex<
+        lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
+    >,
 }
 
 impl GixRepo {
@@ -424,6 +431,9 @@ impl GixRepo {
             worktree_source_memo: std::sync::Mutex::default(),
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
+            signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
+            )),
         }
     }
 
@@ -583,12 +593,53 @@ impl GitRepository for GixRepo {
         self.commit_details_impl(id)
     }
 
+    fn verify_commit_signatures(
+        &self,
+        ids: &[CommitId],
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        self.verify_commit_signatures_impl(ids)
+    }
+
+    fn verify_commit_signatures_cancellable(
+        &self,
+        ids: &[CommitId],
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        self.verify_commit_signatures_cancellable_impl(ids, Some(cancellation))
+    }
+
+    fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {
+        self.resolve_commit_impl(reference)
+    }
+
     fn diff_range_files(
         &self,
         from: &CommitId,
         to: Option<&CommitId>,
     ) -> Result<Vec<CommitFileChange>> {
         self.diff_range_files_impl(from, to)
+    }
+
+    fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.uncommitted_line_stats_impl(&CancellationToken::new())
+    }
+
+    fn uncommitted_line_stats_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.uncommitted_line_stats_impl(cancellation)
+    }
+
+    fn uncommitted_line_stats_for_status_cancellable(
+        &self,
+        status: &RepoStatus,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.line_stats_for_entries_impl(&status.unstaged, cancellation)
     }
 
     fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
@@ -944,6 +995,21 @@ impl GitRepository for GixRepo {
 
     fn pull_with_output_prune(&self, mode: PullMode, prune: bool) -> Result<CommandOutput> {
         self.pull_with_output_prune_impl(mode, prune)
+    }
+
+    fn push_with_tags(
+        &self,
+        request: &gitcomet_core::tag_push::TagPushRequest,
+    ) -> Result<CommandOutput> {
+        self.push_with_tags_impl(request)
+    }
+
+    fn preview_tag_push(
+        &self,
+        request: &gitcomet_core::tag_push::TagPushRequest,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::tag_push::TagPushPreview> {
+        self.preview_tag_push_impl(request, cancellation)
     }
 
     fn push(&self) -> Result<()> {

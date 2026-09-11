@@ -68,6 +68,9 @@ pub enum Effect {
     LoadStagedStatus {
         repo_id: RepoId,
     },
+    LoadUncommittedLineStats {
+        repo_id: RepoId,
+    },
     LoadStatus {
         repo_id: RepoId,
     },
@@ -155,6 +158,14 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Verify the signatures of `commit_ids`. Batched because verification
+    /// shells out to `git`; the backend drops unsigned commits for free.
+    VerifyCommitSignatures {
+        repo_id: RepoId,
+        epoch: u64,
+        cancellation: gitcomet_core::services::CancellationToken,
+        commit_ids: std::sync::Arc<[CommitId]>,
+    },
     LoadHoverCommitMessage {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -164,6 +175,16 @@ pub enum Effect {
     ResolveCommitForReveal {
         repo_id: RepoId,
         reference: CommitId,
+    },
+    /// Resolve a commit reference for the Reveal Commit dialog's preview row.
+    /// Lighter than `ResolveCommitForReveal` — no parent diff — because it runs
+    /// while the user is still typing.
+    ResolveCommitLookup {
+        repo_id: RepoId,
+        reference: CommitId,
+        /// Echoed back on the reply so a completion that lost a race against a
+        /// newer lookup can be dropped. See `CommitLookup::request`.
+        request: u64,
     },
     LoadRangeFiles {
         repo_id: RepoId,
@@ -487,6 +508,17 @@ pub enum Effect {
     SquashRef {
         repo_id: RepoId,
         reference: String,
+    },
+    PushWithTags {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+        auth: Option<StagedGitAuth>,
+    },
+    PreviewTagPush {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+        cancellation: gitcomet_core::services::CancellationToken,
+        generation: u64,
     },
     Push {
         repo_id: RepoId,

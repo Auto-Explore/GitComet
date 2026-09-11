@@ -38,6 +38,7 @@ pub(in crate::view) struct MarkdownPreviewWrapKey {
     pub(in crate::view) width_px: u32,
     pub(in crate::view) ui_scale_percent: u32,
     pub(in crate::view) theme_is_dark: bool,
+    pub(in crate::view) markdown_font_size_px: u32,
     pub(in crate::view) editor_font_family_hash: u64,
     pub(in crate::view) document_rev: u64,
 }
@@ -143,6 +144,7 @@ mod markdown_preview_wrap_cache_tests {
             width_px,
             ui_scale_percent: 100,
             theme_is_dark: false,
+            markdown_font_size_px: 13,
             editor_font_family_hash: 7,
             document_rev: 1,
         }

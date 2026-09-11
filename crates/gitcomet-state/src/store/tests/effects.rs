@@ -1,6 +1,102 @@
 use super::*;
 use gitcomet_core::domain::Upstream;
 
+#[test]
+fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_workers() {
+    for cancel_repo_loads in [false, true] {
+        let primary = super::executor::TaskExecutor::new(1);
+        let signatures = super::executor::TaskExecutor::new(1);
+        let (release_primary, wait_primary) = std::sync::mpsc::channel::<()>();
+        primary.spawn(move || {
+            let _ = wait_primary.recv();
+        });
+        let (release_signatures, wait_signatures) = std::sync::mpsc::channel::<()>();
+        signatures.spawn(move || {
+            let _ = wait_signatures.recv();
+        });
+        let executors = super::effects::EffectExecutors {
+            executor: &primary,
+            repo_load_executor: &primary,
+            metadata_executor: &primary,
+            session_persist_executor: &primary,
+            signature_executor: &signatures,
+        };
+        let repo_id = RepoId(1);
+        let spec = RepoSpec {
+            workdir: PathBuf::from("/tmp/signature-scheduling"),
+        };
+        let mut state = AppState::default();
+        state
+            .repos
+            .push(RepoState::new_opening(repo_id, spec.clone()));
+        let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+        let repos = [(
+            repo_id,
+            Arc::new(DummyRepo::new(spec.workdir)) as Arc<dyn GitRepository>,
+        )]
+        .into_iter()
+        .collect();
+        let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+        let (msg_tx, msg_rx) = std::sync::mpsc::channel();
+        let sender = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+        let mut tokens = FxHashMap::default();
+        super::effects::schedule_effect(
+            executors,
+            &thread_state,
+            &backend,
+            &repos,
+            &mut tokens,
+            sender.clone(),
+            Effect::VerifyCommitSignatures {
+                repo_id,
+                epoch: 0,
+                cancellation: CancellationToken::new(),
+                commit_ids: vec![CommitId("aaaa".into())].into(),
+            },
+        );
+        if cancel_repo_loads {
+            super::effects::schedule_effect(
+                executors,
+                &thread_state,
+                &backend,
+                &repos,
+                &mut tokens,
+                sender.clone(),
+                Effect::LoadHeadBranch { repo_id },
+            );
+            assert!(
+                tokens.contains_key(&repo_id),
+                "a repo load must actually be pending"
+            );
+            super::effects::schedule_effect(
+                executors,
+                &thread_state,
+                &backend,
+                &repos,
+                &mut tokens,
+                sender,
+                Effect::CancelRepoLoads {
+                    repo_id,
+                    load_epoch: 0,
+                },
+            );
+        }
+        drop(release_signatures);
+        // Keep the primary worker occupied: optional verification has its own worker.
+        let reply = recv_effect_message(&msg_rx, Duration::from_secs(1))
+            .expect("verification reply must arrive");
+        assert!(matches!(
+            reply,
+            Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+                repo_id: RepoId(1),
+                epoch: 0,
+                ..
+            })
+        ));
+        drop(release_primary);
+    }
+}
+
 static MERGETOOL_TRACE_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 
@@ -56,6 +152,7 @@ fn schedule_effect_with_state_for_test(
             repo_load_executor: &repo_load_executor,
             session_persist_executor,
             metadata_executor: &metadata_executor,
+            signature_executor: &metadata_executor,
         },
         &thread_state,
         backend,
@@ -3918,6 +4015,35 @@ impl GitRepository for SelectedDiffSchedulingRepo {
     fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
         unsupported_repo_result()
     }
+    fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        // Deliberately blind to cancellation, like a backend's plain scan: the
+        // only way out is the test releasing it.
+        let _ = self.started_tx.send(self.started_repo_id);
+        if matches!(self.mode, SelectedDiffRepoMode::BlockingDiff) {
+            wait_for_release_signal(&self.release);
+        }
+        Ok(Default::default())
+    }
+    fn uncommitted_line_stats_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _ = self.started_tx.send(self.started_repo_id);
+        if matches!(self.mode, SelectedDiffRepoMode::BlockingDiff) {
+            while !cancellation.is_cancelled() {
+                let (lock, condvar) = &*self.release;
+                let released = lock.lock().expect("release mutex");
+                let (released, _) = condvar
+                    .wait_timeout(released, Duration::from_millis(10))
+                    .expect("release wait");
+                if *released {
+                    break;
+                }
+            }
+        }
+        cancellation.check_cancelled()?;
+        Ok(Default::default())
+    }
     fn diff_parsed_cancellable(
         &self,
         target: &DiffTarget,
@@ -4860,6 +4986,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
             repo_load_executor: &repo_load_executor,
             session_persist_executor: &executor,
             metadata_executor: &metadata_executor,
+            signature_executor: &metadata_executor,
         },
         &thread_state,
         &backend,
@@ -4881,6 +5008,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
             repo_load_executor: &repo_load_executor,
             session_persist_executor: &executor,
             metadata_executor: &metadata_executor,
+            signature_executor: &metadata_executor,
         },
         &thread_state,
         &backend,
@@ -4950,6 +5078,7 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
         repo_load_executor: &repo_load_executor,
         session_persist_executor: &executor,
         metadata_executor: &metadata_executor,
+        signature_executor: &metadata_executor,
     };
 
     super::effects::schedule_effect(
@@ -5324,6 +5453,7 @@ fn remote_tag_load_for_one_repo_does_not_block_other_repo_metadata_refresh() {
         repo_load_executor: &repo_load_executor,
         session_persist_executor: &executor,
         metadata_executor: &metadata_executor,
+        signature_executor: &metadata_executor,
     };
 
     super::effects::schedule_effect(
@@ -5435,6 +5565,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         repo_load_executor: &repo_load_executor,
         session_persist_executor: &executor,
         metadata_executor: &metadata_executor,
+        signature_executor: &metadata_executor,
     };
 
     super::effects::schedule_effect(
@@ -5493,6 +5624,122 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         started_rx
             .recv_timeout(Duration::from_millis(200))
             .expect("repo B diff should start once repo A load epoch is cancelled"),
+        repo_b
+    );
+}
+
+/// The line-stats scan reads every changed file, so a superseded one must stop
+/// when its repository's loads are cancelled -- otherwise it holds the single
+/// repo-load worker and every queued load behind it waits for a result nobody
+/// will use.
+#[test]
+fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
+    let repo_a = RepoId(530);
+    let repo_b = RepoId(531);
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release_guard = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<RepoId>();
+    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = FxHashMap::default();
+        repos.insert(
+            repo_a,
+            Arc::new(SelectedDiffSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-line-stats-blocking-a"),
+                },
+                mode: SelectedDiffRepoMode::BlockingDiff,
+                started_tx: started_tx.clone(),
+                started_repo_id: repo_a,
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos.insert(
+            repo_b,
+            Arc::new(SelectedDiffSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-line-stats-ready-b"),
+                },
+                mode: SelectedDiffRepoMode::ReadyDiff,
+                started_tx,
+                started_repo_id: repo_b,
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_a,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-line-stats-state-a"),
+        },
+    ));
+    state.repos.push(RepoState::new_opening(
+        repo_b,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-line-stats-state-b"),
+        },
+    ));
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let mut repo_task_tokens = FxHashMap::default();
+    let executors = super::effects::EffectExecutors {
+        executor: &executor,
+        repo_load_executor: &repo_load_executor,
+        session_persist_executor: &executor,
+        metadata_executor: &metadata_executor,
+        signature_executor: &metadata_executor,
+    };
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::LoadUncommittedLineStats { repo_id: repo_a },
+    );
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("repo A line-stats task did not start"),
+        repo_a
+    );
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::CancelRepoLoads {
+            repo_id: repo_a,
+            load_epoch: 0,
+        },
+    );
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx,
+        Effect::LoadUncommittedLineStats { repo_id: repo_b },
+    );
+
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("repo B line stats should start once repo A load epoch is cancelled"),
         repo_b
     );
 }

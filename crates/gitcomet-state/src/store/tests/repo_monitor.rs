@@ -463,6 +463,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
         executor: &executor,
         repo_load_executor: &repo_load_executor,
         metadata_executor: &metadata_executor,
+        signature_executor: &metadata_executor,
         session_persist_executor: &session_persist_executor,
         backend: &backend,
     }

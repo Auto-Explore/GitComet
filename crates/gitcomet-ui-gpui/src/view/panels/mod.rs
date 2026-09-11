@@ -37,12 +37,21 @@ pub(in crate::view) enum AddRepoMenuAction {
     Initialize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(in crate::view) enum HistoryMenuRef {
+    Branch(BranchMenuTarget),
+    Tag(String),
+}
+
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
     Explorer {
         repo_id: RepoId,
         path: std::path::PathBuf,
         action: panes::ExplorerAction,
+    },
+    ToggleHistoryRefGroup {
+        target: HistoryMenuRef,
     },
     AppMenu(AppMenuAction),
     AddRepoMenu(AddRepoMenuAction),
@@ -256,6 +265,7 @@ pub(in crate::view) enum ContextMenuAction {
         scope: gitcomet_core::domain::LogScope,
     },
     SetCommitFileSort {
+        list: crate::view::rows::FileListId,
         sort: crate::view::rows::CommitFileSort,
     },
     SetDiffContentMode {
@@ -370,6 +380,10 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         index: usize,
         message: String,
+    },
+    PushWithTags {
+        repo_id: RepoId,
+        mode: gitcomet_core::tag_push::TagPushMode,
     },
     Push {
         repo_id: RepoId,

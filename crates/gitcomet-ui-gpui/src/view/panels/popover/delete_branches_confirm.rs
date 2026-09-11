@@ -130,7 +130,7 @@ fn name_list(theme: AppTheme, names: &[String]) -> gpui::Div {
         .py_1()
         .flex()
         .flex_col()
-        .text_sm()
+        .text_size(theme.ui_text(14.0))
         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
         .text_color(theme.colors.foreground.secondary);
     for name in names.iter().take(LISTED_NAMES) {

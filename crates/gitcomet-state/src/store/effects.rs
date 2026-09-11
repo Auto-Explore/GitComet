@@ -95,6 +95,7 @@ pub(super) struct EffectExecutors<'a> {
     pub(super) repo_load_executor: &'a TaskExecutor,
     pub(super) session_persist_executor: &'a TaskExecutor,
     pub(super) metadata_executor: &'a TaskExecutor,
+    pub(super) signature_executor: &'a TaskExecutor,
 }
 
 fn selected_diff_target(
@@ -352,6 +353,12 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::LoadUncommittedLineStats { repo_id } => send(Msg::Internal(
+            crate::msg::InternalMsg::UncommittedLineStatsLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadStatus { repo_id } => {
             send(Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
                 repo_id,
@@ -552,6 +559,13 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::VerifyCommitSignatures { repo_id, epoch, .. } => send(Msg::Internal(
+            crate::msg::InternalMsg::CommitSignaturesVerified {
+                repo_id,
+                epoch,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadHoverCommitMessage { repo_id, commit_id } => send(Msg::Internal(
             crate::msg::InternalMsg::HoverCommitMessageLoaded {
                 repo_id,
@@ -563,6 +577,18 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::CommitRevealResolved {
                 repo_id,
                 reference,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::ResolveCommitLookup {
+            repo_id,
+            reference,
+            request,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::CommitLookupResolved {
+                repo_id,
+                reference,
+                request,
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -1095,6 +1121,28 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::PushWithTags {
+            repo_id, request, ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::PushWithTags { request },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::PreviewTagPush {
+            repo_id,
+            request,
+            generation,
+            ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::TagPushPreviewLoaded {
+                repo_id,
+                mode: request.mode,
+                generation,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::Push { repo_id, .. } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -1402,6 +1450,7 @@ pub(super) fn schedule_effect(
         repo_load_executor,
         session_persist_executor,
         metadata_executor,
+        signature_executor,
     } = executors;
 
     if effect_requires_available_git(&effect) {
@@ -1648,6 +1697,19 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_worktree_status(
+                    repo_load_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    cancellation,
+                );
+            }
+        }
+        Effect::LoadUncommittedLineStats { repo_id } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_uncommitted_line_stats(
                     repo_load_executor,
                     repos,
                     msg_tx,
@@ -2025,6 +2087,24 @@ pub(super) fn schedule_effect(
                 );
             }
         }
+        Effect::VerifyCommitSignatures {
+            repo_id,
+            epoch,
+            cancellation,
+            commit_ids,
+        } => {
+            // Signature requests have their own lifetime: staging and tab switches
+            // cancel repo loads, but must not silently lose pending verification.
+            repo_load::schedule_verify_commit_signatures(
+                signature_executor,
+                repos,
+                msg_tx,
+                repo_id,
+                epoch,
+                cancellation,
+                commit_ids,
+            );
+        }
         Effect::LoadHoverCommitMessage { repo_id, commit_id } => {
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
@@ -2040,6 +2120,19 @@ pub(super) fn schedule_effect(
             {
                 repo_load::schedule_resolve_commit_for_reveal(
                     executor, repos, msg_tx, repo_id, reference,
+                );
+            }
+        }
+        Effect::ResolveCommitLookup {
+            repo_id,
+            reference,
+            request,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_resolve_commit_lookup(
+                    executor, repos, msg_tx, repo_id, reference, request,
                 );
             }
         }
@@ -2624,6 +2717,37 @@ pub(super) fn schedule_effect(
         }
         Effect::SquashRef { repo_id, reference } => {
             repo_commands::schedule_squash_ref(executor, repos, msg_tx, repo_id, reference);
+        }
+        Effect::PushWithTags {
+            repo_id,
+            request,
+            auth,
+        } => {
+            repo_commands::schedule_push_with_tags(executor, repos, msg_tx, repo_id, request, auth)
+        }
+        Effect::PreviewTagPush {
+            repo_id,
+            request,
+            generation,
+            cancellation,
+        } => {
+            util::spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, tx| {
+                if cancellation.is_cancelled() {
+                    return;
+                }
+                let result = repo.preview_tag_push(&request, &cancellation);
+                if !cancellation.is_cancelled() {
+                    util::send_or_log(
+                        &tx,
+                        Msg::Internal(crate::msg::InternalMsg::TagPushPreviewLoaded {
+                            repo_id,
+                            mode: request.mode,
+                            generation,
+                            result,
+                        }),
+                    );
+                }
+            });
         }
         Effect::Push { repo_id, auth } => repo_commands::schedule_push(
             executor,

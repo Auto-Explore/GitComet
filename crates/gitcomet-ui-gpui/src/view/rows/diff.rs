@@ -52,20 +52,16 @@ struct CollapsedHunkRevealClick {
     src_ix: usize,
 }
 
-fn diff_row_height(ui_scale_percent: u32) -> Pixels {
-    crate::view::panes::main::diff_row_height_for_ui_scale(ui_scale_percent)
+fn diff_file_header_height(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
+    crate::view::panes::main::diff_file_header_height_for_ui_scale(theme, ui_scale_percent)
 }
 
-fn diff_file_header_height(ui_scale_percent: u32) -> Pixels {
-    crate::view::panes::main::diff_file_header_height_for_ui_scale(ui_scale_percent)
+fn diff_hunk_header_height(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
+    crate::view::panes::main::diff_hunk_header_height_for_ui_scale(theme, ui_scale_percent)
 }
 
-fn diff_hunk_header_height(ui_scale_percent: u32) -> Pixels {
-    crate::view::panes::main::diff_hunk_header_height_for_ui_scale(ui_scale_percent)
-}
-
-fn collapsed_hunk_header_row_height(ui_scale_percent: u32) -> Pixels {
-    diff_row_height(ui_scale_percent)
+fn collapsed_hunk_header_row_height(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
+    theme.editor_row_height(ui_scale_percent)
 }
 
 fn collapsed_hunk_shell_width(
@@ -172,6 +168,18 @@ fn collapsed_split_hunk_fg(theme: AppTheme, _column: PatchSplitColumn) -> gpui::
     theme.colors.foreground.secondary
 }
 
+/// Hit box for a collapsed-hunk reveal chevron. An editor row, not a chrome
+/// row: follows the editor line height, not the density, and caps out.
+fn collapsed_hunk_reveal_button_size(theme: AppTheme, ui_scale_percent: u32) -> Pixels {
+    const ROW_FRACTION: f32 = 0.9;
+    const MAX_PX: f32 = 24.0;
+    let row: f32 = theme.editor_row_height(ui_scale_percent).into();
+    px(row * ROW_FRACTION).min(crate::ui_scale::design_px_from_percent(
+        MAX_PX,
+        ui_scale_percent,
+    ))
+}
+
 fn collapsed_hunk_reveal_button(
     id: impl Into<gpui::ElementId>,
     debug_selector: &'static str,
@@ -183,11 +191,13 @@ fn collapsed_hunk_reveal_button(
     click: CollapsedHunkRevealClick,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
+    let ui_scale_percent = crate::ui_scale::current(cx).percent;
+    let size = collapsed_hunk_reveal_button_size(theme, ui_scale_percent);
     let mut button = div()
         .id(id)
         .debug_selector(move || debug_selector.to_string())
-        .w(px(18.0))
-        .h(px(18.0))
+        .w(size)
+        .h(size)
         .flex()
         .items_center()
         .justify_center()
@@ -224,7 +234,11 @@ fn collapsed_hunk_reveal_button(
     }
 
     button
-        .child(svg_icon(icon, icon_color, px(10.0)))
+        .child(svg_icon(
+            icon,
+            icon_color,
+            crate::ui_scale::design_px_from_percent(10.0, ui_scale_percent),
+        ))
         .gitcomet_tooltip(theme, tooltip.into())
         .into_any_element()
 }
@@ -332,9 +346,9 @@ fn diff_placeholder_row(
 ) -> AnyElement {
     div()
         .id(id)
-        .h(diff_row_height(ui_scale_percent))
+        .h(theme.editor_row_height(ui_scale_percent))
         .px_2()
-        .text_xs()
+        .text_size(theme.editor_font_size(ui_scale_percent))
         .text_color(theme.colors.foreground.secondary)
         .child("")
         .into_any_element()
@@ -2404,7 +2418,7 @@ fn diff_row(
             header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
         let mut row = div()
             .id(("diff_file_hdr", visible_ix))
-            .h(diff_file_header_height(ui_scale_percent))
+            .h(diff_file_header_height(theme, ui_scale_percent))
             .w_full()
             .min_w(min_width)
             .flex()
@@ -2414,7 +2428,7 @@ fn diff_row(
             .bg(crate::theme::content_header_bg(theme))
             .border_b_1()
             .border_color(theme.colors.stroke.default)
-            .text_sm()
+            .text_size(theme.ui_text(14.0))
             .font_weight(FontWeight::BOLD)
             .child(selectable_cached_diff_text(
                 visible_ix,
@@ -2444,7 +2458,7 @@ fn diff_row(
 
         let mut row = div()
             .id(("diff_hunk_hdr", visible_ix))
-            .h(diff_hunk_header_height(ui_scale_percent))
+            .h(diff_hunk_header_height(theme, ui_scale_percent))
             .w_full()
             .min_w(min_width)
             .flex()
@@ -2459,7 +2473,7 @@ fn diff_row(
                 theme.colors.accent.foreground,
                 if theme.is_dark { 0.28 } else { 0.22 },
             ))
-            .text_xs()
+            .text_size(theme.editor_font_size(ui_scale_percent))
             .text_color(theme.colors.foreground.secondary)
             .child(selectable_cached_diff_text(
                 visible_ix,
@@ -2686,7 +2700,7 @@ fn collapsed_inline_header_row(
             // moves neither the band nor the file name.
             let inner = div()
                 .id(("collapsed_diff_file_hdr", visible_ix))
-                .h(diff_file_header_height(ui_scale_percent))
+                .h(diff_file_header_height(theme, ui_scale_percent))
                 .w(pinned_hunk_shell_width)
                 .min_w(px(0.0))
                 .relative()
@@ -2695,7 +2709,7 @@ fn collapsed_inline_header_row(
                 .items_center()
                 .justify_between()
                 .px_2()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .font_weight(FontWeight::BOLD)
                 .child(selectable_cached_diff_text(
                     visible_ix,
@@ -2712,7 +2726,7 @@ fn collapsed_inline_header_row(
                 });
 
             div()
-                .h(diff_file_header_height(ui_scale_percent))
+                .h(diff_file_header_height(theme, ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .bg(header_bg)
@@ -2726,7 +2740,9 @@ fn collapsed_inline_header_row(
                 .into_any_element()
         }
         DiffClickKind::HunkHeader => {
-            let gutter_w = diff_canvas::diff_inline_text_start(ui_scale_percent);
+            let gutter_w = diff_canvas::diff_inline_text_start(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            );
             let trailing_pad = diff_canvas::diff_row_horizontal_padding(ui_scale_percent);
             let text_color = collapsed_inline_hunk_fg(theme, collapsed_hunk);
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -2855,7 +2871,7 @@ fn collapsed_inline_header_row(
             let mut row = div()
                 .id(("collapsed_diff_hunk_hdr", visible_ix))
                 .debug_selector(|| COLLAPSED_DIFF_INLINE_HUNK_SHELL_DEBUG_SELECTOR.to_string())
-                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(theme, ui_scale_percent))
                 .w(pinned_hunk_shell_width)
                 .min_w(px(0.0))
                 .relative()
@@ -2863,7 +2879,7 @@ fn collapsed_inline_header_row(
                 .flex()
                 .items_center()
                 .bg(painted_row_bg)
-                .text_xs()
+                .text_size(theme.editor_font_size(ui_scale_percent))
                 .text_color(text_color);
             row = row
                 .child(
@@ -2904,7 +2920,7 @@ fn collapsed_inline_header_row(
             }
 
             div()
-                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(theme, ui_scale_percent))
                 .min_w(min_width)
                 .bg(painted_row_bg)
                 .child(scroll_pinned_hunk_shell(
@@ -3058,7 +3074,7 @@ fn patch_split_header_row(
                     },
                     visible_ix,
                 ))
-                .h(diff_file_header_height(ui_scale_percent))
+                .h(diff_file_header_height(theme, ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .flex()
@@ -3068,7 +3084,7 @@ fn patch_split_header_row(
                 .bg(crate::theme::content_header_bg(theme))
                 .border_b_1()
                 .border_color(theme.colors.stroke.default)
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .font_weight(FontWeight::BOLD)
                 .child(selectable_cached_diff_text(
                     visible_ix,
@@ -3103,7 +3119,7 @@ fn patch_split_header_row(
                     },
                     visible_ix,
                 ))
-                .h(diff_hunk_header_height(ui_scale_percent))
+                .h(diff_hunk_header_height(theme, ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .flex()
@@ -3118,7 +3134,7 @@ fn patch_split_header_row(
                     theme.colors.accent.foreground,
                     if theme.is_dark { 0.28 } else { 0.22 },
                 ))
-                .text_xs()
+                .text_size(theme.editor_font_size(ui_scale_percent))
                 .text_color(theme.colors.foreground.secondary)
                 .child(selectable_cached_diff_text(
                     visible_ix,
@@ -3225,7 +3241,7 @@ fn collapsed_split_header_row(
                     },
                     visible_ix,
                 ))
-                .h(diff_file_header_height(ui_scale_percent))
+                .h(diff_file_header_height(theme, ui_scale_percent))
                 .w(pinned_hunk_shell_width)
                 .min_w(px(0.0))
                 .relative()
@@ -3234,7 +3250,7 @@ fn collapsed_split_header_row(
                 .items_center()
                 .justify_between()
                 .px_2()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .font_weight(FontWeight::BOLD)
                 .child(selectable_cached_diff_text(
                     visible_ix,
@@ -3251,7 +3267,7 @@ fn collapsed_split_header_row(
                 });
 
             div()
-                .h(diff_file_header_height(ui_scale_percent))
+                .h(diff_file_header_height(theme, ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .bg(header_bg)
@@ -3265,7 +3281,9 @@ fn collapsed_split_header_row(
                 .into_any_element()
         }
         DiffClickKind::HunkHeader => {
-            let gutter_w = diff_canvas::diff_single_column_text_start(ui_scale_percent);
+            let gutter_w = diff_canvas::diff_single_column_text_start(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            );
             let trailing_pad = diff_canvas::diff_row_horizontal_padding(ui_scale_percent);
             let text_color = collapsed_split_hunk_fg(theme, column);
             let (
@@ -3428,7 +3446,7 @@ fn collapsed_split_header_row(
             let mut row = div()
                 .id((row_id, visible_ix))
                 .debug_selector(move || shell_debug_selector.to_string())
-                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(theme, ui_scale_percent))
                 .w(pinned_hunk_shell_width)
                 .min_w(px(0.0))
                 .relative()
@@ -3436,7 +3454,7 @@ fn collapsed_split_header_row(
                 .flex()
                 .items_center()
                 .bg(painted_row_bg)
-                .text_xs()
+                .text_size(theme.editor_font_size(ui_scale_percent))
                 .text_color(text_color)
                 .child(
                     div()
@@ -3474,7 +3492,7 @@ fn collapsed_split_header_row(
             }
 
             div()
-                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .h(collapsed_hunk_header_row_height(theme, ui_scale_percent))
                 .min_w(min_width)
                 .bg(painted_row_bg)
                 .child(scroll_pinned_hunk_shell(
@@ -3529,11 +3547,11 @@ fn patch_split_meta_row(
             },
             visible_ix,
         ))
-        .h(diff_row_height(ui_scale_percent))
+        .h(theme.editor_row_height(ui_scale_percent))
         .flex()
         .items_center()
         .px_2()
-        .text_xs()
+        .text_size(theme.editor_font_size(ui_scale_percent))
         .bg(bg)
         .text_color(fg)
         .whitespace_nowrap()
@@ -3557,6 +3575,115 @@ fn patch_split_meta_row(
 
 #[cfg(test)]
 mod tests {
+
+    /// Wrap columns come from a measured character, so that measurement has to
+    /// answer the editor font size and the UI zoom. (Family cannot be checked
+    /// here: the test text system measures every font identically.)
+    #[gpui::test]
+    fn wrap_char_width_follows_the_editor_font_and_zoom(cx: &mut gpui::TestAppContext) {
+        let _guard = crate::test_support::lock_visual_test();
+
+        struct Probe;
+        impl gpui::Render for Probe {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                gpui::div()
+            }
+        }
+
+        let (_view, cx) = cx.add_window_view(|_window, _cx| Probe);
+        cx.update(|window, _app| {
+            fn width(window: &mut Window, size: u32) -> Pixels {
+                crate::view::rows::diff_canvas_text_wrap_char_width(
+                    window,
+                    crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY.to_string(),
+                    size,
+                )
+            }
+            fn columns(char_width: Pixels) -> usize {
+                (f32::from(px(400.0)) / f32::from(char_width)).floor() as usize
+            }
+
+            let (small, default, large) = (width(window, 8), width(window, 13), width(window, 26));
+            assert!(small < default && default < large);
+            assert!(
+                columns(large) < columns(default),
+                "a larger font must wrap sooner"
+            );
+
+            crate::ui_scale::apply_to_window(window, 200);
+            let zoomed = width(window, 13);
+            crate::ui_scale::apply_to_window(window, 100);
+            assert!(zoomed > default, "zoom must widen the measured character");
+        });
+    }
+
+    /// Collapsed hunk headers and split meta rows are painted with the editor
+    /// font, so their boxes have to follow it or the text clips.
+    #[test]
+    fn diff_rows_grow_with_the_editor_font() {
+        let theme = |editor_font_size_px| {
+            AppTheme::gitcomet_dark().with_appearance(crate::appearance::Appearance {
+                editor_font_size_px,
+                ..crate::appearance::Appearance::default()
+            })
+        };
+
+        for percent in [100, 150] {
+            let small = collapsed_hunk_header_row_height(theme(8), percent);
+            let default = collapsed_hunk_header_row_height(theme(13), percent);
+            let large = collapsed_hunk_header_row_height(theme(32), percent);
+
+            assert!(small < default && default < large, "at {percent}%");
+            assert!(
+                large >= theme(32).editor_font_size(percent),
+                "the row must clear the glyphs it paints at {percent}%"
+            );
+        }
+    }
+
+    /// The chevron tracks the editor row it sits in, not the UI density, and
+    /// stops growing before a large editor font turns it into a slab.
+    #[test]
+    fn collapsed_hunk_reveal_buttons_track_the_editor_row_and_cap_out() {
+        let at = |editor_font_size_px: u32, density, percent| {
+            collapsed_hunk_reveal_button_size(
+                AppTheme::gitcomet_dark().with_appearance(crate::appearance::Appearance {
+                    editor_font_size_px,
+                    density,
+                    ..crate::appearance::Appearance::default()
+                }),
+                percent,
+            )
+        };
+        use crate::appearance::UiDensity::{Comfortable, Compact};
+
+        assert!(at(8, Compact, 100) < at(13, Compact, 100));
+        assert!(at(13, Compact, 100) < at(100, Compact, 100));
+        assert_eq!(at(32, Compact, 100), at(13, Compact, 100).max(px(24.0)));
+        assert_eq!(
+            at(13, Compact, 100),
+            at(13, Comfortable, 100),
+            "the diff body follows the editor font, not the density"
+        );
+        assert_eq!(at(13, Compact, 200), at(13, Compact, 100) * 2.0);
+
+        for size in [8, 13, 32] {
+            assert!(
+                at(size, Compact, 100)
+                    <= AppTheme::gitcomet_dark()
+                        .with_appearance(crate::appearance::Appearance {
+                            editor_font_size_px: size,
+                            ..crate::appearance::Appearance::default()
+                        })
+                        .editor_row_height(100),
+                "the chevron must never outgrow its row at {size}px"
+            );
+        }
+    }
     use super::*;
 
     fn collapsed_hunk(has_removals: bool, has_additions: bool) -> CollapsedDiffHunk {
@@ -3931,12 +4058,12 @@ mod tests {
     fn collapsed_hunk_headers_use_uniform_diff_row_height() {
         for ui_scale_percent in [75, 100, 125, 150, 200] {
             assert_eq!(
-                collapsed_hunk_header_row_height(ui_scale_percent),
-                diff_row_height(ui_scale_percent)
+                collapsed_hunk_header_row_height(AppTheme::gitcomet_dark(), ui_scale_percent),
+                AppTheme::gitcomet_dark().editor_row_height(ui_scale_percent)
             );
             assert_ne!(
-                collapsed_hunk_header_row_height(ui_scale_percent),
-                diff_hunk_header_height(ui_scale_percent)
+                collapsed_hunk_header_row_height(AppTheme::gitcomet_dark(), ui_scale_percent),
+                diff_hunk_header_height(AppTheme::gitcomet_dark(), ui_scale_percent)
             );
         }
     }

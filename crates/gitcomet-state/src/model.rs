@@ -19,6 +19,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+mod signature_map;
+pub use signature_map::CommitSignatureMap;
+
 pub type Shared<T> = Arc<T>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -48,6 +51,9 @@ pub enum GitLogTagFetchMode {
 pub struct GitLogSettings {
     pub show_history_tags: bool,
     pub tag_fetch_mode: GitLogTagFetchMode,
+    /// Escape hatch: a misconfigured `gpg.program` or a wedged `gpg-agent`
+    /// would otherwise slow every history page with no way to turn it off.
+    pub verify_commit_signatures: bool,
 }
 
 impl Default for GitLogSettings {
@@ -55,6 +61,7 @@ impl Default for GitLogSettings {
         Self {
             show_history_tags: true,
             tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
+            verify_commit_signatures: true,
         }
     }
 }
@@ -155,6 +162,10 @@ impl RepoLoadsInFlight {
     /// Deliberately outside `PRIMARY_REFRESH_FLAGS`: the live listing is a
     /// worktree walk, far costlier than the other loads.
     pub const FILE_BROWSER: u32 = 1 << 18;
+    /// Also outside `PRIMARY_REFRESH_FLAGS`: counting reads both sides of every
+    /// changed file, which the status walk avoids. Kept separate so status
+    /// latency is unchanged and the numbers arrive after the list.
+    pub const UNCOMMITTED_LINE_STATS: u32 = 1 << 19;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
@@ -1014,6 +1025,18 @@ pub struct HistoryState {
     pub reveal_target: Option<CommitId>,
     pub commit_details: Loadable<Shared<CommitDetails>>,
     pub commit_details_rev: u64,
+    /// Signature verdicts by commit, shared by the details pane and the
+    /// history rows. Only badge-worthy commits appear: absent means no badge.
+    /// Behind `Arc` because `AppState` is deep-copied on every dispatch.
+    pub commit_signatures: Shared<CommitSignatureMap>,
+    pub commit_signatures_rev: u64,
+    /// Invalidates batches started before a refresh or preference change.
+    pub commit_signatures_epoch: u64,
+    /// Includes queued, running, and completed no-badge commits for this epoch.
+    pub(crate) commit_signatures_requested: Shared<FxHashSet<CommitId>>,
+    pub(crate) commit_signatures_queue: VecDeque<Shared<[CommitId]>>,
+    pub(crate) commit_signatures_in_flight: bool,
+    pub(crate) commit_signatures_cancellation: gitcomet_core::services::CancellationToken,
     pub multi_selection: CommitMultiSelection,
     /// Active "compare two points" selection: when two commits are selected (or
     /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
@@ -1048,6 +1071,36 @@ pub struct HistoryState {
     /// plan is transiently invalid (e.g. HEAD momentarily unresolved during a
     /// concurrent reload), as long as the range still matches what was asked.
     pub squash_preview_pending: Option<(CommitId, CommitId)>,
+    /// The Reveal Commit dialog's current reference lookup. Preview only: it
+    /// never selects anything, so typing in the dialog cannot move the main
+    /// view the way `reveal_target` does.
+    ///
+    /// Carries no `_rev` counterpart because no pane fingerprints it: the
+    /// dialog is its own entity and repaints itself when this changes.
+    pub commit_lookup: CommitLookup,
+}
+
+/// A resolved-or-failed answer to "what commit does this reference name?".
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitLookup {
+    /// Monotonic id of the newest issued lookup. A reply carrying an older id
+    /// is dropped, so an out-of-order completion cannot overwrite a newer
+    /// answer — the same guard `range_files_request` uses.
+    pub request: u64,
+    /// The reference `result` answers, so a caller can tell whether the answer
+    /// is about what the user has typed *now*.
+    pub reference: Option<CommitId>,
+    pub result: Loadable<Commit>,
+}
+
+impl Default for CommitLookup {
+    fn default() -> Self {
+        Self {
+            request: 0,
+            reference: None,
+            result: Loadable::NotLoaded,
+        }
+    }
 }
 
 impl Default for HistoryState {
@@ -1072,6 +1125,13 @@ impl Default for HistoryState {
             reveal_target: None,
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
+            commit_signatures: Shared::default(),
+            commit_signatures_rev: 0,
+            commit_signatures_epoch: 0,
+            commit_signatures_requested: Shared::default(),
+            commit_signatures_queue: VecDeque::new(),
+            commit_signatures_in_flight: false,
+            commit_signatures_cancellation: Default::default(),
             multi_selection: CommitMultiSelection::default(),
             range_selection: None,
             worktree_selection: None,
@@ -1084,6 +1144,7 @@ impl Default for HistoryState {
             squash_preview: Loadable::NotLoaded,
             squash_preview_rev: 0,
             squash_preview_pending: None,
+            commit_lookup: CommitLookup::default(),
         }
     }
 }
@@ -1450,7 +1511,7 @@ fn mix_branch_sidebar_revs(values: [u64; 7]) -> u64 {
 }
 
 #[inline]
-fn mix_status_cache_revs(values: [u64; 2]) -> u64 {
+pub fn mix_status_cache_revs(values: [u64; 2]) -> u64 {
     let mut acc = STATUS_CACHE_REV_MIX;
     for value in values {
         acc ^= value.wrapping_mul(STATUS_CACHE_REV_MIX);
@@ -1514,6 +1575,14 @@ pub struct RepoNavigationState {
 }
 
 #[derive(Clone, Debug)]
+pub struct TagPushPreviewState {
+    pub request: gitcomet_core::tag_push::TagPushRequest,
+    pub generation: u64,
+    pub cancellation: gitcomet_core::services::CancellationToken,
+    pub result: Loadable<Arc<gitcomet_core::tag_push::TagPushPreview>>,
+}
+
+#[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
@@ -1552,6 +1621,12 @@ pub struct RepoState {
     pub remote_branches_rev: u64,
     pub worktree_status: Loadable<Arc<Vec<FileStatus>>>,
     pub worktree_status_rev: u64,
+    /// Per-file `+/-` for both lanes, cached until the next index or worktree
+    /// change.
+    pub uncommitted_line_stats: Loadable<Arc<UncommittedLineStats>>,
+    /// Per lane, so churn in one does not invalidate the other's rows.
+    pub staged_line_stats_rev: u64,
+    pub unstaged_line_stats_rev: u64,
     pub staged_status: Loadable<Arc<Vec<FileStatus>>>,
     pub staged_status_rev: u64,
     pub status: Loadable<Shared<RepoStatus>>,
@@ -1579,6 +1654,7 @@ pub struct RepoState {
     /// Commit whose full message the history hover card is showing, and the
     /// message once it arrives. A single slot: only one card is ever open, and
     /// the view keeps its own small cache of recently fetched messages.
+    pub tag_push_previews: [Option<TagPushPreviewState>; 2],
     pub hover_commit_message: Option<(CommitId, Loadable<Arc<str>>)>,
     pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
     pub interactive_cherry_pick_setup: Option<InteractiveCherryPickSetup>,
@@ -1658,6 +1734,9 @@ impl RepoState {
             remote_branches: Loadable::NotLoaded,
             remote_branches_rev: 0,
             worktree_status: Loadable::NotLoaded,
+            uncommitted_line_stats: Loadable::NotLoaded,
+            staged_line_stats_rev: 0,
+            unstaged_line_stats_rev: 0,
             worktree_status_rev: 0,
             staged_status: Loadable::NotLoaded,
             staged_status_rev: 0,
@@ -1677,6 +1756,7 @@ impl RepoState {
             rebase_in_progress: Loadable::NotLoaded,
             sequencer_state: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
+            tag_push_previews: [None, None],
             hover_commit_message: None,
             interactive_rebase_setup: None,
             interactive_cherry_pick_setup: None,
@@ -1942,6 +2022,45 @@ impl RepoState {
 
     pub(crate) fn set_sidebar_data_request(&mut self, request: SidebarDataRequest) {
         self.sidebar_data_request = request;
+    }
+
+    /// Bumps only the lanes that changed. Never sets `Loading`, so the numbers
+    /// stay on screen across a rescan the way `worktree_dirty` does.
+    pub(crate) fn set_uncommitted_line_stats(
+        &mut self,
+        stats: Loadable<Arc<UncommittedLineStats>>,
+    ) {
+        let (staged_changed, unstaged_changed) = match (&self.uncommitted_line_stats, &stats) {
+            (Loadable::Ready(previous), Loadable::Ready(next)) => (
+                previous.staged != next.staged,
+                previous.unstaged != next.unstaged,
+            ),
+            _ => (true, true),
+        };
+        self.uncommitted_line_stats = stats;
+        if staged_changed {
+            self.staged_line_stats_rev = self.staged_line_stats_rev.wrapping_add(1);
+        }
+        if unstaged_changed {
+            self.unstaged_line_stats_rev = self.unstaged_line_stats_rev.wrapping_add(1);
+        }
+    }
+
+    pub fn line_stats_rev(&self, area: DiffArea) -> u64 {
+        match area {
+            DiffArea::Staged => self.staged_line_stats_rev,
+            DiffArea::Unstaged => self.unstaged_line_stats_rev,
+        }
+    }
+
+    pub fn line_stats_for_area(
+        &self,
+        area: DiffArea,
+    ) -> Option<&rustc_hash::FxHashMap<PathBuf, LineStats>> {
+        match &self.uncommitted_line_stats {
+            Loadable::Ready(stats) => Some(stats.for_area(area)),
+            _ => None,
+        }
     }
 
     pub(crate) fn set_worktree_status(&mut self, status: Loadable<Vec<FileStatus>>) {
@@ -2226,6 +2345,24 @@ impl RepoState {
         self.history_state.reveal_target = v;
     }
 
+    /// Start a new Reveal Commit lookup, returning the request id the reply has
+    /// to carry to be accepted.
+    pub(crate) fn begin_commit_lookup(&mut self, reference: CommitId) -> u64 {
+        let lookup = &mut self.history_state.commit_lookup;
+        lookup.request = lookup.request.wrapping_add(1);
+        lookup.reference = Some(reference);
+        lookup.result = Loadable::Loading;
+        lookup.request
+    }
+
+    /// Record a lookup reply, ignoring one that a newer lookup has overtaken.
+    pub(crate) fn finish_commit_lookup(&mut self, request: u64, result: Loadable<Commit>) {
+        if self.history_state.commit_lookup.request != request {
+            return;
+        }
+        self.history_state.commit_lookup.result = result;
+    }
+
     /// Selecting a worktree row takes the details pane over, so the commit
     /// selection lets go first. Passing `None` simply clears it, which is what
     /// selecting a commit or the working-tree row ends up doing.
@@ -2263,6 +2400,23 @@ impl RepoState {
             // selection, so it must dissolve here as well.
             self.history_state.multi_selection = CommitMultiSelection::default();
             self.clear_range_comparison();
+        }
+        if let Some(previous) = &self.history_state.selected_commit
+            && Some(previous) != v.as_ref()
+            && self.history_state.commit_signatures.contains_key(previous)
+            && let Loadable::Ready(page) = &self.log
+            && !page.commits.iter().any(|commit| &commit.id == previous)
+        {
+            Arc::make_mut(&mut self.history_state.commit_signatures).remove(previous);
+            if self
+                .history_state
+                .commit_signatures_requested
+                .contains(previous)
+            {
+                Arc::make_mut(&mut self.history_state.commit_signatures_requested).remove(previous);
+            }
+            self.history_state.commit_signatures_rev =
+                self.history_state.commit_signatures_rev.wrapping_add(1);
         }
         self.history_state.selected_commit = v;
         self.history_state.selected_commit_rev =
@@ -2363,6 +2517,54 @@ impl RepoState {
         self.history_state.commit_details = v;
         self.history_state.commit_details_rev =
             self.history_state.commit_details_rev.wrapping_add(1);
+    }
+
+    /// Invalidates both verdicts and in-flight batches. Trust inputs can change
+    /// independently of commit objects, so refreshes must recheck signed commits.
+    pub(crate) fn clear_commit_signatures(&mut self) {
+        self.history_state.commit_signatures_cancellation.cancel();
+        self.history_state.commit_signatures_cancellation = Default::default();
+        self.history_state.commit_signatures_requested = Shared::default();
+        self.history_state.commit_signatures_queue.clear();
+        self.history_state.commit_signatures_in_flight = false;
+        self.history_state.commit_signatures_epoch =
+            self.history_state.commit_signatures_epoch.wrapping_add(1);
+        if self.history_state.commit_signatures.is_empty() {
+            return;
+        }
+        self.history_state.commit_signatures = Shared::default();
+        self.history_state.commit_signatures_rev =
+            self.history_state.commit_signatures_rev.wrapping_add(1);
+    }
+
+    /// Merges batches from the current verification epoch without dropping
+    /// verdicts for other pages or selected commits.
+    pub(crate) fn merge_commit_signatures(&mut self, verified: Vec<(CommitId, CommitSignature)>) {
+        let updates: Vec<_> = verified
+            .into_iter()
+            .filter(|(id, signature)| {
+                let displayed = self.history_state.selected_commit.as_ref() == Some(id)
+                    || match &self.log {
+                        Loadable::Ready(page) => page.commits.iter().any(|commit| &commit.id == id),
+                        _ => true,
+                    };
+                // A discarded badge must be recoverable if this off-page commit
+                // is revealed again. Keep completed no-badge attempts memoized.
+                if !displayed && self.history_state.commit_signatures_requested.contains(id) {
+                    Arc::make_mut(&mut self.history_state.commit_signatures_requested).remove(id);
+                }
+                displayed && self.history_state.commit_signatures.get(id) != Some(signature)
+            })
+            .collect();
+        if updates.is_empty() {
+            return;
+        }
+        let map = Arc::make_mut(&mut self.history_state.commit_signatures);
+        for (id, signature) in updates {
+            map.insert(id, signature);
+        }
+        self.history_state.commit_signatures_rev =
+            self.history_state.commit_signatures_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_hover_commit_message(
@@ -3952,5 +4154,59 @@ mod tests {
         assert_eq!(Loadable::<Vec<u8>>::NotLoaded.ready(), None);
         assert_eq!(Loadable::<Vec<u8>>::Loading.ready(), None);
         assert_eq!(Loadable::<Vec<u8>>::Error("boom".into()).ready(), None);
+    }
+
+    /// Rows cache on these revs: an unchanged rescan must not bump them, and a
+    /// real change must.
+    #[test]
+    fn line_stats_revs_move_per_lane_only_when_that_lane_changes() {
+        use gitcomet_core::domain::{LineStats, UncommittedLineStats};
+
+        fn stats(staged: &[(&str, u32)], unstaged: &[(&str, u32)]) -> UncommittedLineStats {
+            let build = |entries: &[(&str, u32)]| {
+                entries
+                    .iter()
+                    .map(|(path, additions)| {
+                        (
+                            PathBuf::from(path),
+                            LineStats {
+                                additions: Some(*additions),
+                                deletions: Some(0),
+                            },
+                        )
+                    })
+                    .collect()
+            };
+            UncommittedLineStats {
+                staged: build(staged),
+                unstaged: build(unstaged),
+            }
+        }
+
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/line-stats"),
+            },
+        );
+        repo.set_uncommitted_line_stats(Loadable::Ready(Arc::new(stats(&[("a", 1)], &[("b", 2)]))));
+        let (staged_rev, unstaged_rev) = (repo.staged_line_stats_rev, repo.unstaged_line_stats_rev);
+
+        repo.set_uncommitted_line_stats(Loadable::Ready(Arc::new(stats(&[("a", 1)], &[("b", 2)]))));
+        assert_eq!(repo.staged_line_stats_rev, staged_rev, "unchanged rescan");
+        assert_eq!(
+            repo.unstaged_line_stats_rev, unstaged_rev,
+            "unchanged rescan"
+        );
+
+        repo.set_uncommitted_line_stats(Loadable::Ready(Arc::new(stats(&[("a", 9)], &[("b", 2)]))));
+        assert_ne!(
+            repo.staged_line_stats_rev, staged_rev,
+            "staged lane changed"
+        );
+        assert_eq!(
+            repo.unstaged_line_stats_rev, unstaged_rev,
+            "the untouched lane keeps its rev so its rows are not rebuilt"
+        );
     }
 }

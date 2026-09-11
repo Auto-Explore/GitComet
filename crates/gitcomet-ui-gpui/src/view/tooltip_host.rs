@@ -58,6 +58,10 @@ impl TooltipHost {
         true
     }
 
+    pub(crate) fn tooltip_text_matches(&self, text: &SharedString) -> bool {
+        self.tooltip_text.as_ref() == Some(text)
+    }
+
     pub(crate) fn clear_tooltip_if_matches(
         &mut self,
         tooltip: &SharedString,
@@ -253,7 +257,7 @@ impl Render for TooltipHost {
                             .bg(tooltip_bg)
                             .rounded(px(theme.radii.row))
                             .shadow(crate::theme::shadow_popover(theme))
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(tooltip_text_color)
                             .child(text),
                     ),

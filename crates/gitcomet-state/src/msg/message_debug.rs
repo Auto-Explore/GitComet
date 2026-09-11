@@ -3,6 +3,18 @@ use super::message::InternalMsg;
 impl std::fmt::Debug for InternalMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InternalMsg::TagPushPreviewLoaded {
+                repo_id,
+                mode,
+                generation,
+                result,
+            } => f
+                .debug_struct("TagPushPreviewLoaded")
+                .field("repo_id", repo_id)
+                .field("mode", mode)
+                .field("generation", generation)
+                .field("result", result)
+                .finish(),
             InternalMsg::GitOperationStarted {
                 repo_id,
                 operation_id,
@@ -111,6 +123,11 @@ impl std::fmt::Debug for InternalMsg {
                 .debug_struct("StagedStatusLoaded")
                 .field("repo_id", repo_id)
                 .field("result", result)
+                .finish(),
+            InternalMsg::UncommittedLineStatsLoaded { repo_id, result } => f
+                .debug_struct("UncommittedLineStatsLoaded")
+                .field("repo_id", repo_id)
+                .field("ok", &result.is_ok())
                 .finish(),
             InternalMsg::StatusLoaded { repo_id, result } => f
                 .debug_struct("StatusLoaded")
@@ -333,6 +350,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("commit_id", commit_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::CommitSignaturesVerified {
+                repo_id,
+                epoch,
+                result,
+            } => f
+                .debug_struct("CommitSignaturesVerified")
+                .field("repo_id", repo_id)
+                .field("epoch", epoch)
+                .field("verified", &result.as_ref().map(Vec::len))
+                .finish(),
             InternalMsg::CommitRevealResolved {
                 repo_id,
                 reference,
@@ -341,6 +368,18 @@ impl std::fmt::Debug for InternalMsg {
                 .debug_struct("CommitRevealResolved")
                 .field("repo_id", repo_id)
                 .field("reference", reference)
+                .field("result", result)
+                .finish(),
+            InternalMsg::CommitLookupResolved {
+                repo_id,
+                reference,
+                request,
+                result,
+            } => f
+                .debug_struct("CommitLookupResolved")
+                .field("repo_id", repo_id)
+                .field("reference", reference)
+                .field("request", request)
                 .field("result", result)
                 .finish(),
             InternalMsg::RangeFilesLoaded {

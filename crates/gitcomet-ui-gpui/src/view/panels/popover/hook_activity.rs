@@ -1,8 +1,35 @@
 use super::*;
 use crate::view::terminal_alacritty::{terminal_default_background, terminal_default_foreground};
 
+/// One side of the dialog.
+fn hook_activity_dialog_extent(
+    available: Pixels,
+    preferred: Pixels,
+    max: Pixels,
+    fraction: f32,
+) -> Pixels {
+    (available * fraction)
+        .max(preferred)
+        .min(max)
+        .min(available)
+}
+
+/// A hook run is a two-line list row; the per-hook lines under it are
+/// ordinary rows.
+const HOOK_ACTIVITY_RUN_ROW_HEIGHT_PX: f32 = 48.0;
+const HOOK_ACTIVITY_RUN_ROW_COMFORTABLE_HEIGHT_PX: f32 = 56.0;
+const HOOK_ACTIVITY_HOOK_ROW_HEIGHT_PX: f32 = 24.0;
+const HOOK_ACTIVITY_HOOK_ROW_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
+
+/// Smallest the dialog opens at, and the share of the window it takes when
+/// there is more room than that. Hook output is wide and long, so give it the
+/// space rather than scrolling a fixed box, but stop short of the whole window.
 const DIALOG_WIDTH_PX: f32 = 900.0;
 const DIALOG_HEIGHT_PX: f32 = 680.0;
+const DIALOG_MAX_WIDTH_PX: f32 = 1600.0;
+const DIALOG_MAX_HEIGHT_PX: f32 = 1100.0;
+const DIALOG_WIDTH_FRACTION: f32 = 0.72;
+const DIALOG_HEIGHT_FRACTION: f32 = 0.8;
 const DIALOG_MARGIN_PX: f32 = 16.0;
 const HISTORY_RAIL_WIDTH_PX: f32 = 220.0;
 
@@ -80,7 +107,7 @@ fn history_row(
 ) -> gpui::Stateful<gpui::Div> {
     let theme = this.theme;
     let ui_scale = popover_ui_scale(cx);
-    let scaled_px = |value: f32| popover_scaled_px(value, ui_scale);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let operation_id = operation.id;
     let selected = this.hook_activity_selected == Some(operation_id);
     let color = status_color(theme, operation.status);
@@ -98,7 +125,10 @@ fn history_row(
         .id(("hook_activity_run", operation_id.0))
         .debug_selector(move || selector.clone())
         .w_full()
-        .h(scaled_px(48.0))
+        .h(ui_scale.row_height(
+            HOOK_ACTIVITY_RUN_ROW_HEIGHT_PX,
+            HOOK_ACTIVITY_RUN_ROW_COMFORTABLE_HEIGHT_PX,
+        ))
         .px_2()
         .flex_none()
         .flex()
@@ -142,7 +172,7 @@ fn history_row(
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .overflow_hidden()
@@ -152,7 +182,7 @@ fn history_row(
                         .child(
                             div()
                                 .flex_none()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(color)
                                 .whitespace_nowrap()
                                 .child(status),
@@ -162,7 +192,7 @@ fn history_row(
                     div()
                         .debug_selector(move || timestamp_selector.clone())
                         .min_w(px(0.0))
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .line_clamp(1)
                         .whitespace_nowrap()
@@ -263,7 +293,7 @@ fn history_rail(
                 .flex_none()
                 .px_3()
                 .py_2()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .font_weight(FontWeight::BOLD)
                 .text_color(theme.colors.foreground.secondary)
                 .child("RUNS"),
@@ -287,6 +317,7 @@ fn operation_detail(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> AnyElement {
     let theme = this.theme;
+    let ui_scale = popover_ui_scale(cx);
     let operation_id = operation.id;
     let color = status_color(theme, operation.status);
     let terminal_background = terminal_default_background(theme);
@@ -311,11 +342,14 @@ fn operation_detail(
             };
             div()
                 .id(("hook_activity_hook", index))
-                .h(px(24.0))
+                .h(ui_scale.row_height(
+                    HOOK_ACTIVITY_HOOK_ROW_HEIGHT_PX,
+                    HOOK_ACTIVITY_HOOK_ROW_COMFORTABLE_HEIGHT_PX,
+                ))
                 .flex()
                 .items_center()
                 .justify_between()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .child(
                     div()
                         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
@@ -366,7 +400,7 @@ fn operation_detail(
         .min_w(px(0.0))
         .p_2()
         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-        .text_xs()
+        .text_size(theme.ui_text(12.0))
         .text_color(if output.is_empty() {
             theme.colors.foreground.secondary
         } else {
@@ -415,7 +449,7 @@ fn operation_detail(
         .child(
             div()
                 .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.colors.foreground.secondary)
                 .child("Hook output"),
@@ -536,13 +570,13 @@ fn operation_detail(
                                 .gap_2()
                                 .child(
                                     div()
-                                        .text_lg()
+                                        .text_size(theme.ui_text(18.0))
                                         .font_weight(FontWeight::BOLD)
                                         .child(operation.label.clone()),
                                 )
                                 .child(
                                     div()
-                                        .text_sm()
+                                        .text_size(theme.ui_text(14.0))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(color)
                                         .child(status_label(operation.status)),
@@ -550,7 +584,7 @@ fn operation_detail(
                         )
                         .child(
                             div()
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .child(duration_label(operation.duration)),
                         ),
@@ -561,7 +595,7 @@ fn operation_detail(
                             .debug_selector(|| "hook_activity_operation_context".to_string())
                             .w_full()
                             .min_w(px(0.0))
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .whitespace_nowrap()
@@ -584,11 +618,25 @@ pub(super) fn panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let ui_scale = popover_ui_scale(cx);
-    let scaled_px = |value: f32| popover_scaled_px(value, ui_scale);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let window_size = window.window_bounds().get_bounds().size;
     let margin = scaled_px(DIALOG_MARGIN_PX);
-    let width = scaled_px(DIALOG_WIDTH_PX).min((window_size.width - margin * 2.0).max(px(0.0)));
-    let height = scaled_px(DIALOG_HEIGHT_PX).min((window_size.height - margin * 2.0).max(px(0.0)));
+    let available = gpui::size(
+        (window_size.width - margin * 2.0).max(px(0.0)),
+        (window_size.height - margin * 2.0).max(px(0.0)),
+    );
+    let width = hook_activity_dialog_extent(
+        available.width,
+        scaled_px(DIALOG_WIDTH_PX),
+        scaled_px(DIALOG_MAX_WIDTH_PX),
+        DIALOG_WIDTH_FRACTION,
+    );
+    let height = hook_activity_dialog_extent(
+        available.height,
+        scaled_px(DIALOG_HEIGHT_PX),
+        scaled_px(DIALOG_MAX_HEIGHT_PX),
+        DIALOG_HEIGHT_FRACTION,
+    );
     let rail_width = scaled_px(HISTORY_RAIL_WIDTH_PX).min(width * 0.34);
 
     let (repository_name, repository_path, operations) = this
@@ -713,7 +761,7 @@ pub(super) fn panel(
             .items_center()
             .justify_center()
             .p_4()
-            .text_sm()
+            .text_size(theme.ui_text(14.0))
             .text_color(theme.colors.foreground.secondary)
             .bg(theme.colors.surface.canvas)
             .child("No Git hooks have run in this repository during this session.")
@@ -772,7 +820,7 @@ pub(super) fn panel(
                                 .child(
                                     div()
                                         .debug_selector(|| "hook_activity_title".to_string())
-                                        .text_sm()
+                                        .text_size(theme.ui_text(14.0))
                                         .font_weight(FontWeight::BOLD)
                                         .line_clamp(1)
                                         .whitespace_nowrap()
@@ -784,7 +832,7 @@ pub(super) fn panel(
                                         .debug_selector(move || {
                                             format!("hook_activity_repository_{}", repo_id.0)
                                         })
-                                        .text_xs()
+                                        .text_size(theme.ui_text(12.0))
                                         .font_family("monospace")
                                         .text_color(theme.colors.foreground.secondary)
                                         .line_clamp(1)
@@ -796,6 +844,27 @@ pub(super) fn panel(
                 )
                 .child(header_actions),
         )
-        .child(dialog_divider(theme))
+        .child(super::popover_rule(theme))
         .child(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_dialog_grows_with_the_window_between_its_floor_and_cap() {
+        let extent = |available: f32| {
+            hook_activity_dialog_extent(px(available), px(900.0), px(1600.0), 0.72)
+        };
+
+        assert_eq!(extent(600.0), px(600.0), "never wider than the window");
+        assert_eq!(extent(1000.0), px(900.0), "keeps its floor while it fits");
+        assert_eq!(
+            extent(2000.0),
+            px(1440.0),
+            "takes its share of a big window"
+        );
+        assert_eq!(extent(4000.0), px(1600.0), "and stops at the cap");
+    }
 }

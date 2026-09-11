@@ -94,7 +94,12 @@ fn builds_pure_components_without_panics() {
         });
 
         assert_no_panic("components::toast", || {
-            let _ = components::toast(theme, components::ToastKind::Success, "Hello");
+            let _ = components::toast(
+                theme,
+                ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                components::ToastKind::Success,
+                "Hello",
+            );
         });
 
         assert_no_panic("components::Button render variants", || {
@@ -113,7 +118,7 @@ fn builds_pure_components_without_panics() {
                 .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z5", "Create")
                 .style(components::ButtonStyle::Filled)
-                .separated_end_slot(div().text_xs().child("Enter"))
+                .separated_end_slot(div().text_size(theme.ui_text(12.0)).child("Enter"))
                 .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 
@@ -133,10 +138,8 @@ fn builds_pure_components_without_panics() {
             let tab = components::Tab::new(("t", 1u64))
                 .selected(true)
                 .child(div().child("Repo"))
-                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
-            let _ = components::TabBar::new("tb")
-                .tab(tab)
-                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
+                .render(theme);
+            let _ = components::TabBar::new("tb").tab(tab).render();
         });
 
         assert_no_panic("view::window_frame", || {
@@ -210,7 +213,7 @@ impl gpui::Render for SmokeView {
                             .debug_selector(|| "smoke_selected_tab_content".to_string())
                             .child("One"),
                     )
-                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
+                    .render(theme)
                     .debug_selector(|| "smoke_selected_tab".to_string()),
             )
             .tab(
@@ -221,10 +224,10 @@ impl gpui::Render for SmokeView {
                             .debug_selector(|| "smoke_idle_tab_content".to_string())
                             .child("Two"),
                     )
-                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
+                    .render(theme)
                     .debug_selector(|| "smoke_idle_tab".to_string()),
             )
-            .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
+            .render();
 
         let content = div()
             .flex()
@@ -4180,6 +4183,124 @@ fn roomy_repo_tab_expands_to_show_its_full_repository_name(cx: &mut gpui::TestAp
         px(0.0),
         "expected the single naturally sized tab not to overflow the strip"
     );
+}
+
+/// AppKit paints the traffic lights straight over our bar, so the bar has to
+/// keep its own leading control out from under them. Nothing else measures the
+/// reserved inset against what actually gets painted.
+#[cfg(target_os = "macos")]
+#[gpui::test]
+fn the_title_bar_keeps_its_leading_control_clear_of_the_traffic_lights(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_traffic_lights_{}",
+        std::process::id()
+    ));
+    restore_session_and_draw(cx, &store_for_test, view.clone(), vec![workdir]);
+
+    let picker = cx
+        .debug_bounds("repo_picker_toggle")
+        .expect("expected repository picker bounds");
+
+    assert!(
+        picker.left() >= crate::view::chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET,
+        "the first control in the bar starts at {:?}, inside the {:?} reserved for the lights",
+        picker.left(),
+        crate::view::chrome::MACOS_TRAFFIC_LIGHTS_SAFE_INSET
+    );
+}
+
+/// The window chrome is deliberately outside the UI scale: a title bar shares
+/// its row with the OS window controls, which do not resize, so the bar, its
+/// buttons and the repository tabs must not move when the workspace under them
+/// zooms.
+#[gpui::test]
+fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
+    cx: &mut gpui::TestAppContext,
+) {
+    // Width matters as much as height here: the scale parameter this change
+    // dropped from `Tab::natural_width` governs the strip's widths.
+    fn box_of(
+        cx: &mut gpui::VisualTestContext,
+        selector: &'static str,
+        at: u32,
+    ) -> gpui::Size<gpui::Pixels> {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("missing {selector} at {at}% UI scale"))
+            .size
+    }
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_fixed_chrome_{}",
+        std::process::id()
+    ));
+    let repo_id = restore_session_and_draw(cx, &store_for_test, view.clone(), vec![workdir])[0];
+
+    let fixed = [
+        "titlebar_drag",
+        "repo_picker_toggle",
+        "add_repo_menu",
+        repo_tab_selector(repo_id),
+        repo_tab_label_text_selector(repo_id),
+    ];
+    // Proves the zoom actually landed: without it every assertion below would
+    // also hold for a scale change that never took effect.
+    let zooms = "sidebar_tab_files";
+
+    let default_percent = crate::ui_scale::DEFAULT_UI_SCALE_PERCENT;
+    let at_default = fixed.map(|selector| box_of(cx, selector, default_percent));
+    let zooms_at_default = box_of(cx, zooms, default_percent).height;
+
+    for percent in [80, 200] {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                crate::ui_scale::set_current(cx, percent);
+                this.apply_ui_scale_percent(percent, window, cx);
+            });
+        });
+        sync_view_for_tests(cx, &view);
+
+        for (ix, selector) in fixed.into_iter().enumerate() {
+            assert_eq!(
+                box_of(cx, selector, percent),
+                at_default[ix],
+                "{selector} sits in the title bar and must not move at {percent}% UI scale"
+            );
+        }
+        // Absolute, not merely unchanged: the bar is mounted uncached in tests,
+        // so a bar that silently compressed would still "not move".
+        assert_eq!(
+            box_of(cx, "titlebar_drag", percent).height,
+            crate::view::chrome::TITLE_BAR_HEIGHT,
+            "the title bar must hold its own fixed height at {percent}% UI scale"
+        );
+        // Re-checked every step, so neither iteration can pass vacuously.
+        let zoomed = box_of(cx, zooms, percent).height;
+        if percent < default_percent {
+            assert!(
+                zoomed < zooms_at_default,
+                "the workspace under the title bar must shrink at {percent}%"
+            );
+        } else {
+            assert!(
+                zoomed > zooms_at_default,
+                "the workspace under the title bar must still zoom at {percent}%"
+            );
+        }
+    }
 }
 
 #[gpui::test]

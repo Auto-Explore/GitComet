@@ -485,7 +485,7 @@ impl GixRepo {
         Ok(Some(remotes[0].name.clone()))
     }
 
-    fn current_branch_name(&self) -> Result<Option<String>> {
+    pub(super) fn current_branch_name(&self) -> Result<Option<String>> {
         let head = self.current_branch_impl()?;
         let head = head.trim();
         if head.is_empty() || head == "HEAD" {
@@ -821,7 +821,11 @@ impl GixRepo {
     /// destination. Best effort is deliberate: the network operation already
     /// succeeded, so a transient config-lock failure must not report the push
     /// itself as failed.
-    fn clear_pending_upstream_if_matches(&self, local_branch: &str, upstream: &Upstream) {
+    pub(super) fn clear_pending_upstream_if_matches(
+        &self,
+        local_branch: &str,
+        upstream: &Upstream,
+    ) {
         let Ok(repo) = self.reopen_repo() else {
             return;
         };

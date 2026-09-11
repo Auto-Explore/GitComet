@@ -12,7 +12,7 @@ use gpui::prelude::*;
 use gpui::{
     App, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Pixels, Render, ScrollHandle,
     SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, actions,
-    div, point,
+    div,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -148,6 +148,7 @@ impl FocusedDiffView {
             .unwrap_or_else(|| format!("{} vs {}", config.label_left, config.label_right));
 
         let theme = AppTheme::default_for_window_appearance(window.appearance());
+        crate::appearance::initialize(&ui_session, cx);
         let ui_scale = crate::ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
@@ -314,9 +315,9 @@ fn apply_visual_diff_line_kinds(
 
 impl Render for FocusedDiffView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
+        let theme = self.theme.with_appearance(crate::appearance::current(cx));
         let line_count = self.lines.len();
-        let scaled_px = |value| crate::ui_scale::design_px_from_window(value, window);
+        let scaled_px = crate::ui_scale::scaler(crate::ui_scale::UiScale::from_window(window));
         let next_whitespace_mode = self.diff_whitespace_mode.toggled();
 
         div()
@@ -351,7 +352,7 @@ impl Render for FocusedDiffView {
                 weight: FontWeight::default(),
                 style: gpui::FontStyle::default(),
             })
-            .text_size(scaled_px(13.0))
+            .text_size(theme.ui_text(13.0))
             .flex()
             .flex_col()
             // Toolbar
@@ -370,14 +371,14 @@ impl Render for FocusedDiffView {
                     .child(
                         div()
                             .font_weight(FontWeight::BOLD)
-                            .text_size(scaled_px(14.0))
+                            .text_size(theme.ui_text(14.0))
                             .child(SharedString::from(self.title.clone())),
                     )
                     .child(div().flex_grow(1.))
                     .child(
                         div()
                             .text_color(theme.colors.foreground.secondary)
-                            .text_size(scaled_px(12.0))
+                            .text_size(theme.ui_text(12.0))
                             .child(SharedString::from(format!("{line_count} lines"))),
                     )
                     .child(
@@ -408,6 +409,8 @@ impl Render for FocusedDiffView {
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
                     .font_family(self.editor_font_family.clone())
+                    .text_size(scaled_px(theme.metrics.editor_font_size_px as f32))
+                    .line_height(scaled_px(theme.metrics.editor_line_height()))
                     .px(scaled_px(16.0))
                     .py(scaled_px(4.0))
                     .children(
@@ -441,7 +444,7 @@ fn render_diff_line(
     };
 
     let line_num = format!("{:>4} ", index + 1);
-    let scaled_px = |value| crate::ui_scale::design_px_from_window(value, window);
+    let scaled_px = crate::ui_scale::scaler(crate::ui_scale::UiScale::from_window(window));
 
     let mut el = div()
         .w_full()
@@ -450,8 +453,10 @@ fn render_diff_line(
         .child(
             div()
                 .text_color(theme.colors.foreground.secondary)
-                .text_size(scaled_px(11.0))
-                .min_w(scaled_px(40.0))
+                .text_size(scaled_px(theme.metrics.editor_font_size_px as f32))
+                .min_w(scaled_px(
+                    40.0 * theme.metrics.editor_font_size_px as f32 / 13.0,
+                ))
                 .child(SharedString::from(line_num)),
         )
         .child(
@@ -529,10 +534,9 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
                         titlebar: Some(TitlebarOptions {
                             title: Some("GitComet — Diff".into()),
                             appears_transparent: false,
-                            traffic_light_position: Some(point(
-                                crate::ui_scale::design_px_from_percent(9.0, ui_scale_percent),
-                                crate::ui_scale::design_px_from_percent(9.0, ui_scale_percent),
-                            )),
+                            traffic_light_position: Some(
+                                crate::view::chrome::macos_traffic_light_position(),
+                            ),
                         }),
                         app_id: Some("gitcomet-diff".to_string()),
                         window_decorations: Some(WindowDecorations::Server),

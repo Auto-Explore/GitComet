@@ -140,6 +140,7 @@ fn repo_opened_ok_auto_loads_tags_when_enabled() {
         git_log_settings: GitLogSettings {
             show_history_tags: true,
             tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
+            ..GitLogSettings::default()
         },
         ..AppState::default()
     };

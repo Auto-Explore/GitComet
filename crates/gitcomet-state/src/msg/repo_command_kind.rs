@@ -24,6 +24,9 @@ pub enum RepoCommandKind {
         reference: String,
     },
     Push,
+    PushWithTags {
+        request: gitcomet_core::tag_push::TagPushRequest,
+    },
     PushAfterCommit {
         target: SafePushAfterCommitTarget,
         set_upstream: bool,
@@ -189,6 +192,7 @@ impl RepoCommandKind {
             Self::MergeRef { .. } => "Merge",
             Self::SquashRef { .. } | Self::SquashCommits { .. } => "Squash",
             Self::Push | Self::PushAfterCommit { .. } => "Push",
+            Self::PushWithTags { request } => request.mode.label(),
             Self::ForcePush | Self::ForcePushWithLease { .. } => "Force push",
             Self::PushSetUpstream { .. } => "Push and set upstream",
             Self::SetUpstreamBranch { .. } => "Set upstream",

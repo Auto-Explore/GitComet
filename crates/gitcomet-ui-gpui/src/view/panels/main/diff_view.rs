@@ -376,10 +376,13 @@ impl MainPaneView {
             let path = path.clone();
             let area = *area;
             let change_tracking_view = self.active_change_tracking_view(cx);
+            let status_section_order =
+                self.active_status_section_order(repo_id, change_tracking_view, cx);
             let next_path_in_section = status_nav::status_navigation_context_for_repo(
                 repo,
                 &diff_target,
                 change_tracking_view,
+                status_section_order.as_deref(),
             )
             .and_then(|navigation| navigation.next_or_prev_path());
             let status_ready = repo.status_entries_for_area(area).is_some();
@@ -404,17 +407,22 @@ impl MainPaneView {
                 return true;
             }
 
+            let consumes_selection =
+                self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
             if self.confirm_stage_conflict_markers(
                 repo_id,
                 area,
                 vec![path.clone()],
-                false,
+                consumes_selection,
                 window,
                 cx,
             ) {
                 return true;
             }
 
+            if consumes_selection {
+                self.clear_status_selection_for_shortcut(repo_id, cx);
+            }
             match (status_ready, area) {
                 (true, DiffArea::Unstaged) => {
                     self.store.dispatch(Msg::StagePath {
@@ -506,10 +514,13 @@ impl MainPaneView {
             match key {
                 "s" if area == DiffArea::Unstaged && !mods.shift => {
                     let change_tracking_view = self.active_change_tracking_view(cx);
+                    let status_section_order =
+                        self.active_status_section_order(repo_id, change_tracking_view, cx);
                     let next_path_in_section = status_nav::status_navigation_context_for_repo(
                         repo,
                         &diff_target,
                         change_tracking_view,
+                        status_section_order.as_deref(),
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
 
@@ -536,17 +547,22 @@ impl MainPaneView {
                         return true;
                     }
 
+                    let consumes_selection =
+                        self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
                     if self.confirm_stage_conflict_markers(
                         repo_id,
                         area,
                         vec![path.clone()],
-                        false,
+                        consumes_selection,
                         window,
                         cx,
                     ) {
                         return true;
                     }
 
+                    if consumes_selection {
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                    }
                     if status_ready {
                         self.store.dispatch(Msg::StagePath {
                             repo_id,
@@ -574,10 +590,13 @@ impl MainPaneView {
                 }
                 "u" if area == DiffArea::Staged && !mods.shift => {
                     let change_tracking_view = self.active_change_tracking_view(cx);
+                    let status_section_order =
+                        self.active_status_section_order(repo_id, change_tracking_view, cx);
                     let next_path_in_section = status_nav::status_navigation_context_for_repo(
                         repo,
                         &diff_target,
                         change_tracking_view,
+                        status_section_order.as_deref(),
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
 
@@ -602,6 +621,9 @@ impl MainPaneView {
                         return true;
                     }
 
+                    if self.status_single_selection_for_shortcut(repo_id, area, &path, cx) {
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                    }
                     if status_ready {
                         self.store.dispatch(Msg::UnstagePath {
                             repo_id,
@@ -1478,17 +1500,21 @@ impl MainPaneView {
             if theme.is_dark { 0.34 } else { 0.24 },
         );
         let options = self.diff_search_options;
-        let compact_control_height = px(26.0);
-        let compact_icon_button_width = px(22.0);
-        let compact_option_button_width = px(24.0);
-        let max_search_input_height = px(super::super::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX);
+        // A floating toolbar: its controls ride the same ramp as the toolbar
+        // buttons they mirror.
+        let ui_scale =
+            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics);
+        let compact_control_height = ui_scale.row_height(26.0, 32.0);
+        let compact_icon_button_width = components::control_height(ui_scale);
+        let compact_option_button_width = ui_scale.row_height(24.0, 32.0);
+        let max_search_input_height = ui_scale.px(super::super::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX);
 
         let panel = div()
             .flex()
             .items_start()
-            .gap(px(2.0))
-            .px(px(4.0))
-            .py(px(2.0))
+            .gap(ui_scale.px(2.0))
+            .px(ui_scale.px(4.0))
+            .py(ui_scale.px(2.0))
             .rounded(px(theme.radii.control))
             .border_1()
             .border_color(theme.colors.stroke.default)
@@ -1497,8 +1523,8 @@ impl MainPaneView {
             .child(
                 div()
                     .relative()
-                    .w(px(220.0))
-                    .min_w(px(140.0))
+                    .w(ui_scale.px(220.0))
+                    .min_w(ui_scale.px(140.0))
                     .debug_selector(|| "diff_search_input_slot".to_string())
                     .child(
                         div()
@@ -1590,16 +1616,16 @@ impl MainPaneView {
             )
             .child(
                 div()
-                    .w(px(104.0))
-                    .min_w(px(104.0))
-                    .max_w(px(104.0))
+                    .w(ui_scale.px(104.0))
+                    .min_w(ui_scale.px(104.0))
+                    .max_w(ui_scale.px(104.0))
                     .h(compact_control_height)
                     .flex()
                     .items_center()
                     .justify_end()
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(match_label_color)
                     .debug_selector(|| "diff_search_match_label".to_string())
                     .child(match_label),
@@ -1634,8 +1660,10 @@ impl MainPaneView {
             .id("diff_search_overlay_panel")
             .debug_selector(|| "diff_search_overlay".to_string())
             .absolute()
-            .top(components::control_height_md(ui_scale_percent))
-            .right(px(8.0))
+            .top(components::content_header_height(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            ))
+            .right(ui_scale::design_px_from_percent(8.0, ui_scale_percent))
             .child(panel)
             .into_any_element();
 
@@ -1861,7 +1889,10 @@ impl MainPaneView {
                         .items_center()
                         .gap_1()
                         .px_1()
-                        .h(components::control_height(ui_scale_percent))
+                        .h(components::control_height(
+                            ui_scale::UiScale::from_percent(ui_scale_percent)
+                                .with_appearance(theme.metrics),
+                        ))
                         .rounded(px(theme.radii.row))
                         .when(diff_mode_active, |d| {
                             d.bg(theme.colors.interaction.pressed_background)
@@ -1880,7 +1911,7 @@ impl MainPaneView {
                                 .min_w(px(0.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .child(diff_mode_label),
                         )
                         .child(svg_icon(
@@ -2026,7 +2057,10 @@ impl MainPaneView {
                     .debug_selector(|| "diff_view_toggle".to_string())
                     .flex()
                     .items_center()
-                    .h(components::control_height(ui_scale_percent))
+                    .h(components::control_height(
+                        ui_scale::UiScale::from_percent(ui_scale_percent)
+                            .with_appearance(theme.metrics),
+                    ))
                     .rounded(px(theme.radii.row))
                     .border_1()
                     .border_color(view_toggle_border)
@@ -2224,7 +2258,9 @@ impl MainPaneView {
             .flex()
             .items_center()
             .justify_between()
-            .h(components::control_height_md(ui_scale_percent))
+            .h(components::content_header_height(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            ))
             .child(
                 div()
                     .flex_1()
@@ -2956,10 +2992,15 @@ impl MainPaneView {
                                                 // divider lines up. Padding keeps the band and its
                                                 // bottom border full-bleed.
                                                 .pr(shared_scrollbar_gutter)
-                                                .h(components::control_height(ui_scale_percent))
+                                                .h(components::control_height(
+                                                    ui_scale::UiScale::from_percent(
+                                                        ui_scale_percent,
+                                                    )
+                                                    .with_appearance(theme.metrics),
+                                                ))
                                                 .flex()
                                                 .items_center()
-                                                .text_xs()
+                                                .text_size(theme.ui_text(12.0))
                                                 .text_color(theme.colors.foreground.secondary)
                                                 .bg(crate::theme::content_header_bg(theme))
                                                 .border_b_1()
@@ -3248,7 +3289,10 @@ impl MainPaneView {
             }))
             .child(
                 header
-                    .h(components::control_height_md(ui_scale_percent))
+                    .h(components::content_header_height(
+                        ui_scale::UiScale::from_percent(ui_scale_percent)
+                            .with_appearance(theme.metrics),
+                    ))
                     .px_2()
                     .bg(if historical_browse {
                         crate::theme::historical_header_bg(

@@ -7,9 +7,37 @@ use palette::IntoColor;
 use std::num::NonZeroU32;
 
 pub(in crate::view) const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
-/// Row heights the collapsed-rail popover also needs, to size the scroll
-/// spacers it places around its virtualized window.
-pub(in crate::view) const BRANCH_TREE_ROW_HEIGHT_PX: f32 = 24.0;
+
+/// Row height of every continuous list in the sidebar. The tabs swap lists in
+/// place, so a differing rhythm would make the rows jump.
+const SIDEBAR_TREE_ROW_HEIGHT_PX: f32 = 24.0;
+const SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX: f32 = 32.0;
+
+/// Unscaled row height, for the callers that place rows themselves — the
+/// collapsed-rail popover's prefix sum works in design units, then scales once.
+/// Whole pixels on purpose: layout snaps every row to the pixel grid, so a
+/// fractional height off the density ramp (Spacious lands on 36.8) would leave
+/// the popover's prefix sum a fifth of a pixel short per row, accumulating over
+/// a long list until the window it places no longer matches what is drawn.
+pub(in crate::view) fn sidebar_list_row_height_px(theme: AppTheme) -> f32 {
+    theme
+        .metrics
+        .row_height(
+            SIDEBAR_TREE_ROW_HEIGHT_PX,
+            SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+        )
+        .round()
+}
+
+pub(in crate::view) fn sidebar_list_row_height(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> gpui::Pixels {
+    ui_scale::design_px_from_percent(sidebar_list_row_height_px(theme), ui_scale_percent)
+}
+
+/// Height of the spacer rows the collapsed-rail popover also needs, to size the
+/// scroll spacers it places around its virtualized window.
 pub(in crate::view) const BRANCH_TREE_SPACER_HEIGHT_PX: f32 = 8.0;
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
@@ -216,6 +244,18 @@ pub(in crate::view) fn worktree_origin_label(
 ///
 /// Deliberately style-only: callers add the id, cursor, hover and click when the
 /// chip is an affordance rather than a label.
+/// Height of a worktree badge. Comfortable lifts it with the rows and title
+/// bars it sits in.
+const WORKTREE_BADGE_HEIGHT_PX: f32 = 18.0;
+const WORKTREE_BADGE_COMFORTABLE_HEIGHT_PX: f32 = 24.0;
+
+pub(in crate::view) fn worktree_badge_height(scale: impl Into<ui_scale::UiScale>) -> Pixels {
+    scale.into().row_height(
+        WORKTREE_BADGE_HEIGHT_PX,
+        WORKTREE_BADGE_COMFORTABLE_HEIGHT_PX,
+    )
+}
+
 pub(in crate::view) fn worktree_origin_chip(
     theme: AppTheme,
     label: SharedString,
@@ -240,7 +280,7 @@ pub(in crate::view) fn worktree_origin_chip(
         .child(svg_icon(WORKTREE_ICON_PATH, palette.icon, icon_size))
         .child(
             div()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(palette.text)
                 .line_clamp(1)
                 .whitespace_nowrap()
@@ -277,9 +317,8 @@ fn filtered_label_element<V: 'static>(
             font_weight: Some(FontWeight::BOLD),
             ..Default::default()
         };
-        components::TruncatedText::new(label)
+        components::TruncatedText::new(label, text_size)
             .text_color(text_color)
-            .text_size(text_size)
             .font_weight(font_weight)
             .highlights([(range, highlight)])
             .render(cx)
@@ -440,7 +479,7 @@ impl SidebarPaneView {
         /// over the badge.
         const BRANCH_ROW_TRAILING_PAD_PX: f32 = 4.0;
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
 
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
@@ -566,7 +605,7 @@ impl SidebarPaneView {
                         .id(("pinned_section", ix))
                         .debug_selector(move || format!("pinned_section_{selector_suffix}"))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -583,7 +622,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -641,7 +680,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_section", ix))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -655,7 +694,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -701,7 +740,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_filter_group", ix))
                         .debug_selector(move || format!("branch_filter_group_{selector_suffix}"))
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -714,7 +753,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -749,7 +788,7 @@ impl SidebarPaneView {
                         .id(("stash_section", ix))
                         .debug_selector(move || format!("stash_section_{ix}"))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -763,7 +802,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -808,10 +847,10 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::StashPlaceholder { message } => div()
                     .id(("stash_placeholder", ix))
-                    .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .px_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
@@ -844,14 +883,14 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 14.0))
                         .child(
                             components::FadingText::new(
-                                div().text_sm().child(message.clone()),
+                                div().text_size(theme.ui_text(14.0)).child(message.clone()),
                                 row_style.resolved_background(row_state),
                             )
                             .hover_bg(
@@ -896,10 +935,10 @@ impl SidebarPaneView {
                     message,
                 } => div()
                     .id(("branch_placeholder", ix))
-                    .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .px_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
@@ -925,7 +964,7 @@ impl SidebarPaneView {
                         .id(("worktrees_section", ix))
                         .debug_selector(move || format!("worktrees_section_{ix}"))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -939,7 +978,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -989,10 +1028,10 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::WorktreePlaceholder { message } => div()
                     .id(("worktree_placeholder", ix))
-                    .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .px_2()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
@@ -1036,7 +1075,7 @@ impl SidebarPaneView {
                         .id(("worktree_item", ix))
                         .debug_selector(move || row_debug_selector.clone())
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .flex()
                         .items_center()
@@ -1050,7 +1089,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .flex()
                                 .items_center()
                                 .overflow_hidden()
@@ -1062,17 +1101,19 @@ impl SidebarPaneView {
                                         .min_w(px(0.0))
                                         .overflow_hidden()
                                         .child(
-                                            components::TruncatedText::path(path_label.clone())
-                                                .id(("worktree_path_text", ix))
-                                                .text_sm()
-                                                // Set the color explicitly: TruncatedText
-                                                // resolves an unset color from the ambient text
-                                                // style inside a deferred measure closure, which
-                                                // doesn't see ancestor `text_color` — so in the
-                                                // collapsed popover it would render near-black.
-                                                .text_color(theme.colors.foreground.primary)
-                                                .full_text_tooltip(this.tooltip_host.clone())
-                                                .render(cx),
+                                            components::TruncatedText::path(
+                                                path_label.clone(),
+                                                theme.ui_text(14.0),
+                                            )
+                                            .id(("worktree_path_text", ix))
+                                            // Set the color explicitly: TruncatedText
+                                            // resolves an unset color from the ambient text
+                                            // style inside a deferred measure closure, which
+                                            // doesn't see ancestor `text_color` — so in the
+                                            // collapsed popover it would render near-black.
+                                            .text_color(theme.colors.foreground.primary)
+                                            .full_text_tooltip(this.tooltip_host.clone())
+                                            .render(cx),
                                         ),
                                 )
                                 .when_some(branch_badge_label.clone(), |row, badge_label| {
@@ -1082,6 +1123,10 @@ impl SidebarPaneView {
                                             .items_center()
                                             .gap(scaled_px(3.0))
                                             .px(scaled_px(6.0))
+                                            .h(worktree_badge_height(
+                                                ui_scale::UiScale::from_percent(ui_scale_percent)
+                                                    .with_appearance(theme.metrics),
+                                            ))
                                             // Same control radius as the branch
                                             // rows' worktree badge; the two are
                                             // the same chip in two lists.
@@ -1089,7 +1134,7 @@ impl SidebarPaneView {
                                             .border_1()
                                             .border_color(branch_badge_colors.border)
                                             .bg(branch_badge_colors.bg)
-                                            .text_size(scaled_px(11.0))
+                                            .text_size(theme.ui_text(11.0))
                                             .text_color(branch_badge_colors.text)
                                             .id(("worktree_branch_badge", ix))
                                             .debug_selector(move || {
@@ -1113,9 +1158,9 @@ impl SidebarPaneView {
                                                     .child(
                                                         components::TruncatedText::new(
                                                             badge_label.clone(),
+                                                            theme.ui_text(11.0),
                                                         )
                                                         .id(("worktree_branch_badge_text", ix))
-                                                        .text_size(scaled_px(11.0))
                                                         // Explicit color: TruncatedText resolves an
                                                         // unset color from the ambient text style in
                                                         // a deferred measure closure that misses the
@@ -1195,7 +1240,7 @@ impl SidebarPaneView {
                         .id(("submodules_section", ix))
                         .debug_selector(move || format!("submodules_section_{ix}"))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1209,7 +1254,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::MEDIUM)
@@ -1259,14 +1304,14 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::SubmodulePlaceholder { message, can_load } => div()
                     .id(("submodule_placeholder", ix))
-                    .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .w_full()
                     .pl_2()
                     .pr_1()
                     .flex()
                     .items_center()
                     .gap(scaled_px(6.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .child(
                         div()
@@ -1353,7 +1398,7 @@ impl SidebarPaneView {
                     div()
                         .id(("submodule_item", ix))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .flex()
                         .items_center()
@@ -1367,7 +1412,7 @@ impl SidebarPaneView {
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .debug_selector(move || format!("submodule_label_{ix}"))
@@ -1395,7 +1440,7 @@ impl SidebarPaneView {
                                         theme.colors.surface.panel,
                                         if theme.is_dark { 0.9 } else { 0.7 },
                                     ))
-                                    .text_size(scaled_px(11.0))
+                                    .text_size(theme.ui_text(11.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(badge_label),
                             )
@@ -1459,7 +1504,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_remote", ix))
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(0))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1468,7 +1513,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(remote_color)
                         .child(tree_toggle_slot(Some(collapsed)))
@@ -1557,7 +1602,7 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_group", ix))
                         .debug_selector(move || format!("branch_group_{ix}"))
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .pl(indent_px(usize::from(depth)))
                         .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
@@ -1566,7 +1611,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .font_weight(FontWeight::NORMAL)
                         .text_color(theme.colors.foreground.secondary)
                         .child(tree_toggle_slot(Some(collapsed)))
@@ -1712,7 +1757,7 @@ impl SidebarPaneView {
                                 .flex()
                                 .items_center()
                                 .gap_1()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(color)
                                 .child(svg_icon(icon_path, color, 11.0))
@@ -1738,7 +1783,7 @@ impl SidebarPaneView {
                             .gap(scaled_px(3.0))
                             .px(scaled_px(6.0))
                             .rounded(px(theme.radii.control))
-                            .text_size(scaled_px(11.0))
+                            .text_size(theme.ui_text(11.0))
                             .text_color(colors.text)
                             .bg(colors.bg)
                             .border_1()
@@ -1763,7 +1808,7 @@ impl SidebarPaneView {
                         .id(("branch_item", ix))
                         .debug_selector(move || row_debug_selector.clone())
                         .relative()
-                        .h(scaled_px(BRANCH_TREE_ROW_HEIGHT_PX))
+                        .h(sidebar_list_row_height(theme, ui_scale_percent))
                         .w_full()
                         .group(row_group.clone())
                         .flex()
@@ -1787,7 +1832,7 @@ impl SidebarPaneView {
                             // fade them into the row instead of slicing a glyph.
                             components::FadingText::new(
                                 div()
-                                    .text_sm()
+                                    .text_size(theme.ui_text(14.0))
                                     .text_color(branch_selected_label_color)
                                     .child(filtered_label_element(
                                         label,
@@ -1873,6 +1918,10 @@ impl SidebarPaneView {
                             .items_center()
                             .gap(scaled_px(3.0))
                             .px(scaled_px(6.0))
+                            .h(worktree_badge_height(
+                                ui_scale::UiScale::from_percent(ui_scale_percent)
+                                    .with_appearance(theme.metrics),
+                            ))
                             // Squared off on the control radius the buttons and
                             // tabs use, matching the upstream status chip rather
                             // than the fully-round decorative pills.
@@ -1880,7 +1929,7 @@ impl SidebarPaneView {
                             .border_1()
                             .border_color(badge_colors.border)
                             .bg(badge_colors.bg)
-                            .text_size(scaled_px(11.0))
+                            .text_size(theme.ui_text(11.0))
                             .text_color(badge_colors.text)
                             .cursor(CursorStyle::PointingHand)
                             // A worktree folder can outrun the pane. Cap and
@@ -1894,15 +1943,17 @@ impl SidebarPaneView {
                             .child(svg_icon(WORKTREE_ICON_PATH, badge_colors.icon, 9.0))
                             .child(
                                 div().min_w(px(0.0)).overflow_hidden().child(
-                                    components::TruncatedText::new(workspace_badge_label)
-                                        .id(("branch_workspace_badge_text", ix))
-                                        .text_size(scaled_px(11.0))
-                                        // Explicit color: TruncatedText resolves an
-                                        // unset one from the ambient text style in a
-                                        // deferred measure closure that never sees the
-                                        // pill's `.text_color`.
-                                        .text_color(badge_colors.text)
-                                        .render(cx),
+                                    components::TruncatedText::new(
+                                        workspace_badge_label,
+                                        theme.ui_text(11.0),
+                                    )
+                                    .id(("branch_workspace_badge_text", ix))
+                                    // Explicit color: TruncatedText resolves an
+                                    // unset one from the ambient text style in a
+                                    // deferred measure closure that never sees the
+                                    // pill's `.text_color`.
+                                    .text_color(badge_colors.text)
+                                    .render(cx),
                                 ),
                             )
                             .hover(move |s| {
@@ -2086,8 +2137,7 @@ impl DetailsPaneView {
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = repo.id;
         let has_active_menu = this.active_context_menu_invoker.is_some();
         let file_rows = this.cached_commit_file_rows(
@@ -2100,29 +2150,109 @@ impl DetailsPaneView {
             repo.history_state.commit_details_rev,
             &details.files,
         );
+        let plan = this.cached_commit_file_plan(
+            repo_id,
+            repo.history_state.commit_details_rev,
+            &details.files,
+        );
+        let is_tree = plan.is_tree();
         let visible_signature = this.commit_files_visible_signature(
             repo_id,
             repo.history_state.commit_details_rev,
             &range,
             projection.source_indices.len(),
         );
-        let path_alignment_group = this
-            .commit_files_path_alignment_group
-            .visible_rows(visible_signature);
+        // A tree shows leaf names, which have no shared prefix to align, and a
+        // row that reported into the group would anchor it on the shortest one.
+        let path_alignment_group = (!is_tree).then(|| {
+            this.commit_files_path_alignment_group
+                .visible_rows(visible_signature)
+        });
 
-        range
-            .filter_map(|visible_ix| {
-                let source_ix = *projection.source_indices.get(visible_ix)?;
-                details
-                    .files
-                    .get(source_ix)
-                    .zip(file_rows.get(source_ix))
-                    .map(|(f, row)| (visible_ix, f, row.label.clone(), row.visuals))
+        let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
+            .filter_map(|row_ix| {
+                plan.row_at(crate::view::rows::RowIx(row_ix))
+                    .map(|row| (row_ix, row))
             })
-            .map(|(ix, f, path_label, visuals)| {
+            .collect();
+
+        rows.into_iter()
+            .filter_map(|(ix, row)| {
+                let (ordinal, depth) = match row {
+                    crate::view::rows::FileListRow::Directory {
+                        key,
+                        label,
+                        depth,
+                        collapsed,
+                        chain,
+                        subtree: _,
+                        additions,
+                        deletions,
+                    } => {
+                        return Some(
+                            crate::view::rows::directory_row(
+                                crate::view::rows::DirectoryRowProps {
+                                    theme,
+                                    ui_scale_percent,
+                                    id: ("commit_file_dir", ix).into(),
+                                    label: &label,
+                                    depth,
+                                    collapsed,
+                                    additions,
+                                    deletions,
+                                    row_height: sidebar_list_row_height(theme, ui_scale_percent),
+                                    row_group: None,
+                                    detail: crate::view::rows::directory_row_detail_for_width(
+                                        // No width probe on this list.
+                                        gpui::Pixels::MAX,
+                                        depth,
+                                        additions.is_some() || deletions.is_some(),
+                                        ui_scale_percent,
+                                    ),
+                                },
+                            )
+                            .debug_selector(move || format!("commit_file_dir_{}_{}", repo_id.0, ix))
+                            .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                if !e.standard_click() {
+                                    return;
+                                }
+                                this.toggle_file_list_dir(
+                                    repo_id,
+                                    crate::view::rows::FileListId::CommitFiles,
+                                    Arc::clone(&key),
+                                    Arc::clone(&chain),
+                                    collapsed,
+                                    cx,
+                                );
+                            }))
+                            .into_any_element(),
+                        );
+                    }
+                    crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+                };
+                let source_ix = *projection.source_indices.get(ordinal.0)?;
+                let (f, presentation) =
+                    details.files.get(source_ix).zip(file_rows.get(source_ix))?;
+                let visuals = presentation.visuals;
+                let path_label = if is_tree {
+                    SharedString::from(
+                        f.path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| presentation.label.to_string()),
+                    )
+                } else {
+                    presentation.label.clone()
+                };
                 let commit_id = details.id.clone();
-                let icon = Some(visuals.icon);
-                let color = visuals.color(&theme);
+                let (icon, color) = if f.is_submodule {
+                    (visuals.icon, visuals.color(&theme))
+                } else {
+                    crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
+                };
+                // The change kind rides the row wash and a badge on the icon's corner.
+                let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
+                let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
 
                 let context_menu_active = has_active_menu && {
                     let invoker: SharedString = format!(
@@ -2145,6 +2275,34 @@ impl DetailsPaneView {
                         } => t_commit_id == &commit_id && t_path == &f.path,
                         _ => false,
                     });
+                // Mirrors the row's own `.bg()` ladder, so the badge disc is
+                // always the colour of the row it is punched out of.
+                let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
+                let row_group: SharedString = format!("commit_file_row_{ix}").into();
+                let badge_disc = crate::view::rows::FileRowBadgeDisc {
+                    resting: if context_menu_active {
+                        tinted(theme.colors.interaction.pressed_background)
+                    } else if selected {
+                        crate::view::rows::tinted_row_overlay_bg(
+                            theme.colors.surface.canvas,
+                            with_alpha(
+                                theme.colors.accent.foreground,
+                                if theme.is_dark { 0.16 } else { 0.10 },
+                            ),
+                            tint,
+                        )
+                    } else {
+                        tinted(theme.colors.surface.canvas)
+                    },
+                    hover: Some((
+                        row_group.clone(),
+                        tinted(if context_menu_active {
+                            theme.colors.interaction.pressed_background
+                        } else {
+                            theme.colors.interaction.hover_background
+                        }),
+                    )),
+                };
                 let commit_id_for_click = commit_id.clone();
                 let commit_id_for_menu = commit_id.clone();
                 // One owned copy shared by both handlers instead of one each.
@@ -2154,46 +2312,74 @@ impl DetailsPaneView {
 
                 let mut row = div()
                     .id(("commit_file", ix))
+                    // Only so the badge disc can follow the row's hover fill.
+                    .group(row_group.clone())
                     .debug_selector(move || format!("commit_file_{}_{}", repo_id.0, ix))
-                    .h(scaled_px(24.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
-                    .px(scaled_px(8.0))
+                    .pl(if is_tree {
+                        crate::view::rows::file_row_indent_px(depth, ui_scale_percent)
+                    } else {
+                        scaled_px(8.0)
+                    })
+                    .pr(scaled_px(8.0))
                     .w_full()
                     .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| {
-                        if context_menu_active {
-                            s.bg(theme.colors.interaction.pressed_background)
-                        } else {
-                            s.bg(theme.colors.interaction.hover_background)
-                        }
+                    .when_some(tint, |s, tint| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.surface.canvas,
+                            Some(tint),
+                        ))
                     })
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .child(
-                        div()
-                            .w(scaled_px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when_some(icon, |this, icon| {
-                                this.child(svg_icon(icon, color, scaled_px(14.0)))
-                            }),
-                    )
+                    .hover(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            if context_menu_active {
+                                theme.colors.interaction.pressed_background
+                            } else {
+                                theme.colors.interaction.hover_background
+                            },
+                            tint,
+                        ))
+                    })
+                    .active(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.pressed_background,
+                            tint,
+                        ))
+                    })
+                    .child(crate::view::rows::file_row_icon_slot(
+                        icon,
+                        color,
+                        badge,
+                        badge_disc,
+                        14.0,
+                        16.0,
+                        ui_scale_percent,
+                    ))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_sm()
-                            .line_height(scaled_px(18.0))
+                            .text_size(theme.ui_text(14.0))
+                            .line_height(theme.ui_text(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
-                                components::TruncatedText::aligned_path(
-                                    path_label,
-                                    path_alignment_group.clone(),
-                                )
-                                .text_sm()
+                                match path_alignment_group.clone() {
+                                    Some(group) => components::TruncatedText::aligned_path(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                        group,
+                                    ),
+                                    // A tree row's label is a bare file name, so
+                                    // there is no path to align against.
+                                    None => components::TruncatedText::new(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                    ),
+                                }
                                 .render(cx),
                             ),
                     )
@@ -2254,16 +2440,23 @@ impl DetailsPaneView {
                 );
 
                 if selected {
-                    row = row.bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.16 } else { 0.10 },
+                    row = row.bg(crate::view::rows::tinted_row_overlay_bg(
+                        theme.colors.surface.canvas,
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.16 } else { 0.10 },
+                        ),
+                        tint,
                     ));
                 }
                 if context_menu_active {
-                    row = row.bg(theme.colors.interaction.pressed_background);
+                    row = row.bg(crate::view::rows::tinted_row_bg(
+                        theme.colors.interaction.pressed_background,
+                        tint,
+                    ));
                 }
 
-                row.into_any_element()
+                Some(row.into_any_element())
             })
             .collect()
     }
@@ -2298,10 +2491,14 @@ impl DetailsPaneView {
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let file_rows =
             this.cached_worktree_file_rows(repo_id, worktree_dirty_rev, &summary.path, files);
+        let projection =
+            this.cached_worktree_file_projection(repo_id, worktree_dirty_rev, &summary.path, files);
+        let plan =
+            this.cached_worktree_file_plan(repo_id, worktree_dirty_rev, &summary.path, files);
+        let is_tree = plan.is_tree();
         let selected_ix_now = repo
             .diff_state
             .inline_submodule_diff
@@ -2315,64 +2512,197 @@ impl DetailsPaneView {
             &range,
             files.len(),
         );
-        let path_alignment_group = this
-            .worktree_files_path_alignment_group
-            .visible_rows(visible_signature);
+        let path_alignment_group = (!is_tree).then(|| {
+            this.worktree_files_path_alignment_group
+                .visible_rows(visible_signature)
+        });
         let worktree_path = summary.path.clone();
         let origin = gitcomet_state::model::ForeignDiffOrigin::Worktree {
             branch: summary.branch.clone(),
             detached: summary.detached,
         };
 
-        range
-            .filter_map(|ix| {
-                files
-                    .get(ix)
-                    .zip(file_rows.get(ix))
-                    .map(|(f, row)| (ix, f.clone(), row.label.clone(), row.visuals))
+        let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
+            .filter_map(|row_ix| {
+                plan.row_at(crate::view::rows::RowIx(row_ix))
+                    .map(|row| (row_ix, row))
             })
-            .map(|(ix, _f, path_label, visuals)| {
-                let color = visuals.color(&theme);
-                let selected = selected_ix_now == Some(ix);
+            .collect();
+
+        rows.into_iter()
+            .filter_map(|(ix, row)| {
+                let (ordinal, depth) = match row {
+                    crate::view::rows::FileListRow::Directory {
+                        key,
+                        label,
+                        depth,
+                        collapsed,
+                        chain,
+                        subtree: _,
+                        additions,
+                        deletions,
+                    } => {
+                        return Some(
+                            crate::view::rows::directory_row(
+                                crate::view::rows::DirectoryRowProps {
+                                    theme,
+                                    ui_scale_percent,
+                                    id: ("worktree_file_dir", ix).into(),
+                                    label: &label,
+                                    depth,
+                                    collapsed,
+                                    additions,
+                                    deletions,
+                                    row_height: sidebar_list_row_height(theme, ui_scale_percent),
+                                    row_group: None,
+                                    detail: crate::view::rows::directory_row_detail_for_width(
+                                        // No width probe on this list.
+                                        gpui::Pixels::MAX,
+                                        depth,
+                                        additions.is_some() || deletions.is_some(),
+                                        ui_scale_percent,
+                                    ),
+                                },
+                            )
+                            .debug_selector(move || {
+                                format!("worktree_file_dir_{}_{}", repo_id.0, ix)
+                            })
+                            .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                if !e.standard_click() {
+                                    return;
+                                }
+                                this.toggle_file_list_dir(
+                                    repo_id,
+                                    crate::view::rows::FileListId::WorktreeFiles,
+                                    Arc::clone(&key),
+                                    Arc::clone(&chain),
+                                    collapsed,
+                                    cx,
+                                );
+                            }))
+                            .into_any_element(),
+                        );
+                    }
+                    crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+                };
+                // `source_ix` indexes `inputs.entries`, which the reducer
+                // re-derives independently. Sorting the display must not change
+                // the index a click sends.
+                let source_ix = *projection.source_indices.get(ordinal.0)?;
+                let (f, presentation) = files.get(source_ix).zip(file_rows.get(source_ix))?;
+                let visuals = presentation.visuals;
+                let path_label = if is_tree {
+                    SharedString::from(
+                        f.path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| presentation.label.to_string()),
+                    )
+                } else {
+                    presentation.label.clone()
+                };
+                let (icon, color) = if f.is_submodule {
+                    (visuals.icon, visuals.color(&theme))
+                } else {
+                    crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
+                };
+                // The change kind rides the row wash and a badge on the icon's corner.
+                let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
+                let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
+                let selected = selected_ix_now == Some(source_ix);
                 let tooltip = path_label.clone();
+                let ix_for_click = source_ix;
                 let inputs_for_click = Arc::clone(&inputs);
                 let worktree_path_for_click = worktree_path.clone();
                 let origin_for_click = origin.clone();
 
+                let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
+                let row_group: SharedString = format!("worktree_file_row_{ix}").into();
+                let badge_disc = crate::view::rows::FileRowBadgeDisc {
+                    resting: if selected {
+                        crate::view::rows::tinted_row_overlay_bg(
+                            theme.colors.surface.canvas,
+                            with_alpha(
+                                theme.colors.accent.foreground,
+                                if theme.is_dark { 0.16 } else { 0.10 },
+                            ),
+                            tint,
+                        )
+                    } else {
+                        tinted(theme.colors.surface.canvas)
+                    },
+                    hover: Some((
+                        row_group.clone(),
+                        tinted(theme.colors.interaction.hover_background),
+                    )),
+                };
+
                 let mut row = div()
                     .id(("worktree_file", ix))
+                    // Only so the badge disc can follow the row's hover fill.
+                    .group(row_group.clone())
                     .debug_selector(move || format!("worktree_file_{}_{}", repo_id.0, ix))
-                    .h(scaled_px(24.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
-                    .px(scaled_px(8.0))
+                    .pl(if is_tree {
+                        crate::view::rows::file_row_indent_px(depth, ui_scale_percent)
+                    } else {
+                        scaled_px(8.0)
+                    })
+                    .pr(scaled_px(8.0))
                     .w_full()
                     .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .child(
-                        div()
-                            .w(scaled_px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(svg_icon(visuals.icon, color, scaled_px(14.0))),
-                    )
+                    .when_some(tint, |s, tint| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.surface.canvas,
+                            Some(tint),
+                        ))
+                    })
+                    .hover(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.hover_background,
+                            tint,
+                        ))
+                    })
+                    .active(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.pressed_background,
+                            tint,
+                        ))
+                    })
+                    .child(crate::view::rows::file_row_icon_slot(
+                        icon,
+                        color,
+                        badge,
+                        badge_disc,
+                        14.0,
+                        16.0,
+                        ui_scale_percent,
+                    ))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_sm()
-                            .line_height(scaled_px(18.0))
+                            .text_size(theme.ui_text(14.0))
+                            .line_height(theme.ui_text(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
-                                components::TruncatedText::aligned_path(
-                                    path_label,
-                                    path_alignment_group.clone(),
-                                )
-                                .text_sm()
+                                match path_alignment_group.clone() {
+                                    Some(group) => components::TruncatedText::aligned_path(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                        group,
+                                    ),
+                                    // A tree row's label is a bare file name, so
+                                    // there is no path to align against.
+                                    None => components::TruncatedText::new(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                    ),
+                                }
                                 .render(cx),
                             ),
                     )
@@ -2387,20 +2717,24 @@ impl DetailsPaneView {
                             submodule_repo_path: worktree_path_for_click.clone(),
                             parent_submodule_path: worktree_path_for_click.clone(),
                             entries: Arc::clone(&inputs_for_click.entries),
-                            selected_ix: ix,
+                            selected_ix: ix_for_click,
                         });
                         cx.notify();
                     }))
                     .gitcomet_tooltip(theme, tooltip.clone());
 
                 if selected {
-                    row = row.bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.16 } else { 0.10 },
+                    row = row.bg(crate::view::rows::tinted_row_overlay_bg(
+                        theme.colors.surface.canvas,
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.16 } else { 0.10 },
+                        ),
+                        tint,
                     ));
                 }
 
-                row.into_any_element()
+                Some(row.into_any_element())
             })
             .collect()
     }
@@ -2424,33 +2758,109 @@ impl DetailsPaneView {
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let repo_id = repo.id;
         let from = range_selection.from.clone();
         let to = range_selection.to.clone();
         let file_rows =
             this.cached_range_file_rows(repo_id, repo.history_state.range_files_rev, &files);
+        let projection =
+            this.cached_range_file_projection(repo_id, repo.history_state.range_files_rev, &files);
+        let plan = this.cached_range_file_plan(repo_id, repo.history_state.range_files_rev, &files);
+        let is_tree = plan.is_tree();
         let visible_signature = this.range_files_visible_signature(
             repo_id,
             repo.history_state.range_files_rev,
             &range,
             files.len(),
         );
-        let path_alignment_group = this
-            .range_files_path_alignment_group
-            .visible_rows(visible_signature);
+        let path_alignment_group = (!is_tree).then(|| {
+            this.range_files_path_alignment_group
+                .visible_rows(visible_signature)
+        });
 
-        range
-            .filter_map(|ix| {
-                files
-                    .get(ix)
-                    .zip(file_rows.get(ix))
-                    .map(|(f, row)| (ix, f, row.label.clone(), row.visuals))
+        let rows: Vec<(usize, crate::view::rows::FileListRow)> = range
+            .filter_map(|row_ix| {
+                plan.row_at(crate::view::rows::RowIx(row_ix))
+                    .map(|row| (row_ix, row))
             })
-            .map(|(ix, f, path_label, visuals)| {
-                let icon = Some(visuals.icon);
-                let color = visuals.color(&theme);
+            .collect();
+
+        rows.into_iter()
+            .filter_map(|(ix, row)| {
+                let (ordinal, depth) = match row {
+                    crate::view::rows::FileListRow::Directory {
+                        key,
+                        label,
+                        depth,
+                        collapsed,
+                        chain,
+                        subtree: _,
+                        additions,
+                        deletions,
+                    } => {
+                        return Some(
+                            crate::view::rows::directory_row(
+                                crate::view::rows::DirectoryRowProps {
+                                    theme,
+                                    ui_scale_percent,
+                                    id: ("range_file_dir", ix).into(),
+                                    label: &label,
+                                    depth,
+                                    collapsed,
+                                    additions,
+                                    deletions,
+                                    row_height: sidebar_list_row_height(theme, ui_scale_percent),
+                                    row_group: None,
+                                    detail: crate::view::rows::directory_row_detail_for_width(
+                                        // No width probe on this list.
+                                        gpui::Pixels::MAX,
+                                        depth,
+                                        additions.is_some() || deletions.is_some(),
+                                        ui_scale_percent,
+                                    ),
+                                },
+                            )
+                            .debug_selector(move || format!("range_file_dir_{}_{}", repo_id.0, ix))
+                            .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                if !e.standard_click() {
+                                    return;
+                                }
+                                this.toggle_file_list_dir(
+                                    repo_id,
+                                    crate::view::rows::FileListId::RangeFiles,
+                                    Arc::clone(&key),
+                                    Arc::clone(&chain),
+                                    collapsed,
+                                    cx,
+                                );
+                            }))
+                            .into_any_element(),
+                        );
+                    }
+                    crate::view::rows::FileListRow::File { ordinal, depth } => (ordinal, depth),
+                };
+                let source_ix = *projection.source_indices.get(ordinal.0)?;
+                let (f, presentation) = files.get(source_ix).zip(file_rows.get(source_ix))?;
+                let visuals = presentation.visuals;
+                let path_label = if is_tree {
+                    SharedString::from(
+                        f.path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| presentation.label.to_string()),
+                    )
+                } else {
+                    presentation.label.clone()
+                };
+                let (icon, color) = if f.is_submodule {
+                    (visuals.icon, visuals.color(&theme))
+                } else {
+                    crate::view::rows::file_row_icon(&f.path, f.kind, &theme)
+                };
+                // The change kind rides the row wash and a badge on the icon's corner.
+                let tint = crate::view::rows::file_kind_row_tint(f.kind, &theme);
+                let badge = crate::view::rows::file_row_kind_badge(f.kind, &theme);
                 let target = DiffTarget::CommitRange {
                     from_commit_id: from.clone(),
                     to_commit_id: to.clone(),
@@ -2460,42 +2870,93 @@ impl DetailsPaneView {
                 let target_for_click = target.clone();
                 let tooltip = path_label.clone();
 
+                let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
+                let row_group: SharedString = format!("range_file_row_{ix}").into();
+                let badge_disc = crate::view::rows::FileRowBadgeDisc {
+                    resting: if selected {
+                        crate::view::rows::tinted_row_overlay_bg(
+                            theme.colors.surface.canvas,
+                            with_alpha(
+                                theme.colors.accent.foreground,
+                                if theme.is_dark { 0.16 } else { 0.10 },
+                            ),
+                            tint,
+                        )
+                    } else {
+                        tinted(theme.colors.surface.canvas)
+                    },
+                    hover: Some((
+                        row_group.clone(),
+                        tinted(theme.colors.interaction.hover_background),
+                    )),
+                };
+
                 let mut row = div()
                     .id(("range_file", ix))
+                    // Only so the badge disc can follow the row's hover fill.
+                    .group(row_group.clone())
                     .debug_selector(move || format!("range_file_{}_{}", repo_id.0, ix))
-                    .h(scaled_px(24.0))
+                    .h(sidebar_list_row_height(theme, ui_scale_percent))
                     .flex()
                     .items_center()
                     .gap(scaled_px(8.0))
-                    .px(scaled_px(8.0))
+                    .pl(if is_tree {
+                        crate::view::rows::file_row_indent_px(depth, ui_scale_percent)
+                    } else {
+                        scaled_px(8.0)
+                    })
+                    .pr(scaled_px(8.0))
                     .w_full()
                     .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .child(
-                        div()
-                            .w(scaled_px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when_some(icon, |this, icon| {
-                                this.child(svg_icon(icon, color, scaled_px(14.0)))
-                            }),
-                    )
+                    .when_some(tint, |s, tint| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.surface.canvas,
+                            Some(tint),
+                        ))
+                    })
+                    .hover(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.hover_background,
+                            tint,
+                        ))
+                    })
+                    .active(move |s| {
+                        s.bg(crate::view::rows::tinted_row_bg(
+                            theme.colors.interaction.pressed_background,
+                            tint,
+                        ))
+                    })
+                    .child(crate::view::rows::file_row_icon_slot(
+                        icon,
+                        color,
+                        badge,
+                        badge_disc,
+                        14.0,
+                        16.0,
+                        ui_scale_percent,
+                    ))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_sm()
-                            .line_height(scaled_px(18.0))
+                            .text_size(theme.ui_text(14.0))
+                            .line_height(theme.ui_text(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(
-                                components::TruncatedText::aligned_path(
-                                    path_label,
-                                    path_alignment_group.clone(),
-                                )
-                                .text_sm()
+                                match path_alignment_group.clone() {
+                                    Some(group) => components::TruncatedText::aligned_path(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                        group,
+                                    ),
+                                    // A tree row's label is a bare file name, so
+                                    // there is no path to align against.
+                                    None => components::TruncatedText::new(
+                                        path_label,
+                                        theme.ui_text(14.0),
+                                    ),
+                                }
                                 .render(cx),
                             ),
                     )
@@ -2529,13 +2990,17 @@ impl DetailsPaneView {
                     .gitcomet_tooltip(theme, tooltip.clone());
 
                 if selected {
-                    row = row.bg(with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.16 } else { 0.10 },
+                    row = row.bg(crate::view::rows::tinted_row_overlay_bg(
+                        theme.colors.surface.canvas,
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.16 } else { 0.10 },
+                        ),
+                        tint,
                     ));
                 }
 
-                row.into_any_element()
+                Some(row.into_any_element())
             })
             .collect()
     }
@@ -2543,6 +3008,42 @@ impl DetailsPaneView {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every worktree badge -- the branch row pill, the details chip, the log
+    /// row badge -- goes through one height, so they cannot drift apart.
+    #[test]
+    fn worktree_badges_grow_with_the_density() {
+        use crate::appearance::{Appearance, UiDensity};
+        let scale = |density| {
+            ui_scale::UiScale::from_percent(100).with_appearance(Appearance {
+                density,
+                ..Appearance::default()
+            })
+        };
+        let heights: Vec<_> = UiDensity::ALL.into_iter().map(scale).collect();
+        for at in &heights {
+            assert!(
+                worktree_badge_height(*at)
+                    < at.row_height(
+                        SIDEBAR_TREE_ROW_HEIGHT_PX,
+                        SIDEBAR_TREE_COMFORTABLE_ROW_HEIGHT_PX,
+                    ),
+                "the badge must still fit the row it sits in"
+            );
+        }
+        assert!(
+            heights
+                .windows(2)
+                .all(|w| worktree_badge_height(w[1]) > worktree_badge_height(w[0])),
+            "the badge must grow at every density step"
+        );
+        let compact = scale(UiDensity::Compact);
+        assert_eq!(
+            worktree_badge_height(ui_scale::UiScale::from_percent(200)),
+            worktree_badge_height(compact) * 2.0,
+            "and follow the UI zoom"
+        );
+    }
     use super::*;
     use gitcomet_core::domain::{
         Branch, Commit, CommitId, DiffTarget, LogPage, RemoteBranch, RepoSpec, Upstream,

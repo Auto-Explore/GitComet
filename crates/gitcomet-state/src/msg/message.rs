@@ -257,6 +257,7 @@ pub enum Msg {
     SetGitLogSettings {
         show_history_tags: bool,
         tag_fetch_mode: GitLogTagFetchMode,
+        verify_commit_signatures: bool,
     },
     SetRemoteSettings(RemoteSettings),
     SetFileBrowserSettings(FileBrowserSettings),
@@ -534,6 +535,17 @@ pub enum Msg {
     FinishCommitReveal {
         repo_id: RepoId,
     },
+    /// Resolve `reference` and report what commit it names, without selecting
+    /// anything. Backs the Reveal Commit dialog's preview row, which has to be
+    /// able to show a commit the user has not committed to jumping to yet.
+    ///
+    /// Unlike [`Msg::RevealCommit`] this never touches the selection, so it is
+    /// safe to issue on every keystroke; the reducer's request counter drops
+    /// replies a later lookup has overtaken.
+    ResolveCommitLookup {
+        repo_id: RepoId,
+        reference: CommitId,
+    },
     /// Exit file browsing and keep the explorer on the working tree.
     ResetBrowseToLive {
         repo_id: RepoId,
@@ -792,6 +804,15 @@ pub enum Msg {
     SquashRef {
         repo_id: RepoId,
         reference: String,
+    },
+    PushWithTags {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+    },
+    PreviewTagPush {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+        cancellation: gitcomet_core::services::CancellationToken,
     },
     Push {
         repo_id: RepoId,
@@ -1074,6 +1095,12 @@ pub enum Msg {
 }
 
 pub enum InternalMsg {
+    TagPushPreviewLoaded {
+        repo_id: RepoId,
+        mode: gitcomet_core::tag_push::TagPushMode,
+        generation: u64,
+        result: gitcomet_core::services::Result<gitcomet_core::tag_push::TagPushPreview>,
+    },
     GitOperationStarted {
         repo_id: RepoId,
         operation_id: GitOperationId,
@@ -1143,6 +1170,10 @@ pub enum InternalMsg {
     StagedStatusLoaded {
         repo_id: RepoId,
         result: Result<Vec<FileStatus>, Error>,
+    },
+    UncommittedLineStatsLoaded {
+        repo_id: RepoId,
+        result: Result<UncommittedLineStats, Error>,
     },
     StatusLoaded {
         repo_id: RepoId,
@@ -1285,11 +1316,25 @@ pub enum InternalMsg {
         commit_id: CommitId,
         result: Result<CommitDetails, Error>,
     },
+    CommitSignaturesVerified {
+        repo_id: RepoId,
+        epoch: u64,
+        result: Result<Vec<(CommitId, CommitSignature)>, Error>,
+    },
     /// A [`Msg::RevealCommit`] reference resolved (or failed to).
     CommitRevealResolved {
         repo_id: RepoId,
         reference: CommitId,
         result: Result<CommitDetails, Error>,
+    },
+    /// A [`Msg::ResolveCommitLookup`] reference resolved (or failed to).
+    CommitLookupResolved {
+        repo_id: RepoId,
+        reference: CommitId,
+        /// The `Effect::ResolveCommitLookup` request this answers; a reply that
+        /// lost a race against a newer lookup is dropped.
+        request: u64,
+        result: Result<Commit, Error>,
     },
     RangeFilesLoaded {
         repo_id: RepoId,

@@ -20,7 +20,7 @@ use gitcomet_state::store::AppStore;
 use gpui::{
     Action, App, AppContext, BorrowAppContext, Bounds, KeyBinding, Pixels, Point, Size,
     TitlebarOptions, Unbind, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
-    WindowOptions, actions, point, px, size,
+    WindowOptions, actions, px, size,
 };
 #[cfg(target_os = "macos")]
 use gpui::{Menu, MenuItem, OsAction, SystemMenuType};
@@ -131,10 +131,6 @@ pub(crate) fn main_window_min_size_for_percent(percent: u32) -> Size<Pixels> {
 
 fn main_window_default_size_for_percent(percent: u32) -> Size<Pixels> {
     ui_scale::design_size_from_percent(WINDOW_DEFAULT_WIDTH_PX, WINDOW_DEFAULT_HEIGHT_PX, percent)
-}
-
-fn window_traffic_light_position(_percent: u32) -> Point<Pixels> {
-    point(px(9.0), px(9.0))
 }
 
 pub(crate) fn ensure_window_respects_min_size(window: &mut Window, min_size: Size<Pixels>) {
@@ -541,7 +537,9 @@ fn open_gitcomet_window(
                 titlebar: Some(TitlebarOptions {
                     title: Some(window_title.into()),
                     appears_transparent: true,
-                    traffic_light_position: Some(window_traffic_light_position(ui_scale_percent)),
+                    traffic_light_position: Some(
+                        crate::view::chrome::macos_traffic_light_position(),
+                    ),
                 }),
                 app_id: Some(app_id),
                 window_decorations: Some(WindowDecorations::Client),
@@ -704,6 +702,11 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         let backend = Arc::clone(&command_palette_backend);
         cx.defer(move |cx| toggle_command_palette_in_active_existing_or_new_window(cx, backend));
     });
+    // Reaches the window even with nothing focused inside it — the same reason
+    // the palette needs an app-level handler alongside its window one.
+    cx.on_action(|_: &crate::view::ToggleRevealCommit, cx| {
+        cx.defer(toggle_reveal_commit_in_active_window);
+    });
     cx.on_action(|_: &LocateFileInExplorer, cx| {
         cx.defer(locate_file_in_active_or_existing_normal_window);
     });
@@ -800,6 +803,8 @@ fn install_global_diff_shortcut_fallback(cx: &mut App) {
                     || context.contains("Terminal")
                     || context.contains("ContextMenu")
                     || context.contains("PopoverPrompt")
+                    || (context.contains("StatusSection")
+                        && crate::view::is_status_section_shortcut(&event.keystroke))
             })
         {
             return;
@@ -879,6 +884,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-a", SwitchRepository, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
+        KeyBinding::new("secondary-g", crate::view::ToggleRevealCommit, None),
         KeyBinding::new("secondary-shift-l", LocateFileInExplorer, None),
         KeyBinding::new("secondary-w", Close, None),
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
@@ -958,7 +964,9 @@ fn macos_app_menus(cx: &mut App) -> Vec<Menu> {
     )
 }
 
-#[cfg(target_os = "macos")]
+/// The menus as they look with a normal window open, so the tests that care
+/// about the external-editor item do not have to restate that half.
+#[cfg(all(test, target_os = "macos"))]
 fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec<Menu> {
     macos_app_menus_with_options(external_editor_configured, true)
 }
@@ -1851,6 +1859,29 @@ fn toggle_command_palette_in_window(cx: &mut App, window: &GitCometWindowEntry) 
     }
 }
 
+/// Toggle the Reveal Commit dialog in whichever normal window is in front.
+///
+/// Unlike the command palette this never opens a window: there is nothing to
+/// reveal without a repository, so with no normal window the chord is a no-op.
+fn toggle_reveal_commit_in_active_window(cx: &mut App) {
+    let Some(window) =
+        active_normal_gitcomet_window(cx).or_else(|| find_normal_gitcomet_window(cx))
+    else {
+        return;
+    };
+    let _ = window.handle.update(cx, |root_view, window, cx| {
+        let Ok(view) = root_view.downcast::<GitCometView>() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            view.toggle_reveal_commit(window, cx);
+        });
+    });
+    if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
+        activate_gitcomet_window(cx, window.handle);
+    }
+}
+
 fn toggle_command_palette_in_active_existing_or_new_window(
     cx: &mut App,
     backend: Arc<dyn GitBackend>,
@@ -2237,6 +2268,7 @@ pub(crate) fn install_app_shortcuts_for_test(app: &mut App, backend: Arc<dyn Git
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::point;
     use gpui::{
         Action, Context, FocusHandle, InteractiveElement, IntoElement, Render, Styled, Window, div,
     };
@@ -2559,6 +2591,7 @@ mod tests {
                 ))
                 .on_action(record_action_listener!(crate::view::OpenActiveViewSearch))
                 .on_action(record_action_listener!(crate::view::ToggleCommandPalette))
+                .on_action(record_action_listener!(crate::view::ToggleRevealCommit))
                 .on_action(record_action_listener!(crate::view::LocateFileInExplorer))
                 .on_action(record_action_listener!(NewWindow))
                 .on_action(record_action_listener!(OpenSettings))
@@ -3021,6 +3054,7 @@ mod tests {
             ("secondary-shift-a", SwitchRepository.name()),
             ("secondary-f", crate::view::OpenActiveViewSearch.name()),
             ("secondary-p", crate::view::ToggleCommandPalette.name()),
+            ("secondary-g", crate::view::ToggleRevealCommit.name()),
             (
                 "secondary-shift-l",
                 crate::view::LocateFileInExplorer.name(),

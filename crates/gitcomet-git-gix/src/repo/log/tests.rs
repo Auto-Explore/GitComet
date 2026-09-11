@@ -1764,3 +1764,67 @@ fn timing_ref_metadata_with_many_refs() {
         );
     }
 }
+
+#[test]
+fn resolve_commit_upgrades_an_abbreviated_reference_to_the_full_oid() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+    commit_file(workdir, "a.txt", "one\n", "first");
+    commit_file(workdir, "a.txt", "two\n", "second");
+    let repo = open_repo(workdir);
+
+    let head = git_stdout(workdir, &["rev-parse", "HEAD"]);
+    let short = &head[..7];
+
+    let resolved = repo
+        .resolve_commit_impl(&CommitId(short.into()))
+        .expect("resolve short sha");
+    assert_eq!(resolved.id.as_ref(), head);
+    assert_eq!(resolved.summary.as_ref(), "second");
+    assert_eq!(resolved.author.as_ref(), "Test User");
+    assert_eq!(resolved.parent_ids.len(), 1);
+}
+
+#[test]
+fn resolve_commit_accepts_any_revspec_git_understands() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+    commit_file(workdir, "a.txt", "one\n", "first");
+    commit_file(workdir, "a.txt", "two\n", "second");
+    // A global `tag.gpgSign` would otherwise turn this into an annotated tag.
+    git_success(workdir, &["config", "tag.gpgsign", "false"]);
+    git_success(workdir, &["tag", "v1"]);
+    let repo = open_repo(workdir);
+
+    let head = git_stdout(workdir, &["rev-parse", "HEAD"]);
+    let parent = git_stdout(workdir, &["rev-parse", "HEAD~1"]);
+    let branch = git_stdout(workdir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+    for (spec, expected) in [
+        ("HEAD", head.as_str()),
+        ("HEAD~1", parent.as_str()),
+        ("v1", head.as_str()),
+        (branch.as_str(), head.as_str()),
+    ] {
+        let resolved = repo
+            .resolve_commit_impl(&CommitId(spec.into()))
+            .unwrap_or_else(|e| panic!("resolve {spec}: {e}"));
+        assert_eq!(resolved.id.as_ref(), expected, "resolving {spec}");
+    }
+}
+
+#[test]
+fn resolve_commit_reports_an_unknown_reference() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+    commit_file(workdir, "a.txt", "one\n", "first");
+    let repo = open_repo(workdir);
+
+    assert!(
+        repo.resolve_commit_impl(&CommitId("nosuchref".into()))
+            .is_err()
+    );
+}

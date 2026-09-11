@@ -26,8 +26,11 @@ pub(in crate::view) fn markdown_preview_scaled_value(value: f32, ui_scale_percen
     scaled
 }
 
-pub(in crate::view) fn markdown_preview_row_height(ui_scale_percent: u32) -> Pixels {
-    markdown_preview_scaled_px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX, ui_scale_percent)
+pub(in crate::view) fn markdown_preview_row_height(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> Pixels {
+    theme.markdown_px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX, ui_scale_percent)
 }
 
 pub(in crate::view) struct MarkdownPreviewRowTypography {
@@ -266,9 +269,9 @@ pub(in crate::view) fn markdown_preview_row_element(
     visual_row: Option<&MarkdownPreviewVisualRow>,
     context: &MarkdownPreviewRenderContext<'_>,
 ) -> AnyElement {
-    let theme = context.theme;
     let min_width = context.min_width;
     let text_region = context.text_region;
+    let theme = context.theme;
     let ui_scale_percent = context.ui_scale_percent;
     let is_interactive = context.view.is_some();
     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewStyledRowBuild);
@@ -282,8 +285,8 @@ pub(in crate::view) fn markdown_preview_row_element(
             ))
             .debug_selector(move || format!("markdown_preview_gap_{text_region:?}_{row_ix}"))
             .relative()
-            .h(markdown_preview_row_height(ui_scale_percent))
-            .min_h(markdown_preview_row_height(ui_scale_percent))
+            .h(markdown_preview_row_height(theme, ui_scale_percent))
+            .min_h(markdown_preview_row_height(theme, ui_scale_percent))
             .w(min_width)
             .min_w(min_width);
         let Some(view) = context.view.clone() else {
@@ -338,8 +341,8 @@ pub(in crate::view) fn markdown_preview_row_element(
         let padding = markdown_preview_row_horizontal_padding(row, ui_scale_percent);
         return div()
             .relative()
-            .h(markdown_preview_row_height(ui_scale_percent))
-            .min_h(markdown_preview_row_height(ui_scale_percent))
+            .h(markdown_preview_row_height(theme, ui_scale_percent))
+            .min_h(markdown_preview_row_height(theme, ui_scale_percent))
             .w(min_width)
             .min_w(min_width)
             .flex()
@@ -638,10 +641,9 @@ pub(in crate::view) fn markdown_preview_row_element(
                             .flex()
                             .items_center()
                             .justify_end()
-                            .text_size(markdown_preview_scaled_px(
-                                MARKDOWN_PREVIEW_BASE_FONT_PX,
-                                ui_scale_percent,
-                            ))
+                            .text_size(
+                                theme.markdown_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent),
+                            )
                             .line_height(px(typography.line_height))
                             .text_color(theme.colors.foreground.secondary)
                             .child(marker),
@@ -666,7 +668,7 @@ pub(in crate::view) fn markdown_preview_row_element(
                                 alert_color,
                                 if theme.is_dark { 0.18 } else { 0.12 },
                             ))
-                            .text_size(markdown_preview_scaled_px(
+                            .text_size(theme.markdown_px(
                                 MARKDOWN_PREVIEW_ALERT_BADGE_FONT_PX,
                                 ui_scale_percent,
                             ))
@@ -739,8 +741,8 @@ pub(in crate::view) fn markdown_preview_row_element(
             .id(("md_preview_row", row_ix))
             .debug_selector(|| format!("markdown_preview_row_box_{row_ix}"))
             .relative()
-            .h(markdown_preview_row_height(ui_scale_percent))
-            .min_h(markdown_preview_row_height(ui_scale_percent))
+            .h(markdown_preview_row_height(theme, ui_scale_percent))
+            .min_h(markdown_preview_row_height(theme, ui_scale_percent))
             .w(min_width)
             .flex()
             .items_center()
@@ -802,8 +804,8 @@ pub(in crate::view) fn markdown_preview_row_element(
         // Non-interactive markdown preview row (benchmarks, conflict resolver).
         let row_container = div()
             .relative()
-            .h(markdown_preview_row_height(ui_scale_percent))
-            .min_h(markdown_preview_row_height(ui_scale_percent))
+            .h(markdown_preview_row_height(theme, ui_scale_percent))
+            .min_h(markdown_preview_row_height(theme, ui_scale_percent))
             .w(min_width)
             .flex()
             .items_center()
@@ -860,7 +862,8 @@ pub(in crate::view) fn markdown_preview_row_required_width(
             )
         };
 
-        let width = text_width + markdown_preview_row_chrome_width(window, row, ui_scale_percent);
+        let width =
+            text_width + markdown_preview_row_chrome_width(theme, window, row, ui_scale_percent);
         u32::from(width.round())
     });
 
@@ -874,6 +877,7 @@ pub(in crate::view) fn markdown_preview_row_required_width(
 /// word wrap subtracts it from the viewport to get the width the text may
 /// occupy.
 pub(in crate::view) fn markdown_preview_row_chrome_width(
+    theme: AppTheme,
     window: &mut Window,
     row: &MarkdownPreviewRow,
     ui_scale_percent: u32,
@@ -902,7 +906,7 @@ pub(in crate::view) fn markdown_preview_row_chrome_width(
         let marker_width = markdown_preview_shape_text_width(
             window,
             marker,
-            markdown_preview_scaled_value(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent),
+            f32::from(theme.markdown_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent)),
             FontWeight::NORMAL,
             None,
             &[],
@@ -918,7 +922,7 @@ pub(in crate::view) fn markdown_preview_row_chrome_width(
         let alert_width = markdown_preview_shape_text_width(
             window,
             alert_title,
-            markdown_preview_scaled_value(MARKDOWN_PREVIEW_ALERT_BADGE_FONT_PX, ui_scale_percent),
+            f32::from(theme.markdown_px(MARKDOWN_PREVIEW_ALERT_BADGE_FONT_PX, ui_scale_percent)),
             FontWeight::BOLD,
             None,
             &[],
@@ -996,7 +1000,7 @@ pub(in crate::view) fn markdown_preview_row_wrap_ranges(
         return Vec::new();
     }
 
-    let chrome = markdown_preview_row_chrome_width(window, row, ui_scale_percent);
+    let chrome = markdown_preview_row_chrome_width(theme, window, row, ui_scale_percent);
     let wrap_width = available_width - chrome;
     if wrap_width <= px(0.0) {
         return Vec::new();
@@ -1361,8 +1365,8 @@ pub(in crate::view) fn markdown_preview_flow_image(
     remote_image_access: &MarkdownRemoteImageAccess,
 ) -> AnyElement {
     let label_color = theme.colors.foreground.secondary;
-    let font_size = markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
-    let skeleton = markdown_preview_picture_skeleton(row, ui_scale_percent, picture_sizes);
+    let font_size = theme.markdown_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
+    let skeleton = markdown_preview_picture_skeleton(theme, row, ui_scale_percent, picture_sizes);
 
     let source = row.image.as_ref().map(|image| image.source.as_ref());
     if let Some(url) = source.and_then(markdown_preview_remote_image_url)
@@ -1476,6 +1480,7 @@ impl MarkdownPreviewPictureSkeleton {
 }
 
 pub(in crate::view) fn markdown_preview_picture_skeleton(
+    theme: AppTheme,
     row: &MarkdownPreviewRow,
     ui_scale_percent: u32,
     picture_sizes: &MarkdownPreviewPictureSizes,
@@ -1516,7 +1521,7 @@ pub(in crate::view) fn markdown_preview_picture_skeleton(
         aspect_ratio,
         reserved_height: declared_height.map_or_else(
             || {
-                markdown_preview_row_height(ui_scale_percent)
+                markdown_preview_row_height(theme, ui_scale_percent)
                     * f32::from(markdown_preview_image_block_rows(row).max(1))
             },
             |height| markdown_preview_scaled_px(height as f32, ui_scale_percent),
@@ -1560,7 +1565,7 @@ pub(in crate::view) fn markdown_preview_inline_image(
 ) -> AnyElement {
     let source_byte = inline.source_byte;
     let label_color = theme.colors.foreground.secondary;
-    let font_size = markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
+    let font_size = theme.markdown_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
     let described = if inline.alt.is_empty() {
         inline.image.source.clone()
     } else {
@@ -1846,7 +1851,9 @@ pub(in crate::view) fn markdown_preview_image_placeholder(
 ) -> gpui::Div {
     markdown_preview_image_placeholder_element(
         markdown_preview_image_label(row, reason),
-        markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, context.ui_scale_percent),
+        context
+            .theme
+            .markdown_px(MARKDOWN_PREVIEW_BASE_FONT_PX, context.ui_scale_percent),
         context.theme.colors.foreground.secondary,
     )
 }
@@ -1859,8 +1866,9 @@ pub(in crate::view) fn markdown_preview_image_row(
     slice_count: u8,
     context: &MarkdownPreviewRenderContext<'_>,
 ) -> AnyElement {
+    let theme = context.theme;
     let ui_scale_percent = context.ui_scale_percent;
-    let row_height = markdown_preview_row_height(ui_scale_percent);
+    let row_height = markdown_preview_row_height(theme, ui_scale_percent);
     let block_height = row_height * f32::from(slice_count.max(1));
     let source = row.image.as_ref().map(|image| image.source.as_ref());
     let blocked_url = source
@@ -1926,8 +1934,7 @@ pub(in crate::view) fn markdown_preview_image_row(
     // `with_fallback` is called on demand, so the placeholder is rebuilt from
     // owned pieces rather than cloning a built element.
     let failed_label = markdown_preview_image_label(row, "Failed to load");
-    let failed_font_size =
-        markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
+    let failed_font_size = theme.markdown_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
     let failed_color = context.theme.colors.foreground.secondary;
     // `Contain` keeps the aspect ratio inside whichever box the document asked
     // for, so a declared width never stretches the picture across the row.
@@ -2320,7 +2327,7 @@ pub(in crate::view) fn markdown_preview_row_typography(
     ui_scale_percent: u32,
 ) -> MarkdownPreviewRowTypography {
     let text_color = markdown_preview_row_text_color(theme, row);
-    let scaled = |value: f32| markdown_preview_scaled_value(value, ui_scale_percent);
+    let scaled = |value: f32| f32::from(theme.markdown_px(value, ui_scale_percent));
     match row.kind {
         MarkdownPreviewRowKind::Heading { level: 1 } => MarkdownPreviewRowTypography {
             font_size: scaled(28.0),

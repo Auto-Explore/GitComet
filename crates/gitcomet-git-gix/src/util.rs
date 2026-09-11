@@ -759,10 +759,36 @@ fn terminate_process_tree_and_wait(
 }
 
 fn run_command_with_timeout(
+    cmd: Command,
+    label: &str,
+    timeout: Duration,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Output> {
+    run_command_with_timeout_auth(cmd, label, timeout, cancellation, true)
+}
+
+/// Read-only network probes must not open auth prompts or consume credentials
+/// staged for a user-initiated command.
+pub(crate) fn run_git_preview_output(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<Output> {
+    run_command_with_timeout_auth(
+        cmd,
+        label,
+        Duration::from_secs(30),
+        Some(cancellation),
+        false,
+    )
+}
+
+fn run_command_with_timeout_auth(
     mut cmd: Command,
     label: &str,
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
+    allow_auth: bool,
 ) -> Result<Output> {
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
@@ -774,7 +800,11 @@ fn run_command_with_timeout(
     )?;
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref());
     let askpass_context = if command_may_require_auth(&cmd) {
-        let auth = take_pending_git_auth();
+        let auth = if allow_auth {
+            take_pending_git_auth()
+        } else {
+            None
+        };
         let script = create_askpass_script().map_err(io_err)?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))

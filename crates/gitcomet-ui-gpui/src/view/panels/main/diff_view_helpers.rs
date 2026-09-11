@@ -30,7 +30,7 @@ impl MainPaneView {
                 theme,
                 label,
                 ui_scale.px(10.0),
-                ui_scale.px(18.0),
+                crate::view::rows::sidebar::worktree_badge_height(ui_scale),
                 ui_scale.px(220.0),
                 ui_scale.px(6.0),
             )
@@ -65,6 +65,7 @@ impl MainPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
         self.rendered_diff_target()
             .map(|t| {
                 let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
@@ -137,22 +138,22 @@ impl MainPaneView {
                     .overflow_hidden()
                     .child(
                         div()
-                            .w(px(16.0))
+                            .w(ui_scale.px(16.0))
                             .flex()
                             .items_center()
                             .justify_center()
                             .when_some(icon, |this, icon| {
-                                this.child(svg_icon(icon, color, px(14.0)))
+                                this.child(svg_icon(icon, color, ui_scale.px(14.0)))
                             }),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.0))
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .font_weight(FontWeight::BOLD)
                             .child(
-                                components::TruncatedText::path(text)
+                                components::TruncatedText::path(text, theme.ui_text(14.0))
                                     .id(("diff_title_path", 0usize))
                                     .full_text_tooltip(self.tooltip_host.clone())
                                     .render(cx),
@@ -165,7 +166,7 @@ impl MainPaneView {
             })
             .unwrap_or_else(|| {
                 div()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .font_weight(FontWeight::BOLD)
                     .child("Select a file to view diff")
                     .into_any_element()
@@ -216,7 +217,9 @@ impl MainPaneView {
             .items_center()
             .gap_1()
             .px_1()
-            .h(components::control_height(ui_scale_percent))
+            .h(components::control_height(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            ))
             .rounded(px(theme.radii.row))
             .border_1()
             .border_color(theme.colors.stroke.default)
@@ -231,7 +234,7 @@ impl MainPaneView {
             .child(
                 div()
                     .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .whitespace_nowrap()
                     .child(badge_label),
             )
@@ -293,7 +296,7 @@ impl MainPaneView {
     pub(super) fn diff_nav_hotkey_hint(theme: AppTheme, label: &'static str) -> gpui::Div {
         div()
             .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-            .text_xs()
+            .text_size(theme.ui_text(12.0))
             .text_color(theme.colors.foreground.secondary)
             .child(label)
     }
@@ -367,11 +370,9 @@ impl MainPaneView {
             return (None, None);
         };
 
-        let (has_prev, has_next) = if let Some(inline) = self.active_inline_submodule_diff() {
-            (
-                inline.selected_ix > 0,
-                inline.selected_ix + 1 < inline.entries.len(),
-            )
+        let inline_neighbors = self.inline_diff_file_neighbors(repo_id, cx);
+        let (has_prev, has_next) = if let Some((prev_ix, next_ix)) = inline_neighbors {
+            (prev_ix.is_some(), next_ix.is_some())
         } else {
             let commit_file_source_indices = self
                 .root_view
@@ -382,10 +383,12 @@ impl MainPaneView {
                 })
                 .ok()
                 .flatten();
+            let change_tracking_view = self.active_change_tracking_view(cx);
+            let status_section_order =
+                self.active_status_section_order(repo_id, change_tracking_view, cx);
             let Some(repo) = self.active_repo() else {
                 return (None, None);
             };
-            let change_tracking_view = self.active_change_tracking_view(cx);
             let Some(diff_target) = repo.diff_state.diff_target.as_ref() else {
                 return (None, None);
             };
@@ -396,6 +399,7 @@ impl MainPaneView {
                     change_tracking_view,
                     -1,
                     commit_file_source_indices.as_deref(),
+                    status_section_order.as_deref(),
                 )
                 .is_some(),
                 status_nav::adjacent_diff_file_target_for_repo(
@@ -404,6 +408,7 @@ impl MainPaneView {
                     change_tracking_view,
                     1,
                     commit_file_source_indices.as_deref(),
+                    status_section_order.as_deref(),
                 )
                 .is_some(),
             )
@@ -423,6 +428,7 @@ impl MainPaneView {
                     cx.notify();
                 }
             })
+            .debug_selector(move || id.to_string())
             .gitcomet_tooltip(theme, SharedString::from(tooltip))
             .into_any_element()
         };

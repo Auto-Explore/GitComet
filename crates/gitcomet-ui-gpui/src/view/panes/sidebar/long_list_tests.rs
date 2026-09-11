@@ -240,8 +240,9 @@ fn cross_section_filter_popover_places_rows_using_both_row_heights(cx: &mut gpui
     });
     test_support::redraw(cx);
 
-    let (spacer_ix, next_branch_ix, tops, row_count) = cx.update(|_window, app| {
+    let (spacer_ix, next_branch_ix, tops, row_count, row_height_px) = cx.update(|_window, app| {
         let pane = pane.read(app);
+        let row_height_px = crate::view::rows::sidebar::sidebar_list_row_height_px(pane.theme);
         let cache = pane
             .collapsed_popover_rows_cache
             .as_ref()
@@ -275,6 +276,7 @@ fn cross_section_filter_popover_places_rows_using_both_row_heights(cx: &mut gpui
             next_branch_ix,
             cache.tops.clone(),
             cache.rows.len(),
+            row_height_px,
         )
     });
 
@@ -286,7 +288,7 @@ fn cross_section_filter_popover_places_rows_using_both_row_heights(cx: &mut gpui
     );
     assert_eq!(
         tops[spacer_ix] - tops[spacer_ix - 1],
-        crate::view::rows::sidebar::BRANCH_TREE_ROW_HEIGHT_PX,
+        row_height_px,
         "the row before it must be measured with the row height"
     );
 
@@ -328,6 +330,22 @@ fn cross_section_filter_popover_places_rows_using_both_row_heights(cx: &mut gpui
 /// one wrong height in between moves every row after it.
 #[gpui::test]
 fn collapsed_popover_row_heights_match_what_is_laid_out(cx: &mut gpui::TestAppContext) {
+    assert_popover_row_heights_match_layout(cx, crate::appearance::UiDensity::Compact);
+}
+
+/// The claimed height rides the density ramp, so the far end of it has to agree
+/// with the layout too -- and the cached prefix sum has to be rebuilt for it.
+#[gpui::test]
+fn collapsed_popover_row_heights_match_what_is_laid_out_when_spacious(
+    cx: &mut gpui::TestAppContext,
+) {
+    assert_popover_row_heights_match_layout(cx, crate::appearance::UiDensity::Spacious);
+}
+
+fn assert_popover_row_heights_match_layout(
+    cx: &mut gpui::TestAppContext,
+    density: crate::appearance::UiDensity,
+) {
     let _guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
@@ -336,7 +354,14 @@ fn collapsed_popover_row_heights_match_what_is_laid_out(cx: &mut gpui::TestAppCo
     let state = branch_fixture(400);
 
     cx.update(|_window, app| {
+        // After the view exists: its constructor installs the session's own
+        // appearance, which would undo a density set before it.
+        app.set_global(crate::appearance::Appearance {
+            density,
+            ..crate::appearance::Appearance::default()
+        });
         view.update(app, |view, cx| {
+            view.notify_font_preferences_changed(cx);
             view.store.replace_snapshot_for_test(Arc::clone(&state));
             test_support::push_test_state(view, Arc::clone(&state), cx);
             view.set_sidebar_collapsed(true, cx);

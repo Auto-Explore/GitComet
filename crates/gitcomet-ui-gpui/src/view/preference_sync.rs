@@ -51,7 +51,7 @@ impl GitCometView {
     }
 
     pub(super) fn ui_scale(&self) -> ui_scale::UiScale {
-        ui_scale::UiScale::from_percent(self.ui_scale_percent)
+        ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(self.theme.metrics)
     }
 
     pub(in crate::view) fn update_ui_preferences(
@@ -260,6 +260,24 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_change_tracking_view(next, cx));
         self.popover_host
             .update(cx, |host, cx| host.sync_change_tracking_view(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_file_list_layout(
+        &mut self,
+        next: FileListLayout,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_list_layout == next {
+            return;
+        }
+
+        self.file_list_layout = next;
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.file_lists.layout = next;
+        });
+        self.details_pane
+            .update(cx, |pane, cx| pane.set_file_list_layout(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -664,9 +682,16 @@ impl GitCometView {
         self.main_pane.update(cx, |pane, cx| {
             pane.set_history_tag_preferences(show_tags, auto_fetch_tags_on_repo_activation, cx);
         });
+        let verify_commit_signatures = self
+            .ui_model
+            .read(cx)
+            .preferences
+            .history
+            .verify_commit_signatures;
         self.store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: show_tags,
             tag_fetch_mode,
+            verify_commit_signatures,
         });
         if show_tags
             && auto_fetch_tags_on_repo_activation
@@ -680,6 +705,26 @@ impl GitCometView {
                     .dispatch(Msg::LoadRemoteTags { repo_id: repo.id });
             }
         }
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_verify_commit_signatures_preference(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.verify_commit_signatures = enabled;
+        });
+        let (show_history_tags, tag_fetch_mode) = {
+            let history = &self.ui_model.read(cx).preferences.history;
+            (history.show_tags, history.tag_fetch_mode)
+        };
+        self.store.dispatch(Msg::SetGitLogSettings {
+            show_history_tags,
+            tag_fetch_mode,
+            verify_commit_signatures: enabled,
+        });
         self.schedule_ui_settings_persist(cx);
     }
 

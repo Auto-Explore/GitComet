@@ -23,6 +23,12 @@ impl SettingsWindowView {
             repo_sidebar_pinned_branches: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
             ui_scale_percent: Some(self.ui_scale_percent),
+            ui_density: Some(self.appearance_metrics.density.key().to_string()),
+            ui_font_size_px: Some(self.appearance_metrics.ui_font_size_px),
+            editor_font_size_px: Some(self.appearance_metrics.editor_font_size_px),
+            markdown_preview_font_size_px: Some(
+                self.appearance_metrics.markdown_preview_font_size_px,
+            ),
             ui_font_family: Some(self.ui_font_family.clone()),
             editor_font_family: Some(self.editor_font_family.clone()),
             use_font_ligatures: Some(self.use_font_ligatures),
@@ -30,6 +36,7 @@ impl SettingsWindowView {
             timezone: Some(self.timezone.key()),
             show_timezone: Some(self.show_timezone),
             change_tracking_view: Some(self.change_tracking_view.key().to_string()),
+            file_list_layout: Some(self.file_list_layout.key().to_string()),
             diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             diff_content_mode: Some(self.diff_content_mode.key().to_string()),
             diff_whitespace_mode: Some(self.diff_whitespace_mode.key().to_string()),
@@ -66,6 +73,7 @@ impl SettingsWindowView {
             history_highlight_commit_chain: Some(self.history_highlight_commit_chain),
             file_browser_follow_selected_commit: Some(self.files_follow_selected_commit),
             history_show_tags: Some(self.history_show_tags),
+            history_verify_commit_signatures: Some(self.history_verify_commit_signatures),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
             default_history_mode: Some(self.default_history_mode),
             default_tag_type: Some(self.default_tag_type),
@@ -523,7 +531,9 @@ impl SettingsWindowView {
         }
 
         self.theme_mode = mode.clone();
-        self.theme = mode.resolve_theme(window.appearance());
+        self.theme = mode
+            .resolve_theme(window.appearance())
+            .with_appearance(self.appearance_metrics);
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, root_window, cx| {
@@ -652,6 +662,24 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_change_tracking_view(next, cx);
+        });
+        cx.notify();
+    }
+
+    pub(super) fn set_file_list_layout(
+        &mut self,
+        next: FileListLayout,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_list_layout == next {
+            return;
+        }
+
+        self.file_list_layout = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_file_list_layout(next, cx);
         });
         cx.notify();
     }
@@ -922,6 +950,23 @@ impl SettingsWindowView {
         cx.notify();
     }
 
+    pub(super) fn set_verify_commit_signatures(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_verify_commit_signatures == enabled {
+            return;
+        }
+
+        self.history_verify_commit_signatures = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_verify_commit_signatures_preference(enabled, cx);
+        });
+        cx.notify();
+    }
+
     pub(super) fn set_history_tag_fetch_mode(
         &mut self,
         mode: GitLogTagFetchMode,
@@ -991,5 +1036,47 @@ impl SettingsWindowView {
             view.set_remote_prune_preference(enabled, cx);
         });
         cx.notify();
+    }
+}
+
+impl SettingsWindowView {
+    fn publish_appearance(&mut self, cx: &mut gpui::Context<Self>) {
+        self.theme = self.theme.with_appearance(self.appearance_metrics);
+        cx.set_global(self.appearance_metrics);
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, |view, _window, cx| {
+            view.notify_font_preferences_changed(cx);
+        });
+        cx.refresh_windows();
+        cx.notify();
+    }
+
+    pub(super) fn set_font_size(
+        &mut self,
+        role: FontRole,
+        value: u32,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !role.range().contains(&value) {
+            return;
+        }
+        self.font_size_inputs[role.index()].update(cx, |input, cx| {
+            if input.text() != value.to_string() {
+                input.set_text(value.to_string(), cx);
+            }
+        });
+        if self.appearance_metrics.size(role) == value {
+            return;
+        }
+        self.appearance_metrics.set_size(role, value);
+        self.publish_appearance(cx);
+    }
+
+    pub(super) fn set_density(&mut self, density: UiDensity, cx: &mut gpui::Context<Self>) {
+        if self.appearance_metrics.density == density {
+            return;
+        }
+        self.appearance_metrics.density = density;
+        self.publish_appearance(cx);
     }
 }

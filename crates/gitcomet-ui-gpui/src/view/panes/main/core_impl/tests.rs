@@ -42,6 +42,39 @@ fn notify_fingerprint_tracks_cherry_pick_message_readiness() {
 }
 
 #[test]
+fn notify_fingerprint_tracks_line_stats_for_the_open_diff_area() {
+    let repo_id = RepoId(1);
+    let mut state = AppState::default();
+    state.active_repo = Some(repo_id);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: "/tmp/repo".into(),
+        },
+    ));
+
+    for area in [DiffArea::Staged, DiffArea::Unstaged] {
+        state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
+            path: "a.rs".into(),
+            area,
+        });
+        let before = MainPaneView::notify_fingerprint_for(&state);
+        match area {
+            DiffArea::Staged => state.repos[0].staged_line_stats_rev += 1,
+            DiffArea::Unstaged => state.repos[0].unstaged_line_stats_rev += 1,
+        }
+        let after = MainPaneView::notify_fingerprint_for(&state);
+        assert_ne!(before, after, "{area:?} counts can change file neighbors");
+
+        match area {
+            DiffArea::Staged => state.repos[0].unstaged_line_stats_rev += 1,
+            DiffArea::Unstaged => state.repos[0].staged_line_stats_rev += 1,
+        }
+        assert_eq!(after, MainPaneView::notify_fingerprint_for(&state));
+    }
+}
+
+#[test]
 fn should_request_blame_retries_failure_only_when_forced() {
     use gitcomet_state::model::Loadable;
     // A new/changed target always loads, regardless of state or force.
