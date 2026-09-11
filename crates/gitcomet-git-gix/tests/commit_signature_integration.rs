@@ -53,6 +53,16 @@ struct SigningRepo {
     allowed_signers: std::path::PathBuf,
 }
 
+fn generate_ssh_key(key: &Path) {
+    let status = Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-q", "-C", "gitcomet-test", "-N", ""])
+        .arg("-f")
+        .arg(key)
+        .status()
+        .expect("generate SSH signing key");
+    assert!(status.success(), "ssh-keygen key generation failed");
+}
+
 /// A repository that signs every commit with a throwaway SSH key. The allowed
 /// signers file is written but not yet configured, so the caller chooses whether
 /// signatures are verifiable.
@@ -60,14 +70,7 @@ fn init_signing_repo(dir: &Path) -> SigningRepo {
     let repo = dir.join("repo");
     fs::create_dir_all(&repo).expect("create repository directory");
     let key = dir.join("signing_key");
-
-    let status = Command::new("ssh-keygen")
-        .args(["-t", "ed25519", "-q", "-C", "gitcomet-test", "-N", ""])
-        .arg("-f")
-        .arg(&key)
-        .status()
-        .expect("generate SSH signing key");
-    assert!(status.success(), "ssh-keygen key generation failed");
+    generate_ssh_key(&key);
 
     let public_key = fs::read_to_string(key.with_extension("pub")).expect("read public key");
     let allowed_signers = dir.join("allowed_signers");
@@ -112,6 +115,20 @@ fn commit(repo: &Path, name: &str, signed: bool) -> CommitId {
     } else {
         run_git(repo, &["commit", "--no-gpg-sign", "-m", name]);
     }
+    CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into())
+}
+
+/// A signed commit whose payload dwarfs any pipe buffer. Git's SSH fallback to
+/// `check-novalidate` (key untrusted, or `find-principals` failed) does not
+/// ignore SIGPIPE, so a verifier that exits unread there always kills git.
+#[cfg(unix)]
+fn commit_with_huge_message(repo: &Path, name: &str) -> CommitId {
+    fs::write(repo.join(name), name).expect("write file");
+    run_git(repo, &["add", "."]);
+    let message = repo.join(".git").join("HUGE_MESSAGE");
+    let body = format!("{}\n", "x".repeat(99)).repeat(10_000);
+    fs::write(&message, format!("{name}\n\n{body}")).expect("write message");
+    run_git(repo, &["commit", "-F", message.to_str().unwrap()]);
     CommitId(git_stdout(repo, &["rev-parse", "HEAD"]).into())
 }
 
@@ -421,6 +438,8 @@ fn unavailable_ssh_verifiers_do_not_claim_the_signature_is_bad() {
     let fixture = init_signing_repo(dir.path());
     trust_signatures(&fixture);
     let signed = commit(&fixture.repo, "signed.txt", true);
+    // A small payload races the exiting verifier; a huge one always loses.
+    let huge = commit_with_huge_message(&fixture.repo, "huge.txt");
     let signing_only = dir.path().join("signing-only");
     write_program(
         &signing_only,
@@ -436,12 +455,67 @@ fn unavailable_ssh_verifiers_do_not_claim_the_signature_is_bad() {
             &fixture.repo,
             &["config", "gpg.ssh.program", program.to_str().unwrap()],
         );
-        let result = repo.verify_commit_signatures(&[signed.clone()]).unwrap();
+        let result = repo
+            .verify_commit_signatures(&[signed.clone(), huge.clone()])
+            .unwrap();
         assert!(
             result.is_empty(),
             "an unavailable verifier {program:?} must omit the badge, got {result:?}"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_verifier_that_kills_git_costs_only_that_commits_badge() {
+    if !ssh_signing_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = init_signing_repo(dir.path());
+    trust_signatures(&fixture);
+    let before = commit(&fixture.repo, "before.txt", true);
+    // An untrusted key sends git down the `check-novalidate` fallback.
+    let untrusted_key = dir.path().join("untrusted_key");
+    generate_ssh_key(&untrusted_key);
+    run_git(
+        &fixture.repo,
+        &["config", "user.signingkey", untrusted_key.to_str().unwrap()],
+    );
+    let huge = commit_with_huge_message(&fixture.repo, "huge.txt");
+    run_git(
+        &fixture.repo,
+        &[
+            "config",
+            "user.signingkey",
+            dir.path().join("signing_key").to_str().unwrap(),
+        ],
+    );
+    let after = commit(&fixture.repo, "after.txt", true);
+    // Verifies trusted keys, but abandons `check-novalidate` unread, so git
+    // dies of SIGPIPE partway through the batch.
+    let verifier = dir.path().join("no-check-novalidate");
+    write_program(
+        &verifier,
+        "#!/bin/sh\n[ \"$2\" = check-novalidate ] && exit 1\nexec ssh-keygen \"$@\"\n",
+    );
+    run_git(
+        &fixture.repo,
+        &["config", "gpg.ssh.program", verifier.to_str().unwrap()],
+    );
+    let result = open(&fixture.repo)
+        .verify_commit_signatures(&[before.clone(), huge, after.clone()])
+        .expect("one dead verifier must not fail the batch");
+    assert_eq!(
+        result
+            .iter()
+            .map(|(id, signature)| (id, signature.status))
+            .collect::<Vec<_>>(),
+        vec![
+            (&before, SignatureStatus::Good),
+            (&after, SignatureStatus::Good)
+        ]
+    );
 }
 
 #[test]

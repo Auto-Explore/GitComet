@@ -9,7 +9,7 @@
 use super::{GixRepo, with_object_cache};
 use crate::util::{run_git_with_stdin_capture, validate_hex_commit_id};
 use gitcomet_core::domain::{CommitId, CommitSignature, SignatureFormat, SignatureStatus};
-use gitcomet_core::error::{ErrorKind, GitFailureId};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashMap;
@@ -149,15 +149,13 @@ impl GixRepo {
             let verified = match self.run_verify_batch(&formats, VERIFY_TIMEOUT, cancellation) {
                 Ok(verified) => verified,
                 Err(error) => {
-                    let ErrorKind::Git(failure) = error.kind() else {
+                    let Some(failure) = interrupted_verification(&error) else {
                         return Err(error);
                     };
-                    if failure.id() != GitFailureId::Timeout {
-                        return Err(error);
-                    }
-                    // Keep complete records from the timed-out process, then
-                    // retry only unfinished commits individually. A stalled
-                    // verifier must not erase progress for the rest of a page.
+                    // Keep complete records from the interrupted process, then
+                    // retry only unfinished commits individually. One stalled
+                    // or crashing verifier must not erase progress for the rest
+                    // of a page.
                     let mut verified = signatures_from_output(&formats, failure.stdout());
                     let completed: std::collections::HashSet<_> =
                         verified.iter().map(|(oid, _)| *oid).collect();
@@ -165,8 +163,7 @@ impl GixRepo {
                         let single = [(*oid, *format)].into_iter().collect();
                         match self.run_verify_batch(&single, Duration::from_secs(2), cancellation) {
                             Ok(result) => verified.extend(result),
-                            Err(error) if matches!(error.kind(), ErrorKind::Git(failure) if failure.id() == GitFailureId::Timeout) =>
-                                {}
+                            Err(error) if interrupted_verification(&error).is_some() => {}
                             Err(error) => return Err(error),
                         }
                     }
@@ -217,6 +214,19 @@ impl GixRepo {
 
         Ok(signatures_from_output(formats, &output))
     }
+}
+
+/// A verifier that stalls times out. One that exits without reading its payload
+/// kills git with SIGPIPE (no exit code): git's SSH `check-novalidate` fallback
+/// does not ignore it, and git resets SIGPIPE at startup, so we cannot ignore
+/// it on git's behalf.
+fn interrupted_verification(error: &Error) -> Option<&GitFailure> {
+    let ErrorKind::Git(failure) = error.kind() else {
+        return None;
+    };
+    let killed_by_signal =
+        failure.id() == GitFailureId::CommandFailed && failure.exit_code().is_none();
+    (failure.id() == GitFailureId::Timeout || killed_by_signal).then_some(failure)
 }
 
 /// Include only complete records; `None` means Git actually reported no badge.
