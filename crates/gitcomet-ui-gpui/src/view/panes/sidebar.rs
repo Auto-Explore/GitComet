@@ -285,6 +285,9 @@ pub(in super::super) struct SidebarPaneView {
     explorer_name_input: Entity<TextInput>,
     explorer_name_edit: Option<explorer_operations::NameEdit>,
     explorer_drop_target: Option<PathBuf>,
+    /// The row that claimed `explorer_drop_target`. Rows are not one-to-one
+    /// with destinations, so only this identifies the claimant.
+    explorer_drop_row: Option<PathBuf>,
     explorer_hover_task: Option<gpui::Task<()>>,
     explorer_scroll_task: Option<gpui::Task<()>>,
     pub(in super::super) store: Arc<AppStore>,
@@ -621,6 +624,7 @@ impl SidebarPaneView {
             }),
             explorer_name_edit: None,
             explorer_drop_target: None,
+            explorer_drop_row: None,
             explorer_hover_task: None,
             explorer_scroll_task: None,
             store,
@@ -2467,6 +2471,23 @@ impl SidebarPaneView {
                     cx.stop_propagation();
                 }),
             )
+            // One autoscroll driver for the whole tree rather than one per row.
+            .on_drag_move(cx.listener(
+                |this,
+                 event: &gpui::DragMoveEvent<explorer_operations::ExplorerDrag>,
+                 window,
+                 cx| {
+                    this.explorer_drag_scroll(event.event.position, window, cx)
+                },
+            ))
+            .on_drag_move(cx.listener(
+                |this, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, window, cx| {
+                    this.explorer_drag_scroll(event.event.position, window, cx)
+                },
+            ))
+            .on_mouse_exit(cx.listener(|this, _: &gpui::MouseExitEvent, _window, cx| {
+                this.clear_explorer_drag_state(cx)
+            }))
             .on_drop(
                 cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
                     this.explorer_drop(paths.paths().to_vec(), None, true, window, cx)
@@ -3148,6 +3169,9 @@ impl SidebarPaneView {
                                 )
                             },
                         ))
+                        // gpui runs every registered drag_move listener, so
+                        // each row has to decide for itself whether the pointer
+                        // is actually over it.
                         .on_drag_move(cx.listener(
                             move |this,
                                   event: &gpui::DragMoveEvent<
@@ -3155,7 +3179,14 @@ impl SidebarPaneView {
                             >,
                                   window,
                                   cx| {
-                                this.explorer_hover(&hover_path, event.bounds, window, cx)
+                                this.explorer_hover(
+                                    &hover_path,
+                                    is_directory,
+                                    event.bounds,
+                                    event.event.position,
+                                    window,
+                                    cx,
+                                )
                             },
                         ))
                         .on_drag_move(cx.listener(
@@ -3163,7 +3194,14 @@ impl SidebarPaneView {
                                   event: &gpui::DragMoveEvent<gpui::ExternalPaths>,
                                   window,
                                   cx| {
-                                this.explorer_hover(&external_hover_path, event.bounds, window, cx)
+                                this.explorer_hover(
+                                    &external_hover_path,
+                                    is_directory,
+                                    event.bounds,
+                                    event.event.position,
+                                    window,
+                                    cx,
+                                )
                             },
                         ))
                         .when(
@@ -4346,3 +4384,6 @@ mod tests {
 
 #[cfg(test)]
 mod long_list_tests;
+
+#[cfg(test)]
+mod explorer_drag_tests;

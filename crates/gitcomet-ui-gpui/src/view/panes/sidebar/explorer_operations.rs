@@ -1,7 +1,22 @@
 use super::*;
+use crate::kit::{ScrollbarAxis, ScrollbarDriver};
 use gitcomet_core::domain::FileSource;
 use gitcomet_core::filesystem::{Operation, Request, TransferIntent};
 use std::path::Path;
+use std::time::Duration;
+
+/// How long a dragged item has to rest on a collapsed folder before it opens.
+const EXPLORER_HOVER_EXPAND_DELAY: Duration = Duration::from_millis(600);
+/// How close to an edge of the tree a dragged item has to get before the list
+/// starts scrolling under it. Design pixels, scaled with the UI.
+const EXPLORER_DRAG_SCROLL_EDGE_PX: f32 = 24.0;
+/// Speed of that scroll, integrated over elapsed time so it does not depend on
+/// how promptly the executor runs the ticks.
+const EXPLORER_DRAG_SCROLL_PX_PER_SEC: f32 = 400.0;
+/// Ceiling on the gap between two steps, so a stalled frame cannot launch the
+/// list across a whole screen at once.
+const EXPLORER_DRAG_SCROLL_MAX_STEP: Duration = Duration::from_millis(50);
+const EXPLORER_DRAG_SCROLL_TICK: Duration = Duration::from_millis(16);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum ExplorerAction {
@@ -365,9 +380,7 @@ impl SidebarPaneView {
                     let _ = self
                         .root_view
                         .update(cx, |root, cx| root.cancel_filesystem_operations(cx));
-                    self.explorer_drop_target = None;
-                    self.explorer_hover_task = None;
-                    self.explorer_scroll_task = None;
+                    self.clear_explorer_drag_state(cx);
                     cx.stop_propagation();
                     cx.notify();
                     None
@@ -514,9 +527,7 @@ impl SidebarPaneView {
             .spec
             .workdir
             .join(self.explorer_target(target.as_deref()));
-        self.explorer_drop_target = None;
-        self.explorer_hover_task = None;
-        self.explorer_scroll_task = None;
+        self.clear_explorer_drag_state(cx);
         let _ = self.root_view.update(cx, |root, cx| {
             let mut request = Request::new(Operation::Transfer {
                 sources: paths,
@@ -534,82 +545,158 @@ impl SidebarPaneView {
         cx.notify();
     }
 
+    /// Drops every piece of drag state at once. This used to be open-coded at
+    /// four sites and one of them forgot the scroll task.
+    pub(super) fn clear_explorer_drag_state(&mut self, cx: &mut gpui::Context<Self>) {
+        let had_state = self.explorer_drop_target.is_some()
+            || self.explorer_hover_task.is_some()
+            || self.explorer_scroll_task.is_some();
+        self.explorer_drop_row = None;
+        self.explorer_drop_target = None;
+        self.explorer_hover_task = None;
+        self.explorer_scroll_task = None;
+        if had_state {
+            cx.notify();
+        }
+    }
+
+    /// Marks the row under the pointer as the drop destination.
+    ///
+    /// gpui dispatches `on_drag_move` to every registered listener of the
+    /// matching drag type with no hitbox test, so every visible row runs this
+    /// on every mouse move. The bounds check is what makes the pointer decide
+    /// the target rather than whichever row happened to paint last.
     pub(super) fn explorer_hover(
         &mut self,
         path: &Path,
+        is_directory: bool,
         row_bounds: gpui::Bounds<Pixels>,
+        position: gpui::Point<Pixels>,
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let target = self.explorer_target(Some(path));
-        if self.explorer_drop_target.as_ref() != Some(&target) {
-            self.explorer_drop_target = Some(target.clone());
-            let repo_id = self.active_repo_id();
-            self.explorer_hover_task = Some(cx.spawn_in(window, async move |view, cx| {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(600))
-                    .await;
-                let _ = view.update_in(cx, |this, window, cx| {
-                    if !cx.has_active_drag() || !row_bounds.contains(&window.mouse_position()) {
-                        this.explorer_hover_task = None;
-                        this.explorer_drop_target = None;
-                        cx.notify();
-                        return;
-                    }
-                    if this.active_repo_id() != repo_id
-                        || this.explorer_drop_target.as_ref() != Some(&target)
-                    {
-                        return;
-                    }
-                    if let Some(repo) = this.active_repo()
-                        && !repo.file_browser.expanded_dirs.contains(&target)
-                    {
-                        this.store.dispatch(Msg::ToggleFileBrowserDir {
-                            repo_id: repo.id,
-                            path: target,
-                        });
-                    }
-                    this.explorer_hover_task = None;
-                    cx.notify();
-                });
-            }));
-            cx.notify();
+        let target = gitcomet_state::explorer::Selection::destination(Some(path), is_directory);
+        if !row_bounds.contains(&position) {
+            // Only the row that claimed the target may give it up. Keying that
+            // on the destination instead would let a sibling file clear it:
+            // `dir/a` and `dir` both resolve to `dir`.
+            if self.explorer_drop_row.as_deref() == Some(path) {
+                self.explorer_drop_row = None;
+                self.explorer_drop_target = None;
+                self.explorer_hover_task = None;
+                cx.notify();
+            }
+            return;
         }
-        if self.explorer_scroll_task.is_none() {
-            self.explorer_scroll_task = Some(cx.spawn_in(window, async move |view, cx| {
-                loop {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(30))
-                        .await;
-                    let keep = view
-                        .update_in(cx, |this, window, cx| {
-                            let scroll = this.file_browser_scroll.0.borrow();
-                            let bounds = scroll.base_handle.bounds();
-                            let pointer = window.mouse_position();
-                            if !cx.has_active_drag() || !bounds.contains(&pointer) {
-                                return false;
-                            }
-                            let mut offset = scroll.base_handle.offset();
-                            if pointer.y < bounds.top() + px(24.) {
-                                offset.y += px(12.);
-                            } else if pointer.y > bounds.bottom() - px(24.) {
-                                offset.y -= px(12.);
-                            }
-                            scroll.base_handle.set_offset(offset);
-                            true
-                        })
-                        .unwrap_or(false);
-                    if !keep {
-                        break;
-                    }
-                }
-                let _ = view.update_in(cx, |this, _, cx| {
-                    this.explorer_scroll_task = None;
+        if self.explorer_drop_row.as_deref() == Some(path) {
+            return;
+        }
+        self.explorer_drop_row = Some(path.to_path_buf());
+        self.explorer_drop_target = Some(target.clone());
+        let repo_id = self.active_repo_id();
+        self.explorer_hover_task = Some(cx.spawn_in(window, async move |view, cx| {
+            cx.background_executor()
+                .timer(EXPLORER_HOVER_EXPAND_DELAY)
+                .await;
+            let _ = view.update_in(cx, |this, window, cx| {
+                if !cx.has_active_drag() || !row_bounds.contains(&window.mouse_position()) {
                     this.explorer_hover_task = None;
+                    this.explorer_drop_row = None;
                     this.explorer_drop_target = None;
                     cx.notify();
-                });
-            }));
+                    return;
+                }
+                if this.active_repo_id() != repo_id
+                    || this.explorer_drop_target.as_ref() != Some(&target)
+                {
+                    return;
+                }
+                if let Some(repo) = this.active_repo()
+                    && !repo.file_browser.expanded_dirs.contains(&target)
+                {
+                    this.store.dispatch(Msg::ToggleFileBrowserDir {
+                        repo_id: repo.id,
+                        path: target,
+                    });
+                }
+                this.explorer_hover_task = None;
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// Scrolls the tree while a dragged item is held against one of its edges.
+    ///
+    /// Registered once on the container rather than per row. The task is
+    /// dropped and re-armed on every move, so it exists only while the pointer
+    /// is actually inside an edge band.
+    pub(super) fn explorer_drag_scroll(
+        &mut self,
+        position: gpui::Point<Pixels>,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        // Dropping the old task cancels it, so at most one is ever live.
+        self.explorer_scroll_task = None;
+        let bounds = self.file_browser_scroll.0.borrow().base_handle.bounds();
+        if !bounds.contains(&position) {
+            return;
         }
+        let edge = ui_scale::design_px_from_percent(
+            EXPLORER_DRAG_SCROLL_EDGE_PX,
+            ui_scale::current(cx).percent,
+        );
+        // Offsets run from -max (bottom) to 0 (top), so scrolling up is positive.
+        let direction = if position.y < bounds.top() + edge {
+            1.0
+        } else if position.y > bounds.bottom() - edge {
+            -1.0
+        } else {
+            return;
+        };
+        let scroll = self.file_browser_scroll.clone();
+        self.explorer_scroll_task = Some(cx.spawn_in(window, async move |view, cx| {
+            let mut previous_tick = std::time::Instant::now();
+            loop {
+                cx.background_executor()
+                    .timer(EXPLORER_DRAG_SCROLL_TICK)
+                    .await;
+                let now = std::time::Instant::now();
+                let step = now
+                    .saturating_duration_since(previous_tick)
+                    .min(EXPLORER_DRAG_SCROLL_MAX_STEP);
+                previous_tick = now;
+                let keep = view
+                    .update_in(cx, |_this, _window, cx| {
+                        if !cx.has_active_drag() {
+                            return false;
+                        }
+                        let max = ScrollbarDriver::max_offset(&scroll, ScrollbarAxis::Vertical);
+                        let current = ScrollbarDriver::raw_offset(&scroll, ScrollbarAxis::Vertical);
+                        let delta =
+                            px(EXPLORER_DRAG_SCROLL_PX_PER_SEC * step.as_secs_f32() * direction);
+                        let next = (current + delta).clamp(-max, px(0.0));
+                        if next == current {
+                            // Already against the end of the list.
+                            return false;
+                        }
+                        ScrollbarDriver::set_axis_offset(&scroll, ScrollbarAxis::Vertical, next);
+                        // `set_offset` only writes a RefCell and never marks the
+                        // window dirty; during a drag gpui repaints on mouse
+                        // moves alone, so without this the list scrolls
+                        // invisibly and jumps on the next move.
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
+            }
+            let _ = view.update_in(cx, |this, _window, _cx| {
+                this.explorer_scroll_task = None;
+            });
+        }));
     }
 }
