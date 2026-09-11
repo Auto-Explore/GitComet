@@ -183,6 +183,10 @@ impl GixRepo {
 
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("log")
+            // `log.showSignature=true` makes git print gpg's prose to *stdout*
+            // ahead of the records, which would swallow the first oid and make
+            // the whole batch parse as "no badge".
+            .arg("--no-show-signature")
             .arg("--no-walk=unsorted")
             .arg("--stdin")
             .arg("--format=%H%x1f%G?%x1f%GS%x1f%GK%x1e");

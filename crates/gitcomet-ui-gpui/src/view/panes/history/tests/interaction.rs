@@ -3253,3 +3253,115 @@ fn retained_history_rows_support_keyboard_navigation_while_loading(cx: &mut gpui
         repo.history_state.selected_commit.as_ref() == Some(&second)
     });
 }
+
+/// The date cell's tooltip has to be retracted when the pointer leaves it.
+///
+/// A stranded tooltip is not just a stale bubble: while `TooltipHost` holds any
+/// text, every pointer event in the window drops and respawns its delay timer,
+/// so failing to clear turns all mouse movement into a task-spawn treadmill.
+#[gpui::test]
+fn a_date_cell_tooltip_is_retracted_when_the_pointer_leaves_the_cell(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let page = Arc::new(log_page(
+        vec![commit("tip", &["base"], "tip"), commit("base", &[], "base")],
+        None,
+    ));
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/history-date-tooltip"),
+        },
+    );
+    repo.head_branch = Loadable::Ready("main".to_string());
+    repo.head_branch_rev = 1;
+    repo.log = Loadable::Ready(Arc::clone(&page));
+    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(page);
+    repo.history_state.log_rev = 1;
+
+    let state = Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    });
+
+    cx.update(|_window, app| {
+        let ui_model = view.read(app).ui_model.clone();
+        ui_model.update(app, |model, cx| {
+            model.set_state(Arc::clone(&state), cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    ensure_history_cache_for_tests(cx, &view, state);
+
+    wait_until(cx, "history row", |cx| {
+        cx.debug_bounds("history_row_0").is_some()
+    });
+
+    let row = cx
+        .debug_bounds("history_row_0")
+        .expect("history row should be rendered");
+
+    // Sweep the row right-to-left rather than recomputing the column layout, so
+    // the test survives column-width changes and still pins the clear path.
+    let mut hovered_at = None;
+    let mut x = row.right() - px(4.0);
+    while x > row.left() {
+        cx.simulate_mouse_move(point(x, row.center().y), None, gpui::Modifiers::default());
+        cx.run_until_parked();
+        let text = crate::view::test_support::tooltip_text(cx, &view);
+        if text.is_some() {
+            hovered_at = Some(x);
+            break;
+        }
+        x -= px(6.0);
+    }
+
+    let hovered_at = hovered_at.expect("some x in the row should show the date tooltip");
+    assert!(
+        crate::view::test_support::tooltip_text(cx, &view).is_some(),
+        "hovering the date cell at {hovered_at:?} should set the shared tooltip"
+    );
+
+    // Leave the cell without leaving the row: the owning row's listener still
+    // runs, and must retract its own text.
+    cx.simulate_mouse_move(
+        point(row.left() + px(2.0), row.center().y),
+        None,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        None,
+        "moving off the date cell must retract the tooltip"
+    );
+
+    // And leaving the row entirely, where the owning row's hitbox no longer
+    // reports the pointer at all, must clear it too.
+    cx.simulate_mouse_move(
+        point(hovered_at, row.center().y),
+        None,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    assert!(crate::view::test_support::tooltip_text(cx, &view).is_some());
+    cx.simulate_mouse_move(point(px(1.0), px(1.0)), None, gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        None,
+        "leaving the history list must retract the tooltip, or every later \
+         pointer event respawns the tooltip delay timer"
+    );
+}

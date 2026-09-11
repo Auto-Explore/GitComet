@@ -1055,6 +1055,9 @@ pub(in super::super) struct HistoryView {
     /// Which row sub-area the pointer is over, so the shared tooltip is only
     /// rewritten when the hover actually moves rather than on every pixel.
     row_hover: Option<(usize, HistoryRowHoverArea)>,
+    /// Exactly what we last handed the shared host, so we only ever retract
+    /// our own tooltip and never one another surface has since set.
+    row_hover_tooltip: Option<SharedString>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     pub(in super::super) last_window_size: Size<Pixels>,
@@ -1126,14 +1129,31 @@ impl HistoryView {
         let Some(host) = self.tooltip_host.upgrade() else {
             return;
         };
+        let previous = self.row_hover_tooltip.take();
+        self.row_hover_tooltip = tooltip.clone();
         host.update(cx, |host, cx| match tooltip {
             Some(text) => {
                 host.set_tooltip_text_if_changed(Some(text), cx);
             }
             None => {
-                host.clear_tooltip(cx);
+                // Retract only our own text. A blanket `clear_tooltip` would
+                // also cancel a pending reveal another surface just armed.
+                if let Some(previous) = previous {
+                    host.clear_tooltip_if_matches(&previous, cx);
+                }
             }
         });
+    }
+
+    /// Forget the hover without touching the host.
+    ///
+    /// Any mouse-down clears the host from the window root, which would leave
+    /// this mirror claiming a tooltip that is no longer shown — and then the
+    /// equality gate would suppress re-showing it until the pointer left the
+    /// cell and came back.
+    pub(in crate::view) fn reset_history_row_hover(&mut self) {
+        self.row_hover = None;
+        self.row_hover_tooltip = None;
     }
 
     pub(in crate::view) fn row_hover(&self) -> Option<(usize, HistoryRowHoverArea)> {
@@ -1284,6 +1304,7 @@ impl HistoryView {
             root_view,
             tooltip_host,
             row_hover: None,
+            row_hover_tooltip: None,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             last_window_size,

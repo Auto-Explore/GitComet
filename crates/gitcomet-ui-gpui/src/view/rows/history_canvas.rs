@@ -1333,7 +1333,10 @@ pub(super) fn history_commit_row_canvas(
 
             // Hover regions resolved during paint and read by the shared move
             // listener below.
-            let mut signature_hover: Option<(Bounds<Pixels>, SharedString)> = None;
+            let mut signature_hover: Option<(
+                Bounds<Pixels>,
+                gitcomet_core::domain::CommitSignature,
+            )> = None;
             let mut date_hover_bounds: Option<Bounds<Pixels>> = None;
 
             if show_author && !author.is_empty() {
@@ -1410,12 +1413,10 @@ pub(super) fn history_commit_row_canvas(
                     .active_repo()
                     .map(|repo| {
                         let signatures = &repo.history_state.commit_signatures;
-                        (
-                            signatures.get(&commit_id).map(|signature| {
-                                crate::view::commit_signature::signature_badge(theme, signature)
-                            }),
-                            !signatures.is_empty(),
-                        )
+                        // Cloned, not rendered: building the badge's tooltip here
+                        // would allocate a multi-line string per signed row per
+                        // frame, for text only the hovered row ever reads.
+                        (signatures.get(&commit_id).cloned(), !signatures.is_empty())
                     })
                     .unwrap_or((None, false));
                 let signature_glyph = scaled_px(12.0);
@@ -1427,7 +1428,7 @@ pub(super) fn history_commit_row_canvas(
                 };
                 let author_text_right =
                     (author_bounds.right() - cell_pad_x - signature_width).max(text_left);
-                if let Some(badge) = &signature {
+                if let Some(signature) = &signature {
                     let badge_bounds = Bounds::new(
                         point(
                             author_bounds.right() - cell_pad_x - signature_glyph,
@@ -1435,15 +1436,17 @@ pub(super) fn history_commit_row_canvas(
                         ),
                         size(signature_glyph, author_bounds.size.height),
                     );
+                    let (icon, palette) =
+                        crate::view::commit_signature::signature_glyph(theme, signature);
                     super::diff_canvas::paint_centered_svg_icon(
-                        badge.icon,
+                        icon,
                         badge_bounds,
                         signature_glyph,
-                        badge.palette.foreground,
+                        palette.foreground,
                         window,
                         cx,
                     );
-                    signature_hover = Some((badge_bounds, badge.tooltip.clone()));
+                    signature_hover = Some((badge_bounds, signature.clone()));
                 }
 
                 let author_text_bounds = Bounds::new(
@@ -1568,17 +1571,26 @@ pub(super) fn history_commit_row_canvas(
                 let hitbox = hitbox.clone();
                 let signature_hover = signature_hover.clone();
                 move |event: &gpui::MouseMoveEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
                     // The row's hitbox — not its bounds — decides whether this
                     // row owns the pointer: window-level listeners run whatever
                     // is painted on top, so anything overlaying the history (the
                     // collapsed sidebar's popover, a panel, a menu) must win.
-                    if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
-                        return;
-                    }
+                    let pointer_on_row = hitbox.is_hovered(window);
 
                     // Canvas cells cannot carry `.tooltip()`, so the signature
                     // badge and the date cell drive the shared host by hand.
-                    let hovered_area = if signature_hover
+                    //
+                    // Retracting is deliberately NOT gated on the hitbox: the row
+                    // that owns the tooltip is by definition the one the pointer
+                    // just left, so gating it would strand the host's text and
+                    // make every later pointer event in the window respawn the
+                    // host's delay timer.
+                    let hovered_area = if !pointer_on_row {
+                        None
+                    } else if signature_hover
                         .as_ref()
                         .is_some_and(|(bounds, _)| bounds.contains(&event.position))
                     {
@@ -1593,28 +1605,36 @@ pub(super) fn history_commit_row_canvas(
                     let next_hover = hovered_area.map(|area| (row_id, area));
                     let current_hover = view.read(cx).row_hover();
                     // Gate hard: this listener runs for every visible row on
-                    // every pixel of movement, and never clear a hover that
-                    // another row owns.
+                    // every pixel of movement. Only this row's own hover is ever
+                    // retracted, so rows never fight over the host.
                     if current_hover != next_hover
                         && (next_hover.is_some()
                             || matches!(current_hover, Some((ix, _)) if ix == row_id))
                     {
-                        let tooltip = match hovered_area {
-                            Some(HistoryRowHoverArea::Signature) => {
-                                signature_hover.as_ref().map(|(_, tooltip)| tooltip.clone())
-                            }
-                            Some(HistoryRowHoverArea::Date) => None,
-                            None => None,
+                        let signature = match hovered_area {
+                            Some(HistoryRowHoverArea::Signature) => signature_hover
+                                .as_ref()
+                                .map(|(_, signature)| signature.clone()),
+                            _ => None,
                         };
                         view.update(cx, |this, cx| {
+                            // Built here, once per hover transition, rather than
+                            // once per row per frame.
                             let tooltip = match hovered_area {
+                                Some(HistoryRowHoverArea::Signature) => signature
+                                    .as_ref()
+                                    .map(crate::view::commit_signature::signature_tooltip),
                                 Some(HistoryRowHoverArea::Date) => {
                                     Some(this.full_commit_time_text(commit_time))
                                 }
-                                _ => tooltip,
+                                None => None,
                             };
                             this.update_history_row_hover(next_hover, tooltip, cx);
                         });
+                    }
+
+                    if !pointer_on_row {
+                        return;
                     }
 
                     if !ref_items.is_empty() && branch_bounds.contains(&event.position) {
@@ -1671,13 +1691,17 @@ pub(super) fn history_commit_row_canvas(
                 let view = view.clone();
                 let commit_id = commit_id.clone();
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+                    // The window root clears the shared host on any mouse-down,
+                    // so drop our mirror of it too; otherwise the equality gate
+                    // suppresses re-showing the tooltip the click just hid.
+                    view.update(cx, |this, _cx| this.reset_history_row_hover());
                     // Hitbox, not bounds: see the hover listener above. Without
                     // this, right-clicking an overlay that happens to sit over
                     // the history opens this commit's menu through it.
-                    if phase != DispatchPhase::Bubble
-                        || event.button != MouseButton::Right
-                        || !hitbox.is_hovered(window)
-                    {
+                    if event.button != MouseButton::Right || !hitbox.is_hovered(window) {
                         return;
                     }
 

@@ -258,3 +258,30 @@ fn a_tampered_commit_reports_a_bad_signature() {
     assert_eq!(results.len(), 1, "a bad signature still earns a badge");
     assert_eq!(results[0].1.status, SignatureStatus::Bad);
 }
+
+#[test]
+fn log_show_signature_does_not_corrupt_the_batch_parse() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y verify` is unavailable");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let fixture = init_signing_repo(dir.path());
+    trust_signatures(&fixture);
+    // With this set, `git log` prints gpg's prose to stdout before the records.
+    run_git(&fixture.repo, &["config", "log.showSignature", "true"]);
+
+    let signed = commit(&fixture.repo, "signed.txt", true);
+
+    let repo = open(&fixture.repo);
+    let results = repo
+        .verify_commit_signatures(&[signed.clone()])
+        .expect("verify signatures");
+
+    assert_eq!(
+        results.len(),
+        1,
+        "log.showSignature must not swallow the record, got {results:?}"
+    );
+    assert!(results[0].1.status.is_verified());
+}

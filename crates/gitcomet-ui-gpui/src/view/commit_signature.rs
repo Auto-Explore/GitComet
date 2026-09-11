@@ -55,19 +55,36 @@ fn tooltip_text(signature: &CommitSignature) -> String {
     lines.join("\n")
 }
 
+/// Just what painting needs. Split out from [`signature_badge`] because the
+/// history canvas draws the icon for every signed row on every frame and must
+/// not build the label and tooltip strings it never shows.
+pub(in crate::view) fn signature_glyph(
+    theme: AppTheme,
+    signature: &CommitSignature,
+) -> (&'static str, StatusColorSet) {
+    let icon = if signature.status.is_verified() {
+        SHIELD_CHECK_ICON_PATH
+    } else {
+        SHIELD_ALERT_ICON_PATH
+    };
+    (icon, status_palette(theme, signature.status))
+}
+
+/// The hover text. Built on demand, once per hover transition.
+pub(in crate::view) fn signature_tooltip(signature: &CommitSignature) -> SharedString {
+    tooltip_text(signature).into()
+}
+
 pub(in crate::view) fn signature_badge(
     theme: AppTheme,
     signature: &CommitSignature,
 ) -> SignatureBadge {
+    let (icon, palette) = signature_glyph(theme, signature);
     SignatureBadge {
-        icon: if signature.status.is_verified() {
-            SHIELD_CHECK_ICON_PATH
-        } else {
-            SHIELD_ALERT_ICON_PATH
-        },
-        palette: status_palette(theme, signature.status),
+        icon,
+        palette,
         label: status_label(signature.status).into(),
-        tooltip: tooltip_text(signature).into(),
+        tooltip: signature_tooltip(signature),
     }
 }
 
