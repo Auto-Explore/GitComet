@@ -2871,8 +2871,14 @@ impl PopoverHost {
                         limit: 200,
                     });
                 }
-                PopoverKind::HistoryAuthorFilter { .. } => {
+                PopoverKind::HistoryAuthorFilter { repo_id } => {
                     self.ensure_history_author_filter_search_input(window, cx);
+                    self.store.dispatch(Msg::HistoryAuthors(
+                        gitcomet_state::history_authors::HistoryAuthorsMsg::Ensure {
+                            repo_id: *repo_id,
+                            retry: true,
+                        },
+                    ));
                 }
                 PopoverKind::PushSetUpstreamPrompt {
                     repo_id,

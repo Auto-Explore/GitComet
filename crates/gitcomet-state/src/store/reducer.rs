@@ -4,6 +4,7 @@ mod diff_selection;
 mod effects;
 mod external_and_history;
 mod git_hook_activity;
+mod history_authors;
 mod indexed_history;
 mod repo_management;
 mod util;
@@ -2351,6 +2352,7 @@ fn reduce_inner(
             effects::upstream_divergence_loaded(state, repo_id, result)
         }
         Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
+        Msg::HistoryAuthors(event) => history_authors::reduce(state, event),
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             seq,

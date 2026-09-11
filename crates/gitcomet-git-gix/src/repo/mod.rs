@@ -400,6 +400,7 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_page_cache: std::sync::Mutex<Vec<LogPageCacheEntry>>,
+    history_authors_cache: std::sync::Mutex<Option<log::HistoryAuthorsCache>>,
     all_branches_tips: std::sync::Mutex<Option<AllBranchesTipsCacheEntry>>,
     divergence_cache: DivergenceCache,
     /// `list_ref_metadata` output keyed by the ref namespace fingerprint; the
@@ -424,6 +425,7 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
             log_page_cache: std::sync::Mutex::new(Vec::new()),
+            history_authors_cache: Default::default(),
             all_branches_tips: std::sync::Mutex::new(None),
             divergence_cache: DivergenceCache::default(),
             ref_metadata_cache: std::sync::Mutex::new(None),
@@ -467,6 +469,13 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
 }
 
 impl GitRepository for GixRepo {
+    fn history_authors(
+        &self,
+        mode: HistoryMode,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<[Arc<str>]>> {
+        self.history_authors_impl(mode, cancellation)
+    }
     fn spec(&self) -> &RepoSpec {
         &self.spec
     }

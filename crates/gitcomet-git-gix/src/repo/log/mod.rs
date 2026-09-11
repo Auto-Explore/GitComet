@@ -23,6 +23,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod authors;
 mod commit_stats;
 mod decode;
 mod index;
@@ -31,6 +32,7 @@ mod repo_impl;
 mod snapshot;
 mod walk;
 
+pub(super) use authors::HistoryAuthorsCache;
 pub(super) use commit_stats::*;
 pub(super) use decode::*;
 pub(super) use reflog::*;

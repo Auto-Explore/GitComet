@@ -265,12 +265,8 @@ pub(in super::super) struct PopoverHost {
     submodule_picker_selected_index: Option<usize>,
     file_history_selected_index: Option<usize>,
     history_author_filter_selected_index: Option<usize>,
-    /// Author suggestions for the history author filter, keyed by repository and
-    /// the log revision they were collected from. Collecting them walks the
-    /// whole accumulated log, and the popover re-renders on every mouse move
-    /// over it, so the result has to outlive the frame. See
-    /// [`author_filter::suggestions`].
-    history_author_suggestions: Option<(RepoId, u64, std::sync::Arc<[SharedString]>)>,
+    /// Collected author names survive frames and active author filters.
+    history_author_suggestions: Option<author_filter::SuggestionCache>,
     /// Row models for the pickers that build one row per repository, ref or
     /// worktree, rebuilt only when the data behind them changes rather than on
     /// every frame. See [`rows_cache`] — a hover moving between rows re-renders

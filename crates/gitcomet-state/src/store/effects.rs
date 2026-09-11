@@ -1,4 +1,5 @@
 mod clone;
+mod history_authors;
 mod indexed_history;
 mod open_repo;
 mod repo_actions;
@@ -356,6 +357,9 @@ fn send_unavailable_git_effect_result(
             },
         )),
         Effect::IndexedHistory(work) => send(Msg::IndexedHistory(
+            work.failed(git_unavailable_error(runtime)),
+        )),
+        Effect::HistoryAuthors(work) => send(Msg::HistoryAuthors(
             work.failed(git_unavailable_error(runtime)),
         )),
         Effect::LoadLog {
@@ -1717,6 +1721,13 @@ pub(super) fn schedule_effect(
                     repo_id,
                     cancellation,
                 );
+            }
+        }
+        Effect::HistoryAuthors(work) => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, work.repo_id)
+            {
+                history_authors::schedule(repos, msg_tx, work, cancellation);
             }
         }
         Effect::IndexedHistory(work) => {

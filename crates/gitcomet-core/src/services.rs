@@ -407,6 +407,34 @@ pub enum SafePushAfterCommitDecision {
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
+    /// Distinct author names across the complete, unfiltered history scope.
+    /// Called on demand, independently of the visible commit metadata cache.
+    fn history_authors(
+        &self,
+        mode: HistoryMode,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<[Arc<str>]>> {
+        let mut authors = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut cursor = None;
+        loop {
+            cancellation.check_cancelled()?;
+            let page =
+                self.log_history_mode_page_cancellable(mode, 256, cursor.as_ref(), cancellation)?;
+            for commit in &page.commits {
+                if seen.insert(commit.author.clone()) {
+                    authors.push(commit.author.clone());
+                }
+            }
+            cursor = page.next_cursor.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+        cancellation.check_cancelled()?;
+        Ok(authors.into())
+    }
+
     /// Optional indexed access to history. `None` keeps older backends on the
     /// paged reader. Construction is background work; range reads never walk
     /// from the branch tip to the requested offset.

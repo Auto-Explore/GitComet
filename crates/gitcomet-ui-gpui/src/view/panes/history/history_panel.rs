@@ -502,17 +502,11 @@ impl HistoryView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == author_invoker.as_ref());
-        // The names on offer come from the commits loaded so far, not from the
-        // whole repository, so say where they are from — otherwise an author who
-        // has not been paged in yet looks like an author who does not exist. Kept
-        // to one line: the tooltip bubble shapes its text as a single run.
         let author_tooltip: SharedString = self
             .active_repo()
             .and_then(|r| r.history_state.history_author_filter.clone())
-            .map(|name| format!("Author filter: {name} — suggestions from loaded history"))
-            .unwrap_or_else(|| {
-                "Filter history by author — suggestions from loaded history".to_string()
-            })
+            .map(|name| format!("Author filter: {name}"))
+            .unwrap_or_else(|| "Filter history by author".to_string())
             .into();
 
         let ui_scale_percent = self.ui_scale_percent;
