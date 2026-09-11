@@ -36,6 +36,7 @@ pub(super) fn paint_history_graph(
     let stroke_width = scaled_px(1.6);
     let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
     let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
+    let margin_right = scaled_px(HISTORY_GRAPH_MARGIN_RIGHT_PX);
     let node_radius = scaled_px(3.4);
     let node_corner_radius = scaled_px(2.0);
 
@@ -46,8 +47,8 @@ pub(super) fn paint_history_graph(
     let y_bottom = bounds.bottom();
 
     // Columns past the edge all land on the edge x, icons included.
-    let x_for_col = |col: usize| graph_col_x(col, margin_x, col_gap, bounds.size.width);
-    let edge_x = graph_edge_x(margin_x, bounds.size.width);
+    let edge_x = graph_edge_x(margin_x, margin_right, bounds.size.width);
+    let x_for_col = |col: usize| graph_col_x(col, margin_x, col_gap, edge_x);
     let left = bounds.left();
 
     let node_x = x_for_col(usize::from(row.node_col));
@@ -626,8 +627,12 @@ pub(super) fn paint_history_graph_band(
     let y_center = bounds.top() + bounds.size.height / 2.0;
     let y_bottom = bounds.bottom();
     // Same edge pinning as the commit rows, or the edge line breaks at a band.
-    let x_for_col = |col: usize| graph_col_x(col, margin_x, col_gap, bounds.size.width);
-    let edge_x = graph_edge_x(margin_x, bounds.size.width);
+    let edge_x = graph_edge_x(
+        margin_x,
+        scaled_px(HISTORY_GRAPH_MARGIN_RIGHT_PX),
+        bounds.size.width,
+    );
+    let x_for_col = |col: usize| graph_col_x(col, margin_x, col_gap, edge_x);
 
     // The same wash the commit rows carry into their message border, painted
     // before the lanes so the strokes stay crisp on top of it.
@@ -718,16 +723,17 @@ pub(super) fn paint_history_graph_band(
 /// Where column `col` is drawn, in pixels from the graph cell's left edge.
 ///
 /// The column's width is fixed rather than fitted to the lanes, and the cell
-/// clips, so every column past the edge is pinned to [`graph_edge_x`]: its
-/// lanes merge into one edge line and its nodes sit on it instead of vanishing.
-fn graph_col_x(col: usize, margin_x: Pixels, col_gap: Pixels, width: Pixels) -> Pixels {
-    (margin_x + col_gap * (col as f32)).min(graph_edge_x(margin_x, width))
+/// clips, so every column past `edge_x` (see [`graph_edge_x`]) is pinned to it:
+/// its lanes merge into one edge line and its nodes sit on it instead of
+/// vanishing.
+fn graph_col_x(col: usize, margin_x: Pixels, col_gap: Pixels, edge_x: Pixels) -> Pixels {
+    (margin_x + col_gap * (col as f32)).min(edge_x)
 }
 
-/// The right-most x a lane or node is drawn at: one margin in from the edge,
-/// which leaves a 16px icon whole.
-fn graph_edge_x(margin_x: Pixels, width: Pixels) -> Pixels {
-    (width - margin_x).max(margin_x)
+/// The right-most x a lane or node is drawn at: `margin_right` in from the edge,
+/// clear of the message border, but never left of column 0.
+fn graph_edge_x(margin_x: Pixels, margin_right: Pixels, width: Pixels) -> Pixels {
+    (width - margin_right).max(margin_x)
 }
 
 /// Whether two x-offsets draw as one line. A connector between them is no elbow.
@@ -1464,27 +1470,45 @@ mod tests {
     /// half-row.
     const COL_GAP: f32 = HISTORY_GRAPH_COL_GAP_PX;
     const HALF_ROW: f32 = 14.0;
+    /// Half a 16px node icon.
+    const ICON_HALF: Pixels = px(8.0);
+
+    fn edge_x(width: Pixels) -> Pixels {
+        graph_edge_x(
+            px(HISTORY_GRAPH_MARGIN_X_PX),
+            px(HISTORY_GRAPH_MARGIN_RIGHT_PX),
+            width,
+        )
+    }
+
+    /// Design-scale x of column `col` in a graph cell `width` wide.
+    fn col_x(col: usize, width: Pixels) -> Pixels {
+        graph_col_x(
+            col,
+            px(HISTORY_GRAPH_MARGIN_X_PX),
+            px(HISTORY_GRAPH_COL_GAP_PX),
+            edge_x(width),
+        )
+    }
 
     /// In a column narrower than the graph, the node's natural column is outside
     /// a cell that clips rather than overflows, so it would not be drawn at all.
     /// It has to come back inside.
     #[test]
     fn a_pushed_out_node_stays_inside_a_column_too_narrow_for_it() {
-        let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
-        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
         let clamped_width = px(crate::view::HISTORY_COL_GRAPH_MAX_PX);
 
-        // 20 lanes wants x = 330 in a column the clamp holds at 240.
-        let offset = graph_col_x(20, margin, gap, clamped_width);
+        // 20 lanes want x = 332 in a column the clamp holds at 240.
+        let offset = col_x(20, clamped_width);
         assert!(
             offset < clamped_width,
             "the node must stay inside the clipped cell, got {offset:?}"
         );
-        assert_eq!(offset, clamped_width - margin);
+        assert_eq!(offset, clamped_width - px(HISTORY_GRAPH_MARGIN_RIGHT_PX));
 
         // A column dragged narrower than one margin still yields a drawable
         // offset rather than a negative one.
-        let offset = graph_col_x(3, margin, gap, px(4.0));
+        let offset = col_x(3, px(4.0));
         assert!(offset >= px(0.0), "got {offset:?}");
     }
 
@@ -1494,14 +1518,11 @@ mod tests {
     /// to the commit below.
     #[test]
     fn a_narrow_column_clamps_the_connector_as_well_as_the_node() {
-        let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
-        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
-
         // Wide enough for both: the node sits right of its exit lane, so the
         // connector runs leftwards into it.
         let wide = px(400.0);
-        let node_x = graph_col_x(6, margin, gap, wide);
-        let exit_x = graph_col_x(2, margin, gap, wide);
+        let node_x = col_x(6, wide);
+        let exit_x = col_x(2, wide);
         assert!(
             exit_x < node_x,
             "the connector should still run left, got {exit_x:?} vs {node_x:?}"
@@ -1511,24 +1532,23 @@ mod tests {
         // `paint_node_to_lane` renders as a straight drop rather than an elbow
         // aimed off-screen.
         let narrow = px(4.0);
-        let node_x = graph_col_x(6, margin, gap, narrow);
-        let exit_x = graph_col_x(2, margin, gap, narrow);
+        let node_x = col_x(6, narrow);
+        let exit_x = col_x(2, narrow);
         assert_eq!(exit_x, node_x);
         assert!(same_x(exit_x, node_x), "must not turn at all");
     }
 
     /// Columns that fit keep their place; every one past the edge shares the
-    /// edge x, far enough in that a 16px icon centred there is not clipped.
+    /// edge x, far enough in that a 16px icon there keeps 8px clear of the
+    /// message border.
     #[test]
     fn columns_past_the_edge_share_one_x_inside_the_cell() {
         let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
         let gap = px(HISTORY_GRAPH_COL_GAP_PX);
         let width = px(crate::view::HISTORY_COL_GRAPH_PX);
-        let edge = width - margin;
+        let edge = edge_x(width);
 
-        let xs: Vec<_> = (0..20)
-            .map(|col| graph_col_x(col, margin, gap, width))
-            .collect();
+        let xs: Vec<_> = (0..20).map(|col| col_x(col, width)).collect();
         for (col, &x) in xs.iter().enumerate() {
             let natural = margin + gap * (col as f32);
             if natural <= edge {
@@ -1537,8 +1557,8 @@ mod tests {
                 assert_eq!(x, edge, "column {col} must pin to the edge");
             }
             assert!(
-                x + px(8.0) <= width,
-                "a 16px icon on column {col} is clipped"
+                x + ICON_HALF + px(8.0) <= width,
+                "a 16px icon on column {col} crowds the message border"
             );
         }
         assert!(xs.windows(2).all(|pair| pair[0] <= pair[1]));
@@ -1546,16 +1566,22 @@ mod tests {
     }
 
     /// At its minimum the column shows exactly one lane: every column lands on
-    /// column 0's x, with room for a 16px icon.
+    /// column 0's x, with a 16px icon clear of both sides.
     #[test]
     fn the_minimum_graph_column_draws_one_lane() {
         let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
-        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
         let width = px(crate::view::HISTORY_COL_GRAPH_MIN_PX);
         for col in 0..20 {
-            assert_eq!(graph_col_x(col, margin, gap, width), margin, "column {col}");
+            assert_eq!(col_x(col, width), margin, "column {col}");
         }
-        assert!(margin + px(8.0) <= width, "a 16px icon is clipped");
+        assert!(
+            margin - ICON_HALF >= px(2.0),
+            "a 16px icon touches the left edge"
+        );
+        assert!(
+            margin + ICON_HALF + px(8.0) <= width,
+            "a 16px icon crowds the message border"
+        );
     }
 
     /// On the edge line the selected lane is painted last; lanes elsewhere keep
@@ -1580,14 +1606,8 @@ mod tests {
     /// A node that still has a column of its own never recolours the edge.
     #[test]
     fn a_node_on_the_edge_line_colours_the_line_beside_it() {
-        let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
-        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
         let takes = |node: usize, segment: usize, width: Pixels| {
-            edge_takes_node_colour(
-                graph_col_x(node, margin, gap, width),
-                graph_col_x(segment, margin, gap, width),
-                graph_edge_x(margin, width),
-            )
+            edge_takes_node_colour(col_x(node, width), col_x(segment, width), edge_x(width))
         };
 
         let one_lane = px(crate::view::HISTORY_COL_GRAPH_MIN_PX);

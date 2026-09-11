@@ -1011,7 +1011,12 @@ fn merged_selection_range(
     repo_state: &RepoState,
     selected: &[CommitId],
 ) -> Option<(CommitId, CommitId)> {
-    if let Some(index) = &repo_state.history_state.indexed.range_index {
+    let indexed = &repo_state.history_state.indexed;
+    if let Some(index) = indexed
+        .displayed_index
+        .as_ref()
+        .or(indexed.range_index.as_ref())
+    {
         let positions: Option<Vec<usize>> = selected
             .iter()
             .map(|id| index.position(id.as_ref()))

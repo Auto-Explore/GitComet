@@ -424,6 +424,10 @@ impl HistoryView {
             return;
         }
         self.indexed.presentation = Some(next.clone());
+        self.store.dispatch(Msg::IndexedHistory(Event::Publish {
+            repo_id: next.key.repo_id,
+            index: next.graph.projection.index.clone(),
+        }));
         self.indexed.window = pending.window.take().map(Rc::new);
         self.indexed
             .window_building
@@ -736,7 +740,10 @@ impl HistoryView {
                             let is_stash = stash.is_some()
                                 || shown.graph.projection.index.is_probable_stash(raw);
                             let summary = if is_stash {
-                                stash_summary_from_log_summary(&commit.summary)
+                                stash
+                                    .map(|stash| stash.message.as_ref())
+                                    .filter(|message| !message.trim().is_empty())
+                                    .or_else(|| stash_summary_from_log_summary(&commit.summary))
                                     .unwrap_or(&commit.summary)
                             } else {
                                 &commit.summary
@@ -984,12 +991,18 @@ impl HistoryView {
                 .position(id.as_ref())
                 .map(|row| plan.list_ix_for_visible(row)),
             Some(HistoryPrimarySelection::WorkingTree) => Some(0),
-            Some(HistoryPrimarySelection::Worktree(path)) => self
-                .indexed
-                .worktrees
-                .iter()
-                .position(|summary| summary.path == path)
-                .and_then(|ix| plan.list_ix_for_worktree(ix)),
+            Some(HistoryPrimarySelection::Worktree(path)) => {
+                let Some(row) = self
+                    .indexed
+                    .worktrees
+                    .iter()
+                    .position(|summary| summary.path == path)
+                    .and_then(|ix| plan.list_ix_for_worktree(ix))
+                else {
+                    return false;
+                };
+                Some(row)
+            }
             None => None,
         }
         .unwrap_or(0);

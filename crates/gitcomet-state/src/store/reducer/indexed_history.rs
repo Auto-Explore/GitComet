@@ -7,6 +7,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
     let repo_id = match &event {
         Event::Retry { repo_id }
         | Event::Select { repo_id, .. }
+        | Event::Publish { repo_id, .. }
         | Event::Ensure { repo_id }
         | Event::RequestRanges { repo_id, .. }
         | Event::Progress { repo_id, .. }
@@ -30,7 +31,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             if repo
                 .history_state
                 .indexed
-                .range_index
+                .displayed_index
                 .as_ref()
                 .is_none_or(|index| !Arc::ptr_eq(index, &projection.index))
             {
@@ -57,6 +58,26 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             };
             // Only materialize the selected range, never every ID in history.
             return effects::select_commit_multi(state, repo_id, commit_id, mode, None, entries);
+        }
+        Event::Publish { index, .. } => {
+            let history = &mut repo.history_state.indexed;
+            // The store can finish a newer build before it processes the UI's
+            // publication. The prepared range source is still a valid display.
+            if !history
+                .index
+                .iter()
+                .chain(history.range_index.iter())
+                .any(|known| Arc::ptr_eq(known, &index))
+                || history
+                    .displayed_index
+                    .as_ref()
+                    .is_some_and(|shown| Arc::ptr_eq(shown, &index))
+            {
+                return Vec::new();
+            }
+            history.displayed_index = Some(index);
+            history.rev = history.rev.wrapping_add(1);
+            return Vec::new();
         }
         Event::Ensure { .. } => {
             let Some(snapshot) = repo.history_state.log_snapshot.clone() else {
@@ -187,6 +208,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 history.range_errors.clear();
                 history.lru.clear();
                 history.range_index = Some(index.clone());
+                history.rev = history.rev.wrapping_add(1);
             }
             let mut desired = Vec::new();
             for block in blocks
@@ -472,8 +494,141 @@ mod tests {
         );
     }
     #[test]
+    fn publication_accepts_prepared_ranges_when_a_newer_build_has_finished() {
+        let (mut state, index) = fixture();
+        request(&mut state, &index, vec![0]);
+        state.repos[0].history_state.indexed.index = Some(
+            HistoryIndexBuilder::new(HistorySnapshot("newer".into()), LogScope::AllBranches, 20)
+                .unwrap()
+                .finish(&CancellationToken::new())
+                .unwrap(),
+        );
+        reduce(
+            &mut state,
+            Event::Publish {
+                repo_id: RepoId(1),
+                index: index.clone(),
+            },
+        );
+        assert!(Arc::ptr_eq(
+            state.repos[0]
+                .history_state
+                .indexed
+                .displayed_index
+                .as_ref()
+                .unwrap(),
+            &index
+        ));
+
+        state.repos[0].history_state.indexed.reset_query();
+        reduce(
+            &mut state,
+            Event::Publish {
+                repo_id: RepoId(1),
+                index,
+            },
+        );
+        assert!(
+            state.repos[0]
+                .history_state
+                .indexed
+                .displayed_index
+                .is_none(),
+            "a publication from a discarded query must be ignored"
+        );
+    }
+
+    #[test]
+    fn indexed_regression_selection_uses_displayed_history_during_refresh() {
+        let (mut state, index) = fixture();
+        reduce(
+            &mut state,
+            Event::Publish {
+                repo_id: RepoId(1),
+                index: index.clone(),
+            },
+        );
+        request(&mut state, &index, vec![9984]);
+        // The next snapshot no longer contains the old visible commits.
+        let replacement = HistoryIndexBuilder::new(
+            HistorySnapshot("replacement".into()),
+            LogScope::AllBranches,
+            20,
+        )
+        .unwrap()
+        .finish(&CancellationToken::new())
+        .unwrap();
+        state.repos[0].history_state.indexed.index = Some(replacement.clone());
+        let previous_rev = state.repos[0].history_state.indexed.rev;
+        request(&mut state, &replacement, vec![]);
+        assert_ne!(
+            state.repos[0].history_state.indexed.rev, previous_rev,
+            "changing range sources must invalidate decoded card metadata"
+        );
+        let projection = HistoryProjection::new(index.clone(), vec![]);
+        for (row, mode) in [
+            (10_000, CommitSelectMode::Single),
+            (10_002, CommitSelectMode::Range),
+        ] {
+            reduce(
+                &mut state,
+                Event::Select {
+                    repo_id: RepoId(1),
+                    projection: projection.clone(),
+                    commit_id: index.commit_id(row).unwrap(),
+                    mode,
+                },
+            );
+            assert_eq!(
+                state.repos[0].history_state.selected_commit,
+                index.commit_id(row)
+            );
+        }
+        assert_eq!(
+            state.repos[0].history_state.multi_selection.commits.len(),
+            3
+        );
+        let range = state.repos[0]
+            .history_state
+            .range_selection
+            .as_ref()
+            .expect("visible selection still opens a comparison");
+        assert_eq!(range.to, index.commit_id(10_000));
+        assert_eq!(range.from, index.commit_id(10_003).unwrap());
+
+        reduce(
+            &mut state,
+            Event::Publish {
+                repo_id: RepoId(1),
+                index: replacement,
+            },
+        );
+        let selected = state.repos[0].history_state.selected_commit.clone();
+        reduce(
+            &mut state,
+            Event::Select {
+                repo_id: RepoId(1),
+                projection,
+                commit_id: index.commit_id(10_004).unwrap(),
+                mode: CommitSelectMode::Single,
+            },
+        );
+        assert_eq!(
+            state.repos[0].history_state.selected_commit, selected,
+            "old presentation must be rejected after publication"
+        );
+    }
+
+    #[test]
     fn shift_selection_and_comparison_resolve_outside_the_bootstrap_page() {
         let (mut state, index) = fixture();
+        reduce(
+            &mut state,
+            Event::Publish {
+                repo_id: RepoId(1),
+                index: index.clone(),
+            },
+        );
         request(&mut state, &index, vec![9984]);
         let projection = HistoryProjection::new(index.clone(), vec![10_002]);
         for (row, mode) in [

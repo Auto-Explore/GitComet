@@ -58,6 +58,19 @@ fn top(cx: &mut gpui::VisualTestContext, view: &Entity<GitCometView>) -> (Commit
     cx.update(|_, app| {
         let entity = view.read(app).main_pane.read(app).history_view.clone();
         entity.update(app, |history, _| {
+            if let Some(shown) = &history.indexed.presentation {
+                let scroll = history.scroll_interaction.borrow();
+                let logical = scroll.logical.as_ref().unwrap();
+                let crate::view::caches::HistoryListRow::Commit { visible_ix } =
+                    history.indexed.plan.row_at(logical.top).unwrap()
+                else {
+                    panic!("expected commit at indexed viewport top")
+                };
+                return (
+                    shown.graph.projection.commit_id(visible_ix).unwrap(),
+                    px(-logical.within as f32),
+                );
+            }
             let plan = history.ensure_history_list_plan();
             let offset = history.history_scroll.0.borrow().base_handle.offset().y;
             let height = crate::view::rows::history_row_height(history.ui_scale());
@@ -472,6 +485,157 @@ fn logical_top(
         let logical = scroll.logical.as_ref().unwrap();
         (logical.top, logical.within, logical.total)
     })
+}
+
+#[gpui::test]
+fn indexed_regression_displayed_rows_remain_selectable_during_range_handoff(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(500);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index.clone());
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    cx.run_until_parked();
+
+    // The replacement supplies ranges while the existing presentation is still visible.
+    let mut state = (*store.snapshot()).clone();
+    let (replacement, _) = indexed_fixture(510);
+    install_index(&mut state, replacement.clone());
+    state.repos[0].history_state.indexed.range_index = Some(replacement);
+    store.replace_snapshot_for_test(Arc::new(state));
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        assert!(Arc::ptr_eq(
+            &history
+                .indexed
+                .presentation
+                .as_ref()
+                .unwrap()
+                .graph
+                .projection
+                .index,
+            &index
+        ));
+        assert!(history.select_indexed_commit(
+            RepoId(1),
+            commits[40].id.clone(),
+            gitcomet_state::msg::CommitSelectMode::Single
+        ));
+    });
+    wait_until(cx, "selection against the displayed index", |_| {
+        store.snapshot().repos[0]
+            .history_state
+            .selected_commit
+            .as_ref()
+            == Some(&commits[40].id)
+    });
+}
+
+#[gpui::test]
+fn indexed_regression_unanchored_worktree_arrow_preserves_selection_and_viewport(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(500);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+
+    let path = PathBuf::from("/tmp/filtered-worktree");
+    for scan in [
+        Loadable::Loading,
+        Loadable::Ready(Arc::new(vec![dirty(
+            path.to_str().unwrap(),
+            "excluded-head",
+        )])),
+    ] {
+        state.repos[0].history_state.worktree_selection = Some(path.clone());
+        state.repos[0].worktree_dirty = scan;
+        state.repos[0].worktree_dirty_rev += 1;
+        store.replace_snapshot_for_test(Arc::new(state.clone()));
+        cx.update(|_, app| {
+            let entity = view.read(app).main_pane.read(app).history_view.clone();
+            entity.update(app, |history, cx| {
+                history.state = Arc::new(state.clone());
+                history.sync_indexed_plan();
+                let before = {
+                    let mut scroll = history.scroll_interaction.borrow_mut();
+                    let logical = scroll.logical.as_mut().unwrap();
+                    logical.set_position(40.0 * logical.height + 7.0);
+                    logical.position()
+                };
+                for direction in [-1, 1] {
+                    assert!(
+                        !history.history_select_adjacent_commit(direction, cx),
+                        "no visible worktree row to step from"
+                    );
+                    assert_eq!(
+                        history
+                            .scroll_interaction
+                            .borrow()
+                            .logical
+                            .as_ref()
+                            .unwrap()
+                            .position(),
+                        before
+                    );
+                }
+            });
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            store.snapshot().repos[0].history_state.worktree_selection,
+            Some(path.clone())
+        );
+    }
+}
+
+#[gpui::test]
+fn indexed_regression_stash_label_preserves_listed_message_and_summary_fallback(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, mut commits) = indexed_fixture(10);
+    commits[0].summary = "On main: embedded message".into();
+    commits[1].summary = "On main: fallback message".into();
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits.clone(), None)));
+    state.repos[0].stashes = Loadable::Ready(Arc::new(vec![
+        StashEntry {
+            index: 0,
+            id: commits[0].id.clone(),
+            message: "display-message".into(),
+            created_at: None,
+        },
+        StashEntry {
+            index: 1,
+            id: commits[1].id.clone(),
+            message: "  ".into(),
+            created_at: None,
+        },
+    ]));
+    state.repos[0].stashes_rev += 1;
+    install_index(&mut state, index);
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "indexed viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        let rows = &history.indexed.window.as_ref().unwrap().cache.base.row_vms;
+        assert!(rows[0].is_stash && rows[1].is_stash);
+        assert_eq!(rows[0].summary.as_ref(), "display-message");
+        assert_eq!(rows[1].summary.as_ref(), "fallback message");
+    });
 }
 
 #[gpui::test]

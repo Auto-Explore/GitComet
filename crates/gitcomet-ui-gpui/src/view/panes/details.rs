@@ -110,7 +110,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_details_delay_seq: u64,
 
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
-    /// `range_comparison_commits` memoized on the revs that feed it; it walked
+    /// Comparison cards memoized on the revs that feed them; they walked
     /// the whole log page and cloned every selected commit 2-3 times per frame.
     pub(in super::super) range_comparison_commits_cache:
         std::cell::RefCell<Option<(u64, std::rc::Rc<[crate::view::rows::CommitCard]>)>>,
@@ -288,6 +288,8 @@ impl DetailsPaneView {
             repo.unstaged_line_stats_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
+            repo.log_rev.hash(&mut hasher);
+            repo.history_state.indexed.rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
             repo.history_state.worktree_selection_rev.hash(&mut hasher);
             repo.history_state.range_files_rev.hash(&mut hasher);
@@ -2589,6 +2591,18 @@ mod tests {
         state.repos[1].merge_message_rev = 1;
 
         assert_eq!(DetailsPaneView::notify_fingerprint(&state), initial);
+    }
+
+    #[test]
+    fn indexed_regression_details_fingerprint_tracks_comparison_metadata() {
+        let mut state = AppState {
+            active_repo: Some(RepoId(1)),
+            repos: vec![repo_state(RepoId(1), "/tmp/indexed-comparison")],
+            ..Default::default()
+        };
+        let before = DetailsPaneView::notify_fingerprint(&state);
+        state.repos[0].history_state.indexed.rev += 1;
+        assert_ne!(before, DetailsPaneView::notify_fingerprint(&state));
     }
 
     #[test]

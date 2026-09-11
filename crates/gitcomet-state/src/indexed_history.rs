@@ -9,6 +9,9 @@ use std::sync::Arc;
 #[derive(Clone, Debug, Default)]
 pub struct IndexedHistoryState {
     pub index: Option<HistoryIndexHandle>,
+    /// The presentation currently published by the history view. Range requests
+    /// may already belong to a replacement while these rows remain interactive.
+    pub displayed_index: Option<HistoryIndexHandle>,
     pub range_index: Option<HistoryIndexHandle>,
     pub requested: Option<HistorySnapshot>,
     pub loading: bool,
@@ -71,6 +74,10 @@ pub enum IndexedHistoryMsg {
     },
     Ensure {
         repo_id: RepoId,
+    },
+    Publish {
+        repo_id: RepoId,
+        index: HistoryIndexHandle,
     },
     Select {
         repo_id: RepoId,

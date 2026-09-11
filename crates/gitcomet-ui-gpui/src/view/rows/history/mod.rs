@@ -404,15 +404,12 @@ fn history_worktree_node_color_ix(
 /// Absolutely positioned so the label keeps the same left offset it has on a
 /// commit row — a flow child would push the text over by the border's width.
 fn history_message_border(ui_scale: ui_scale::UiScale, color: gpui::Rgba) -> impl IntoElement {
-    let border_w = ui_scale.px(HISTORY_MESSAGE_BORDER_W_PX);
-    let inset_y = ui_scale.px(HISTORY_MESSAGE_BORDER_INSET_Y_PX);
     div()
         .absolute()
         .left_0()
-        .top(inset_y)
-        .bottom(inset_y)
-        .w(border_w)
-        .rounded(border_w * 0.5)
+        .top_0()
+        .bottom_0()
+        .w(ui_scale.px(HISTORY_MESSAGE_BORDER_W_PX))
         .bg(color)
 }
 
@@ -824,6 +821,9 @@ fn worktree_uncommitted_history_row(
                 .relative()
                 .flex_1()
                 .min_w(px(0.0))
+                // Full row height, so the lane border does not stop short of the
+                // commit rows' borders above and below.
+                .h_full()
                 .overflow_hidden()
                 .flex()
                 .items_center()
@@ -1038,6 +1038,9 @@ fn working_tree_summary_history_row(
                 .relative()
                 .flex_1()
                 .min_w(px(0.0))
+                // Full row height, so the lane border does not stop short of the
+                // commit rows' borders above and below.
+                .h_full()
                 .overflow_hidden()
                 .flex()
                 .items_center()

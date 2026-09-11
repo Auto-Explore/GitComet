@@ -312,8 +312,9 @@ const HISTORY_COL_HANDLE_PX: f32 = 8.0;
 
 const HISTORY_COL_BRANCH_MIN_PX: f32 = 60.0;
 const HISTORY_COL_BRANCH_MAX_PX: f32 = 320.0;
-/// One lane: a margin either side of column 0; every other lane pins onto it.
-const HISTORY_COL_GRAPH_MIN_PX: f32 = HISTORY_GRAPH_MARGIN_X_PX * 2.0;
+/// One lane: the graph's left and right insets around column 0; every other lane
+/// pins onto it.
+const HISTORY_COL_GRAPH_MIN_PX: f32 = HISTORY_GRAPH_MARGIN_X_PX + HISTORY_GRAPH_MARGIN_RIGHT_PX;
 const HISTORY_COL_AUTHOR_MIN_PX: f32 = 80.0;
 const HISTORY_COL_AUTHOR_MAX_PX: f32 = 260.0;
 const HISTORY_COL_DATE_MIN_PX: f32 = 110.0;
@@ -325,7 +326,12 @@ const ERROR_BANNER_OVERFLOW_HINT_MIN_LINES: usize = 8;
 const ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS: usize = 240;
 
 const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
-const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
+/// Inset from the graph cell's left edge to column 0: 10px for a lane plus 2px
+/// padding.
+const HISTORY_GRAPH_MARGIN_X_PX: f32 = 12.0;
+/// Inset from the graph cell's right edge to the right-most lane, wider than the
+/// left one so a 16px node keeps 8px clear of the message border.
+const HISTORY_GRAPH_MARGIN_RIGHT_PX: f32 = 16.0;
 /// Corner radius where a graph line turns between columns. Against a 16px column
 /// pitch and a 14px half-row this leaves roughly a 10px straight horizontal run
 /// per column crossed and 8px of straight vertical below the corner, so the turn
@@ -346,11 +352,9 @@ const HISTORY_BRANCH_BADGE_MIN_W_PX: f32 = 34.0;
 /// Alpha of the hover branch badge. Faint by design -- it is an on-demand hint
 /// in a column that otherwise holds solid ref chips, and must not read as one.
 const HISTORY_BRANCH_BADGE_ALPHA: f32 = 0.70;
-/// Width of the lane-coloured border down the left edge of the message cell.
+/// Width of the lane-coloured border down the left edge of the message cell. It
+/// spans the full row height with square ends.
 const HISTORY_MESSAGE_BORDER_W_PX: f32 = 3.0;
-/// Vertical inset of that border, so consecutive rows read as separate borders
-/// rather than as one continuous stripe down the list.
-const HISTORY_MESSAGE_BORDER_INSET_Y_PX: f32 = 3.0;
 /// Gap between that border and the message text.
 const HISTORY_MESSAGE_BORDER_GAP_PX: f32 = 6.0;
 

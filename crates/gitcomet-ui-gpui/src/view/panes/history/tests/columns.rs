@@ -120,7 +120,7 @@ fn reset_widths_clamp_branch_after_graph_reaches_minimum() {
     );
 
     assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
-    assert_eq!(widths.branch, px(104.0));
+    assert_eq!(widths.branch, px(96.0));
 }
 
 #[test]

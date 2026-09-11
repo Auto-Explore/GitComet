@@ -1272,22 +1272,16 @@ pub(super) fn history_commit_row_canvas(
                 summary_bounds.left() + scaled_px(history_message_text_left_px(false));
             if show_graph_color_marker {
                 // A lane-coloured border down the left edge of the message cell,
-                // where the graph column's fade lands. Inset vertically so
-                // consecutive rows read as separate borders rather than as one
-                // continuous stripe down the list.
+                // where the graph column's fade lands. Full row height, so it
+                // changes colour row by row like the graph line beside it.
                 let border_w = scaled_px(HISTORY_MESSAGE_BORDER_W_PX);
-                let inset_y = scaled_px(HISTORY_MESSAGE_BORDER_INSET_Y_PX);
-                let border_h = (bounds.size.height - inset_y * 2.0).max(px(0.0));
-                window.paint_quad(
-                    fill(
-                        Bounds::new(
-                            point(summary_bounds.left(), bounds.top() + inset_y),
-                            size(border_w, border_h),
-                        ),
-                        node_color,
-                    )
-                    .corner_radii(border_w * 0.5),
-                );
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(summary_bounds.left(), bounds.top()),
+                        size(border_w, bounds.size.height),
+                    ),
+                    node_color,
+                ));
                 summary_text_left =
                     summary_bounds.left() + scaled_px(history_message_text_left_px(true));
             }
