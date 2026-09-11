@@ -75,6 +75,7 @@ pub(super) struct EffectExecutors<'a> {
     pub(super) repo_load_executor: &'a TaskExecutor,
     pub(super) session_persist_executor: &'a TaskExecutor,
     pub(super) metadata_executor: &'a TaskExecutor,
+    pub(super) signature_executor: &'a TaskExecutor,
 }
 
 fn selected_diff_target(
@@ -535,6 +536,13 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::CommitDetailsLoaded {
                 repo_id,
                 commit_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::VerifyCommitSignatures { repo_id, epoch, .. } => send(Msg::Internal(
+            crate::msg::InternalMsg::CommitSignaturesVerified {
+                repo_id,
+                epoch,
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -1422,6 +1430,7 @@ pub(super) fn schedule_effect(
         repo_load_executor,
         session_persist_executor,
         metadata_executor,
+        signature_executor,
     } = executors;
 
     if effect_requires_available_git(&effect) {
@@ -1999,6 +2008,24 @@ pub(super) fn schedule_effect(
                     executor, repos, msg_tx, repo_id, commit_id,
                 );
             }
+        }
+        Effect::VerifyCommitSignatures {
+            repo_id,
+            epoch,
+            cancellation,
+            commit_ids,
+        } => {
+            // Signature requests have their own lifetime: staging and tab switches
+            // cancel repo loads, but must not silently lose pending verification.
+            repo_load::schedule_verify_commit_signatures(
+                signature_executor,
+                repos,
+                msg_tx,
+                repo_id,
+                epoch,
+                cancellation,
+                commit_ids,
+            );
         }
         Effect::LoadHoverCommitMessage { repo_id, commit_id } => {
             if let Some((msg_tx, _)) =

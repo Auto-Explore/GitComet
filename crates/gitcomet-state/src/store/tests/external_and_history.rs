@@ -1825,13 +1825,16 @@ fn queued_refresh_promoted_after_load_more_covers_the_grown_log() {
     assert!(
         matches!(
             effects.as_slice(),
-            [Effect::LoadLog {
-                limit: 600,
-                cursor: None,
-                ..
-            }]
+            [
+                Effect::VerifyCommitSignatures { .. },
+                Effect::LoadLog {
+                    limit: 600,
+                    cursor: None,
+                    ..
+                },
+            ]
         ),
-        "expected the promoted refresh to cover all 600 rows, got {effects:?}"
+        "unexpected effects: {effects:?}"
     );
 }
 

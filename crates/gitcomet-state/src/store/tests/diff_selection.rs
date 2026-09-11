@@ -1382,14 +1382,16 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
         Loadable::NotLoaded
     ));
     assert!(repo_state.diff_state.diff_preview_text_file.is_loading());
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::LoadDiffPreviewTextFile {
-            repo_id: RepoId(1),
-            target: effect_target,
+    assert!(
+        matches!(effects.as_slice(), [
+        Effect::LoadDiffPreviewTextFile {
+            repo_id: RepoId(1), target: effect_target,
             side: gitcomet_core::domain::DiffPreviewTextSide::Old,
-        }] if effect_target == &target
-    ));
+        },
+        Effect::VerifyCommitSignatures { repo_id: RepoId(1), .. },
+    ] if effect_target == &target),
+        "got {effects:?}"
+    );
 
     reduce(
         &mut repos,

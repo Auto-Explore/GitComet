@@ -11,7 +11,7 @@ use gitcomet_core::auth::{
 };
 #[cfg(test)]
 use gitcomet_core::domain::Upstream;
-use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
+use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
@@ -23,6 +23,80 @@ use std::time::SystemTime;
 
 /// Default page size for log fetches.
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
+
+/// Queue each commit at most once per refresh, including no-badge results.
+/// One small batch per repository runs at a time; replies start the next batch.
+pub(super) fn verify_commit_signatures_effect(
+    enabled: bool,
+    repo_state: &mut RepoState,
+    repo_id: RepoId,
+    ids: impl IntoIterator<Item = CommitId>,
+) -> Option<Effect> {
+    if !enabled {
+        return None;
+    }
+    let history = &mut repo_state.history_state;
+    let mut unique = FxHashSet::default();
+    let pending: Vec<_> = ids
+        .into_iter()
+        .filter(|id| {
+            !history.commit_signatures.contains_key(id)
+                && !history.commit_signatures_requested.contains(id)
+                && unique.insert(id.clone())
+        })
+        .collect();
+    if !pending.is_empty() {
+        Arc::make_mut(&mut history.commit_signatures_requested).extend(pending.iter().cloned());
+        history
+            .commit_signatures_queue
+            .extend(pending.chunks(16).map(Arc::from));
+    }
+    if history.commit_signatures_in_flight {
+        return None;
+    }
+    let commit_ids = history.commit_signatures_queue.pop_front()?;
+    history.commit_signatures_in_flight = true;
+    Some(Effect::VerifyCommitSignatures {
+        repo_id,
+        epoch: history.commit_signatures_epoch,
+        cancellation: history.commit_signatures_cancellation.clone(),
+        commit_ids,
+    })
+}
+
+pub(super) fn reverify_loaded_commit_signatures_effect(
+    enabled: bool,
+    repo_state: &mut RepoState,
+) -> Option<Effect> {
+    repo_state.clear_commit_signatures();
+    if !enabled {
+        return None;
+    }
+    let mut ids: Vec<CommitId> = match &repo_state.log {
+        Loadable::Ready(page) => page
+            .commits
+            .iter()
+            .map(|commit| commit.id.clone())
+            .collect(),
+        _ => Vec::new(),
+    };
+    // Indexed scrolling keeps metadata outside the bootstrap page. Recheck
+    // those bounded, loaded blocks when verification is enabled or refreshed.
+    ids.extend(
+        repo_state
+            .history_state
+            .indexed
+            .ranges
+            .values()
+            .flat_map(|range| range.commits.iter().map(|commit| commit.id.clone())),
+    );
+    if let Some(selected) = &repo_state.history_state.selected_commit
+        && !ids.contains(selected)
+    {
+        ids.push(selected.clone());
+    }
+    verify_commit_signatures_effect(true, repo_state, repo_state.id, ids)
+}
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
 const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;

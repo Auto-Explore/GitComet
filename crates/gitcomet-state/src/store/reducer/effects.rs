@@ -13,10 +13,10 @@ use gitcomet_core::conflict_session::{
     ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
 };
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, EMPTY_TREE_ID, FileEntry,
-    FileSource, FileStatusKind, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry,
-    Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence,
-    Worktree, WorktreeDirtySummary,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, EMPTY_TREE_ID,
+    FileEntry, FileSource, FileStatusKind, LogCursor, LogPage, RecentCommitMessage, RefMetadata,
+    ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag,
+    UpstreamDivergence, Worktree, WorktreeDirtySummary,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
@@ -2956,6 +2956,7 @@ pub(super) fn commit_reveal_resolved(
     reference: CommitId,
     result: std::result::Result<CommitDetails, Error>,
 ) -> Vec<Effect> {
+    let verify_signatures = state.git_log_settings.verify_commit_signatures;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -2982,7 +2983,15 @@ pub(super) fn commit_reveal_resolved(
     let commit_id = details.id.clone();
     repo_state.set_reveal_target(Some(commit_id.clone()));
     repo_state.set_commit_details(Loadable::Ready(Arc::new(details)));
-    select_commit(state, repo_id, commit_id)
+    let signature_effect = super::util::verify_commit_signatures_effect(
+        verify_signatures,
+        repo_state,
+        repo_id,
+        [commit_id.clone()],
+    );
+    let mut effects = select_commit(state, repo_id, commit_id);
+    effects.extend(signature_effect);
+    effects
 }
 
 pub(super) fn commit_details_loaded(
@@ -2991,6 +3000,7 @@ pub(super) fn commit_details_loaded(
     commit_id: CommitId,
     result: std::result::Result<CommitDetails, Error>,
 ) -> Vec<Effect> {
+    let verify_signatures = state.git_log_settings.verify_commit_signatures;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.history_state.selected_commit.as_ref() == Some(&commit_id)
     {
@@ -3007,16 +3017,54 @@ pub(super) fn commit_details_loaded(
         };
         repo_state.set_commit_details(value);
 
+        // The selected commit is usually a log row, but a reveal or a link menu
+        // can select one the loaded page does not contain.
+        let signature_effect = super::util::verify_commit_signatures_effect(
+            verify_signatures,
+            repo_state,
+            repo_id,
+            [commit_id.clone()],
+        );
+
         if let Some(target @ gitcomet_core::domain::DiffTarget::Commit { .. }) = selected_target {
             let next_plan = selected_diff_load_plan(repo_state, &target);
             if previous_plan != Some(next_plan) {
                 apply_selected_diff_load_plan_state(repo_state, next_plan);
                 repo_state.bump_diff_state_rev();
-                return diff_reload_effects(repo_state, repo_id, target);
+                let mut effects = diff_reload_effects(repo_state, repo_id, target);
+                effects.extend(signature_effect);
+                return effects;
             }
         }
+        return signature_effect.into_iter().collect();
     }
     Vec::new()
+}
+
+pub(super) fn commit_signatures_verified(
+    state: &mut AppState,
+    repo_id: RepoId,
+    epoch: u64,
+    result: std::result::Result<Vec<(CommitId, CommitSignature)>, Error>,
+) -> Vec<Effect> {
+    if !state.git_log_settings.verify_commit_signatures {
+        return Vec::new();
+    }
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if repo_state.history_state.commit_signatures_epoch != epoch {
+        return Vec::new();
+    }
+    repo_state.history_state.commit_signatures_in_flight = false;
+    // A failure here is a missing badge, not something worth a diagnostic
+    // toast: signing is optional and gpg may simply be unavailable.
+    if let Ok(verified) = result {
+        repo_state.merge_commit_signatures(verified);
+    }
+    super::util::verify_commit_signatures_effect(true, repo_state, repo_id, [])
+        .into_iter()
+        .collect()
 }
 
 #[cfg(test)]

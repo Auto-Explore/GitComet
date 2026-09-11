@@ -142,6 +142,7 @@ impl HistoryView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.update_history_row_hover(None, None, cx);
         self.cancel_history_scroll_reveal();
         let mut scroll = self.scroll_interaction.borrow_mut();
         scroll.generation = scroll.generation.wrapping_add(1);

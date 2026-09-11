@@ -620,6 +620,30 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    /// Verifies the signatures of `ids`, returning an entry only for commits
+    /// that earn a badge. Unsigned commits, and signatures that cannot be
+    /// checked because the key is missing, are simply omitted.
+    ///
+    /// Batched on purpose: verification shells out to `git`, and one process per
+    /// commit costs roughly ten times a single batched call.
+    fn verify_commit_signatures(
+        &self,
+        _ids: &[CommitId],
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "signature verification is not implemented for this backend",
+        )))
+    }
+    fn verify_commit_signatures_cancellable(
+        &self,
+        ids: &[CommitId],
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        cancellation.check_cancelled()?;
+        let result = self.verify_commit_signatures(ids)?;
+        cancellation.check_cancelled()?;
+        Ok(result)
+    }
     /// Resolve a possibly abbreviated reference — or any revspec git accepts,
     /// such as a branch, tag, or `HEAD~3` — to the commit it names.
     ///

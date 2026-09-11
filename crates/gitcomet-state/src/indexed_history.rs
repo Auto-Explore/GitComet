@@ -33,6 +33,15 @@ pub struct IndexedHistoryState {
 }
 
 impl IndexedHistoryState {
+    pub(crate) fn contains_loaded_commit(&self, id: &gitcomet_core::domain::CommitId) -> bool {
+        self.range_index.as_ref().is_some_and(|index| {
+            index.position(id.as_ref()).is_some_and(|row| {
+                self.commit(&index.snapshot, row)
+                    .is_some_and(|commit| commit.id == *id)
+            })
+        })
+    }
+
     pub fn commit(
         &self,
         snapshot: &HistorySnapshot,

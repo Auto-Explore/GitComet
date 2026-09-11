@@ -590,6 +590,10 @@ pub(super) fn close_repo(
     // matter which of them (tab `x`, tab menu, picker row menu, close-others)
     // the user reached for.
     let closed_repo = &state.repos[removed_repo_ix];
+    closed_repo
+        .history_state
+        .commit_signatures_cancellation
+        .cancel();
     let closed_workdir = closed_repo.spec.workdir.clone();
     let persist_closed_recent = !closed_repo.is_provisional_external_drop_open();
     state.repos.remove(removed_repo_ix);
@@ -686,7 +690,13 @@ pub(super) fn close_repos(
         crate::store::effects::release_worktree_scan_handles(repo_id);
     }
 
-    state.repos.retain(|repo| !close_ids.contains(&repo.id));
+    state.repos.retain(|repo| {
+        let keep = !close_ids.contains(&repo.id);
+        if !keep {
+            repo.history_state.commit_signatures_cancellation.cancel();
+        }
+        keep
+    });
 
     let repo_still_open =
         |repo_id: RepoId, state: &AppState| state.repos.iter().any(|repo| repo.id == repo_id);
@@ -1321,6 +1331,10 @@ fn discard_failed_repo_open(
     repos.remove(&repo_id);
     if let Some(ix) = state.repos.iter().position(|r| r.id == repo_id) {
         let was_active = state.active_repo == Some(repo_id);
+        state.repos[ix]
+            .history_state
+            .commit_signatures_cancellation
+            .cancel();
         state.repos.remove(ix);
         if was_active {
             let adjacent_repo = if ix > 0 {

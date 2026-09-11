@@ -599,9 +599,11 @@ impl HistoryView {
         self.pending_history_cache = None;
         super::scroll::trace(&self.scroll_interaction.borrow(), "snapshot-published");
         self.presented_history = None;
+        // The same row rank can name a different commit in the new snapshot.
+        self.update_history_row_hover(None, None, cx);
     }
 
-    pub(super) fn sync_indexed_plan(&mut self) {
+    pub(super) fn sync_indexed_plan(&mut self, cx: &mut gpui::Context<Self>) {
         if self.scroll_interaction.borrow().dragging {
             return;
         }
@@ -665,6 +667,7 @@ impl HistoryView {
         self.indexed.plan = plan;
         self.indexed.worktrees = dirty;
         self.indexed.plan_key = Some(key);
+        self.update_history_row_hover(None, None, cx);
     }
 
     pub(super) fn prepare_indexed_window(&mut self, cx: &mut gpui::Context<Self>) {

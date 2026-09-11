@@ -19,6 +19,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+mod signature_map;
+pub use signature_map::CommitSignatureMap;
+
 pub type Shared<T> = Arc<T>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -48,6 +51,9 @@ pub enum GitLogTagFetchMode {
 pub struct GitLogSettings {
     pub show_history_tags: bool,
     pub tag_fetch_mode: GitLogTagFetchMode,
+    /// Escape hatch: a misconfigured `gpg.program` or a wedged `gpg-agent`
+    /// would otherwise slow every history page with no way to turn it off.
+    pub verify_commit_signatures: bool,
 }
 
 impl Default for GitLogSettings {
@@ -55,6 +61,7 @@ impl Default for GitLogSettings {
         Self {
             show_history_tags: true,
             tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
+            verify_commit_signatures: true,
         }
     }
 }
@@ -995,6 +1002,18 @@ pub struct HistoryState {
     pub reveal_target: Option<CommitId>,
     pub commit_details: Loadable<Shared<CommitDetails>>,
     pub commit_details_rev: u64,
+    /// Signature verdicts by commit, shared by the details pane and the
+    /// history rows. Only badge-worthy commits appear: absent means no badge.
+    /// Behind `Arc` because `AppState` is deep-copied on every dispatch.
+    pub commit_signatures: Shared<CommitSignatureMap>,
+    pub commit_signatures_rev: u64,
+    /// Invalidates batches started before a refresh or preference change.
+    pub commit_signatures_epoch: u64,
+    /// Includes queued, running, and completed no-badge commits for this epoch.
+    pub(crate) commit_signatures_requested: Shared<FxHashSet<CommitId>>,
+    pub(crate) commit_signatures_queue: VecDeque<Shared<[CommitId]>>,
+    pub(crate) commit_signatures_in_flight: bool,
+    pub(crate) commit_signatures_cancellation: gitcomet_core::services::CancellationToken,
     pub multi_selection: CommitMultiSelection,
     selected_ids: Arc<FxHashSet<CommitId>>,
     squash_cache: Option<Arc<HistorySquashCache>>,
@@ -1105,6 +1124,13 @@ impl Default for HistoryState {
             reveal_target: None,
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
+            commit_signatures: Shared::default(),
+            commit_signatures_rev: 0,
+            commit_signatures_epoch: 0,
+            commit_signatures_requested: Shared::default(),
+            commit_signatures_queue: VecDeque::new(),
+            commit_signatures_in_flight: false,
+            commit_signatures_cancellation: Default::default(),
             multi_selection: CommitMultiSelection::default(),
             selected_ids: Arc::new(FxHashSet::default()),
             squash_cache: None,
@@ -2379,6 +2405,24 @@ impl RepoState {
             self.history_state.selected_ids = Arc::new(FxHashSet::default());
             self.clear_range_comparison();
         }
+        if let Some(previous) = &self.history_state.selected_commit
+            && Some(previous) != v.as_ref()
+            && self.history_state.commit_signatures.contains_key(previous)
+            && let Loadable::Ready(page) = &self.log
+            && !page.commits.iter().any(|commit| &commit.id == previous)
+            && !self.history_state.indexed.contains_loaded_commit(previous)
+        {
+            Arc::make_mut(&mut self.history_state.commit_signatures).remove(previous);
+            if self
+                .history_state
+                .commit_signatures_requested
+                .contains(previous)
+            {
+                Arc::make_mut(&mut self.history_state.commit_signatures_requested).remove(previous);
+            }
+            self.history_state.commit_signatures_rev =
+                self.history_state.commit_signatures_rev.wrapping_add(1);
+        }
         self.history_state.selected_commit = v;
         self.history_state.selected_commit_rev =
             self.history_state.selected_commit_rev.wrapping_add(1);
@@ -2555,6 +2599,55 @@ impl RepoState {
         self.history_state.commit_details = v;
         self.history_state.commit_details_rev =
             self.history_state.commit_details_rev.wrapping_add(1);
+    }
+
+    /// Invalidates both verdicts and in-flight batches. Trust inputs can change
+    /// independently of commit objects, so refreshes must recheck signed commits.
+    pub(crate) fn clear_commit_signatures(&mut self) {
+        self.history_state.commit_signatures_cancellation.cancel();
+        self.history_state.commit_signatures_cancellation = Default::default();
+        self.history_state.commit_signatures_requested = Shared::default();
+        self.history_state.commit_signatures_queue.clear();
+        self.history_state.commit_signatures_in_flight = false;
+        self.history_state.commit_signatures_epoch =
+            self.history_state.commit_signatures_epoch.wrapping_add(1);
+        if self.history_state.commit_signatures.is_empty() {
+            return;
+        }
+        self.history_state.commit_signatures = Shared::default();
+        self.history_state.commit_signatures_rev =
+            self.history_state.commit_signatures_rev.wrapping_add(1);
+    }
+
+    /// Merges batches from the current verification epoch without dropping
+    /// verdicts for other pages or selected commits.
+    pub(crate) fn merge_commit_signatures(&mut self, verified: Vec<(CommitId, CommitSignature)>) {
+        let updates: Vec<_> = verified
+            .into_iter()
+            .filter(|(id, signature)| {
+                let displayed = self.history_state.selected_commit.as_ref() == Some(id)
+                    || self.history_state.indexed.contains_loaded_commit(id)
+                    || match &self.log {
+                        Loadable::Ready(page) => page.commits.iter().any(|commit| &commit.id == id),
+                        _ => true,
+                    };
+                // A discarded badge must be recoverable if this off-page commit
+                // is revealed again. Keep completed no-badge attempts memoized.
+                if !displayed && self.history_state.commit_signatures_requested.contains(id) {
+                    Arc::make_mut(&mut self.history_state.commit_signatures_requested).remove(id);
+                }
+                displayed && self.history_state.commit_signatures.get(id) != Some(signature)
+            })
+            .collect();
+        if updates.is_empty() {
+            return;
+        }
+        let map = Arc::make_mut(&mut self.history_state.commit_signatures);
+        for (id, signature) in updates {
+            map.insert(id, signature);
+        }
+        self.history_state.commit_signatures_rev =
+            self.history_state.commit_signatures_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_hover_commit_message(

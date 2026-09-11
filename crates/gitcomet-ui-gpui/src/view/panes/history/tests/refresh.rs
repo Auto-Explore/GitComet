@@ -576,7 +576,7 @@ fn indexed_regression_unanchored_worktree_arrow_preserves_selection_and_viewport
             let entity = view.read(app).main_pane.read(app).history_view.clone();
             entity.update(app, |history, cx| {
                 history.state = Arc::new(state.clone());
-                history.sync_indexed_plan();
+                history.sync_indexed_plan(cx);
                 let before = {
                     let mut scroll = history.scroll_interaction.borrow_mut();
                     let logical = scroll.logical.as_mut().unwrap();
@@ -1283,6 +1283,172 @@ fn indexed_history_unrelated_updates_reuse_text_and_graph_windows(cx: &mut gpui:
             assert!(next.selected_lane.is_some());
         });
     }
+}
+
+#[derive(Clone, Copy)]
+enum IndexedSignatureTooltipChange {
+    Wheel,
+    Programmatic,
+    BadgeRemoval,
+    Publication,
+}
+
+fn indexed_signature_tooltip_is_retracted(
+    cx: &mut gpui::TestAppContext,
+    change: IndexedSignatureTooltipChange,
+) {
+    use gitcomet_core::domain::{CommitSignature, SignatureFormat, SignatureStatus};
+
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(5000);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits[..200].to_vec(), None)));
+    install_index(&mut state, index.clone());
+    let history = &mut state.repos[0].history_state;
+    history.indexed.range_index = Some(index.clone());
+    history.indexed.ranges.insert(
+        512,
+        Arc::new(gitcomet_core::history_index::HistoryRange {
+            snapshot: index.snapshot.clone(),
+            start: 512,
+            commits: commits[512..768].to_vec(),
+        }),
+    );
+    history.commit_signatures = Arc::new(
+        [(
+            commits[600].id.clone(),
+            CommitSignature {
+                status: SignatureStatus::Good,
+                format: SignatureFormat::Ssh,
+                signer: Some("Ada".into()),
+                key_id: Some("test-key".into()),
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
+    history.commit_signatures_rev = 1;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "indexed signature viewport", |cx| {
+        cx.debug_bounds("indexed_history_viewport").is_some()
+    });
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    cx.update(|_, app| {
+        history.update(app, |history, cx| {
+            let mut scroll = history.scroll_interaction.borrow_mut();
+            let logical = scroll.logical.as_mut().unwrap();
+            logical.set_position(600.0 * logical.height);
+            cx.notify();
+        });
+    });
+    wait_until(cx, "indexed signed row beyond bootstrap", |cx| {
+        cx.debug_bounds("history_row_600").is_some()
+    });
+    let row = cx.debug_bounds("history_row_600").unwrap();
+    let mut hover = None;
+    let mut x = row.right() - px(4.0);
+    while x > row.left() {
+        let position = point(x, row.center().y);
+        cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+        cx.run_until_parked();
+        if cx.update(|_, app| history.read(app).row_hover(app))
+            == Some((600, HistoryRowHoverArea::Signature))
+        {
+            hover = Some(position);
+            break;
+        }
+        x -= px(4.0);
+    }
+    let hover = hover.expect("loaded indexed commit must paint a hoverable signature badge");
+    assert!(crate::view::test_support::tooltip_text(cx, &view).is_some());
+    let (cached, presentation) = cx.update(|_, app| {
+        let history = history.read(app);
+        (
+            history.indexed.window.clone().unwrap(),
+            history.indexed.presentation.clone().unwrap(),
+        )
+    });
+    match change {
+        IndexedSignatureTooltipChange::Wheel => cx.simulate_event(gpui::ScrollWheelEvent {
+            position: hover,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-1000.0))),
+            ..Default::default()
+        }),
+        IndexedSignatureTooltipChange::Programmatic => cx.update(|_, app| {
+            history.update(app, |history, cx| {
+                let mut scroll = history.scroll_interaction.borrow_mut();
+                let logical = scroll.logical.as_mut().unwrap();
+                logical.set_position(640.0 * logical.height);
+                cx.notify();
+            });
+        }),
+        IndexedSignatureTooltipChange::BadgeRemoval
+        | IndexedSignatureTooltipChange::Publication => {
+            if matches!(change, IndexedSignatureTooltipChange::BadgeRemoval) {
+                state.repos[0].history_state.commit_signatures = Arc::default();
+                state.repos[0].history_state.commit_signatures_rev += 1;
+            } else {
+                state.repos[0].branches_rev += 1;
+            }
+            let state = Arc::new(state);
+            store.replace_snapshot_for_test(state.clone());
+            cx.update(|_, app| {
+                view.read(app)
+                    .ui_model
+                    .clone()
+                    .update(app, |model, cx| model.set_state(state, cx));
+            });
+        }
+    }
+    if matches!(change, IndexedSignatureTooltipChange::Publication) {
+        wait_until(cx, "replacement indexed presentation", |cx| {
+            cx.update(|_, app| {
+                history
+                    .read(app)
+                    .indexed
+                    .presentation
+                    .as_ref()
+                    .is_some_and(|next| !Arc::ptr_eq(&presentation, next))
+            })
+        });
+    }
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    assert_eq!(crate::view::test_support::tooltip_text(cx, &view), None);
+    assert_eq!(cx.update(|_, app| history.read(app).row_hover(app)), None);
+    if matches!(change, IndexedSignatureTooltipChange::BadgeRemoval) {
+        cx.update(|_, app| {
+            assert!(
+                std::rc::Rc::ptr_eq(&cached, history.read(app).indexed.window.as_ref().unwrap()),
+                "badge updates must retain the text and graph window"
+            )
+        });
+    }
+}
+
+#[gpui::test]
+fn indexed_history_signature_tooltip_clears_on_wheel(cx: &mut gpui::TestAppContext) {
+    indexed_signature_tooltip_is_retracted(cx, IndexedSignatureTooltipChange::Wheel);
+}
+
+#[gpui::test]
+fn indexed_history_signature_tooltip_clears_on_programmatic_scroll(cx: &mut gpui::TestAppContext) {
+    indexed_signature_tooltip_is_retracted(cx, IndexedSignatureTooltipChange::Programmatic);
+}
+
+#[gpui::test]
+fn indexed_history_signature_removal_reuses_the_window_and_clears_its_tooltip(
+    cx: &mut gpui::TestAppContext,
+) {
+    indexed_signature_tooltip_is_retracted(cx, IndexedSignatureTooltipChange::BadgeRemoval);
+}
+
+#[gpui::test]
+fn indexed_history_signature_tooltip_clears_on_publication(cx: &mut gpui::TestAppContext) {
+    indexed_signature_tooltip_is_retracted(cx, IndexedSignatureTooltipChange::Publication);
 }
 
 #[gpui::test]

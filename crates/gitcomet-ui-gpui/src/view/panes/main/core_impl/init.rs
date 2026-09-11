@@ -292,6 +292,7 @@ impl MainPaneView {
                 history_show_tags,
                 history_auto_fetch_tags_on_repo_activation,
                 root_view.clone(),
+                tooltip_host.clone(),
                 last_window_size,
                 window,
                 cx,

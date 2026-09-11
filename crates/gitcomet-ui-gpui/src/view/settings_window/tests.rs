@@ -3222,3 +3222,13 @@ fn density_and_font_geometry_remain_independent_across_scales() {
         }
     }
 }
+
+#[test]
+fn signature_verification_is_discoverable_in_settings_search() {
+    for query in ["signature", "Verify commit signatures", "verification"] {
+        assert!(
+            SettingsCategory::GitLog.matches_query(query),
+            "query: {query}"
+        );
+    }
+}

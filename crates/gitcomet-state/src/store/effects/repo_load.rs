@@ -1633,6 +1633,27 @@ pub(super) fn schedule_load_commit_details(
     });
 }
 
+pub(super) fn schedule_verify_commit_signatures(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    epoch: u64,
+    cancellation: CancellationToken,
+    commit_ids: std::sync::Arc<[gitcomet_core::domain::CommitId]>,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+                repo_id,
+                epoch,
+                result: repo.verify_commit_signatures_cancellable(&commit_ids, &cancellation),
+            }),
+        );
+    });
+}
+
 /// Resolve a possibly abbreviated reference and load its details in one call.
 ///
 /// `commit_details` runs the reference through `rev-parse`, so this answers

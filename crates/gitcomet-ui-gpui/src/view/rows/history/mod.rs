@@ -31,6 +31,7 @@ impl HistoryView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         this.sync_history_loading_rows(range.clone(), cx);
+        this.clear_history_row_hover_if_scrolled(cx);
         let (_, worktree_counts) = this.ensure_history_worktree_summary_cache();
         let indexed = this.indexed.presentation.is_some();
         let indexed_window = this.indexed.window.clone();
@@ -516,6 +517,7 @@ fn history_table_row(
         author,
         summary,
         when,
+        commit.time,
         short_sha,
         active_context_menu_invoker.cloned(),
         row_bg_overlay,

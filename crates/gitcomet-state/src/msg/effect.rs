@@ -158,6 +158,14 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Verify the signatures of `commit_ids`. Batched because verification
+    /// shells out to `git`; the backend drops unsigned commits for free.
+    VerifyCommitSignatures {
+        repo_id: RepoId,
+        epoch: u64,
+        cancellation: gitcomet_core::services::CancellationToken,
+        commit_ids: std::sync::Arc<[CommitId]>,
+    },
     LoadHoverCommitMessage {
         repo_id: RepoId,
         commit_id: CommitId,

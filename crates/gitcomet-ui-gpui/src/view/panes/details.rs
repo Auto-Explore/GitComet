@@ -306,6 +306,7 @@ impl DetailsPaneView {
             repo.log_rev.hash(&mut hasher);
             repo.history_state.indexed.rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
+            repo.history_state.commit_signatures_rev.hash(&mut hasher);
             repo.history_state.worktree_selection_rev.hash(&mut hasher);
             repo.history_state.range_files_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);

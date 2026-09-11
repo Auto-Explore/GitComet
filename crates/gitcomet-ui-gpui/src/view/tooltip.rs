@@ -263,6 +263,7 @@ impl GitCometView {
                             terminal_external_args: None,
                             terminal_action_bar_target: None,
                             history_show_tags: Some(history_show_tags),
+                            history_verify_commit_signatures: None,
                             history_tag_fetch_mode: Some(if history_auto_fetch_tags_on_repo_activation
                             {
                                 gitcomet_state::model::GitLogTagFetchMode::OnRepositoryActivation

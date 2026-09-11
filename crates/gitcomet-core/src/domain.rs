@@ -121,6 +121,89 @@ pub struct CommitDetails {
     pub files: Vec<CommitFileChange>,
 }
 
+/// Verification outcome for a commit signature, from `git log %G?`.
+///
+/// `E` (key missing) and `N` (unsigned) have no variant: both mean "no badge",
+/// and are represented by the absence of a [`CommitSignature`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignatureStatus {
+    /// `G` — good signature from a certified key.
+    Good,
+    /// `U` — good signature, key not certified in the local web of trust.
+    GoodUncertified,
+    /// `X` — good signature that has expired.
+    Expired,
+    /// `Y` — good signature made by a key that has expired.
+    ExpiredKey,
+    /// `B` — signature does not match the commit.
+    Bad,
+    /// `R` — good signature made by a revoked key.
+    Revoked,
+}
+
+impl SignatureStatus {
+    /// `None` for the codes that carry no badge (`E`, `N`) and anything unknown.
+    pub fn from_git_code(code: u8) -> Option<Self> {
+        match code {
+            b'G' => Some(Self::Good),
+            b'U' => Some(Self::GoodUncertified),
+            b'X' => Some(Self::Expired),
+            b'Y' => Some(Self::ExpiredKey),
+            b'B' => Some(Self::Bad),
+            b'R' => Some(Self::Revoked),
+            _ => None,
+        }
+    }
+
+    /// Whether the signature checked out with a trusted signing identity.
+    pub fn is_verified(self) -> bool {
+        matches!(self, Self::Good)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignatureFormat {
+    OpenPgp,
+    Ssh,
+    X509,
+}
+
+impl SignatureFormat {
+    /// Reads the format off the armor header of a `gpgsig` payload.
+    pub fn from_armor(signature: &[u8]) -> Option<Self> {
+        // Git matches raw prefixes, including PGP MESSAGE armor. Leading
+        // whitespace is invalid and must not be sent to `git log` as signed.
+        [
+            (b"-----BEGIN PGP SIGNATURE-----".as_slice(), Self::OpenPgp),
+            (b"-----BEGIN PGP MESSAGE-----".as_slice(), Self::OpenPgp),
+            (b"-----BEGIN SSH SIGNATURE-----".as_slice(), Self::Ssh),
+            (b"-----BEGIN SIGNED MESSAGE-----".as_slice(), Self::X509),
+        ]
+        .into_iter()
+        .find_map(|(prefix, format)| signature.starts_with(prefix).then_some(format))
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OpenPgp => "GPG",
+            Self::Ssh => "SSH",
+            Self::X509 => "X.509",
+        }
+    }
+}
+
+/// A verified commit signature. Only built for commits that earn a badge, so
+/// "absent from the signature map" and "no badge" are the same thing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitSignature {
+    pub status: SignatureStatus,
+    pub format: SignatureFormat,
+    /// Signer identity (`%GS`); `None` when git could not name one.
+    pub signer: Option<Arc<str>>,
+    /// Key id or fingerprint (`%GK`).
+    pub key_id: Option<Arc<str>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitFileChange {
     pub path: PathBuf,

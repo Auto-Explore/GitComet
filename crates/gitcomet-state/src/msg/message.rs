@@ -220,6 +220,7 @@ pub enum Msg {
     SetGitLogSettings {
         show_history_tags: bool,
         tag_fetch_mode: GitLogTagFetchMode,
+        verify_commit_signatures: bool,
     },
     SetRemoteSettings(RemoteSettings),
     SetFileBrowserSettings(FileBrowserSettings),
@@ -1276,6 +1277,11 @@ pub enum InternalMsg {
         repo_id: RepoId,
         commit_id: CommitId,
         result: Result<CommitDetails, Error>,
+    },
+    CommitSignaturesVerified {
+        repo_id: RepoId,
+        epoch: u64,
+        result: Result<Vec<(CommitId, CommitSignature)>, Error>,
     },
     /// A [`Msg::RevealCommit`] reference resolved (or failed to).
     CommitRevealResolved {

@@ -1055,6 +1055,14 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_highlight_commit_chain: bool,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
+    tooltip_host: WeakEntity<TooltipHost>,
+    /// Which row sub-area the pointer is over, so the shared tooltip is only
+    /// rewritten when the hover actually moves rather than on every pixel.
+    row_hover: Option<(usize, HistoryRowHoverArea)>,
+    row_hover_scroll_position: f64,
+    /// Exactly what we last handed the shared host, so we only ever retract
+    /// our own tooltip and never one another surface has since set.
+    row_hover_tooltip: Option<SharedString>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     pub(in super::super) last_window_size: Size<Pixels>,
@@ -1102,7 +1110,116 @@ pub(in super::super) struct HistoryView {
     relative_time_tick: Option<gpui::Task<()>>,
 }
 
+/// A hoverable sub-area of a history row. Both are painted on the canvas, so
+/// neither can use `.tooltip()`; they drive the shared [`TooltipHost`] by hand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum HistoryRowHoverArea {
+    Signature,
+    Date,
+}
+
 impl HistoryView {
+    /// Point the shared tooltip host at the row sub-area now under the pointer.
+    ///
+    /// Deliberately does not `notify`: nothing in the row's paint depends on this
+    /// hover, so repainting every row on pointer movement would be pure waste.
+    pub(in crate::view) fn update_history_row_hover(
+        &mut self,
+        next: Option<(usize, HistoryRowHoverArea)>,
+        tooltip: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.row_hover == next && (next.is_none() || self.row_hover(cx) == next) {
+            return;
+        }
+        self.row_hover = next;
+        self.row_hover_scroll_position = self.history_scroll_position();
+        let Some(host) = self.tooltip_host.upgrade() else {
+            return;
+        };
+        let previous = self.row_hover_tooltip.take();
+        self.row_hover_tooltip = tooltip.clone();
+        host.update(cx, |host, cx| match tooltip {
+            Some(text) => {
+                host.set_tooltip_text_if_changed(Some(text), cx);
+            }
+            None => {
+                // Retract only our own text. A blanket `clear_tooltip` would
+                // also cancel a pending reveal another surface just armed.
+                if let Some(previous) = previous {
+                    host.clear_tooltip_if_matches(&previous, cx);
+                }
+            }
+        });
+    }
+
+    /// Forget the hover without touching the host.
+    ///
+    /// Any mouse-down clears the host from the window root, which would leave
+    /// this mirror claiming a tooltip that is no longer shown — and then the
+    /// equality gate would suppress re-showing it until the pointer left the
+    /// cell and came back.
+    pub(in crate::view) fn reset_history_row_hover(&mut self) {
+        self.row_hover = None;
+        self.row_hover_tooltip = None;
+    }
+
+    pub(in crate::view) fn row_hover(&self, cx: &App) -> Option<(usize, HistoryRowHoverArea)> {
+        let host = self.tooltip_host.upgrade()?;
+        let tooltip = self.row_hover_tooltip.as_ref()?;
+        host.read(cx)
+            .tooltip_text_matches(tooltip)
+            .then_some(self.row_hover)
+            .flatten()
+    }
+
+    /// Virtualization can remove the owning row and its mouse listener entirely.
+    /// Check the active viewport when the list lays out, including scrollbar
+    /// drags and programmatic reveals that do not send a wheel event.
+    pub(in crate::view) fn clear_history_row_hover_if_scrolled(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.row_hover.is_some()
+            && self.history_scroll_position() != self.row_hover_scroll_position
+        {
+            self.update_history_row_hover(None, None, cx);
+        }
+    }
+
+    fn history_scroll_position(&self) -> f64 {
+        self.scroll_interaction
+            .borrow()
+            .logical
+            .as_ref()
+            .map_or_else(
+                || {
+                    f64::from(f32::from(
+                        -self.history_scroll.0.borrow().base_handle.offset().y,
+                    ))
+                },
+                |logical| logical.position(),
+            )
+    }
+
+    /// The absolute, timezone-qualified rendering of a commit time, for the date
+    /// column's tooltip. Built on demand from the pointer handler so a relative
+    /// label like "4 days ago" costs nothing until someone actually hovers it.
+    pub(in crate::view) fn full_commit_time_text(
+        &self,
+        time: std::time::SystemTime,
+    ) -> SharedString {
+        let mut text = String::with_capacity(32);
+        crate::view::date_time::format_datetime_into(
+            &mut text,
+            time,
+            self.date_time_format,
+            self.timezone,
+            true,
+        );
+        text.into()
+    }
+
     fn notify_fingerprint_for(state: &AppState, show_history_tags: bool) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
@@ -1154,6 +1271,7 @@ impl HistoryView {
         history_show_tags: bool,
         history_auto_fetch_tags_on_repo_activation: bool,
         root_view: WeakEntity<GitCometView>,
+        tooltip_host: WeakEntity<TooltipHost>,
         last_window_size: Size<Pixels>,
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -1165,6 +1283,18 @@ impl HistoryView {
             let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
             let changed = next_fingerprint != this.notify_fingerprint;
             let switched_repo = this.state.active_repo != next.active_repo;
+            // Badges repaint the rows without invalidating open refs menus.
+            let signatures_changed = this
+                .state
+                .repos
+                .iter()
+                .find(|repo| Some(repo.id) == this.state.active_repo)
+                .map(|repo| repo.history_state.commit_signatures_rev)
+                != next
+                    .repos
+                    .iter()
+                    .find(|repo| Some(repo.id) == next.active_repo)
+                    .map(|repo| repo.history_state.commit_signatures_rev);
             this.state = next;
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
@@ -1199,9 +1329,18 @@ impl HistoryView {
                 }
             }
 
+            if signatures_changed
+                && matches!(this.row_hover, Some((_, HistoryRowHoverArea::Signature)))
+            {
+                // Verification can remove or replace a badge under a resting
+                // pointer. Its old verdict must not survive in the tooltip.
+                this.update_history_row_hover(None, None, cx);
+            }
             if changed {
                 this.notify_fingerprint = next_fingerprint;
                 this.dismiss_history_refs_hover(cx);
+                cx.notify();
+            } else if signatures_changed {
                 cx.notify();
             }
         });
@@ -1224,6 +1363,10 @@ impl HistoryView {
             history_highlight_commit_chain,
             _ui_model_subscription: subscription,
             root_view,
+            tooltip_host,
+            row_hover: None,
+            row_hover_scroll_position: 0.0,
+            row_hover_tooltip: None,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             last_window_size,

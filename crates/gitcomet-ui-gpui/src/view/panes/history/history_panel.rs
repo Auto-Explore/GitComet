@@ -44,14 +44,14 @@ impl HistoryView {
             self.apply_pending_history_cache();
             self.ensure_history_cache(cx);
         }
-        self.sync_indexed_plan();
+        self.sync_indexed_plan(cx);
         self.prepare_indexed_window(cx);
         self.sync_history_loading(cx);
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
         let plan = self.ensure_history_list_plan();
         if self.indexed.presentation.is_none() {
-            self.sync_history_viewport(&plan);
+            self.sync_history_viewport(&plan, cx);
         }
         let repo = self.active_repo();
         let commits_count = self
