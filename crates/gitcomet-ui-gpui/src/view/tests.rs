@@ -5431,6 +5431,86 @@ fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn native_file_drop_moves_before_acknowledgement_and_can_be_undone(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let directory = tempfile::tempdir().unwrap();
+    let repository = directory.path().join("repository");
+    let destination = repository.join("target");
+    std::fs::create_dir_all(&destination).unwrap();
+    let source = directory.path().join("desktop.txt");
+    std::fs::write(&source, b"saved desktop contents").unwrap();
+    let target = destination.join("desktop.txt");
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].spec.workdir = repository;
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![FileEntry {
+        name: "target".into(),
+        path: Arc::new(PathBuf::from("target")),
+        kind: FileEntryKind::Directory,
+        depth: 0,
+    }]));
+    state.repos[0].file_browser.bump_rev();
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    let position = cx.debug_bounds("file_browser_row_0").unwrap().center();
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Entered {
+            position,
+            paths: gpui::ExternalPaths([source.clone()].into_iter().collect()),
+        },
+    );
+    let completions = Arc::new(Mutex::new(Vec::new()));
+    let completed = completions.clone();
+    let old = source.clone();
+    let new = target.clone();
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::SubmitWithTransfer {
+            position,
+            transfer: gpui::FileDropTransfer {
+                operation: gpui::FileTransferOperation::Move,
+                // Native URI-list file managers let the receiving application
+                // move files, even though the wire protocol has a Move result.
+                source_owns_move: false,
+                completion: gpui::FilePaste::new(move |operation| {
+                    assert!(!old.exists(), "acknowledge only after source removal");
+                    assert_eq!(std::fs::read(&new).unwrap(), b"saved desktop contents");
+                    completed.lock().unwrap().push(operation);
+                }),
+            },
+        },
+    );
+    pump_until(cx, "native move result", || {
+        !store.snapshot().filesystem.completed.is_empty()
+    });
+    // Deterministic UI tests apply store snapshots explicitly; the live app's
+    // store poller normally delivers the result that releases the native lease.
+    sync_view_snapshot(cx, &view);
+    assert_eq!(
+        *completions.lock().unwrap(),
+        [Some(gpui::FileTransferOperation::Move)]
+    );
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.submit_filesystem_operation(
+                gitcomet_core::filesystem::Request::new(gitcomet_core::filesystem::Operation::Undo),
+                None,
+                window,
+                cx,
+            );
+        });
+    });
+    pump_until(cx, "undo native move", || {
+        source.exists() && !target.exists()
+    });
+    assert_eq!(std::fs::read(source).unwrap(), b"saved desktop contents");
+}
+
+#[gpui::test]
 fn explorer_selection_keyboard_cut_and_document_navigation_are_focus_scoped(
     cx: &mut gpui::TestAppContext,
 ) {

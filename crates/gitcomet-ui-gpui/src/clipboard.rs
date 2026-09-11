@@ -47,6 +47,7 @@ enum ClipboardBackend {
 
 pub(crate) fn write_text<T: 'static>(cx: &mut gpui::Context<T>, text: String, source: CopySource) {
     FILE_CLIPBOARD.with(|owned| owned.borrow_mut().take());
+    bump_files_revision();
     let backend = clipboard_backend();
     write_copy_diagnostic(source, text.len(), backend);
 
@@ -67,6 +68,30 @@ pub(crate) struct FilePayload {
 
 thread_local! {
     static FILE_CLIPBOARD: std::cell::RefCell<Option<(FilePayload, gpui::ClipboardItem)>> = const { std::cell::RefCell::new(None) };
+    /// Bumped whenever this process changes the file clipboard. Views key a
+    /// cached cut set on it rather than reading the platform clipboard every
+    /// frame -- on X11 that read is a synchronous selection transfer.
+    ///
+    /// Only our own writes move it, so a cut made in another application is not
+    /// reflected until something here touches the clipboard. That is the
+    /// deliberate trade: dimming another app's cut is not worth a poll.
+    static FILE_CLIPBOARD_REV: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Counts platform clipboard reads so tests can pin that the file-browser
+    /// row builder is not doing one per frame.
+    pub(crate) static FILE_CLIPBOARD_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Changes whenever this process writes or clears the file clipboard.
+pub(crate) fn files_revision() -> u64 {
+    FILE_CLIPBOARD_REV.with(|rev| rev.get())
+}
+
+fn bump_files_revision() {
+    FILE_CLIPBOARD_REV.with(|rev| rev.set(rev.get().wrapping_add(1)));
 }
 
 pub(crate) fn write_files<T: 'static>(
@@ -121,33 +146,13 @@ pub(crate) fn write_files_owned<T: 'static>(
             item,
         ))
     });
+    bump_files_revision();
     cx.refresh_windows();
-    if intent == gitcomet_core::filesystem::TransferIntent::Move
-        && crate::ui_runtime::current().uses_cursor_blink()
-    {
-        cx.spawn(async move |view, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(300))
-                    .await;
-                let active = view
-                    .update(cx, |_, cx| {
-                        let still_owned = read_files(cx).is_some_and(|p| p.ownership == ownership)
-                            || cx.file_transfer_is_active(ownership);
-                        cx.refresh_windows();
-                        still_owned
-                    })
-                    .unwrap_or(false);
-                if !active {
-                    break;
-                }
-            }
-        })
-        .detach();
-    }
 }
 
 pub(crate) fn read_files<T: 'static>(cx: &gpui::Context<T>) -> Option<FilePayload> {
+    #[cfg(test)]
+    FILE_CLIPBOARD_READS.with(|reads| reads.set(reads.get() + 1));
     #[cfg(all(target_os = "linux", not(test)))]
     let item = if clipboard_backend() == ClipboardBackend::X11 {
         gpui_platform::read_files_from_x11_clipboard().map(|files| gpui::ClipboardItem {

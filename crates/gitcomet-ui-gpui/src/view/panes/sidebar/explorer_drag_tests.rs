@@ -330,3 +330,32 @@ fn hovering_a_collapsed_folder_during_a_drag_expands_it(cx: &mut gpui::TestAppCo
         "hovering a collapsed folder during a drag must expand it"
     );
 }
+
+#[gpui::test]
+fn drawing_the_tree_does_not_read_the_platform_clipboard_each_frame(cx: &mut gpui::TestAppContext) {
+    // On Linux/X11 a clipboard read is a synchronous selection transfer, and
+    // gpui re-renders on every mouse move while a drag is in flight.
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let state = long_explorer_state(120);
+    cx.update(|_window, app| {
+        view.update(app, |view, cx| {
+            view.store.replace_snapshot_for_test(Arc::clone(&state));
+            test_support::push_test_state(view, Arc::clone(&state), cx);
+            view.set_sidebar_collapsed(false, cx);
+        })
+    });
+    test_support::redraw(cx);
+
+    crate::clipboard::FILE_CLIPBOARD_READS.with(|reads| reads.set(0));
+    for _ in 0..5 {
+        test_support::redraw(cx);
+    }
+    let reads = crate::clipboard::FILE_CLIPBOARD_READS.with(|reads| reads.get());
+    assert_eq!(
+        reads, 0,
+        "five redraws with an unchanged clipboard must not re-read it"
+    );
+}

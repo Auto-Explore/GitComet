@@ -560,6 +560,25 @@ impl SidebarPaneView {
         }
     }
 
+    /// Paths this process has cut, or `None` when the clipboard holds no cut.
+    ///
+    /// Recomputed only when our own clipboard revision moves, so a cut made in
+    /// another application is not reflected until something here touches the
+    /// clipboard -- the deliberate trade for not polling the platform.
+    pub(super) fn explorer_cut_paths(&self, cx: &gpui::Context<Self>) -> Option<Rc<[PathBuf]>> {
+        let revision = crate::clipboard::files_revision();
+        if let Some((cached, paths)) = self.explorer_cut_cache.borrow().as_ref()
+            && *cached == revision
+        {
+            return paths.clone();
+        }
+        let paths = crate::clipboard::read_files(cx)
+            .filter(|payload| payload.intent == TransferIntent::Move)
+            .map(|payload| Rc::from(payload.paths));
+        *self.explorer_cut_cache.borrow_mut() = Some((revision, paths.clone()));
+        paths
+    }
+
     /// Whether the pointer is inside the row list itself, as opposed to the
     /// search field, the visibility toggles or the scrollbar beside it.
     pub(super) fn explorer_pointer_over_rows(&self, window: &Window) -> bool {

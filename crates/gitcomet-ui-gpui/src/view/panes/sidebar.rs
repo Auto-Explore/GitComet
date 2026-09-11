@@ -284,6 +284,12 @@ pub(in super::super) struct SidebarPaneView {
     explorer_focus: gpui::FocusHandle,
     explorer_name_input: Entity<TextInput>,
     explorer_name_edit: Option<explorer_operations::NameEdit>,
+    /// Cut paths mirrored from the clipboard, keyed on
+    /// `clipboard::files_revision`. The row builder used to read the platform
+    /// clipboard itself, which on Linux/X11 is a synchronous selection transfer
+    /// -- once per prepaint, and gpui re-renders on every mouse move during a
+    /// drag.
+    explorer_cut_cache: std::cell::RefCell<Option<(u64, Option<Rc<[PathBuf]>>)>>,
     explorer_drop_target: Option<PathBuf>,
     /// The row that claimed `explorer_drop_target`. Rows are not one-to-one
     /// with destinations, so only this identifies the claimant.
@@ -623,6 +629,7 @@ impl SidebarPaneView {
                 )
             }),
             explorer_name_edit: None,
+            explorer_cut_cache: std::cell::RefCell::new(None),
             explorer_drop_target: None,
             explorer_drop_row: None,
             explorer_hover_task: None,
@@ -2871,7 +2878,7 @@ impl SidebarPaneView {
             .unwrap_or_default();
 
         let visible_rows = this.file_browser_visible_rows(cx);
-        let file_clipboard = crate::clipboard::read_files(cx);
+        let cut_paths = this.explorer_cut_paths(cx);
         let repo = this.active_repo();
         // The file the main pane is showing, so the tree can mark it. Read
         // whatever the target names — a diff of a file is still "this file is
@@ -3052,13 +3059,12 @@ impl SidebarPaneView {
                     let focused = repo.is_some_and(|r| {
                         r.file_browser.selection.focused.as_ref() == Some(entry.path.as_ref())
                     });
-                    let cut = file_clipboard.as_ref().is_some_and(|payload| {
-                        payload.intent == gitcomet_core::filesystem::TransferIntent::Move
-                            && repo.is_some_and(|r| {
-                                payload.paths.iter().any(|p| {
-                                    r.spec.workdir.join(entry.path.as_ref()).starts_with(p)
-                                })
-                            })
+                    let cut = cut_paths.as_ref().is_some_and(|paths| {
+                        repo.is_some_and(|r| {
+                            paths
+                                .iter()
+                                .any(|p| r.spec.workdir.join(entry.path.as_ref()).starts_with(p))
+                        })
                     });
                     let row_text_color = if cut && !selected {
                         theme.colors.foreground.disabled
