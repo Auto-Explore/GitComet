@@ -3770,6 +3770,7 @@ fn a_selection_on_a_worktree_that_went_clean_is_dropped() {
         deleted: 0,
         staged: Vec::new(),
         unstaged: Vec::new(),
+        line_stats: Default::default(),
     };
 
     for (label, result) in [(
@@ -3843,6 +3844,7 @@ fn a_selection_on_a_still_dirty_worktree_survives_a_rescan() {
                 deleted: 0,
                 staged: Vec::new(),
                 unstaged: Vec::new(),
+                line_stats: Default::default(),
             }]),
         }),
     );
@@ -3875,6 +3877,7 @@ fn a_failed_worktree_scan_keeps_the_rows_and_the_selection() {
         deleted: 0,
         staged: Vec::new(),
         unstaged: Vec::new(),
+        line_stats: Default::default(),
     }];
     let mut repo_state = RepoState::new_opening(
         RepoId(1),
@@ -3936,6 +3939,7 @@ fn a_rescan_re_resolves_an_open_worktree_diff_against_the_new_file_list() {
         deleted: 0,
         staged: Vec::new(),
         unstaged: files.iter().map(|name| file(name)).collect(),
+        line_stats: Default::default(),
     };
 
     let open_on = |state: &mut AppState, files: &[&str], selected_ix: usize| {
@@ -4149,6 +4153,7 @@ fn a_rescan_keeps_the_worktree_diff_on_the_half_it_was_opened_from() {
         deleted: 0,
         staged: vec![file.clone()],
         unstaged: vec![file.clone()],
+        line_stats: Default::default(),
     };
 
     let entries = crate::model::worktree_inline_diff_entries(&summary());
@@ -4280,6 +4285,7 @@ fn worktree_dirty_summary(
                 conflict: None,
             })
             .collect(),
+        line_stats: Default::default(),
     }
 }
 

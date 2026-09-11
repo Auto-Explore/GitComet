@@ -159,6 +159,10 @@ impl RepoLoadsInFlight {
     /// Deliberately outside `PRIMARY_REFRESH_FLAGS`: the live listing is a
     /// worktree walk, far costlier than the other loads.
     pub const FILE_BROWSER: u32 = 1 << 18;
+    /// Also outside `PRIMARY_REFRESH_FLAGS`: counting reads both sides of every
+    /// changed file, which the status walk avoids. Kept separate so status
+    /// latency is unchanged and the numbers arrive after the list.
+    pub const UNCOMMITTED_LINE_STATS: u32 = 1 << 19;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
@@ -1437,7 +1441,7 @@ fn mix_branch_sidebar_revs(values: [u64; 7]) -> u64 {
 }
 
 #[inline]
-fn mix_status_cache_revs(values: [u64; 2]) -> u64 {
+pub fn mix_status_cache_revs(values: [u64; 2]) -> u64 {
     let mut acc = STATUS_CACHE_REV_MIX;
     for value in values {
         acc ^= value.wrapping_mul(STATUS_CACHE_REV_MIX);
@@ -1547,6 +1551,12 @@ pub struct RepoState {
     pub remote_branches_rev: u64,
     pub worktree_status: Loadable<Arc<Vec<FileStatus>>>,
     pub worktree_status_rev: u64,
+    /// Per-file `+/-` for both lanes, cached until the next index or worktree
+    /// change.
+    pub uncommitted_line_stats: Loadable<Arc<UncommittedLineStats>>,
+    /// Per lane, so churn in one does not invalidate the other's rows.
+    pub staged_line_stats_rev: u64,
+    pub unstaged_line_stats_rev: u64,
     pub staged_status: Loadable<Arc<Vec<FileStatus>>>,
     pub staged_status_rev: u64,
     pub status: Loadable<Shared<RepoStatus>>,
@@ -1654,6 +1664,9 @@ impl RepoState {
             remote_branches: Loadable::NotLoaded,
             remote_branches_rev: 0,
             worktree_status: Loadable::NotLoaded,
+            uncommitted_line_stats: Loadable::NotLoaded,
+            staged_line_stats_rev: 0,
+            unstaged_line_stats_rev: 0,
             worktree_status_rev: 0,
             staged_status: Loadable::NotLoaded,
             staged_status_rev: 0,
@@ -1939,6 +1952,45 @@ impl RepoState {
 
     pub(crate) fn set_sidebar_data_request(&mut self, request: SidebarDataRequest) {
         self.sidebar_data_request = request;
+    }
+
+    /// Bumps only the lanes that changed. Never sets `Loading`, so the numbers
+    /// stay on screen across a rescan the way `worktree_dirty` does.
+    pub(crate) fn set_uncommitted_line_stats(
+        &mut self,
+        stats: Loadable<Arc<UncommittedLineStats>>,
+    ) {
+        let (staged_changed, unstaged_changed) = match (&self.uncommitted_line_stats, &stats) {
+            (Loadable::Ready(previous), Loadable::Ready(next)) => (
+                previous.staged != next.staged,
+                previous.unstaged != next.unstaged,
+            ),
+            _ => (true, true),
+        };
+        self.uncommitted_line_stats = stats;
+        if staged_changed {
+            self.staged_line_stats_rev = self.staged_line_stats_rev.wrapping_add(1);
+        }
+        if unstaged_changed {
+            self.unstaged_line_stats_rev = self.unstaged_line_stats_rev.wrapping_add(1);
+        }
+    }
+
+    pub fn line_stats_rev(&self, area: DiffArea) -> u64 {
+        match area {
+            DiffArea::Staged => self.staged_line_stats_rev,
+            DiffArea::Unstaged => self.unstaged_line_stats_rev,
+        }
+    }
+
+    pub fn line_stats_for_area(
+        &self,
+        area: DiffArea,
+    ) -> Option<&rustc_hash::FxHashMap<PathBuf, LineStats>> {
+        match &self.uncommitted_line_stats {
+            Loadable::Ready(stats) => Some(stats.for_area(area)),
+            _ => None,
+        }
     }
 
     pub(crate) fn set_worktree_status(&mut self, status: Loadable<Vec<FileStatus>>) {
@@ -3975,5 +4027,59 @@ mod tests {
         assert_eq!(Loadable::<Vec<u8>>::NotLoaded.ready(), None);
         assert_eq!(Loadable::<Vec<u8>>::Loading.ready(), None);
         assert_eq!(Loadable::<Vec<u8>>::Error("boom".into()).ready(), None);
+    }
+
+    /// Rows cache on these revs: an unchanged rescan must not bump them, and a
+    /// real change must.
+    #[test]
+    fn line_stats_revs_move_per_lane_only_when_that_lane_changes() {
+        use gitcomet_core::domain::{LineStats, UncommittedLineStats};
+
+        fn stats(staged: &[(&str, u32)], unstaged: &[(&str, u32)]) -> UncommittedLineStats {
+            let build = |entries: &[(&str, u32)]| {
+                entries
+                    .iter()
+                    .map(|(path, additions)| {
+                        (
+                            PathBuf::from(path),
+                            LineStats {
+                                additions: Some(*additions),
+                                deletions: Some(0),
+                            },
+                        )
+                    })
+                    .collect()
+            };
+            UncommittedLineStats {
+                staged: build(staged),
+                unstaged: build(unstaged),
+            }
+        }
+
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/line-stats"),
+            },
+        );
+        repo.set_uncommitted_line_stats(Loadable::Ready(Arc::new(stats(&[("a", 1)], &[("b", 2)]))));
+        let (staged_rev, unstaged_rev) = (repo.staged_line_stats_rev, repo.unstaged_line_stats_rev);
+
+        repo.set_uncommitted_line_stats(Loadable::Ready(Arc::new(stats(&[("a", 1)], &[("b", 2)]))));
+        assert_eq!(repo.staged_line_stats_rev, staged_rev, "unchanged rescan");
+        assert_eq!(
+            repo.unstaged_line_stats_rev, unstaged_rev,
+            "unchanged rescan"
+        );
+
+        repo.set_uncommitted_line_stats(Loadable::Ready(Arc::new(stats(&[("a", 9)], &[("b", 2)]))));
+        assert_ne!(
+            repo.staged_line_stats_rev, staged_rev,
+            "staged lane changed"
+        );
+        assert_eq!(
+            repo.unstaged_line_stats_rev, unstaged_rev,
+            "the untouched lane keeps its rev so its rows are not rebuilt"
+        );
     }
 }

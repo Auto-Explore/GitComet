@@ -22,6 +22,7 @@ pub struct UiSettings {
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
+    pub file_list_layout: Option<String>,
     pub repo_picker_sort: Option<String>,
     /// Whole replacement set — the repository picker owns it and always writes
     /// every collapsed section it knows about.
@@ -115,6 +116,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, timezone);
         apply_setting!(settings, file, show_timezone);
         apply_setting!(settings, file, change_tracking_view);
+        apply_setting!(settings, file, file_list_layout);
         apply_setting!(settings, file, repo_picker_sort);
         // Owned by the repository picker (`repo_picker::persist_collapsed_sections`).
         apply_setting!(settings, file, repo_picker_collapsed_sections);

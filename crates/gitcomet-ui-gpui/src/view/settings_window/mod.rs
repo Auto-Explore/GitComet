@@ -117,6 +117,19 @@ const CHANGE_TRACKING_OPTIONS: &[(&str, ChangeTrackingView, &str)] = &[
     ),
 ];
 
+const FILE_LIST_LAYOUT_OPTIONS: &[(&str, FileListLayout, &str)] = &[
+    (
+        "settings_window_file_list_layout_flat",
+        FileListLayout::Flat,
+        "Show every changed file as a full path",
+    ),
+    (
+        "settings_window_file_list_layout_tree",
+        FileListLayout::Tree,
+        "Group changed files under their folders",
+    ),
+];
+
 const DIFF_SCROLL_SYNC_OPTIONS: &[(&str, DiffScrollSync, &str)] = &[
     (
         "settings_window_diff_scroll_sync_vertical",
@@ -266,6 +279,7 @@ enum SettingsSection {
     TerminalExternal,
     TerminalActionBar,
     ChangeTracking,
+    FileListLayout,
     DiffContentMode,
     Diff,
     DiffViewMode,
@@ -291,6 +305,7 @@ impl SettingsSection {
             | Self::Timezone => SettingsCategory::General,
             Self::TerminalExternal | Self::TerminalActionBar => SettingsCategory::Terminal,
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
+            Self::FileListLayout => SettingsCategory::ChangeTracking,
             Self::DiffContentMode | Self::Diff | Self::DiffViewMode => SettingsCategory::Diff,
             Self::GitLogDefaultMode | Self::GitLogColumns | Self::GitLogTagFetch => {
                 SettingsCategory::GitLog
@@ -495,6 +510,7 @@ pub(crate) struct SettingsWindowView {
     date_format_scroll: UniformListScrollHandle,
     timezone_scroll: UniformListScrollHandle,
     change_tracking_scroll: UniformListScrollHandle,
+    file_list_layout_scroll: UniformListScrollHandle,
     diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
     diff_view_mode_scroll: UniformListScrollHandle,
@@ -504,6 +520,7 @@ pub(crate) struct SettingsWindowView {
     timezone: Timezone,
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
+    file_list_layout: FileListLayout,
     terminal_preferences: TerminalPreferences,
     terminal_external_program_input: Entity<components::TextInput>,
     terminal_external_args_input: Entity<components::TextInput>,
@@ -882,6 +899,7 @@ impl SettingsWindowView {
         let timezone = ui_preferences.appearance.timezone;
         let show_timezone = ui_preferences.appearance.show_timezone;
         let change_tracking_view = ui_preferences.change_tracking.view;
+        let file_list_layout = ui_preferences.file_lists.layout;
         let terminal_preferences = ui_preferences.terminal.clone();
         let diff_scroll_sync = ui_preferences.diff.scroll_sync;
         let diff_content_mode = ui_preferences.diff.content_mode;
@@ -1151,6 +1169,7 @@ impl SettingsWindowView {
             date_format_scroll: UniformListScrollHandle::default(),
             timezone_scroll: UniformListScrollHandle::default(),
             change_tracking_scroll: UniformListScrollHandle::default(),
+            file_list_layout_scroll: UniformListScrollHandle::default(),
             diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
             diff_view_mode_scroll: UniformListScrollHandle::default(),
@@ -1160,6 +1179,7 @@ impl SettingsWindowView {
             timezone,
             show_timezone,
             change_tracking_view,
+            file_list_layout,
             terminal_preferences,
             terminal_external_program_input,
             terminal_external_args_input,

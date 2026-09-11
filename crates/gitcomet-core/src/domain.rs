@@ -301,7 +301,7 @@ pub struct Worktree {
 /// throwaway handle at its path. Counts follow the same rules as the history
 /// pane's working-tree row: staged and unstaged are summed, so a file that is
 /// both staged and dirty counts twice.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WorktreeDirtySummary {
     pub path: PathBuf,
     /// Commit this worktree has checked out. Carried here rather than looked up
@@ -326,6 +326,9 @@ pub struct WorktreeDirtySummary {
     /// selected.
     pub staged: Vec<FileStatus>,
     pub unstaged: Vec<FileStatus>,
+    /// Filled only for the selected worktree, like the lists above. Empty means
+    /// "not loaded", not "no counts".
+    pub line_stats: UncommittedLineStats,
 }
 
 impl WorktreeDirtySummary {
@@ -401,6 +404,47 @@ pub struct FileStatus {
     pub path: PathBuf,
     pub kind: FileStatusKind,
     pub conflict: Option<FileConflictKind>,
+}
+
+/// `None` means unknown: binary, over the size cap, or not reported by git at
+/// all — an untracked file is in neither index lane.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LineStats {
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+impl LineStats {
+    pub const UNKNOWN: Self = Self {
+        additions: None,
+        deletions: None,
+    };
+}
+
+impl From<(Option<u32>, Option<u32>)> for LineStats {
+    fn from((additions, deletions): (Option<u32>, Option<u32>)) -> Self {
+        Self {
+            additions,
+            deletions,
+        }
+    }
+}
+
+/// Keyed the way `FileStatus` reports paths, so the join is a map lookup. An
+/// absent key means git has no counts for that file.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct UncommittedLineStats {
+    pub staged: rustc_hash::FxHashMap<PathBuf, LineStats>,
+    pub unstaged: rustc_hash::FxHashMap<PathBuf, LineStats>,
+}
+
+impl UncommittedLineStats {
+    pub fn for_area(&self, area: DiffArea) -> &rustc_hash::FxHashMap<PathBuf, LineStats> {
+        match area {
+            DiffArea::Staged => &self.staged,
+            DiffArea::Unstaged => &self.unstaged,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1577,6 +1621,7 @@ mod file_status_count_tests {
             deleted: 0,
             staged: Vec::new(),
             unstaged: Vec::new(),
+            line_stats: UncommittedLineStats::default(),
         };
         assert!(!clean.is_dirty());
         assert!(

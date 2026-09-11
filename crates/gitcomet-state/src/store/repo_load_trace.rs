@@ -157,6 +157,7 @@ pub(super) fn effect_name(effect: &Effect) -> &'static str {
         Effect::LoadRemoteBranches { .. } => "LoadRemoteBranches",
         Effect::LoadWorktreeStatus { .. } => "LoadWorktreeStatus",
         Effect::LoadStagedStatus { .. } => "LoadStagedStatus",
+        Effect::LoadUncommittedLineStats { .. } => "LoadUncommittedLineStats",
         Effect::LoadStatus { .. } => "LoadStatus",
         Effect::LoadHeadBranch { .. } => "LoadHeadBranch",
         Effect::LoadUpstreamDivergence { .. } => "LoadUpstreamDivergence",
@@ -187,6 +188,7 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         | Effect::LoadRemoteBranches { repo_id }
         | Effect::LoadWorktreeStatus { repo_id }
         | Effect::LoadStagedStatus { repo_id }
+        | Effect::LoadUncommittedLineStats { repo_id }
         | Effect::LoadStatus { repo_id }
         | Effect::LoadHeadBranch { repo_id }
         | Effect::LoadUpstreamDivergence { repo_id }
