@@ -99,8 +99,10 @@ impl DiskVersion {
         })
     }
 
-    pub(super) fn matches(&self, path: &Path) -> io::Result<()> {
-        if Self::read(path)? == *self {
+    /// Takes a token: a mismatch check walks the whole tree, so on a large
+    /// directory this is one of the longest things an operation does.
+    pub(super) fn matches(&self, path: &Path, cancellation: &Cancellation) -> io::Result<()> {
+        if Self::read_cancellable(path, cancellation)? == *self {
             Ok(())
         } else {
             Err(invalid(format!(

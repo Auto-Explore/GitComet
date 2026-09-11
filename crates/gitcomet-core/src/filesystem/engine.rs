@@ -240,7 +240,7 @@ impl Filesystem {
         }
         if !overwrite {
             match (expected, metadata.as_ref()) {
-                (Some(expected), Some(_)) => expected.matches(&path)?,
+                (Some(expected), Some(_)) => expected.matches(&path, &Cancellation::default())?,
                 (None, None) => {}
                 _ => {
                     return Err(invalid(
@@ -267,15 +267,17 @@ impl Filesystem {
             let parked = recovery.reserve(path.parent().unwrap())?;
             recovery.record_intent(&path, &parked)?;
             rename_exclusive(&path, &parked)?;
-            let install = original.matches(&parked).and_then(|_| {
-                if !overwrite && let Some(expected) = expected {
-                    expected.matches(&parked)?;
-                }
-                staged
-                    .persist_noclobber(&path)
-                    .map(|_| ())
-                    .map_err(|e| e.error)
-            });
+            let install = original
+                .matches(&parked, &Cancellation::default())
+                .and_then(|_| {
+                    if !overwrite && let Some(expected) = expected {
+                        expected.matches(&parked, &Cancellation::default())?;
+                    }
+                    staged
+                        .persist_noclobber(&path)
+                        .map(|_| ())
+                        .map_err(|e| e.error)
+                });
             if let Err(error) = install {
                 if let Err(restore) = rename_exclusive(&parked, &path) {
                     let location = recovery.areas.remove(0).keep();
@@ -491,7 +493,7 @@ impl Filesystem {
                 self.undo.pop_front();
             }
         }
-        result.moved_versions = moved_versions(&result.changes);
+        result.moved_versions = moved_versions(&result.changes, &request.cancellation);
         self.publish(&result.changes);
         result.undo_available = !self.undo.is_empty();
         result.redo_available = !self.redo.is_empty();
@@ -637,7 +639,7 @@ impl Filesystem {
                 };
                 let reverse = || -> io::Result<()> {
                     check_cancel(&request.cancellation)?;
-                    step.version.matches(from)?;
+                    step.version.matches(from, &request.cancellation)?;
                     step.from_parent.check(&step.from)?;
                     step.to_parent.check(&step.to)?;
                     if exists(to)? {
@@ -699,7 +701,7 @@ impl Filesystem {
                 self.undo.push_back(entry);
             }
         }
-        result.moved_versions = moved_versions(&result.changes);
+        result.moved_versions = moved_versions(&result.changes, &request.cancellation);
         self.publish(&result.changes);
         result.undo_available = !self.undo.is_empty();
         result.redo_available = !self.redo.is_empty();
@@ -713,14 +715,14 @@ fn complete_outbound_move(
     cancellation: &Cancellation,
 ) -> io::Result<()> {
     check_cancel(cancellation)?;
-    version.matches(path)?;
+    version.matches(path, cancellation)?;
     protect(path, true, cancellation)?;
     let mut recovery = JournalEntry::default();
     let parked = recovery.reserve(path.parent().unwrap())?;
     recovery.record_intent(path, &parked)?;
     rename_exclusive(path, &parked)?;
     if let Err(error) = version
-        .matches(&parked)
+        .matches(&parked, cancellation)
         .and_then(|_| protect(&parked, true, cancellation))
     {
         if let Err(restore) = rename_exclusive(&parked, path) {
@@ -748,7 +750,13 @@ fn complete_outbound_move(
     Ok(())
 }
 
-fn moved_versions(changes: &[PathChange]) -> BTreeMap<PathBuf, DiskVersion> {
+/// Versions of everything a move landed, so open editors can re-adopt a
+/// baseline. Cancellable, and a partial map is safe: callers look each path up
+/// individually and keep their existing version when one is missing.
+fn moved_versions(
+    changes: &[PathChange],
+    cancellation: &Cancellation,
+) -> BTreeMap<PathBuf, DiskVersion> {
     let mut versions = BTreeMap::new();
     let mut pending: Vec<_> = changes
         .iter()
@@ -756,6 +764,9 @@ fn moved_versions(changes: &[PathChange]) -> BTreeMap<PathBuf, DiskVersion> {
         .filter_map(|c| c.new.clone())
         .collect();
     while let Some(path) = pending.pop() {
+        if check_cancel(cancellation).is_err() {
+            break;
+        }
         let Ok(metadata) = fs::symlink_metadata(&path) else {
             continue;
         };
@@ -782,7 +793,7 @@ fn native_trash(
     let backup = journal.reserve(source.parent().unwrap())?;
     let original = DiskVersion::read_cancellable(source, &request.cancellation)?;
     copy_tree(source, &backup, &request.cancellation)?;
-    original.matches(source)?;
+    original.matches(source, &request.cancellation)?;
     if !original.same_contents(&DiskVersion::read(&backup)?) {
         return Err(invalid("File changed while preparing Trash"));
     }
@@ -845,7 +856,7 @@ fn native_trash(
                     backup.display()
                 )));
             }
-            Ok(true) if original.matches(source).is_ok() => {}
+            Ok(true) if original.matches(source, &request.cancellation).is_ok() => {}
             Ok(true) => {
                 for area in std::mem::take(&mut journal.areas) {
                     let _ = area.keep();
@@ -938,7 +949,9 @@ fn transfer(
                 let step = journal.steps.last().unwrap();
                 let rollback = step
                     .version
-                    .matches(&step.to)
+                    // Deliberately uncancellable: this is the rollback, and abandoning
+                    // it halfway strands parked data in a temporary directory.
+                    .matches(&step.to, &Cancellation::default())
                     .and_then(|_| journal.record_intent(&step.to, &step.from))
                     .and_then(|_| rename_exclusive(&step.to, &step.from));
                 if let Err(restore) = rollback {
@@ -1078,7 +1091,7 @@ fn transfer_inner(
         let before = DiskVersion::read_cancellable(source, &request.cancellation)?;
         let staged = journal.reserve(destination.parent().unwrap())?;
         copy_tree(source, &staged, &request.cancellation)?;
-        before.matches(source)?;
+        before.matches(source, &request.cancellation)?;
         let staged_version = DiskVersion::read_cancellable(&staged, &request.cancellation)?;
         if !before.same_contents(&staged_version) {
             return Err(invalid("Source changed while copying"));
@@ -1094,7 +1107,7 @@ fn transfer_inner(
             .get(&destination)
             .ok_or_else(|| invalid("Destination changed while copying"))?
             .expected;
-        expected.matches(&destination)?;
+        expected.matches(&destination, &request.cancellation)?;
         let parked = journal.reserve(destination.parent().unwrap())?;
         journal.move_known(destination.clone(), parked, expected.clone(), None)?;
     }
@@ -1117,7 +1130,7 @@ fn transfer_inner(
                 before.clone(),
                 Some(change),
             )?;
-            before.matches(&parked)?;
+            before.matches(&parked, &request.cancellation)?;
         }
     } else {
         // Read once, up here: the plain rename needs it, and so does the
@@ -1137,7 +1150,7 @@ fn transfer_inner(
             Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
                 let staged = journal.reserve(destination.parent().unwrap())?;
                 copy_tree(source, &staged, &request.cancellation)?;
-                before.matches(source)?;
+                before.matches(source, &request.cancellation)?;
                 let staged_version = DiskVersion::read_cancellable(&staged, &request.cancellation)?;
                 if !before.same_contents(&staged_version) {
                     return Err(invalid("Source changed while copying"));
@@ -1150,7 +1163,7 @@ fn transfer_inner(
                     before.clone(),
                     Some(change),
                 )?;
-                before.matches(&parked)?;
+                before.matches(&parked, &request.cancellation)?;
             }
             Err(e) => return Err(e),
         }

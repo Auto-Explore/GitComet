@@ -704,3 +704,21 @@ fn transfers_hash_their_trees_a_bounded_number_of_times() {
     // copy back. `copy_tree`'s own read is not hashed and so not counted.
     assert_eq!(copy_passes, 3, "copy");
 }
+
+#[test]
+fn version_checks_stop_when_the_operation_is_cancelled() {
+    // `matches` walks the whole tree, so on a large directory it is one of the
+    // longest things an operation does; it used to run to completion regardless.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("file.txt");
+    fs::write(&path, b"contents").unwrap();
+    let version = DiskVersion::read(&path).unwrap();
+    let cancellation = Cancellation::default();
+
+    assert!(version.matches(&path, &cancellation).is_ok());
+    cancellation.cancel();
+    assert_eq!(
+        version.matches(&path, &cancellation).unwrap_err().kind(),
+        io::ErrorKind::Interrupted,
+    );
+}
