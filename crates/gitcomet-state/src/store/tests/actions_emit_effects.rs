@@ -603,6 +603,7 @@ fn revert_commit_emits_effect() {
             commit: false,
             mainline: Some(2),
             summary,
+            auth: None,
         }] if summary == "revert me"
     ));
     assert_eq!(state.repos[0].local_actions_in_flight, 1);
@@ -2382,6 +2383,9 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
          to re-derive or reorder them"
     );
 
+    // The messages above never finished; Continue/Abort wait for those
+    // (`continue_and_abort_wait_for_a_running_local_action`).
+    state.repos[0].local_actions_in_flight = 0;
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -2395,6 +2399,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             auth: None,
         }]
     ));
+    state.repos[0].local_actions_in_flight = 0;
 
     let effects = reduce(
         &mut repos,
@@ -4063,6 +4068,47 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
         Loadable::NotLoaded
     ));
     assert_eq!(state.repos[0].pending.force_push_lease, None);
+}
+
+#[test]
+fn continue_and_abort_wait_for_a_running_local_action() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    // A revert's commit step still running while REVERT_HEAD is on disk.
+    state.repos[0].local_actions_in_flight = 1;
+
+    for msg in [
+        Msg::RebaseAbort { repo_id },
+        Msg::RebaseContinue { repo_id },
+    ] {
+        let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
+        assert!(effects.is_empty(), "{effects:?}");
+    }
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+    assert!(
+        state
+            .notifications
+            .iter()
+            .any(|notification| notification.message.contains("Wait for the running Git")),
+        "a blocked Continue/Abort should say why"
+    );
+
+    state.repos[0].local_actions_in_flight = 0;
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RebaseAbort { repo_id },
+    );
+    assert!(matches!(effects.as_slice(), [Effect::RebaseAbort { .. }]));
 }
 
 #[test]

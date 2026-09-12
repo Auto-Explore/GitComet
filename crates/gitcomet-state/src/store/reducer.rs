@@ -142,6 +142,25 @@ fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
     }
 }
 
+/// Continue and Abort act on sequencer state another command may still be
+/// writing: a revert shows REVERT_HEAD while its commit step waits on a slow
+/// signer, and an Abort then would reset under the commit.
+fn sequencer_step_blocked(state: &mut AppState, repo_id: RepoId) -> bool {
+    let busy = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .is_some_and(|repo| repo.local_actions_in_flight > 0);
+    if busy {
+        util::push_notification(
+            state,
+            crate::model::AppNotificationKind::Warning,
+            "Wait for the running Git operation to finish, then continue or abort.".to_string(),
+        );
+    }
+    busy
+}
+
 fn begin_commit_action(state: &mut AppState, repo_id: RepoId) {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
@@ -531,25 +550,21 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
                 }
             }
         }
-        // A failed signing step leaves REVERT_HEAD behind; see CherryPick above.
+        // Replayed whole: the auth may be for the `--no-commit` step (a
+        // promisor fetch), and a revert stopped at its commit step resumes
+        // there with the same hooks skipped, which `revert --continue` would not.
         RepoCommandKind::Revert {
             commit_id,
             commit,
             mainline,
             summary,
-        } => {
-            if commit {
-                Msg::RebaseContinue { repo_id }
-            } else {
-                Msg::RevertCommit {
-                    repo_id,
-                    commit_id,
-                    commit,
-                    mainline,
-                    summary,
-                }
-            }
-        }
+        } => Msg::RevertCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        },
         RepoCommandKind::MergeAbort => Msg::MergeAbort { repo_id },
         RepoCommandKind::CreateTag {
             name,
@@ -686,7 +701,8 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::DeleteRemoteBranches { auth: slot, .. }
         | Effect::PushTag { auth: slot, .. }
         | Effect::DeleteRemoteTag { auth: slot, .. }
-        | Effect::RebaseContinue { auth: slot, .. } => {
+        | Effect::RebaseContinue { auth: slot, .. }
+        | Effect::RevertCommit { auth: slot, .. } => {
             *slot = Some(auth);
         }
         _ => {}
@@ -2020,10 +2036,16 @@ fn reduce_inner(
             actions_emit_effects::rebase(repo_id, onto)
         }
         Msg::RebaseContinue { repo_id } => {
+            if sequencer_step_blocked(state, repo_id) {
+                return Vec::new();
+            }
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase_continue(repo_id)
         }
         Msg::RebaseAbort { repo_id } => {
+            if sequencer_step_blocked(state, repo_id) {
+                return Vec::new();
+            }
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase_abort(repo_id)
         }
@@ -2812,6 +2834,16 @@ fn reduce_inner(
                 (RepoCommandKind::ForceRemoveWorktree { path }, Ok(_)) => Some(path.clone()),
                 _ => None,
             };
+            // Their start cleared the HEAD gitlink cache; reclassify the
+            // retained selection before the completion reloads it.
+            if matches!(
+                &command,
+                RepoCommandKind::CherryPick { .. }
+                    | RepoCommandKind::InteractiveCherryPick { .. }
+                    | RepoCommandKind::Revert { .. }
+            ) {
+                refresh_selected_head_gitlink(repos, state, repo_id);
+            }
 
             let effects =
                 actions_emit_effects::repo_command_finished(state, repo_id, command, result);

@@ -9,17 +9,15 @@ enum AbortMode {
     Revert,
 }
 
-/// A cherry-pick or revert also reports `rebase_in_progress`, so the specific
-/// sequencer states are checked before that fallback.
 fn abort_mode(repo: &RepoState) -> AbortMode {
-    if matches!(&repo.merge_commit_message, Loadable::Ready(Some(_))) {
+    if merge_in_progress(repo) {
         return AbortMode::Merge;
     }
-    match &repo.sequencer_state {
-        Loadable::Ready(SequencerState::CherryPick) => AbortMode::CherryPick,
-        Loadable::Ready(SequencerState::Revert) => AbortMode::Revert,
-        _ if matches!(&repo.rebase_in_progress, Loadable::Ready(true)) => AbortMode::RebaseOrApply,
-        _ => AbortMode::Merge,
+    match active_sequencer_state(repo) {
+        SequencerState::CherryPick => AbortMode::CherryPick,
+        SequencerState::Revert => AbortMode::Revert,
+        SequencerState::RebaseOrApply => AbortMode::RebaseOrApply,
+        SequencerState::None => AbortMode::Merge,
     }
 }
 

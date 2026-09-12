@@ -413,13 +413,22 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.feedback.hook_activity_rev.hash(hasher);
         }
 
+        // The parent list arrives from a lookup issued on open, and the
+        // buttons follow the repo's busy state.
+        PopoverKind::CherryPickCommitConfirm { .. } | PopoverKind::RevertCommitConfirm { .. } => {
+            let lookup = &repo.history_state.commit_lookup;
+            lookup.request.hash(hasher);
+            lookup.reference.hash(hasher);
+            std::mem::discriminant(&lookup.result).hash(hasher);
+            repo.history_state.commit_details_rev.hash(hasher);
+            repo.history_rewrite_busy().hash(hasher);
+        }
+
         // Most prompt-style popovers don't require live state updates.
         PopoverKind::InteractiveRebaseActionMenu { .. }
         | PopoverKind::InteractiveRebaseAutosquashMenu
         | PopoverKind::RebaseReword { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
-        | PopoverKind::CherryPickCommitConfirm { .. }
-        | PopoverKind::RevertCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::ResetPrompt { .. }

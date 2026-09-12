@@ -387,6 +387,7 @@ fn unavailable_git_revert_emits_synthetic_revert_command_error() {
             commit: false,
             mainline: Some(1),
             summary: "revert me".into(),
+            auth: None,
         },
     );
 
@@ -6019,6 +6020,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 commit: true,
                 mainline: None,
                 summary: "revert me".into(),
+                auth: None,
             },
             1,
         ),

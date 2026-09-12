@@ -7,7 +7,7 @@ use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, InteractiveRebaseAction, InteractiveRebaseEntry,
-    REVERT_NOTHING_TO_REVERT_SENTINEL, ResetMode, Result, SequencerState,
+    REVERT_NOTHING_TO_REVERT_SENTINEL, REVERT_SKIP_COMMAND, ResetMode, Result, SequencerState,
 };
 use std::fmt::Write as _;
 use std::fs;
@@ -406,10 +406,10 @@ impl GixRepo {
         }
     }
 
-    /// `revert --no-commit`, then `commit --no-verify --no-edit`: REVERT_HEAD
-    /// appears only once git's merge ran, so refusals leave no state and a
-    /// failed commit step (hook, signer) resumes via `revert --continue`.
-    /// `--no-verify` matches the hooks a one-shot `git revert` runs.
+    /// `revert --no-commit`, then `commit --no-verify -F MERGE_MSG`: REVERT_HEAD
+    /// appears only once git's merge ran, so refusals leave no state, and a
+    /// failed commit step (hook, signer) resumes when this call is replayed.
+    /// Without `commit` the inverse is just staged, like `cherry-pick -n`.
     pub(super) fn revert_with_output_impl(
         &self,
         id: &CommitId,
@@ -418,10 +418,24 @@ impl GixRepo {
     ) -> Result<CommandOutput> {
         validate_hex_commit_id(id)?;
         self.validate_single_pick_mainline("revert", id, mainline)?;
+        let mainline_label = mainline.map_or_else(String::new, |parent| format!(" -m {parent}"));
+        let label = if commit {
+            format!("git revert{mainline_label} {}", id.as_ref())
+        } else {
+            format!("git revert{mainline_label} --no-commit {}", id.as_ref())
+        };
+
+        // The signing-passphrase retry replays this call after its commit
+        // step failed; pick up at that step with the same flags.
+        if commit && self.revert_awaits_commit(id)? {
+            let mut output = self.commit_paused_revert()?;
+            output.command = label;
+            return Ok(output);
+        }
 
         // `--no-commit` checks neither of these itself: it would fold staged
-        // work into the revert (which `--abort` then discards) and ignores
-        // another operation's state.
+        // work into the revert and ignores another operation's state (a
+        // closing `--quit` would even delete a leftover sequence).
         if let Some(operation) = self.revert_blocking_operation() {
             return Err(Error::new(ErrorKind::Backend(format!(
                 "revert: {operation} is in progress; finish or abort it first"
@@ -433,52 +447,50 @@ impl GixRepo {
             )));
         }
 
-        let mainline_label = mainline.map_or_else(String::new, |parent| format!(" -m {parent}"));
-        let label = if commit {
-            format!("git revert{mainline_label} {}", id.as_ref())
-        } else {
-            format!("git revert{mainline_label} --no-commit {}", id.as_ref())
-        };
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("revert").arg("--no-commit");
         if let Some(parent) = mainline {
             cmd.arg("-m").arg(parent.to_string());
         }
         cmd.arg("--").arg(id.as_ref());
-        let output = run_git_raw_output(cmd, &label)?;
-        if !output.status.success() {
-            return Err(git_command_failed_error(&label, output));
-        }
-
-        let mut acc = CommandOutput {
-            command: label,
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: None,
-        };
-        append_raw_output(&mut acc, &output);
+        let mut output = run_git_with_output(cmd, &label)?;
         if self.index_matches_head()? {
             let mut quit = self.git_workdir_cmd();
             quit.arg("revert").arg("--quit");
             run_git_with_output(quit, "git revert --quit")?;
-            acc.stdout = REVERT_NOTHING_TO_REVERT_SENTINEL.to_string();
-            acc.exit_code = Some(0);
-            return Ok(acc);
+            output.stdout = REVERT_NOTHING_TO_REVERT_SENTINEL.to_string();
+            return Ok(output);
         }
         if !commit {
-            return Ok(acc);
+            // MERGE_MSG stays as the next commit's template, as after `cherry-pick -n`.
+            let mut drop_head = self.git_workdir_cmd();
+            drop_head.args(["update-ref", "-d", "REVERT_HEAD"]);
+            run_git_with_output(drop_head, "git update-ref -d REVERT_HEAD")?;
+            return Ok(output);
         }
+        append_command_output(&mut output, self.commit_paused_revert()?);
+        Ok(output)
+    }
 
-        let commit_label = "git commit --no-verify --no-edit";
-        let mut commit_cmd = self.git_workdir_cmd();
-        commit_cmd.env("GIT_EDITOR", "true");
-        commit_cmd.args(["commit", "--no-verify", "--no-edit"]);
-        let commit_output = run_git_raw_output(commit_cmd, commit_label)?;
-        if !commit_output.status.success() {
-            return Err(git_command_failed_error(commit_label, commit_output));
-        }
-        append_raw_output(&mut acc, &commit_output);
-        Ok(acc)
+    /// Commits a paused revert with the message, hooks, and `revert:` reflog
+    /// entry of a one-shot `git revert` (`--no-edit` would also prepend a
+    /// stale SQUASH_MSG).
+    fn commit_paused_revert(&self) -> Result<CommandOutput> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.env("GIT_REFLOG_ACTION", "revert");
+        cmd.args(["commit", "--no-verify", "-F"])
+            .arg(self.repo().path().join("MERGE_MSG"));
+        run_git_with_output(cmd, "git commit --no-verify -F MERGE_MSG")
+    }
+
+    /// Whether `id` is a single revert stopped only at its commit step.
+    fn revert_awaits_commit(&self, id: &CommitId) -> Result<bool> {
+        let git_dir = self.repo().path().to_path_buf();
+        let stopped_on = fs::read_to_string(git_dir.join("REVERT_HEAD")).unwrap_or_default();
+        Ok(stopped_on.trim().eq_ignore_ascii_case(id.as_ref())
+            && !git_dir.join("sequencer").exists()
+            && !self.index_has_conflicts()
+            && !self.index_matches_head()?)
     }
 
     /// A single revert has no todo to advance past an empty resolution:
@@ -486,9 +498,10 @@ impl GixRepo {
     /// only Continue and Abort, so such a stop is skipped instead.
     fn revert_continue_with_output(&self) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        if !self.index_has_conflicts() && self.index_matches_head()? {
+        // A sequence left without REVERT_HEAD has no stopped step to skip.
+        if self.revert_head_exists() && !self.index_has_conflicts() && self.index_matches_head()? {
             cmd.arg("revert").arg("--skip");
-            return run_git_with_output(cmd, "git revert --skip");
+            return run_git_with_output(cmd, REVERT_SKIP_COMMAND);
         }
         // Git already skips the editor without a tty; this covers platforms
         // where that check misfires.
@@ -508,13 +521,42 @@ impl GixRepo {
             Some(InProgress::CherryPick | InProgress::CherryPickSequence) => Some("a cherry-pick"),
             Some(InProgress::Merge) => Some("a merge"),
             Some(InProgress::Revert | InProgress::RevertSequence) => Some("a revert"),
-            Some(InProgress::Bisect) | None => self.revert_head_exists().then_some("a revert"),
+            Some(InProgress::Bisect) if self.revert_head_exists() => Some("a revert"),
+            Some(InProgress::Bisect) | None => self
+                .repo()
+                .path()
+                .join("sequencer")
+                .exists()
+                .then_some("a cherry-pick or revert sequence"),
         }
     }
 
     /// gix reports a bisect ahead of `REVERT_HEAD`, so probe the file itself.
     fn revert_head_exists(&self) -> bool {
         self.repo().path().join("REVERT_HEAD").is_file()
+    }
+
+    /// A cherry-pick or revert sequence outlives its `*_HEAD` when a stopped
+    /// step is concluded with a plain `git commit`; git still reports it from
+    /// the todo's first command, and so does this.
+    fn leftover_sequence_state(&self) -> SequencerState {
+        let todo = fs::read_to_string(self.repo().path().join("sequencer").join("todo"))
+            .unwrap_or_default();
+        match todo.split_whitespace().next() {
+            Some("pick" | "p") => SequencerState::CherryPick,
+            Some("revert") => SequencerState::Revert,
+            _ => SequencerState::None,
+        }
+    }
+
+    /// Whether any operation state is on disk that a bare `git reset` (which
+    /// clears MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD and the sequencer)
+    /// would silently end.
+    pub(super) fn operation_state_on_disk(&self) -> bool {
+        let repo = self.repo();
+        !matches!(repo.state(), None | Some(gix::state::InProgress::Bisect))
+            || repo.path().join("REVERT_HEAD").is_file()
+            || repo.path().join("sequencer").exists()
     }
 
     /// Whether the index records exactly HEAD's tree, gitlinks included.
@@ -772,17 +814,7 @@ impl GixRepo {
             _ => return Err(git_command_failed_error(&source_label, source_output)),
         }
 
-        let mut cmd = self.git_workdir_cmd();
-        cmd.args(["diff", "--cached", "--quiet"]);
-        let output = run_git_raw_output(cmd, "git diff --cached --quiet")?;
-        match output.status.code() {
-            Some(0) => Ok(true),
-            Some(1) => Ok(false),
-            _ => Err(git_command_failed_error(
-                "git diff --cached --quiet",
-                output,
-            )),
-        }
+        self.index_matches_head()
     }
 
     fn persist_cherry_pick_mainline(&self, source: &str, parent: &str) -> Result<()> {
@@ -949,7 +981,8 @@ impl GixRepo {
             Some(gix::state::InProgress::Bisect) if self.revert_head_exists() => {
                 SequencerState::Revert
             }
-            _ => SequencerState::None,
+            Some(gix::state::InProgress::Bisect) | None => self.leftover_sequence_state(),
+            Some(gix::state::InProgress::Merge) => SequencerState::None,
         };
         if state != SequencerState::CherryPick {
             self.clear_persisted_cherry_pick_mainline();

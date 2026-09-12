@@ -311,6 +311,8 @@ pub enum Effect {
         commit: bool,
         mainline: Option<usize>,
         summary: String,
+        /// Signing or fetch auth staged when a failed revert is replayed.
+        auth: Option<StagedGitAuth>,
     },
     CreateBranch {
         repo_id: RepoId,

@@ -1056,7 +1056,9 @@ impl GixRepo {
 
         if paths.is_empty() {
             if has_commits {
-                if conflicted.is_empty() {
+                // A bare `git reset` would also end a conflict-free operation
+                // in progress (a resolved merge, a stopped revert).
+                if conflicted.is_empty() && !self.operation_state_on_disk() {
                     let mut cmd = self.git_workdir_cmd();
                     cmd.arg("reset");
                     return run_git_simple(cmd, "git reset");

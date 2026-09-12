@@ -623,8 +623,8 @@ pub(super) fn dialog_cancel_button(
     theme: AppTheme,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Stateful<gpui::Div> {
-    cancel_button(id, hint_debug_selector, theme).on_click(theme, cx, |this, _e, _w, cx| {
-        this.close_popover(cx);
+    cancel_button(id, hint_debug_selector, theme).on_click(theme, cx, |this, _e, window, cx| {
+        this.close_popover_and_restore_focus(window, cx);
     })
 }
 

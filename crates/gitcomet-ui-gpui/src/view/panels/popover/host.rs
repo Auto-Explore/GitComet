@@ -2418,11 +2418,16 @@ impl PopoverHost {
         // tooltip from re-showing on top of the popover.
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(true, cx);
         self.request_lazy_popover_repo_data(&kind);
-        if matches!(
-            &kind,
-            PopoverKind::CherryPickCommitConfirm { .. } | PopoverKind::RevertCommitConfirm { .. }
-        ) {
+        if let PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }
+        | PopoverKind::RevertCommitConfirm { repo_id, commit_id } = &kind
+        {
             self.commit_mainline = None;
+            // History rows can omit a merge's parents; the dialogs wait for
+            // the commit object's own list.
+            self.store.dispatch(Msg::ResolveCommitLookup {
+                repo_id: *repo_id,
+                reference: commit_id.clone(),
+            });
         }
         self.menu_invoker_focus = if matches!(
             &kind,
@@ -2430,6 +2435,8 @@ impl PopoverHost {
                 | PopoverKind::AddRepoMenu
                 | PopoverKind::StageConflictMarkersConfirm { .. }
                 | PopoverKind::CommitMenu { .. }
+                | PopoverKind::CherryPickCommitConfirm { .. }
+                | PopoverKind::RevertCommitConfirm { .. }
                 | PopoverKind::PushPicker
                 | PopoverKind::Repo {
                     kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),

@@ -1482,8 +1482,8 @@ fn summarize_command(
         RepoCommandKind::Rebase { onto } => format!("Rebase onto {onto}: Completed"),
         RepoCommandKind::RebaseContinue => {
             let operation = sequencer_operation_label(output, None);
-            if output.command == "git revert --skip" {
-                "Revert: Skipped; the resolution left nothing to commit".to_string()
+            if output.command == gitcomet_core::services::REVERT_SKIP_COMMAND {
+                "Revert: Skipped the revert the resolution left empty".to_string()
             } else if sequencer_paused(output) {
                 format!("{operation}: Paused at the next conflict")
             } else {
@@ -2675,9 +2675,9 @@ mod tests {
                 "Revert: Continued",
             ),
             (
-                "git revert --skip",
+                gitcomet_core::services::REVERT_SKIP_COMMAND,
                 RepoCommandKind::RebaseContinue,
-                "Revert: Skipped; the resolution left nothing to commit",
+                "Revert: Skipped the revert the resolution left empty",
             ),
             (
                 "git revert --abort",

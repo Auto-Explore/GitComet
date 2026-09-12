@@ -1384,6 +1384,7 @@ pub(super) fn schedule_revert_commit(
     commit: bool,
     mainline: Option<usize>,
     summary: String,
+    auth: Option<StagedGitAuth>,
 ) {
     let command_commit_id = commit_id.clone();
     schedule_repo_command(
@@ -1397,7 +1398,11 @@ pub(super) fn schedule_revert_commit(
             mainline,
             summary,
         },
-        move |repo| repo.revert_with_output(&commit_id, commit, mainline),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.revert_with_output(&commit_id, commit, mainline)
+            })
+        },
     );
 }
 

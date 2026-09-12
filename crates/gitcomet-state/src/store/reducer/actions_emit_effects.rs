@@ -78,6 +78,7 @@ pub(super) fn revert_commit(
         commit,
         mainline,
         summary,
+        auth: None,
     }]
 }
 

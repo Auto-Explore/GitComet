@@ -467,6 +467,12 @@ impl Render for ActionBarView {
             .and_then(sequencer_banner);
         let rebase_has_unstaged_conflicts =
             self.active_repo().is_some_and(|r| r.has_unstaged_conflicts);
+        // A revert shows REVERT_HEAD while its commit step still runs; the
+        // reducer also refuses Continue/Abort until it finishes.
+        let sequencer_step_busy = self
+            .active_repo()
+            .is_some_and(|r| r.local_actions_in_flight > 0);
+        const SEQUENCER_BUSY_TOOLTIP: &str = "Wait for the running Git operation to finish";
 
         let (pull_count, push_count) = self
             .active_repo()
@@ -1062,6 +1068,7 @@ impl Render for ActionBarView {
                                 .child(
                                     components::Button::new(banner.abort_id, "Abort")
                                         .style(components::ButtonStyle::Danger)
+                                        .disabled(sequencer_step_busy)
                                         .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
                                             if let Some(repo_id) = this.active_repo_id() {
                                                 this.open_popover_at(
@@ -1071,12 +1078,20 @@ impl Render for ActionBarView {
                                                     cx,
                                                 );
                                             }
+                                        })
+                                        .when(sequencer_step_busy, |button| {
+                                            button.gitcomet_tooltip(
+                                                theme,
+                                                SEQUENCER_BUSY_TOOLTIP.into(),
+                                            )
                                         }),
                                 )
                                 .child(
                                     components::Button::new(banner.continue_id, "Continue")
                                         .style(components::ButtonStyle::Outlined)
-                                        .disabled(rebase_has_unstaged_conflicts)
+                                        .disabled(
+                                            rebase_has_unstaged_conflicts || sequencer_step_busy,
+                                        )
                                         .on_click(theme, cx, |this, _e, _w, _cx| {
                                             if let Some(repo_id) = this.active_repo_id() {
                                                 this.store
@@ -1085,7 +1100,9 @@ impl Render for ActionBarView {
                                         })
                                         .gitcomet_tooltip(
                                             theme,
-                                            if rebase_has_unstaged_conflicts {
+                                            if sequencer_step_busy {
+                                                SEQUENCER_BUSY_TOOLTIP.into()
+                                            } else if rebase_has_unstaged_conflicts {
                                                 "Resolve all conflicts before continuing".into()
                                             } else {
                                                 banner.continue_tooltip.into()

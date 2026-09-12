@@ -998,6 +998,62 @@ fn intentionally_empty_cherry_pick_signing_failure_is_not_auto_skipped() {
 }
 
 #[test]
+fn gitlink_pick_signing_failure_is_not_mistaken_for_already_applied() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    // A gitlink with no checkout, as for an uninitialized submodule.
+    fs::create_dir_all(repo.join("sub")).expect("create submodule dir");
+    run_git(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{base},sub"),
+        ],
+    );
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "add gitlink"],
+    );
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let bumped = commit_file(&repo, "other.txt", "other\n", "other");
+    run_git(
+        &repo,
+        &[
+            "update-index",
+            "--cacheinfo",
+            &format!("160000,{bumped},sub"),
+        ],
+    );
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "bump gitlink"],
+    );
+    let picked = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    run_git(&repo, &["checkout", "main"]);
+    run_git(&repo, &["config", "diff.ignoreSubmodules", "all"]);
+    run_git(&repo, &["config", "commit.gpgsign", "true"]);
+    run_git(&repo, &["config", "gpg.program", "false"]);
+
+    let error = open_backend(&repo)
+        .cherry_pick_with_output(&commit_id(&picked), true, None)
+        .expect_err("a signing failure must not be reported as already applied");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("sign") || message.contains("gpg"),
+        "unexpected signing error: {message}"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "CHERRY_PICK_HEAD"]),
+        picked
+    );
+}
+
+#[test]
 fn intentionally_empty_merge_signing_failure_is_not_auto_skipped() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");

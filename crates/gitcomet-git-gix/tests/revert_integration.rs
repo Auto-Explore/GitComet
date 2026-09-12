@@ -151,7 +151,7 @@ fn revert_with_commit_creates_revert_commit() {
 }
 
 #[test]
-fn revert_without_commit_stages_inverse_and_pauses_in_revert_state() {
+fn revert_without_commit_only_stages_the_inverse() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");
     let change = setup_revertable_repo(&repo);
@@ -163,41 +163,18 @@ fn revert_without_commit_stages_inverse_and_pauses_in_revert_state() {
     assert_eq!(output.command, format!("git revert --no-commit {change}"));
     assert_eq!(head(&repo), change);
     assert_eq!(status(&repo), "M  file.txt");
-    assert_eq!(sequencer_state(&repo), SequencerState::Revert);
-    assert!(open_backend(&repo).rebase_in_progress().unwrap());
-    assert_eq!(git_stdout(&repo, &["rev-parse", "REVERT_HEAD"]), change);
-
-    let output = open_backend(&repo)
-        .rebase_continue_with_output()
-        .expect("continue commits the staged revert");
-
-    assert_eq!(output.command, "git revert --continue");
-    assert_eq!(
-        git_stdout(&repo, &["log", "-1", "--format=%s"]),
-        "Revert \"change\""
+    // Like `cherry-pick -n`: no operation left in progress, but MERGE_MSG
+    // stays as the next commit's template.
+    assert_eq!(sequencer_state(&repo), SequencerState::None);
+    assert!(!repo.join(".git/REVERT_HEAD").exists());
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "--no-edit"],
     );
-    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD~1"]), change);
-    assert_eq!(status(&repo), "");
-    assert_no_revert_state(&repo);
-}
-
-#[test]
-fn revert_without_commit_abort_restores_previous_state() {
-    let dir = tempfile::tempdir().expect("create tempdir");
-    let repo = dir.path().join("repo");
-    let change = setup_revertable_repo(&repo);
-    open_backend(&repo)
-        .revert_with_output(&commit_id(&change), false, None)
-        .expect("revert --no-commit");
-
-    let output = open_backend(&repo)
-        .rebase_abort_with_output()
-        .expect("abort the paused revert");
-
-    assert_eq!(output.command, "git revert --abort");
-    assert_eq!(head(&repo), change);
-    assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "new\n");
-    assert_eq!(status(&repo), "");
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        format!("Revert \"change\"\n\nThis reverts commit {change}.")
+    );
     assert_no_revert_state(&repo);
 }
 
@@ -518,18 +495,169 @@ fn signing_failure_leaves_a_resumable_revert() {
     assert_eq!(status(&repo), "M  file.txt");
     assert_eq!(sequencer_state(&repo), SequencerState::Revert);
 
+    // The auth retry replays the revert, which resumes at the commit step.
     run_git(&repo, &["config", "commit.gpgsign", "false"]);
     let output = open_backend(&repo)
+        .revert_with_output(&commit_id(&change), true, None)
+        .expect("replay after fixing the signer");
+
+    assert_eq!(output.command, format!("git revert {change}"));
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        format!("Revert \"change\"\n\nThis reverts commit {change}.")
+    );
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD~1"]), change);
+    assert_eq!(status(&repo), "");
+    assert_no_revert_state(&repo);
+}
+
+#[cfg(unix)]
+#[test]
+fn replayed_revert_commits_with_the_same_hooks_skipped() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let change = setup_revertable_repo(&repo);
+    run_git(&repo, &["config", "commit.gpgsign", "true"]);
+    run_git(&repo, &["config", "gpg.program", "false"]);
+    open_backend(&repo)
+        .revert_with_output(&commit_id(&change), true, None)
+        .expect_err("signing failure");
+    install_hook(&repo, "pre-commit", "#!/bin/sh\nexit 1\n");
+    install_hook(&repo, "commit-msg", "#!/bin/sh\nexit 1\n");
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+
+    open_backend(&repo)
+        .revert_with_output(&commit_id(&change), true, None)
+        .expect("the replay skips pre-commit and commit-msg like the first attempt");
+
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD~1"]), change);
+    assert_no_revert_state(&repo);
+}
+
+#[test]
+fn stale_squash_msg_does_not_leak_into_the_revert() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let change = setup_revertable_repo(&repo);
+    fs::write(
+        repo.join(".git/SQUASH_MSG"),
+        "Squashed commit of the following:\n",
+    )
+    .expect("write stale SQUASH_MSG");
+
+    open_backend(&repo)
+        .revert_with_output(&commit_id(&change), true, None)
+        .expect("revert");
+
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        format!("Revert \"change\"\n\nThis reverts commit {change}.")
+    );
+    assert!(
+        git_stdout(&repo, &["reflog", "-1", "--format=%gs"]).starts_with("revert: "),
+        "the reflog should record a revert"
+    );
+}
+
+#[test]
+fn leftover_cherry_pick_sequence_blocks_revert_and_stays_reported() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "base\n", "base");
+    let reverted = commit_file(&repo, "other.txt", "other\n", "other");
+    run_git(&repo, &["checkout", "-b", "feature", "HEAD~1"]);
+    let first = commit_file(&repo, "file.txt", "feature\n", "first pick");
+    let second = commit_file(&repo, "second.txt", "second\n", "second pick");
+    run_git(&repo, &["checkout", "main"]);
+    commit_file(&repo, "file.txt", "main\n", "main change");
+    let conflict = git_output(&repo, &["cherry-pick", &first, &second]);
+    assert!(!conflict.status.success(), "the first pick should conflict");
+    fs::write(repo.join("file.txt"), "resolved\n").expect("resolve");
+    run_git(&repo, &["add", "file.txt"]);
+    // A plain commit concludes the stopped step but keeps the sequence.
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "--no-edit"],
+    );
+    assert!(!repo.join(".git/CHERRY_PICK_HEAD").exists());
+    assert!(repo.join(".git/sequencer/todo").exists());
+
+    assert_eq!(sequencer_state(&repo), SequencerState::CherryPick);
+    let err = open_backend(&repo)
+        .revert_with_output(&commit_id(&reverted), true, None)
+        .expect_err("revert over a leftover sequence");
+    assert!(
+        err.to_string().contains("sequence is in progress"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        repo.join(".git/sequencer/todo").exists(),
+        "the pending pick survives"
+    );
+}
+
+#[test]
+fn leftover_revert_sequence_continues_its_remaining_steps() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let change = setup_conflicting_revert_repo(&repo);
+    let other = commit_file(&repo, "other.txt", "other\n", "other");
+    let conflict = git_output(&repo, &["revert", "--no-edit", &change, &other]);
+    assert!(
+        !conflict.status.success(),
+        "the first revert should conflict"
+    );
+    fs::write(repo.join("file.txt"), "resolved\n").expect("resolve");
+    run_git(&repo, &["add", "file.txt"]);
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "--no-edit"],
+    );
+    assert!(!repo.join(".git/REVERT_HEAD").exists());
+    assert_eq!(sequencer_state(&repo), SequencerState::Revert);
+
+    let output = open_backend(&repo)
         .rebase_continue_with_output()
-        .expect("continue after fixing the signer");
+        .expect("continue the remaining revert");
 
     assert_eq!(output.command, "git revert --continue");
     assert_eq!(
         git_stdout(&repo, &["log", "-1", "--format=%s"]),
-        "Revert \"change\""
+        "Revert \"other\""
     );
-    assert_eq!(status(&repo), "");
-    assert_no_revert_state(&repo);
+    assert!(!repo.join("other.txt").exists());
+    assert_eq!(sequencer_state(&repo), SequencerState::None);
+}
+
+#[test]
+fn unstage_all_keeps_a_stopped_revert_and_a_resolved_merge() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let change = setup_revertable_repo(&repo);
+    run_git(&repo, &["config", "commit.gpgsign", "true"]);
+    run_git(&repo, &["config", "gpg.program", "false"]);
+    open_backend(&repo)
+        .revert_with_output(&commit_id(&change), true, None)
+        .expect_err("signing failure stops the revert");
+
+    open_backend(&repo).unstage(&[]).expect("unstage all");
+
+    // Unstaged now (`status` trims the leading space of " M").
+    assert_eq!(status(&repo), "M file.txt");
+    assert_eq!(sequencer_state(&repo), SequencerState::Revert);
+    assert!(repo.join(".git/MERGE_MSG").exists());
+
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    setup_merge_revert_repo(&repo);
+    run_git(&repo, &["reset", "--hard", "HEAD~1"]);
+    run_git(&repo, &["merge", "--no-ff", "--no-commit", "side"]);
+    assert!(repo.join(".git/MERGE_HEAD").exists());
+
+    open_backend(&repo).unstage(&[]).expect("unstage all");
+
+    assert!(repo.join(".git/MERGE_HEAD").exists(), "the merge survives");
 }
 
 #[cfg(unix)]

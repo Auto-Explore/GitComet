@@ -819,6 +819,7 @@ fn send_unavailable_git_effect_result(
             commit,
             mainline,
             summary,
+            ..
         } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -2331,9 +2332,10 @@ pub(super) fn schedule_effect(
             commit,
             mainline,
             summary,
+            auth,
         } => {
             repo_commands::schedule_revert_commit(
-                executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary,
+                executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary, auth,
             );
         }
         Effect::CreateBranch {
