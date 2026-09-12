@@ -845,7 +845,7 @@ impl PopoverHost {
             hook_activity_history_scroll: ScrollHandle::new(),
             hook_activity_hooks_scroll: ScrollHandle::new(),
             hook_activity_output_scroll: ScrollHandle::new(),
-            cherry_pick_mainline: None,
+            commit_mainline: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
             popover_opened_from_diff_panel: false,
@@ -1126,6 +1126,16 @@ impl PopoverHost {
     #[cfg(test)]
     pub(in crate::view) fn popover_opened_from_diff_panel_for_tests(&self) -> bool {
         self.popover_opened_from_diff_panel
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn context_menu_focus_handle_for_tests(&self) -> FocusHandle {
+        self.context_menu_focus_handle.clone()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn context_menu_selected_ix_for_tests(&self) -> Option<usize> {
+        self.context_menu_selected_ix
     }
 
     /// The box the open popover hangs off, when it was anchored to one.
@@ -2408,8 +2418,11 @@ impl PopoverHost {
         // tooltip from re-showing on top of the popover.
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(true, cx);
         self.request_lazy_popover_repo_data(&kind);
-        if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
-            self.cherry_pick_mainline = None;
+        if matches!(
+            &kind,
+            PopoverKind::CherryPickCommitConfirm { .. } | PopoverKind::RevertCommitConfirm { .. }
+        ) {
+            self.commit_mainline = None;
         }
         self.menu_invoker_focus = if matches!(
             &kind,
@@ -2418,6 +2431,10 @@ impl PopoverHost {
                 | PopoverKind::StageConflictMarkersConfirm { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::PushPicker
+                | PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+                    ..
+                }
         ) {
             window
                 .focused(cx)
@@ -2434,7 +2451,16 @@ impl PopoverHost {
             .diff_panel_focus_handle
             .is_focused(window);
         let is_context_menu = popover_is_context_menu(&kind);
-        let keep_active_invoker = is_context_menu
+        // The remote picker opens from a shortcut or menu, never from a row, so
+        // a row lit by an earlier right-click must not stay lit behind it.
+        let opened_from_row = !matches!(
+            &kind,
+            PopoverKind::Repo {
+                kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+                ..
+            }
+        );
+        let keep_active_invoker = (is_context_menu && opened_from_row)
             || matches!(
                 &kind,
                 PopoverKind::CreateBranchFromRefPrompt { .. }

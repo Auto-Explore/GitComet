@@ -90,6 +90,7 @@ actions!(
         CommandPaletteDismiss,
         ToggleRevealCommit,
         LocateFileInExplorer,
+        OpenRemoteInBrowser,
     ]
 );
 

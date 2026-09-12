@@ -5997,3 +5997,5 @@ fn command_palette_enables_abort_merge_during_a_merge(cx: &mut gpui::TestAppCont
         );
     });
 }
+
+mod open_remote_in_browser;

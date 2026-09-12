@@ -1,6 +1,16 @@
 use super::*;
 
-pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextMenuModel {
+pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextMenuModel {
+    let remote_url = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.remotes.ready())
+        .and_then(|remotes| remotes.iter().find(|remote| remote.name == name))
+        .and_then(|remote| remote.url.as_deref());
+    let web_url = remote_url.and_then(crate::view::permalink::remote_web_url);
+
     let mut items = vec![ContextMenuItem::Header("Remote".into())];
     items.push(ContextMenuItem::Label(name.to_owned().into()));
     items.push(ContextMenuItem::Separator);
@@ -26,6 +36,22 @@ pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &str) -> Context
         action: Box::new(ContextMenuAction::PruneLocalTags { repo_id }),
     });
     items.push(ContextMenuItem::Separator);
+
+    let open_in_browser_ix = items.len();
+    let open_in_browser_tooltip = match (&web_url, remote_url) {
+        (Some(url), _) => url.clone(),
+        (None, Some(_)) => "This remote's URL doesn't point to a web page".to_owned(),
+        (None, None) => "This remote has no URL".to_owned(),
+    };
+    items.push(ContextMenuItem::Entry {
+        label: "Open in web browser".into(),
+        icon: Some("icons/link.svg".into()),
+        shortcut: None,
+        disabled: web_url.is_none(),
+        action: Box::new(ContextMenuAction::OpenWebUrl {
+            url: web_url.unwrap_or_default(),
+        }),
+    });
 
     for (label, kind) in [
         ("Edit fetch URL…", RemoteUrlKind::Fetch),
@@ -64,5 +90,8 @@ pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &str) -> Context
         }),
     });
 
-    ContextMenuModel::new(items)
+    ContextMenuModel::new(items).with_entry_tooltips(FxHashMap::from_iter([(
+        open_in_browser_ix,
+        SharedString::from(open_in_browser_tooltip),
+    )]))
 }

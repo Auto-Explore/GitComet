@@ -1143,8 +1143,72 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         }] if path == &PathBuf::from("vendor/lib")
     ));
 
+    // A committing revert that failed to sign left REVERT_HEAD: continue it.
+    let revert_effects = replay_case(RepoCommandKind::Revert {
+        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+        commit: true,
+        mainline: Some(1),
+        summary: "revert me".to_string(),
+    });
+    assert!(matches!(
+        revert_effects.as_slice(),
+        [Effect::RebaseContinue {
+            repo_id: RepoId(1),
+            auth: Some(_),
+        }]
+    ));
+
+    let revert_no_commit_effects = replay_case(RepoCommandKind::Revert {
+        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+        commit: false,
+        mainline: Some(1),
+        summary: "revert me".to_string(),
+    });
+    assert!(matches!(
+        revert_no_commit_effects.as_slice(),
+        [Effect::RevertCommit {
+            repo_id: RepoId(1),
+            commit: false,
+            mainline: Some(1),
+            ..
+        }]
+    ));
+
     let non_replayable_effects = replay_case(RepoCommandKind::StageHunk);
     assert!(non_replayable_effects.is_empty());
+}
+
+#[test]
+fn revert_signing_passphrase_failure_sets_passphrase_prompt() {
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let command = RepoCommandKind::Revert {
+        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+        commit: true,
+        mainline: None,
+        summary: "revert me".to_string(),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: command.clone(),
+            result: Err(auth_error(
+                "git commit --no-verify --no-edit failed: Enter passphrase for key '/home/user/.ssh/id_ed25519': terminal prompts disabled",
+            )),
+        }),
+    );
+
+    let prompt = state.auth_prompt.expect("expected auth prompt");
+    assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
+    assert_eq!(
+        prompt.operation,
+        AuthRetryOperation::RepoCommand { repo_id, command }
+    );
 }
 
 #[test]

@@ -487,6 +487,32 @@ fn copying_file_history_sha_keeps_picker_open(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn file_history_row_revert_opens_the_revert_confirmation(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    file_history_picker!(cx, host);
+    right_click_history_row(cx);
+    cx.update(|window, app| {
+        host.update(app, |host, cx| {
+            let action = picker_row_menu::nav_actions(host, cx)
+                .unwrap()
+                .into_iter()
+                .find(|action| matches!(action, ContextMenuAction::RevertCommit { .. }))
+                .expect("file history rows offer Revert");
+            picker_row_menu::activate(host, action, window, cx);
+            assert_eq!(
+                host.popover_kind_for_tests(),
+                Some(PopoverKind::RevertCommitConfirm {
+                    repo_id: RepoId(1),
+                    commit_id: commit(1).id,
+                })
+            );
+        })
+    });
+    draw_picker(cx);
+    assert!(cx.update(|_, app| host.read(app).is_open()));
+}
+
+#[gpui::test]
 fn file_history_enter_activates_row_and_closes_picker(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     cx.update(crate::app::bind_text_input_keys_for_test);

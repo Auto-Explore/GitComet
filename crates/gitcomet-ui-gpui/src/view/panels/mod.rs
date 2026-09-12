@@ -12,6 +12,8 @@ pub(in crate::view) enum AppMenuAction {
     /// variant here, whether it can run is carried by the menu item's own
     /// `disabled` flag rather than duplicated in the payload.
     LocateFileInExplorer,
+    /// Open the active repository's remote in the browser, or its picker.
+    OpenRemoteInBrowser,
     Settings,
     OpenInCodeEditor {
         path: Option<std::path::PathBuf>,

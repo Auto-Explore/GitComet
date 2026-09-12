@@ -68,8 +68,17 @@ pub(super) fn cherry_pick_commit(
 pub(super) fn revert_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
+    commit: bool,
+    mainline: Option<usize>,
+    summary: String,
 ) -> Vec<Effect> {
-    vec![Effect::RevertCommit { repo_id, commit_id }]
+    vec![Effect::RevertCommit {
+        repo_id,
+        commit_id,
+        commit,
+        mainline,
+        summary,
+    }]
 }
 
 pub(super) fn create_branch(repo_id: RepoId, name: String, target: String) -> Vec<Effect> {
@@ -1005,6 +1014,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveRebase { .. }
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::Revert { .. }
             | RepoCommandKind::MergeAbort
             | RepoCommandKind::CreateTag { .. }
             | RepoCommandKind::DeleteTag { .. }
@@ -1052,6 +1062,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveRebase { .. }
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::Revert { .. }
             | RepoCommandKind::MergeAbort
     )
 }
@@ -1204,6 +1215,7 @@ pub(super) fn repo_command_finished(
                     | RepoCommandKind::InteractiveRebase { .. }
                     | RepoCommandKind::InteractiveCherryPick { .. }
                     | RepoCommandKind::CherryPick { .. }
+                    | RepoCommandKind::Revert { .. }
                     | RepoCommandKind::MergeAbort
             ) {
                 repo_state.set_diff_target(None);

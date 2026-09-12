@@ -6,8 +6,8 @@ use crate::util::{
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
-    CommandOutput, InteractiveRebaseAction, InteractiveRebaseEntry, ResetMode, Result,
-    SequencerState,
+    CommandOutput, InteractiveRebaseAction, InteractiveRebaseEntry,
+    REVERT_NOTHING_TO_REVERT_SENTINEL, ResetMode, Result, SequencerState,
 };
 use std::fmt::Write as _;
 use std::fs;
@@ -294,37 +294,7 @@ impl GixRepo {
         mainline: Option<usize>,
     ) -> Result<CommandOutput> {
         validate_hex_commit_id(id)?;
-
-        // Validate mainline selection before invoking git so a stale or
-        // malformed UI request cannot leave cherry-pick state behind.
-        let repo = self.repo();
-        let parent_ids = peel_commit(&repo, id.as_ref())?
-            .parent_ids()
-            .map(|parent| parent.detach().to_string())
-            .collect::<Vec<_>>();
-        let parent_count = parent_ids.len();
-        let short = id.as_ref().get(..8).unwrap_or(id.as_ref());
-        match (parent_count > 1, mainline) {
-            (true, None) => {
-                return Err(Error::new(ErrorKind::Backend(format!(
-                    "cherry-pick: {short} is a merge commit with {parent_count} parents; choose a \
-                     mainline parent"
-                ))));
-            }
-            (true, Some(parent)) if parent == 0 || parent > parent_count => {
-                return Err(Error::new(ErrorKind::Backend(format!(
-                    "cherry-pick: mainline parent {parent} is invalid for merge commit {short}; \
-                     choose a parent from 1 to {parent_count}"
-                ))));
-            }
-            (false, Some(_)) => {
-                return Err(Error::new(ErrorKind::Backend(format!(
-                    "cherry-pick: {short} is not a merge commit; a mainline parent cannot be \
-                     selected"
-                ))));
-            }
-            _ => {}
-        }
+        let parent_ids = self.validate_single_pick_mainline("cherry-pick", id, mainline)?;
 
         // A single merge pick has no sequencer todo from which continue-time
         // code can recover `-m`. Keep the exact source/parent pair beside
@@ -402,7 +372,170 @@ impl GixRepo {
         Err(git_command_failed_error(&label, output))
     }
 
+    /// Validates Git's 1-based `-m` parent for a single pick or revert of `id`
+    /// before invoking git, so a stale or malformed UI request cannot leave
+    /// sequencer state behind. Returns the commit's parent ids.
+    fn validate_single_pick_mainline(
+        &self,
+        op: &str,
+        id: &CommitId,
+        mainline: Option<usize>,
+    ) -> Result<Vec<String>> {
+        let repo = self.repo();
+        let parent_ids = peel_commit(&repo, id.as_ref())?
+            .parent_ids()
+            .map(|parent| parent.detach().to_string())
+            .collect::<Vec<_>>();
+        let parent_count = parent_ids.len();
+        let short = id.as_ref().get(..8).unwrap_or(id.as_ref());
+        match (parent_count > 1, mainline) {
+            (true, None) => Err(Error::new(ErrorKind::Backend(format!(
+                "{op}: {short} is a merge commit with {parent_count} parents; choose a mainline \
+                 parent"
+            )))),
+            (true, Some(parent)) if parent == 0 || parent > parent_count => {
+                Err(Error::new(ErrorKind::Backend(format!(
+                    "{op}: mainline parent {parent} is invalid for merge commit {short}; choose a \
+                     parent from 1 to {parent_count}"
+                ))))
+            }
+            (false, Some(_)) => Err(Error::new(ErrorKind::Backend(format!(
+                "{op}: {short} is not a merge commit; a mainline parent cannot be selected"
+            )))),
+            _ => Ok(parent_ids),
+        }
+    }
+
+    /// `revert --no-commit`, then `commit --no-verify --no-edit`: REVERT_HEAD
+    /// appears only once git's merge ran, so refusals leave no state and a
+    /// failed commit step (hook, signer) resumes via `revert --continue`.
+    /// `--no-verify` matches the hooks a one-shot `git revert` runs.
+    pub(super) fn revert_with_output_impl(
+        &self,
+        id: &CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        validate_hex_commit_id(id)?;
+        self.validate_single_pick_mainline("revert", id, mainline)?;
+
+        // `--no-commit` checks neither of these itself: it would fold staged
+        // work into the revert (which `--abort` then discards) and ignores
+        // another operation's state.
+        if let Some(operation) = self.revert_blocking_operation() {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "revert: {operation} is in progress; finish or abort it first"
+            ))));
+        }
+        if !self.index_matches_head()? {
+            return Err(Error::new(ErrorKind::Backend(
+                "revert: the index has staged changes; commit or unstage them first".to_string(),
+            )));
+        }
+
+        let mainline_label = mainline.map_or_else(String::new, |parent| format!(" -m {parent}"));
+        let label = if commit {
+            format!("git revert{mainline_label} {}", id.as_ref())
+        } else {
+            format!("git revert{mainline_label} --no-commit {}", id.as_ref())
+        };
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("revert").arg("--no-commit");
+        if let Some(parent) = mainline {
+            cmd.arg("-m").arg(parent.to_string());
+        }
+        cmd.arg("--").arg(id.as_ref());
+        let output = run_git_raw_output(cmd, &label)?;
+        if !output.status.success() {
+            return Err(git_command_failed_error(&label, output));
+        }
+
+        let mut acc = CommandOutput {
+            command: label,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+        };
+        append_raw_output(&mut acc, &output);
+        if self.index_matches_head()? {
+            let mut quit = self.git_workdir_cmd();
+            quit.arg("revert").arg("--quit");
+            run_git_with_output(quit, "git revert --quit")?;
+            acc.stdout = REVERT_NOTHING_TO_REVERT_SENTINEL.to_string();
+            acc.exit_code = Some(0);
+            return Ok(acc);
+        }
+        if !commit {
+            return Ok(acc);
+        }
+
+        let commit_label = "git commit --no-verify --no-edit";
+        let mut commit_cmd = self.git_workdir_cmd();
+        commit_cmd.env("GIT_EDITOR", "true");
+        commit_cmd.args(["commit", "--no-verify", "--no-edit"]);
+        let commit_output = run_git_raw_output(commit_cmd, commit_label)?;
+        if !commit_output.status.success() {
+            return Err(git_command_failed_error(commit_label, commit_output));
+        }
+        append_raw_output(&mut acc, &commit_output);
+        Ok(acc)
+    }
+
+    /// A single revert has no todo to advance past an empty resolution:
+    /// `revert --continue` refuses it ("nothing to commit") and the UI offers
+    /// only Continue and Abort, so such a stop is skipped instead.
+    fn revert_continue_with_output(&self) -> Result<CommandOutput> {
+        let mut cmd = self.git_workdir_cmd();
+        if !self.index_has_conflicts() && self.index_matches_head()? {
+            cmd.arg("revert").arg("--skip");
+            return run_git_with_output(cmd, "git revert --skip");
+        }
+        // Git already skips the editor without a tty; this covers platforms
+        // where that check misfires.
+        cmd.env("GIT_EDITOR", "true");
+        cmd.arg("revert").arg("--continue");
+        run_git_with_output(cmd, "git revert --continue")
+    }
+
+    /// The in-progress operation a new revert would collide with.
+    fn revert_blocking_operation(&self) -> Option<&'static str> {
+        use gix::state::InProgress;
+        match self.repo().state() {
+            Some(InProgress::Rebase | InProgress::RebaseInteractive) => Some("a rebase"),
+            Some(InProgress::ApplyMailbox | InProgress::ApplyMailboxRebase) => {
+                Some("a patch apply")
+            }
+            Some(InProgress::CherryPick | InProgress::CherryPickSequence) => Some("a cherry-pick"),
+            Some(InProgress::Merge) => Some("a merge"),
+            Some(InProgress::Revert | InProgress::RevertSequence) => Some("a revert"),
+            Some(InProgress::Bisect) | None => self.revert_head_exists().then_some("a revert"),
+        }
+    }
+
+    /// gix reports a bisect ahead of `REVERT_HEAD`, so probe the file itself.
+    fn revert_head_exists(&self) -> bool {
+        self.repo().path().join("REVERT_HEAD").is_file()
+    }
+
+    /// Whether the index records exactly HEAD's tree, gitlinks included.
+    fn index_matches_head(&self) -> Result<bool> {
+        let label = "git diff --cached --quiet --ignore-submodules=none";
+        let mut cmd = self.git_workdir_cmd();
+        cmd.args(["diff", "--cached", "--quiet", "--ignore-submodules=none"]);
+        let output = run_git_raw_output(cmd, label)?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(git_command_failed_error(label, output)),
+        }
+    }
+
     pub(super) fn rebase_continue_with_output_impl(&self) -> Result<CommandOutput> {
+        // `cherry-pick --continue` refuses a revert sequence, and the fallback
+        // chain below would report "no rebase in progress" over its error.
+        if self.sequencer_state_impl()? == SequencerState::Revert {
+            return self.revert_continue_with_output();
+        }
         let mut cmd = self.git_workdir_cmd();
         let repo = self.repo();
         match persisted_reword_state(repo.path()) {
@@ -749,6 +882,11 @@ impl GixRepo {
     }
 
     pub(super) fn rebase_abort_with_output_impl(&self) -> Result<CommandOutput> {
+        if self.sequencer_state_impl()? == SequencerState::Revert {
+            let mut cmd = self.git_workdir_cmd();
+            cmd.arg("revert").arg("--abort");
+            return run_git_with_output(cmd, "git revert --abort");
+        }
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("rebase").arg("--abort");
         match run_git_with_output(cmd, "git rebase --abort") {
@@ -805,6 +943,12 @@ impl GixRepo {
             Some(
                 gix::state::InProgress::CherryPick | gix::state::InProgress::CherryPickSequence,
             ) => SequencerState::CherryPick,
+            Some(gix::state::InProgress::Revert | gix::state::InProgress::RevertSequence) => {
+                SequencerState::Revert
+            }
+            Some(gix::state::InProgress::Bisect) if self.revert_head_exists() => {
+                SequencerState::Revert
+            }
             _ => SequencerState::None,
         };
         if state != SequencerState::CherryPick {
