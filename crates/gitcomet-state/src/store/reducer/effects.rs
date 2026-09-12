@@ -2916,14 +2916,16 @@ pub(super) fn resolve_commit_lookup(
     state: &mut AppState,
     repo_id: RepoId,
     reference: CommitId,
+    purpose: crate::model::CommitLookupPurpose,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    let request = repo_state.begin_commit_lookup(reference.clone());
+    let request = repo_state.begin_commit_lookup(purpose, reference.clone());
     vec![Effect::ResolveCommitLookup {
         repo_id,
         reference,
+        purpose,
         request,
     }]
 }
@@ -2933,20 +2935,21 @@ pub(super) fn commit_lookup_resolved(
     repo_id: RepoId,
     reference: CommitId,
     request: u64,
+    purpose: crate::model::CommitLookupPurpose,
     result: std::result::Result<Commit, Error>,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
     // A reply for a reference the user has already typed past.
-    if repo_state.history_state.commit_lookup.reference.as_ref() != Some(&reference) {
+    if repo_state.commit_lookup_mut(purpose).reference.as_ref() != Some(&reference) {
         return Vec::new();
     }
     let value = match result {
         Ok(commit) => Loadable::Ready(commit),
         Err(e) => Loadable::Error(e.to_string()),
     };
-    repo_state.finish_commit_lookup(request, value);
+    repo_state.finish_commit_lookup(purpose, request, value);
     Vec::new()
 }
 

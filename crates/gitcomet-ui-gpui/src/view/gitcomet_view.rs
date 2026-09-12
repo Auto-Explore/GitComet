@@ -169,6 +169,7 @@ impl GitCometView {
             sequencer: repo.is_some_and(|repo| {
                 active_sequencer_state(repo) != gitcomet_core::services::SequencerState::None
             }),
+            sequencer_busy: repo.is_some_and(|repo| repo.sequencer_actions_in_flight > 0),
             unresolved_conflicts: repo.is_some_and(|repo| repo.has_unstaged_conflicts),
             push_with_tags_unavailable: gitcomet_core::tag_push::TagPushMode::ALL
                 .map(|mode| host.push_with_tags_unavailable(mode)),

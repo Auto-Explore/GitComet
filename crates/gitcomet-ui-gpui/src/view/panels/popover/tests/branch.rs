@@ -298,10 +298,6 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
-
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
         self.actions
             .lock()

@@ -269,6 +269,57 @@ fn commit_menu_revert_action_opens_confirm_popover(cx: &mut gpui::TestAppContext
 }
 
 #[gpui::test]
+fn revert_confirm_keeps_and_restores_the_commit_menu_invoker_focus(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(1);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = commit_menu_test_repo(repo_id, &commit_id);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        let invoker = app.focus_handle();
+        window.focus(&invoker, app);
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CommitMenu {
+                        repo_id,
+                        commit_id: commit_id.clone(),
+                    },
+                    gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                    window,
+                    cx,
+                );
+                host.context_menu_activate_action(
+                    ContextMenuAction::RevertCommit {
+                        repo_id,
+                        commit_id: commit_id.clone(),
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    host.menu_invoker_focus.as_ref(),
+                    Some(&invoker),
+                    "the dialog must remember what the commit menu was opened from"
+                );
+                host.dismiss_prompt_popover(window, cx);
+            });
+        });
+        assert!(
+            invoker.is_focused(window),
+            "closing the dialog restores focus"
+        );
+    });
+}
+
+#[gpui::test]
 fn commit_menu_hides_cherry_pick_for_current_head(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =

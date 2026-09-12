@@ -3723,6 +3723,66 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
 }
 
 #[gpui::test]
+fn staged_revert_offers_its_message_to_an_empty_commit_box(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(51);
+    let state_with = |message: Option<&str>, rev: u64| {
+        let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo"));
+        repo.suggested_commit_message = message.map(str::to_string);
+        repo.suggested_commit_message_rev = rev;
+        Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        })
+    };
+    let commit_box_text = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let details_pane = view.read(app).details_pane.clone();
+            let pane = details_pane.read(app);
+            pane.commit_message_input.read(app).text().to_string()
+        })
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state_with(None, 0), cx);
+        });
+    });
+    assert_eq!(commit_box_text(cx), "");
+
+    let message = "Revert \"change\"\n\nThis reverts commit deadbeef.";
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state_with(Some(message), 1), cx);
+        });
+    });
+    assert_eq!(commit_box_text(cx), message);
+
+    // A message the user is already writing is never overwritten.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_message_input.update(cx, |input, cx| {
+                    input.set_text("my own words".to_string(), cx)
+                });
+                cx.notify();
+            });
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, state_with(Some("Revert \"other\""), 2), cx);
+        });
+    });
+    assert_eq!(commit_box_text(cx), "my own words");
+}
+
+#[gpui::test]
 fn switching_active_repo_restores_commit_message_draft_per_repo(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

@@ -183,6 +183,7 @@ pub enum Effect {
     ResolveCommitLookup {
         repo_id: RepoId,
         reference: CommitId,
+        purpose: crate::model::CommitLookupPurpose,
         /// Echoed back on the reply so a completion that lost a race against a
         /// newer lookup can be dropped. See `CommitLookup::request`.
         request: u64,
@@ -313,6 +314,8 @@ pub enum Effect {
         commit: bool,
         mainline: Option<usize>,
         summary: String,
+        /// Signing or fetch auth staged when a failed revert is replayed.
+        auth: Option<StagedGitAuth>,
     },
     CreateBranch {
         repo_id: RepoId,

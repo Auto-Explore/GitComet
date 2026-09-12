@@ -112,6 +112,9 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_push_after_enabled: bool,
     pending_commit_amend: Option<PendingCommitAmend>,
     pending_amend_prefill: Option<RepoId>,
+    /// Suggestion (repo and rev) already offered to the commit box, so git's
+    /// prepared message is applied once and never re-applied.
+    applied_commit_suggestion: Option<(RepoId, u64)>,
     pub(in super::super) commit_message_user_edited: bool,
     pub(in super::super) commit_message_last_text: SharedString,
     pub(in super::super) commit_message_programmatic_change: bool,
@@ -311,6 +314,7 @@ impl DetailsPaneView {
             repo.history_state.range_files_rev.hash(&mut hasher);
             repo.worktree_dirty_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
+            repo.suggested_commit_message_rev.hash(&mut hasher);
             repo.recent_commit_messages_rev.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
@@ -524,6 +528,7 @@ impl DetailsPaneView {
             commit_push_after_enabled,
             pending_commit_amend: None,
             pending_amend_prefill: None,
+            applied_commit_suggestion: None,
             commit_message_user_edited: false,
             commit_message_last_text: SharedString::default(),
             commit_message_programmatic_change: false,
@@ -2170,8 +2175,28 @@ impl DetailsPaneView {
         }
 
         self.apply_pending_amend_prefill(cx);
+        self.apply_suggested_commit_message(cx);
 
         self.update_commit_details_delay(cx);
+    }
+
+    /// Offers the message git prepared for the next commit (after a staged
+    /// revert) as the commit box's starting text, once and only when empty.
+    fn apply_suggested_commit_message(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let suggestion = (repo.id, repo.suggested_commit_message_rev);
+        if self.applied_commit_suggestion == Some(suggestion) {
+            return;
+        }
+        let message = repo.suggested_commit_message.clone();
+        self.applied_commit_suggestion = Some(suggestion);
+        if let Some(message) = message
+            && self.commit_message_is_empty(cx)
+        {
+            self.set_commit_message_programmatically(message, cx);
+        }
     }
 
     fn apply_pending_amend_prefill(&mut self, cx: &mut gpui::Context<Self>) {
@@ -2654,10 +2679,11 @@ mod tests {
         assert_ne!(after_range_files, after_details);
 
         state.repos[0].merge_message_rev = 1;
-        assert_ne!(
-            DetailsPaneView::notify_fingerprint(&state),
-            after_range_files
-        );
+        let after_merge = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_merge, after_range_files);
+
+        state.repos[0].suggested_commit_message_rev = 1;
+        assert_ne!(DetailsPaneView::notify_fingerprint(&state), after_merge);
     }
 
     #[test]

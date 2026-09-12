@@ -1492,8 +1492,8 @@ fn summarize_command(
         RepoCommandKind::Rebase { onto } => format!("Rebase onto {onto}: Completed"),
         RepoCommandKind::RebaseContinue => {
             let operation = sequencer_operation_label(output, None);
-            if output.command == "git revert --skip" {
-                "Revert: Skipped; the resolution left nothing to commit".to_string()
+            if output.command == gitcomet_core::services::REVERT_SKIP_COMMAND {
+                "Revert: Skipped the revert the resolution left empty".to_string()
             } else if sequencer_paused(output) {
                 format!("{operation}: Paused at the next conflict")
             } else {
@@ -1501,7 +1501,14 @@ fn summarize_command(
             }
         }
         RepoCommandKind::RebaseAbort => {
-            format!("{}: Aborted", sequencer_operation_label(output, None))
+            if output
+                .stdout
+                .contains(gitcomet_core::services::REVERT_ABORT_KEPT_HEAD_SENTINEL)
+            {
+                "Revert: Sequence cleared; HEAD was left where it is".to_string()
+            } else {
+                format!("{}: Aborted", sequencer_operation_label(output, None))
+            }
         }
         RepoCommandKind::InteractiveRebase { base, interactive } => {
             let state = if sequencer_paused(output) {
@@ -2685,9 +2692,9 @@ mod tests {
                 "Revert: Continued",
             ),
             (
-                "git revert --skip",
+                gitcomet_core::services::REVERT_SKIP_COMMAND,
                 RepoCommandKind::RebaseContinue,
-                "Revert: Skipped; the resolution left nothing to commit",
+                "Revert: Skipped the revert the resolution left empty",
             ),
             (
                 "git revert --abort",
@@ -2699,6 +2706,21 @@ mod tests {
                 summarize_command(&kind, &command_output(command, "", ""), true, None);
             assert_eq!(summary, expected, "{command}");
         }
+
+        let (_, kept_head) = summarize_command(
+            &RepoCommandKind::RebaseAbort,
+            &command_output(
+                "git revert --abort",
+                gitcomet_core::services::REVERT_ABORT_KEPT_HEAD_SENTINEL,
+                "",
+            ),
+            true,
+            None,
+        );
+        assert_eq!(
+            kept_head,
+            "Revert: Sequence cleared; HEAD was left where it is"
+        );
 
         let mut paused_cherry_pick = command_output("git cherry-pick --continue", "", "");
         paused_cherry_pick.exit_code = Some(1);

@@ -53,6 +53,8 @@ pub(crate) struct PaletteContext {
     pub(crate) external_editor: bool,
     pub(crate) merging: bool,
     pub(crate) sequencer: bool,
+    /// A sequencer command is running, so Continue/Abort would be refused.
+    pub(crate) sequencer_busy: bool,
     pub(crate) unresolved_conflicts: bool,
     /// Why each tag-push mode is unavailable, indexed by `TagPushMode::index`.
     /// Computed by the push menu's own logic so the two cannot disagree.
@@ -65,16 +67,28 @@ pub(crate) struct PaletteContext {
 pub(crate) fn unavailable_reason(needs: Needs, ctx: &PaletteContext) -> Option<&'static str> {
     const NOT_SEQUENCING: &str =
         "Only available while a rebase, cherry-pick, or revert is in progress";
+    // Same wording as the action bar's disabled Continue/Abort.
+    const SEQUENCER_BUSY: &str = "Wait for the running Git operation to finish";
     match needs {
         Needs::Nothing => None,
         Needs::ExternalEditor => {
             (!ctx.external_editor).then_some("Choose an external code editor in Settings first")
         }
         Needs::Merge => (!ctx.merging).then_some("Only available while a merge is in progress"),
-        Needs::Sequencer => (!ctx.sequencer).then_some(NOT_SEQUENCING),
+        Needs::Sequencer => {
+            if !ctx.sequencer {
+                Some(NOT_SEQUENCING)
+            } else if ctx.sequencer_busy {
+                Some(SEQUENCER_BUSY)
+            } else {
+                None
+            }
+        }
         Needs::SequencerResolved => {
             if !ctx.sequencer {
                 Some(NOT_SEQUENCING)
+            } else if ctx.sequencer_busy {
+                Some(SEQUENCER_BUSY)
             } else if ctx.unresolved_conflicts {
                 // Same wording as the action bar's Continue button.
                 Some("Resolve all conflicts before continuing")
@@ -1438,6 +1452,30 @@ fn fuzzy_subsequence_match(label: &str, query: &str) -> Option<(i32, Vec<usize>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequencer_commands_are_unavailable_while_one_is_running() {
+        let ctx = PaletteContext {
+            has_active_repo: true,
+            sequencer: true,
+            sequencer_busy: true,
+            ..PaletteContext::default()
+        };
+
+        for needs in [Needs::Sequencer, Needs::SequencerResolved] {
+            assert_eq!(
+                unavailable_reason(needs, &ctx),
+                Some("Wait for the running Git operation to finish"),
+                "the action bar disables these; the palette must agree"
+            );
+        }
+
+        let idle = PaletteContext {
+            sequencer_busy: false,
+            ..ctx
+        };
+        assert_eq!(unavailable_reason(Needs::Sequencer, &idle), None);
+    }
 
     #[test]
     fn keyword_matches_find_commands_their_label_no_longer_spells_out() {
