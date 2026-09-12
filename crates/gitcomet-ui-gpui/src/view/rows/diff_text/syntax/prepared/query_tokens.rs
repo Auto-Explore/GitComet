@@ -9,6 +9,7 @@ pub(crate) struct DocumentTokenCollectionContext<'a> {
     /// tree. Injection cache keys always use root-document coordinates.
     pub(crate) document_byte_start: usize,
     pub(crate) per_line: &'a mut [Vec<SyntaxToken>],
+    pub(crate) host: HostLayers<'a>,
 }
 
 pub(crate) fn syntax_tokens_for_line_treesitter(
@@ -166,6 +167,7 @@ pub(crate) fn treesitter_document_hash(language: DiffSyntaxLanguage, input: &str
     hasher.finish()
 }
 
+#[cfg(test)]
 pub(crate) fn collect_treesitter_document_line_tokens_for_line_window(
     tree: &tree_sitter::Tree,
     highlight: &TreesitterHighlightSpec,
@@ -189,7 +191,7 @@ pub(crate) fn collect_treesitter_document_line_tokens_for_line_window(
 
 /// Collects host and injected tokens while preserving whether every host
 /// highlight-query pass completed. Injection collection still runs after a
-/// recovered host panic so callers can choose their own fallback policy.
+/// failed host pass so the caller can decide what to keep.
 pub(crate) fn collect_treesitter_document_line_tokens_for_line_window_with_host_query_status(
     tree: &tree_sitter::Tree,
     highlight: &TreesitterHighlightSpec,
@@ -208,6 +210,7 @@ pub(crate) fn collect_treesitter_document_line_tokens_for_line_window_with_host_
         end_line_ix,
         document_hash,
         0,
+        HostLayers::default(),
     )
 }
 
@@ -230,6 +233,35 @@ pub(crate) fn collect_treesitter_document_line_tokens_for_line_window_at(
         end_line_ix,
         document_hash,
         document_byte_start,
+        HostLayers::default(),
+    )
+    .0
+}
+
+/// The chunk builder's entry: the root tree plus its prepared combined layers.
+pub(crate) fn collect_treesitter_document_line_tokens_for_line_window_with_combined_layers(
+    tree: &tree_sitter::Tree,
+    highlight: &TreesitterHighlightSpec,
+    input: &[u8],
+    line_starts: &[usize],
+    start_line_ix: usize,
+    end_line_ix: usize,
+    document_hash: u64,
+    combined_layers: Option<&[PreparedCombinedLayer]>,
+) -> Vec<Vec<SyntaxToken>> {
+    collect_treesitter_document_line_tokens_for_line_window_at_with_host_query_status(
+        tree,
+        highlight,
+        input,
+        line_starts,
+        start_line_ix,
+        end_line_ix,
+        document_hash,
+        0,
+        HostLayers {
+            combined_layers,
+            owned_ranges: None,
+        },
     )
     .0
 }
@@ -243,6 +275,7 @@ fn collect_treesitter_document_line_tokens_for_line_window_at_with_host_query_st
     end_line_ix: usize,
     document_hash: u64,
     document_byte_start: usize,
+    host: HostLayers<'_>,
 ) -> (Vec<Vec<SyntaxToken>>, bool) {
     if line_starts.is_empty() {
         return (Vec::new(), true);
@@ -267,6 +300,7 @@ fn collect_treesitter_document_line_tokens_for_line_window_at_with_host_query_st
             end_line_ix,
             document_byte_start,
             per_line: &mut per_line,
+            host,
         };
         for pass in &query_passes {
             if !collect_query_pass_tokens_for_document(tree, highlight, input, pass, &mut context) {
@@ -540,6 +574,30 @@ pub(crate) fn apply_injection_query_tokens_for_document(
     );
     for injection in &injections.singles {
         let injection = *injection;
+        if let Some(owned) = context.host.owned_ranges {
+            let whole = injection.byte_start..injection.byte_end;
+            let pieces = intersect_sorted_ranges(std::slice::from_ref(&whole), owned);
+            if pieces.as_slice() != std::slice::from_ref(&whole) {
+                // A `<script>` body spanning a `{% %}` gap: parse only the owned
+                // pieces, as a combined layer would, so the injected grammar never
+                // sees the host's bytes.
+                if !pieces.is_empty()
+                    && let Some(spec) = tree_sitter_highlight_spec(injection.language)
+                    && let Some(tree) =
+                        parse_combined_injection_tree(spec, input, context.line_starts, &pieces)
+                {
+                    splice_combined_layer_tokens(
+                        &tree,
+                        spec,
+                        &pieces,
+                        input,
+                        document_hash,
+                        context,
+                    );
+                }
+                continue;
+            }
+        }
         let Some(injected_tokens) = collect_injected_tokens_for_parent_line_window(
             input,
             context.line_starts,
@@ -607,11 +665,115 @@ pub(crate) fn apply_injection_query_tokens_for_document(
     // first let a single delete combined tokens and then repaint only the bytes
     // its own captures cover, leaving the rest bare. No in-tree grammar mixes
     // them yet.
-    if !injections.truncated {
+    if let Some(layers) = context.host.combined_layers {
+        for layer in layers {
+            apply_prepared_combined_layer_tokens(layer, input, document_hash, context);
+        }
+    } else if !injections.truncated {
         for group in &injections.combined {
             apply_combined_injection_tokens(group, input, document_hash, context);
         }
     }
+}
+
+/// What the host tree of a token collection carries with it, as `Default` for
+/// a root tree collected on its own.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct HostLayers<'a> {
+    /// Whole-document combined layers of the host tree; `None` = windowed fallback.
+    pub(crate) combined_layers: Option<&'a [PreparedCombinedLayer]>,
+    /// When the host tree is itself a combined layer, the ranges it owns: a
+    /// nested body that straddles a gap is parsed over its pieces only.
+    pub(crate) owned_ranges: Option<&'a [Range<usize>]>,
+}
+
+/// One `(#set! injection.combined)` group parsed over the whole document, so a
+/// window sees every element opened above it.
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedCombinedLayer {
+    pub(crate) language: DiffSyntaxLanguage,
+    /// Sorted, disjoint, non-empty: what `set_included_ranges` was given.
+    pub(crate) ranges: Vec<Range<usize>>,
+    pub(crate) tree: tree_sitter::Tree,
+}
+
+/// Parses every combined group of `tree` once.
+///
+/// Outer `None` = the deadline ran out (the caller reports a timed-out prepare so
+/// the unbudgeted background path redoes it). Inner `None` = the injection query
+/// overflowed its match limit or a group exceeded `max_ranges`; chunks then use
+/// the windowed fallback, which was the only path before this existed.
+pub(crate) fn build_prepared_combined_layers(
+    spec: &TreesitterHighlightSpec,
+    tree: &tree_sitter::Tree,
+    input: &[u8],
+    line_starts: &[usize],
+    document_hash: u64,
+    deadline: Option<Instant>,
+    max_ranges: usize,
+) -> Option<Option<Vec<PreparedCombinedLayer>>> {
+    if !spec.has_combined_injections {
+        return Some(Some(Vec::new()));
+    }
+    let matches = collect_treesitter_injection_matches_for_line_window_at(
+        tree,
+        spec,
+        input,
+        line_starts,
+        0,
+        line_starts.len(),
+        document_hash,
+        0,
+    );
+    if matches.truncated
+        || matches
+            .combined
+            .iter()
+            .any(|group| group.ranges.len() > max_ranges)
+    {
+        return Some(None);
+    }
+    let mut layers = Vec::with_capacity(matches.combined.len());
+    for group in matches.combined {
+        let Some(layer_spec) = tree_sitter_highlight_spec(group.language) else {
+            continue;
+        };
+        let tree = parse_combined_injection_tree_with_deadline(
+            layer_spec,
+            input,
+            line_starts,
+            &group.ranges,
+            deadline,
+        )?;
+        layers.push(PreparedCombinedLayer {
+            language: group.language,
+            ranges: group.ranges,
+            tree,
+        });
+    }
+    Some(Some(layers))
+}
+
+/// Splices one prepared layer's tokens for the window into `context.per_line`.
+/// Same clipping as the windowed path: the tree spans host bytes between its
+/// ranges, and nested `<script>` bodies still go through `TS_INJECTION_CACHE`.
+fn apply_prepared_combined_layer_tokens(
+    layer: &PreparedCombinedLayer,
+    input: &[u8],
+    document_hash: u64,
+    context: &mut DocumentTokenCollectionContext<'_>,
+) {
+    let Some(spec) = tree_sitter_highlight_spec(layer.language) else {
+        return;
+    };
+    splice_combined_layer_tokens(
+        &layer.tree,
+        spec,
+        &layer.ranges,
+        input,
+        document_hash,
+        context,
+    );
 }
 
 /// Parses `ranges` as one document with `spec`'s grammar, leaving node offsets in
@@ -633,6 +795,16 @@ pub(crate) fn parse_combined_injection_tree(
     line_starts: &[usize],
     ranges: &[Range<usize>],
 ) -> Option<tree_sitter::Tree> {
+    parse_combined_injection_tree_with_deadline(spec, input, line_starts, ranges, None)
+}
+
+pub(crate) fn parse_combined_injection_tree_with_deadline(
+    spec: &TreesitterHighlightSpec,
+    input: &[u8],
+    line_starts: &[usize],
+    ranges: &[Range<usize>],
+    deadline: Option<Instant>,
+) -> Option<tree_sitter::Tree> {
     // Never call `set_included_ranges` with an empty slice: that is tree-sitter's
     // reset to "the whole document", so a window whose group collapsed to nothing
     // would highlight the entire file with the injected grammar.
@@ -651,7 +823,13 @@ pub(crate) fn parse_combined_injection_tree(
 
     with_ts_parser_parse_result(&spec.ts_language, |parser| {
         let mut guard = IncludedRangesGuard::set(parser, &ts_ranges)?;
-        parse_treesitter_tree(guard.parser(), input, None, None)
+        let budget = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        let tree = parse_treesitter_tree(guard.parser(), input, None, budget);
+        #[cfg(test)]
+        if tree.is_some() {
+            TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+        }
+        tree
     })
 }
 
@@ -679,6 +857,32 @@ impl Drop for IncludedRangesGuard<'_> {
     fn drop(&mut self) {
         let _ = self.0.set_included_ranges(&[]);
     }
+}
+
+/// The pieces of `target` that lie inside `parent`; both sorted and disjoint,
+/// so the result is too.
+pub(crate) fn intersect_sorted_ranges(
+    target: &[Range<usize>],
+    parent: &[Range<usize>],
+) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let mut parent_ix = 0;
+    for range in target {
+        while parent_ix < parent.len() && parent[parent_ix].end <= range.start {
+            parent_ix += 1;
+        }
+        for clip in &parent[parent_ix..] {
+            if clip.start >= range.end {
+                break;
+            }
+            let start = range.start.max(clip.start);
+            let end = range.end.min(clip.end);
+            if start < end {
+                out.push(start..end);
+            }
+        }
+    }
+    out
 }
 
 /// The byte span a combined layer is parsed over for a given window.
@@ -717,7 +921,9 @@ pub(crate) fn clip_injection_ranges_to_region(
         .collect()
 }
 
-/// Parses one combined group and splices its tokens into `context.per_line`.
+/// Windowed fallback: parses one combined group clipped to the window and splices
+/// its tokens into `context.per_line`. Reached only when
+/// `build_prepared_combined_layers` declined (see it).
 pub(crate) fn apply_combined_injection_tokens(
     group: &CombinedInjectionGroup,
     input: &[u8],
@@ -753,17 +959,34 @@ pub(crate) fn apply_combined_injection_tokens(
     else {
         return;
     };
+    splice_combined_layer_tokens(&tree, spec, &ranges, input, document_hash, context);
+}
 
-    let mut injected = collect_treesitter_document_line_tokens_for_line_window_at(
-        &tree,
-        spec,
-        input,
-        context.line_starts,
-        context.start_line_ix,
-        context.end_line_ix,
-        document_hash,
-        context.document_byte_start,
-    );
+/// Queries `tree` over the window, clips to `ranges`, and replaces the host's
+/// tokens on those bytes.
+fn splice_combined_layer_tokens(
+    tree: &tree_sitter::Tree,
+    spec: &TreesitterHighlightSpec,
+    ranges: &[Range<usize>],
+    input: &[u8],
+    document_hash: u64,
+    context: &mut DocumentTokenCollectionContext<'_>,
+) {
+    let (mut injected, _) =
+        collect_treesitter_document_line_tokens_for_line_window_at_with_host_query_status(
+            tree,
+            spec,
+            input,
+            context.line_starts,
+            context.start_line_ix,
+            context.end_line_ix,
+            document_hash,
+            context.document_byte_start,
+            HostLayers {
+                combined_layers: None,
+                owned_ranges: Some(ranges),
+            },
+        );
     if injected.len() != context.per_line.len() {
         return;
     }
@@ -780,7 +1003,7 @@ pub(crate) fn apply_combined_injection_tokens(
         input.len(),
         context.end_line_ix.saturating_sub(1),
     );
-    for gap in combined_injection_gaps(window_start..window_end, &ranges) {
+    for gap in combined_injection_gaps(window_start..window_end, ranges) {
         subtract_absolute_range_from_document_tokens(
             context.line_starts,
             input,
@@ -791,7 +1014,7 @@ pub(crate) fn apply_combined_injection_tokens(
     }
 
     // ... and drop the host grammar's tokens from the bytes the injection took over.
-    for range in &ranges {
+    for range in ranges {
         subtract_absolute_range_from_document_tokens(
             context.line_starts,
             input,

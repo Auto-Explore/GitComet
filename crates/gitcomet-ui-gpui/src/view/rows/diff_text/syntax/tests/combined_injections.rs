@@ -618,3 +618,254 @@ fn perf_treesitter_tokenization_smoke() {
     }
     eprintln!("syntax_tokens_for_line (rust): {:?}", start.elapsed());
 }
+
+// ---- Whole-document combined layers ---------------------------------------
+
+/// A template whose outer elements open more than a chunk (and more than the
+/// windowed fallback's 4 KiB margin) above where they close.
+fn tall_template() -> (String, usize, usize) {
+    let mut lines = vec![
+        "{% block body %}".to_string(),
+        "<section class=\"page\">".to_string(),
+        "<div class=\"grid\">".to_string(),
+    ];
+    for ix in 0..200 {
+        lines.push(format!("  <p class=\"row\">filler line number {ix:04}</p>"));
+    }
+    let div_line = lines.len();
+    lines.push("</div>".to_string());
+    let section_line = lines.len();
+    lines.push("</section>".to_string());
+    lines.push("{% endblock %}".to_string());
+    let text = lines.join("\n");
+    assert!(
+        text.len() > TS_COMBINED_INJECTION_CONTEXT_MARGIN_BYTES
+            && div_line > TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS,
+        "fixture must close its elements past the fallback's context margin"
+    );
+    (text, div_line, section_line)
+}
+
+/// The windowed fallback parsed the tail chunk without the `<section>`/`<div>`
+/// openers, and the HTML grammar then turned the orphan end tags into a bare
+/// `ERROR` no query captures. One layer per document sees the whole element.
+#[test]
+fn combined_layer_tail_close_tags_keep_their_tag_name_past_the_context_margin() {
+    let (text, div_line, section_line) = tall_template();
+    let lines: Vec<&str> = text.lines().collect();
+    let doc = prepare_test_document(DiffSyntaxLanguage::Jinja, &text);
+    for (line_ix, name) in [(div_line, "div"), (section_line, "section")] {
+        let kinds = token_kinds_for_line_fragment(doc, line_ix, lines[line_ix], name);
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Tag),
+            "`</{name}>` on line {line_ix} lost its tag name: {kinds:?}"
+        );
+    }
+}
+
+#[test]
+fn combined_layers_are_parsed_once_per_prepared_document() {
+    let (text, div_line, _) = tall_template();
+    TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.set(0));
+    let doc = prepare_test_document(DiffSyntaxLanguage::Jinja, &text);
+    for line_ix in [0, 100, div_line] {
+        let _ = syntax_tokens_for_prepared_document_line(doc, line_ix)
+            .expect("line tokens should be available");
+    }
+    assert_eq!(
+        TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.get()),
+        1,
+        "three chunks of one document must share one HTML parse"
+    );
+}
+
+#[test]
+fn combined_layers_are_rebuilt_when_the_root_tree_is_reparsed() {
+    let (text, div_line, section_line) = tall_template();
+    TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.set(0));
+    let base = prepare_test_document(DiffSyntaxLanguage::Jinja, &text);
+    let _ = syntax_tokens_for_prepared_document_line(base, div_line);
+
+    let mut edited: Vec<String> = text.lines().map(str::to_owned).collect();
+    edited[div_line - 1].push_str("<em>late edit</em>");
+    let edited_text = edited.join("\n");
+    let attempt = prepare_test_document_with_budget_reuse(
+        DiffSyntaxLanguage::Jinja,
+        &edited_text,
+        DiffSyntaxBudget {
+            foreground_parse: Duration::from_millis(200),
+        },
+        Some(base),
+    );
+    let PrepareTreesitterDocumentResult::Ready(reparsed) = attempt else {
+        panic!("reparse should succeed, got {attempt:?}");
+    };
+    let kinds =
+        token_kinds_for_line_fragment(reparsed, section_line, &edited[section_line], "section");
+    assert!(
+        kinds.contains(&SyntaxTokenKind::Tag),
+        "the reparsed document must carry a fresh HTML layer: {kinds:?}"
+    );
+    assert_eq!(
+        TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.get()),
+        2,
+        "a reparse rebuilds the layer exactly once"
+    );
+}
+
+/// Over the range guard the builder declines and chunks take the windowed path,
+/// which still highlights (it was the only path before).
+#[test]
+fn combined_layer_over_the_range_guard_falls_back_to_the_windowed_path() {
+    let text = dense_jinja_table(64, 4);
+    let input = treesitter_document_input_from_text(&text);
+    let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Jinja).expect("jinja spec");
+    let tree = with_ts_parser_parse_result(&spec.ts_language, |parser| parser.parse(&text, None))
+        .expect("template should parse");
+    let hash = treesitter_document_hash(DiffSyntaxLanguage::Jinja, &text);
+    let declined = build_prepared_combined_layers(
+        spec,
+        &tree,
+        text.as_bytes(),
+        input.line_starts.as_ref(),
+        hash,
+        None,
+        8,
+    );
+    assert!(
+        matches!(declined, Some(None)),
+        "a group past the range guard must decline, not parse"
+    );
+    let built = build_prepared_combined_layers(
+        spec,
+        &tree,
+        text.as_bytes(),
+        input.line_starts.as_ref(),
+        hash,
+        None,
+        TS_COMBINED_LAYER_MAX_RANGES,
+    );
+    assert!(
+        matches!(&built, Some(Some(layers)) if layers.len() == 1),
+        "within the guard the same document builds one HTML layer"
+    );
+
+    let lines: Vec<&str> = text.lines().collect();
+    let chunk = collect_treesitter_document_line_tokens_for_line_window_with_combined_layers(
+        &tree,
+        spec,
+        text.as_bytes(),
+        input.line_starts.as_ref(),
+        0,
+        lines.len(),
+        hash,
+        None,
+    );
+    let start = lines[10].find("<td>").expect("row has a cell");
+    let kinds: Vec<SyntaxTokenKind> = chunk[10]
+        .iter()
+        .filter(|token| token.range.start > start && token.range.end <= start + 3)
+        .map(|token| token.kind)
+        .collect();
+    assert!(
+        kinds.contains(&SyntaxTokenKind::Tag),
+        "the windowed fallback still tags `<td>`: {kinds:?}"
+    );
+}
+
+/// The background path ships the layers with the tree state, so the chunk
+/// workers never parse HTML themselves.
+#[test]
+fn background_prepare_ships_the_combined_layers_with_the_tree_state() {
+    let (text, _, _) = tall_template();
+    let data = prepare_test_document_in_background(DiffSyntaxLanguage::Jinja, &text)
+        .expect("background prepare should succeed");
+    let tree_state = data.tree_state.as_ref().expect("tree state");
+    let layers = tree_state
+        .combined_layers
+        .get()
+        .expect("layers are built eagerly with the tree")
+        .as_ref()
+        .expect("a tall template is within the range guard");
+    assert_eq!(
+        layers.len(),
+        1,
+        "one HTML layer for the one combined pattern"
+    );
+    assert_eq!(layers[0].language, DiffSyntaxLanguage::Html);
+}
+
+/// A `<script>` body is one `raw_text` to HTML even when a template tag sits
+/// inside it. The nested JavaScript layer must only see the bytes the HTML
+/// layer owns: handed the tag too, a `{# https://… #}` reads as `//` and turns
+/// the rest of the line into a comment.
+#[test]
+fn nested_script_layer_inside_a_combined_layer_skips_the_template_gap() {
+    let lines = [
+        /* 0 */ "<script>",
+        /* 1 */ "let x = 1; {# see https://example.com #} let y = 2;",
+        /* 2 */ "</script>",
+    ];
+    let doc = prepare_test_document(DiffSyntaxLanguage::Jinja, &lines.join("\n"));
+    let after_gap = lines[1].rfind("let").expect("second let");
+    let kinds: Vec<SyntaxTokenKind> = syntax_tokens_for_prepared_document_line(doc, 1)
+        .expect("line tokens")
+        .iter()
+        .filter(|token| token.range.start >= after_gap && token.range.end <= after_gap + 3)
+        .map(|token| token.kind)
+        .collect();
+    assert!(
+        kinds.contains(&SyntaxTokenKind::Keyword) && !kinds.contains(&SyntaxTokenKind::Comment),
+        "`let` after the template comment must stay a keyword: {kinds:?}"
+    );
+    let first = lines[1].find("let").expect("first let");
+    let kinds: Vec<SyntaxTokenKind> = syntax_tokens_for_prepared_document_line(doc, 1)
+        .expect("line tokens")
+        .iter()
+        .filter(|token| token.range.start >= first && token.range.end <= first + 3)
+        .map(|token| token.kind)
+        .collect();
+    assert!(
+        kinds.contains(&SyntaxTokenKind::Keyword),
+        "first `let`: {kinds:?}"
+    );
+}
+
+/// The layer parse shares the root parse's foreground budget, but missing it
+/// must not turn a document that used to be `Ready` into `TimedOut`: the
+/// document comes back with the layers unbuilt and the first chunk build parses
+/// them, so a debug build is no slower to first colour than before.
+#[test]
+fn a_combined_layer_missing_the_foreground_budget_leaves_the_document_ready() {
+    let (text, div_line, _) = tall_template();
+    let lines: Vec<&str> = text.lines().collect();
+    TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.set(0));
+    TS_FORCE_COMBINED_LAYER_DEADLINE_MISS.with(|force| force.set(true));
+    let attempt = prepare_test_document_with_budget_reuse(
+        DiffSyntaxLanguage::Jinja,
+        &text,
+        DiffSyntaxBudget {
+            foreground_parse: Duration::from_millis(200),
+        },
+        None,
+    );
+    TS_FORCE_COMBINED_LAYER_DEADLINE_MISS.with(|force| force.set(false));
+    let PrepareTreesitterDocumentResult::Ready(doc) = attempt else {
+        panic!("a layer deadline miss must not fail the prepare, got {attempt:?}");
+    };
+    assert_eq!(
+        TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.get()),
+        0,
+        "the foreground parse gave up on the layer without finishing it"
+    );
+    let kinds = token_kinds_for_line_fragment(doc, div_line, lines[div_line], "div");
+    assert!(
+        kinds.contains(&SyntaxTokenKind::Tag),
+        "the first chunk build parses the layer it was owed: {kinds:?}"
+    );
+    assert_eq!(
+        TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.get()),
+        1,
+        "the lazy build parses the layer exactly once"
+    );
+}

@@ -723,6 +723,7 @@ pub(crate) fn parse_treesitter_document_core(
     }
 
     let old_tree_for_parse = incremental_seed.as_ref().map(|seed| &seed.tree);
+    let started = Instant::now();
     let tree = with_ts_parser_parse_result(&request.ts_language, |parser| {
         parse_treesitter_tree(
             parser,
@@ -731,6 +732,31 @@ pub(crate) fn parse_treesitter_document_core(
             foreground_timeout,
         )
     })?;
+    // Combined layers ride the root parse's remaining budget. A miss does not
+    // fail the prepare -- the document was Ready before layers existed and must
+    // stay so -- it leaves the cell empty for the first chunk build to fill.
+    let combined_layers = match tree_sitter_highlight_spec(request.language) {
+        Some(spec) => build_prepared_combined_layers(
+            spec,
+            &tree,
+            request.input.text.as_bytes(),
+            &request.input.line_starts,
+            request.cache_key.doc_hash,
+            foreground_timeout.map(|budget| {
+                #[cfg(test)]
+                if TS_FORCE_COMBINED_LAYER_DEADLINE_MISS.with(|force| force.get()) {
+                    return started;
+                }
+                started + budget
+            }),
+            TS_COMBINED_LAYER_MAX_RANGES,
+        ),
+        None => Some(Some(Vec::new())),
+    };
+    let combined_layers = match combined_layers {
+        Some(built) => Arc::new(OnceLock::from(built)),
+        None => Arc::new(OnceLock::new()),
+    };
 
     #[cfg(test)]
     let parse_mode = if incremental_seed.is_some() {
@@ -773,6 +799,7 @@ pub(crate) fn parse_treesitter_document_core(
             source_hash: request.cache_key.doc_hash,
             source_version,
             tree,
+            combined_layers,
             #[cfg(test)]
             parse_mode,
         }),

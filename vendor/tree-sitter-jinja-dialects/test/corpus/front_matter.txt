@@ -1,0 +1,61 @@
+================================
+Front matter at the top of the file
+================================
+---
+title: Sign up
+layout: base.njk
+---
+<h1>{{ title }}</h1>
+--------------------------------
+
+(source_file
+  (front_matter)
+  (text)
+  (output
+    (identifier))
+  (text))
+
+================================
+Front matter needs a closing line
+================================
+---
+title: Sign up
+<h1>{{ title }}</h1>
+--------------------------------
+
+(source_file
+  (text)
+  (output
+    (identifier))
+  (text))
+
+================================
+A dashed line after byte zero is text
+================================
+
+---
+title: Sign up
+---
+<p>---</p>
+--------------------------------
+
+(source_file
+  (text))
+
+================================
+A dashed block after an error is still text
+================================
+{% if x %}
+---
+title: Sign up
+---
+<p>{{ title }}</p>
+--------------------------------
+
+(source_file
+  (ERROR
+    (identifier)
+    (text)
+    (output
+      (identifier))
+    (text)))

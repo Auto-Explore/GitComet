@@ -7541,10 +7541,8 @@ dependencies = [
 [[package]]
 name = "tree-sitter-jinja-dialects"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a4035749204bb8f928ec08f67a1bb8c8a8de253966c5121ed5fe6d55645b5f9"
 dependencies = [
- "cc",
+ "tree-sitter-build",
  "tree-sitter-language",
 ]
 

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "jinja",
+      "camelcase": "Jinja",
+      "title": "Jinja",
+      "scope": "source.jinja",
+      "file-types": [
+        "jinja",
+        "jinja2",
+        "j2",
+        "njk",
+        "nunjucks",
+        "twig"
+      ],
+      "injection-regex": "^(jinja|jinja2|nunjucks|njk)$",
+      "class-name": "TreeSitterJinja"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.1",
+    "license": "MIT",
+    "description": "Parser for Jinja2 and daughter languages: nunjucks, twig",
+    "authors": [
+      {
+        "name": "Benny Powers",
+        "email": "web@bennypowers.com",
+        "url": "bennypowers.dev"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/bennypowers/tree-sitter-jinja-dialects"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "java": false,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true,
+    "zig": false
+  }
+}

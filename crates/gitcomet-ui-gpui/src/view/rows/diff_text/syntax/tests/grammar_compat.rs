@@ -130,6 +130,11 @@ fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
             tree_sitter_html::LANGUAGE.into(),
         ),
         (
+            "jinja-dialects",
+            "tree-sitter-jinja-dialects",
+            tree_sitter_jinja_dialects::LANGUAGE.into(),
+        ),
+        (
             "julia",
             "tree-sitter-julia",
             tree_sitter_julia::LANGUAGE.into(),
