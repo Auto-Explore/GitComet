@@ -400,6 +400,8 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_page_cache: std::sync::Mutex<Vec<LogPageCacheEntry>>,
+    history_authors_cache: std::sync::Mutex<Option<log::HistoryAuthorsCache>>,
+    range_reader: std::sync::Mutex<Option<RangeReader>>,
     all_branches_tips: std::sync::Mutex<Option<AllBranchesTipsCacheEntry>>,
     divergence_cache: DivergenceCache,
     /// `list_ref_metadata` output keyed by the ref namespace fingerprint; the
@@ -424,6 +426,8 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
             log_page_cache: std::sync::Mutex::new(Vec::new()),
+            history_authors_cache: Default::default(),
+            range_reader: Default::default(),
             all_branches_tips: std::sync::Mutex::new(None),
             divergence_cache: DivergenceCache::default(),
             ref_metadata_cache: std::sync::Mutex::new(None),
@@ -460,15 +464,77 @@ impl GixRepo {
         crate::open::open_worktree_repo(&self.spec.workdir)
             .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo"))
     }
+
+    /// The object store for indexed range reads, re-opened every
+    /// [`RANGE_READER_REOPEN_BLOCKS`] blocks. Range reads touch commit objects
+    /// across the whole pack set, and every page of a mapped pack they touch
+    /// stays resident until the mapping is dropped; scrolling a large history
+    /// this way grew resident memory by gigabytes. A fresh open costs a config
+    /// parse and releases the mappings, so the store's footprint stays bounded
+    /// by the blocks read since.
+    pub(super) fn range_reader_repo(&self) -> Result<gix::Repository> {
+        let mut slot = self.range_reader.lock().expect("range reader");
+        if slot
+            .as_ref()
+            .is_none_or(|reader| reader.blocks >= RANGE_READER_REOPEN_BLOCKS)
+        {
+            gitcomet_core::history_perf::record(
+                gitcomet_core::history_perf::Work::RangeStoreReopen,
+            );
+            *slot = Some(RangeReader {
+                repo: self.reopen_repo()?.into_sync(),
+                blocks: 0,
+            });
+        }
+        let reader = slot.as_mut().expect("range reader is open");
+        reader.blocks += 1;
+        Ok(reader.repo.to_thread_local())
+    }
 }
+
+/// See [`GixRepo::range_reader_repo`].
+struct RangeReader {
+    repo: gix::ThreadSafeRepository,
+    blocks: usize,
+}
+
+/// Blocks of 256 commits read through one range-reader store before it is
+/// re-opened. On chromium a block touches roughly 0.2 MiB of pack pages.
+const RANGE_READER_REOPEN_BLOCKS: usize = 64;
 
 pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
     mergetool::allow_test_repo_local_mergetool_command(workdir, tool_name);
 }
 
 impl GitRepository for GixRepo {
+    fn history_authors(
+        &self,
+        mode: HistoryMode,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<[Arc<str>]>> {
+        self.history_authors_impl(mode, cancellation)
+    }
     fn spec(&self) -> &RepoSpec {
         &self.spec
+    }
+
+    fn build_history_index(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        cancellation: &CancellationToken,
+        on_progress: &mut dyn FnMut(gitcomet_core::history_index::HistoryIndexProgress),
+    ) -> Result<Option<gitcomet_core::history_index::HistoryIndexHandle>> {
+        self.build_history_index_impl(mode, author, cancellation, on_progress)
+    }
+
+    fn read_history_range(
+        &self,
+        index: &gitcomet_core::history_index::HistoryIndexHandle,
+        range: std::ops::Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::history_index::HistoryRange> {
+        self.read_history_range_impl(index, range, cancellation)
     }
 
     fn read_history(

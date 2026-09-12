@@ -80,6 +80,16 @@ pub(super) fn reverify_loaded_commit_signatures_effect(
             .collect(),
         _ => Vec::new(),
     };
+    // Indexed scrolling keeps metadata outside the bootstrap page. Recheck
+    // those bounded, loaded blocks when verification is enabled or refreshed.
+    ids.extend(
+        repo_state
+            .history_state
+            .indexed
+            .ranges
+            .values()
+            .flat_map(|range| range.commits.iter().map(|commit| commit.id.clone())),
+    );
     if let Some(selected) = &repo_state.history_state.selected_commit
         && !ids.contains(selected)
     {

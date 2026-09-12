@@ -1004,7 +1004,7 @@ pub(in crate::view) struct CommitCard {
     pub(in crate::view) short_sha: gpui::SharedString,
     pub(in crate::view) summary: gpui::SharedString,
     pub(in crate::view) author: gpui::SharedString,
-    pub(in crate::view) unix_secs: i64,
+    pub(in crate::view) unix_secs: Option<i64>,
 }
 
 impl CommitCard {
@@ -1025,7 +1025,21 @@ impl CommitCard {
             short_sha,
             summary: gpui::SharedString::from(std::sync::Arc::clone(&commit.summary)),
             author: gpui::SharedString::from(std::sync::Arc::clone(&commit.author)),
-            unix_secs,
+            unix_secs: Some(unix_secs),
+        }
+    }
+
+    pub(in crate::view) fn unloaded(id: &gitcomet_core::domain::CommitId) -> Self {
+        Self {
+            short_sha: id
+                .as_ref()
+                .get(..8)
+                .unwrap_or(id.as_ref())
+                .to_owned()
+                .into(),
+            summary: "Commit details not loaded".into(),
+            author: "".into(),
+            unix_secs: None,
         }
     }
 }

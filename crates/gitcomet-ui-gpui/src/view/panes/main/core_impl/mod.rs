@@ -1487,6 +1487,16 @@ impl MainPaneView {
         self.history_view.read(cx).history_tag_preferences()
     }
 
+    pub(in crate::view) fn set_history_branch_names(
+        &mut self,
+        next: HistoryBranchNamesMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view
+            .update(cx, |view, cx| view.set_history_branch_names(next, cx));
+        cx.notify();
+    }
+
     pub(in crate::view) fn set_history_column_preferences(
         &mut self,
         show_graph: bool,

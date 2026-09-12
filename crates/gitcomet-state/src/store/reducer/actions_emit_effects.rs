@@ -603,7 +603,7 @@ pub(super) fn squash_commits(
         repo_id,
         base: plan.oldest_parent,
         actual_head: plan.actual_head,
-        selected_ids: plan.ordered_ids,
+        selected_ids: Arc::unwrap_or_clone(plan.ordered_ids),
         reword_id: oldest,
         message,
         count,

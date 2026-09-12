@@ -133,3 +133,99 @@ fn author_suggestions_survive_an_applied_filter(cx: &mut gpui::TestAppContext) {
 
     assert_eq!(suggestion_names(&filtered), vec!["Alice", "Bob"]);
 }
+
+#[gpui::test]
+fn completed_author_catalog_replaces_bootstrap_suggestions_without_a_log_change(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(9003);
+    let mut repo = repo_with_authors(repo_id, 1, &["Recent author"]);
+    repo.history_state.history_author_filter = Some("Recent author".into());
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo.clone(), repo_id), cx)
+        })
+    });
+    let before = cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .clone()
+            .update(app, |host, _| author_filter::suggestions(host, repo_id))
+    });
+    assert_eq!(suggestion_names(&before), ["Recent author"]);
+
+    repo.history_state.authors =
+        gitcomet_state::history_authors::HistoryAuthorsState::loaded_for_test(
+            &repo,
+            vec![
+                Arc::from("Older author"),
+                Arc::from("Recent author"),
+                Arc::from("older author"),
+            ]
+            .into(),
+        );
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo.clone(), repo_id), cx)
+        })
+    });
+    let (after, again) = cx.update(|_, app| {
+        view.read(app).popover_host.clone().update(app, |host, _| {
+            (
+                author_filter::suggestions(host, repo_id),
+                author_filter::suggestions(host, repo_id),
+            )
+        })
+    });
+    assert_eq!(suggestion_names(&after), ["Older author", "Recent author"]);
+    assert!(Arc::ptr_eq(&after, &again));
+    assert!(!Arc::ptr_eq(&before, &after));
+
+    // The complete list survives a filtered page update and a pending rescan.
+    repo.history_state.log_rev += 1;
+    repo.history_state.authors.names = Loadable::Loading;
+    repo.history_state.authors.rev += 1;
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx)
+        })
+    });
+    let pending = cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .clone()
+            .update(app, |host, _| author_filter::suggestions(host, repo_id))
+    });
+    assert!(Arc::ptr_eq(&after, &pending));
+}
+
+#[gpui::test]
+fn author_catalog_from_another_scope_is_not_offered(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(9004);
+    let mut repo = repo_with_authors(repo_id, 1, &["Current branch author"]);
+    repo.history_state.history_scope = gitcomet_core::domain::HistoryMode::AllBranches;
+    repo.history_state.authors =
+        gitcomet_state::history_authors::HistoryAuthorsState::loaded_for_test(
+            &repo,
+            vec![Arc::from("Other branch author")].into(),
+        );
+    repo.history_state.history_scope = gitcomet_core::domain::HistoryMode::FirstParent;
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx)
+        })
+    });
+    let names = cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .clone()
+            .update(app, |host, _| author_filter::suggestions(host, repo_id))
+    });
+    assert_eq!(suggestion_names(&names), ["Current branch author"]);
+}

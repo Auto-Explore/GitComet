@@ -703,6 +703,7 @@ pub(super) fn close_repos(
         let keep = !close_ids.contains(&repo.id);
         if !keep {
             repo.history_state.commit_signatures_cancellation.cancel();
+            repo.history_state.authors.cancellation.cancel();
         }
         keep
     });

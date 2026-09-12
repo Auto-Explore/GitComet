@@ -4,6 +4,8 @@ mod diff_selection;
 mod effects;
 mod external_and_history;
 mod git_hook_activity;
+mod history_authors;
+mod indexed_history;
 mod repo_management;
 mod util;
 
@@ -929,6 +931,9 @@ fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
     // Enforced here rather than at each of the places a worktree selection can
     // end; see the helper.
     effects::retire_orphaned_worktree_diffs(state);
+    for repo in &mut state.repos {
+        repo.prepare_history_squash_plan();
+    }
 
     if let Some(push) = nav_push {
         reconcile_active_nav_history(state, push);
@@ -2430,6 +2435,8 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded { repo_id, result }) => {
             effects::upstream_divergence_loaded(state, repo_id, result)
         }
+        Msg::IndexedHistory(event) => indexed_history::reduce(state, event),
+        Msg::HistoryAuthors(event) => history_authors::reduce(state, event),
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             seq,

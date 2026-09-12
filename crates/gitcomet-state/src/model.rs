@@ -970,6 +970,8 @@ pub struct PendingCommitRetry {
 
 #[derive(Clone, Debug)]
 pub struct HistoryState {
+    pub indexed: crate::indexed_history::IndexedHistoryState,
+    pub authors: crate::history_authors::HistoryAuthorsState,
     pub history_scope: LogScope,
     /// Case-insensitive author filter for the history, or `None` for all
     /// authors. Matches the author name shown in the UI.
@@ -1014,6 +1016,8 @@ pub struct HistoryState {
     pub(crate) commit_signatures_in_flight: bool,
     pub(crate) commit_signatures_cancellation: gitcomet_core::services::CancellationToken,
     pub multi_selection: CommitMultiSelection,
+    selected_ids: Arc<FxHashSet<CommitId>>,
+    squash_cache: Option<Arc<HistorySquashCache>>,
     /// Active "compare two points" selection: when two commits are selected (or
     /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
     /// and the changed-file list between them. `None` when no comparison is
@@ -1092,9 +1096,30 @@ impl Default for CommitLookup {
     }
 }
 
+#[derive(Clone, Debug)]
+struct HistorySquashCache {
+    key: (usize, u64, u64, u64, Option<CommitId>, usize),
+    // Pin identities used by the cache key across asynchronous snapshots.
+    _selection: Arc<Vec<CommitId>>,
+    _index: Option<gitcomet_core::history_index::HistoryIndexHandle>,
+    plan: Option<gitcomet_core::squash::SquashPlan>,
+}
+
+impl HistoryState {
+    pub fn selection_contains(&self, id: &CommitId) -> bool {
+        if self.selected_ids.len() == self.multi_selection.commits.len() {
+            self.selected_ids.contains(id)
+        } else {
+            self.multi_selection.contains(id)
+        }
+    }
+}
+
 impl Default for HistoryState {
     fn default() -> Self {
         Self {
+            indexed: Default::default(),
+            authors: Default::default(),
             history_scope: LogScope::default(),
             history_author_filter: None,
             log: Loadable::NotLoaded,
@@ -1122,6 +1147,8 @@ impl Default for HistoryState {
             commit_signatures_in_flight: false,
             commit_signatures_cancellation: Default::default(),
             multi_selection: CommitMultiSelection::default(),
+            selected_ids: Arc::new(FxHashSet::default()),
+            squash_cache: None,
             range_selection: None,
             worktree_selection: None,
             worktree_selection_rev: 0,
@@ -1146,7 +1173,7 @@ impl Default for HistoryState {
 /// resolution hint trusted only while the log revision is unchanged.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommitMultiSelection {
-    pub commits: Vec<CommitId>,
+    pub commits: Arc<Vec<CommitId>>,
     pub anchor: Option<CommitId>,
     pub anchor_index: Option<usize>,
     pub anchor_log_rev: Option<u64>,
@@ -2329,7 +2356,9 @@ impl RepoState {
         if self.history_state.history_scope == scope {
             return;
         }
+        self.history_state.indexed.reset_query();
         self.history_state.history_scope = scope;
+        self.history_state.authors.cancellation.cancel();
         self.bump_log_revs();
     }
 
@@ -2337,6 +2366,7 @@ impl RepoState {
         if self.history_state.history_author_filter == author {
             return;
         }
+        self.history_state.indexed.reset_query();
         self.history_state.history_author_filter = author;
         self.bump_log_revs();
     }
@@ -2416,6 +2446,7 @@ impl RepoState {
             // relies on this. A range comparison is likewise a form of
             // selection, so it must dissolve here as well.
             self.history_state.multi_selection = CommitMultiSelection::default();
+            self.history_state.selected_ids = Arc::new(FxHashSet::default());
             self.clear_range_comparison();
         }
         if let Some(previous) = &self.history_state.selected_commit
@@ -2423,6 +2454,7 @@ impl RepoState {
             && self.history_state.commit_signatures.contains_key(previous)
             && let Loadable::Ready(page) = &self.log
             && !page.commits.iter().any(|commit| &commit.id == previous)
+            && !self.history_state.indexed.contains_loaded_commit(previous)
         {
             Arc::make_mut(&mut self.history_state.commit_signatures).remove(previous);
             if self
@@ -2502,9 +2534,86 @@ impl RepoState {
         self.history_state.range_files_rev = self.history_state.range_files_rev.wrapping_add(1);
     }
 
+    fn history_squash_key(&self) -> (usize, u64, u64, u64, Option<CommitId>, usize) {
+        (
+            Arc::as_ptr(&self.history_state.multi_selection.commits) as usize,
+            self.log_rev,
+            self.head_branch_rev,
+            self.branches_rev,
+            self.detached_head_commit.clone(),
+            self.history_state
+                .indexed
+                .index
+                .as_ref()
+                .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+                .map_or(0, |index| Arc::as_ptr(index) as usize),
+        )
+    }
+
+    /// Called on the store worker before publication, once per selection/topology.
+    pub(crate) fn prepare_history_squash_plan(&mut self) {
+        if !self.history_state.multi_selection.is_multi() {
+            self.history_state.squash_cache = None;
+            return;
+        }
+        let key = self.history_squash_key();
+        if self
+            .history_state
+            .squash_cache
+            .as_ref()
+            .is_some_and(|cache| cache.key == key)
+        {
+            return;
+        }
+        let plan = self.compute_history_squash_plan();
+        self.history_state.squash_cache = Some(Arc::new(HistorySquashCache {
+            key,
+            _selection: self.history_state.multi_selection.commits.clone(),
+            _index: self.history_state.indexed.index.clone(),
+            plan,
+        }));
+    }
+
+    pub fn history_squash_plan(&self) -> Option<gitcomet_core::squash::SquashPlan> {
+        if let Some(cache) = &self.history_state.squash_cache
+            && cache.key == self.history_squash_key()
+        {
+            return cache.plan.clone();
+        }
+        self.compute_history_squash_plan()
+    }
+
+    fn compute_history_squash_plan(&self) -> Option<gitcomet_core::squash::SquashPlan> {
+        let head = self.head_commit_id()?;
+        if let Some(index) = self
+            .history_state
+            .indexed
+            .index
+            .as_ref()
+            .filter(|index| Some(&index.snapshot) == self.history_state.log_snapshot.as_ref())
+        {
+            return gitcomet_core::squash::squash_eligibility_indexed(
+                index,
+                &self.history_state.multi_selection.commits,
+                &head,
+            );
+        }
+        let Loadable::Ready(page) = &self.log else {
+            return None;
+        };
+        gitcomet_core::squash::squash_eligibility(
+            &page.commits,
+            &self.history_state.multi_selection.commits,
+            &head,
+        )
+    }
+
     pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {
         if self.history_state.multi_selection == v {
             return;
+        }
+        if !Arc::ptr_eq(&self.history_state.multi_selection.commits, &v.commits) {
+            self.history_state.selected_ids = Arc::new(v.commits.iter().cloned().collect());
         }
         self.history_state.multi_selection = v;
         self.history_state.selected_commit_rev =
@@ -2561,6 +2670,7 @@ impl RepoState {
             .into_iter()
             .filter(|(id, signature)| {
                 let displayed = self.history_state.selected_commit.as_ref() == Some(id)
+                    || self.history_state.indexed.contains_loaded_commit(id)
                     || match &self.log {
                         Loadable::Ready(page) => page.commits.iter().any(|commit| &commit.id == id),
                         _ => true,
@@ -2700,6 +2810,8 @@ impl RepoState {
     pub(crate) fn bump_load_epoch(&mut self) -> u64 {
         let previous = self.load_epoch;
         self.load_epoch = self.load_epoch.wrapping_add(1);
+        self.history_state.indexed.cancel();
+        self.history_state.authors.cancellation.cancel();
         previous
     }
 }

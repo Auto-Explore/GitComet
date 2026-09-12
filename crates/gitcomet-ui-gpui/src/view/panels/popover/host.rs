@@ -1245,15 +1245,7 @@ impl PopoverHost {
         repo_id: RepoId,
     ) -> Option<gitcomet_core::squash::SquashPlan> {
         let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
-        let Loadable::Ready(page) = &repo.log else {
-            return None;
-        };
-        let head = repo.head_commit_id()?;
-        gitcomet_core::squash::squash_eligibility(
-            &page.commits,
-            &repo.history_state.multi_selection.commits,
-            &head,
-        )
+        repo.history_squash_plan()
     }
 
     /// Populates the squash prompt's inputs from the loaded message preview.
@@ -2949,8 +2941,14 @@ impl PopoverHost {
                         limit: 200,
                     });
                 }
-                PopoverKind::HistoryAuthorFilter { .. } => {
+                PopoverKind::HistoryAuthorFilter { repo_id } => {
                     self.ensure_history_author_filter_search_input(window, cx);
+                    self.store.dispatch(Msg::HistoryAuthors(
+                        gitcomet_state::history_authors::HistoryAuthorsMsg::Ensure {
+                            repo_id: *repo_id,
+                            retry: true,
+                        },
+                    ));
                 }
                 PopoverKind::PushSetUpstreamPrompt {
                     repo_id,

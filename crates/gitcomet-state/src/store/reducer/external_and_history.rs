@@ -526,6 +526,9 @@ pub(super) fn interactive_cherry_pick_messages_loaded(
                         ));
                         return vec![];
                     };
+                    if entry.summary.is_empty() {
+                        entry.summary = message.lines().next().unwrap_or_default().to_owned();
+                    }
                     entry.message = message;
                     ordered_entries.push(entry);
                 }
@@ -708,6 +711,7 @@ pub(super) fn log_loaded(
         // paging toward its target — one clear per batch, which the details pane
         // shows as a flicker between the commit and the working tree.
         if !is_load_more
+            && repo_state.history_state.indexed.index.is_none()
             && !repo_state.history_state.multi_selection.commits.is_empty()
             && let Loadable::Ready(page) = &repo_state.log
         {
@@ -721,7 +725,7 @@ pub(super) fn log_loaded(
             };
 
             let mut next = repo_state.history_state.multi_selection.clone();
-            next.commits.retain(&survives);
+            Arc::make_mut(&mut next.commits).retain(&survives);
             if let Some(anchor) = &next.anchor
                 && !survives(anchor)
             {

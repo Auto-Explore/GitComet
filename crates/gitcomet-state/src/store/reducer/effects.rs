@@ -844,7 +844,7 @@ pub(super) fn select_commit_multi(
     commit_id: CommitId,
     mode: CommitSelectMode,
     clicked_index: Option<usize>,
-    visible_order: Option<Vec<CommitId>>,
+    mut visible_order: Option<Vec<CommitId>>,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -860,7 +860,7 @@ pub(super) fn select_commit_multi(
         }
         CommitSelectMode::Toggle => {
             if let Some(ix) = sel.commits.iter().position(|c| *c == commit_id) {
-                sel.commits.remove(ix);
+                Arc::make_mut(&mut sel.commits).remove(ix);
                 let Some(focus) = sel.commits.last().cloned() else {
                     // Toggled the last commit away: clear the selection
                     // entirely (also dissolves the multi-selection).
@@ -870,7 +870,7 @@ pub(super) fn select_commit_multi(
                 };
                 focus
             } else {
-                sel.commits.push(commit_id.clone());
+                Arc::make_mut(&mut sel.commits).push(commit_id.clone());
                 sel.anchor = Some(commit_id.clone());
                 sel.anchor_index = clicked_index;
                 sel.anchor_log_rev = Some(log_rev);
@@ -905,7 +905,11 @@ pub(super) fn select_commit_multi(
                     } else {
                         (clicked_ix, anchor_ix)
                     };
-                    sel.commits = entries[a..=b].to_vec();
+                    sel.commits = Arc::new(if a == 0 && b + 1 == entries.len() {
+                        visible_order.take().unwrap()
+                    } else {
+                        entries[a..=b].to_vec()
+                    });
                     if sel.anchor.is_none() {
                         sel.anchor = Some(commit_id.clone());
                     }
@@ -1011,6 +1015,27 @@ fn merged_selection_range(
     repo_state: &RepoState,
     selected: &[CommitId],
 ) -> Option<(CommitId, CommitId)> {
+    let indexed = &repo_state.history_state.indexed;
+    if let Some(index) = indexed
+        .displayed_index
+        .as_ref()
+        .or(indexed.range_index.as_ref())
+    {
+        let positions: Option<Vec<usize>> = selected
+            .iter()
+            .map(|id| index.position(id.as_ref()))
+            .collect();
+        if let Some(positions) = positions {
+            let newest = *positions.iter().min()?;
+            let oldest = *positions.iter().max()?;
+            return Some((
+                index
+                    .parent_commit_id(oldest, 0)
+                    .unwrap_or_else(|| CommitId(EMPTY_TREE_ID.into())),
+                index.commit_id(newest)?,
+            ));
+        }
+    }
     let Loadable::Ready(page) = &repo_state.history_state.log else {
         return None;
     };
@@ -1241,8 +1266,7 @@ fn collapse_multi_selection_to(
     clicked_index: Option<usize>,
     log_rev: u64,
 ) {
-    sel.commits.clear();
-    sel.commits.push(commit_id.clone());
+    sel.commits = Arc::new(vec![commit_id.clone()]);
     sel.anchor = Some(commit_id);
     sel.anchor_index = clicked_index;
     sel.anchor_log_rev = Some(log_rev);
@@ -2718,15 +2742,7 @@ pub(super) fn reflog_loaded(
 pub(super) fn squash_plan_for_repo(
     repo_state: &RepoState,
 ) -> Option<gitcomet_core::squash::SquashPlan> {
-    let Loadable::Ready(page) = &repo_state.log else {
-        return None;
-    };
-    let head = repo_state.head_commit_id()?;
-    gitcomet_core::squash::squash_eligibility(
-        &page.commits,
-        &repo_state.history_state.multi_selection.commits,
-        &head,
-    )
+    repo_state.history_squash_plan()
 }
 
 pub(super) fn prepare_squash(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
