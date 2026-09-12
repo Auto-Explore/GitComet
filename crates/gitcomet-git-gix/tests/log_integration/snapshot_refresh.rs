@@ -454,12 +454,33 @@ fn indexed_history_matches_empty_and_shallow_repositories() {
     }
 }
 
+/// Resident and peak-resident memory of this process in MiB, Linux only.
+fn resident_mib() -> Option<(f64, f64)> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let field = |name: &str| {
+        status
+            .lines()
+            .find(|line| line.starts_with(name))
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|kb| kb.parse::<f64>().ok())
+            .map(|kb| kb / 1024.0)
+    };
+    Some((field("VmRSS:")?, field("VmHWM:")?))
+}
+
 #[test]
 #[ignore = "set GITCOMET_HISTORY_BENCH_REPO to benchmark a real repository"]
 fn indexed_history_large_repository_benchmark() {
     use std::time::Instant;
     let path = std::env::var("GITCOMET_HISTORY_BENCH_REPO").expect("GITCOMET_HISTORY_BENCH_REPO");
+    let report_memory = |phase: &str| {
+        if let Some((rss, peak)) = resident_mib() {
+            eprintln!("memory phase={phase} rss_mib={rss:.1} peak_mib={peak:.1}");
+        }
+    };
+    report_memory("start");
     let repo = GixBackend.open(Path::new(&path)).unwrap();
+    report_memory("opened");
     let cancellation = CancellationToken::new();
     let started = Instant::now();
     let index = repo
@@ -472,6 +493,7 @@ fn indexed_history_large_repository_benchmark() {
         started.elapsed().as_secs_f64(),
         index.estimated_bytes() as f64 / 1048576.0
     );
+    report_memory("indexed");
     let _capture = gitcomet_core::git_ops_trace::capture();
     let mut samples = Vec::new();
     for round in 0..4 {
@@ -491,6 +513,22 @@ fn indexed_history_large_repository_benchmark() {
             eprintln!("first ten block reads ms={samples:?}");
         }
     }
+    report_memory("ranges_read");
+    // Every block of the history once, as a scroll to the bottom would touch it.
+    let started = Instant::now();
+    let mut blocks = 0usize;
+    for start in (0..index.len()).step_by(256) {
+        let range = repo
+            .read_history_range(&index, start..(start + 256).min(index.len()), &cancellation)
+            .unwrap();
+        std::hint::black_box(&range);
+        blocks += 1;
+    }
+    eprintln!(
+        "full scan blocks={blocks} seconds={:.3}",
+        started.elapsed().as_secs_f64()
+    );
+    report_memory("full_scan");
     for (name, values) in [("first_touch", &samples[..10]), ("warm", &samples[10..])] {
         let mut values = values.to_vec();
         values.sort_by(f64::total_cmp);
@@ -560,6 +598,39 @@ fn indexed_history_reads_headers_only_when_needed_and_decodes_ranges_once() {
             }
         }
     }
+}
+
+#[test]
+fn indexed_range_reads_reopen_their_object_store_every_sixty_four_blocks() {
+    use gitcomet_core::history_perf::{Work, capture, count};
+    let dir = fixture(600);
+    let repo = GixBackend.open(dir.path()).unwrap();
+    let cancel = CancellationToken::new();
+    let index = repo
+        .build_history_index(HistoryMode::FullReachable, None, &cancel, &mut |_| {})
+        .unwrap()
+        .unwrap();
+    let _capture = capture();
+    let expected = repo.read_history_range(&index, 0..256, &cancel).unwrap();
+    assert_eq!(
+        count(Work::RangeStoreReopen),
+        1,
+        "first read opens the store"
+    );
+    for block in 1..130 {
+        let range = repo.read_history_range(&index, 256..512, &cancel).unwrap();
+        assert_eq!(range.commits.len(), 256);
+        assert_eq!(
+            count(Work::RangeStoreReopen),
+            1 + (block / 64) as u64,
+            "block {block}"
+        );
+    }
+    let again = repo.read_history_range(&index, 0..256, &cancel).unwrap();
+    assert_eq!(
+        again.commits, expected.commits,
+        "a re-opened store reads the same objects"
+    );
 }
 
 #[test]

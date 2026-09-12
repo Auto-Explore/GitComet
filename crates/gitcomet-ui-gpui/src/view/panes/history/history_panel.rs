@@ -79,7 +79,7 @@ impl HistoryView {
                 .when(
                     self.loading
                         .initial_skeleton_visible(cx.background_executor().now()),
-                    |body| body.children((0..rows).map(|row| self.history_skeleton_row(row))),
+                    |body| body.children((0..rows).map(|row| self.history_skeleton_row(row, None))),
                 )
                 .into_any_element()
         } else if count == 0 {

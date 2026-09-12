@@ -92,6 +92,18 @@ impl IndexedGraph {
                 .sum::<usize>()
     }
 
+    /// Retained bytes of the per-column lane spans that resolve selected-lane
+    /// highlights, including each column's vector header.
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub fn lane_span_bytes(&self) -> usize {
+        self.lane_spans.capacity() * std::mem::size_of::<Vec<LaneSpan>>()
+            + self
+                .lane_spans
+                .iter()
+                .map(|spans| spans.capacity() * std::mem::size_of::<LaneSpan>())
+                .sum::<usize>()
+    }
+
     /// Unused elements retained by the checkpoints, as element counts.
     #[cfg(test)]
     pub fn checkpoint_capacity_slack(&self) -> usize {
@@ -856,6 +868,9 @@ impl IndexedHistoryFixture {
     pub fn checkpoint_bytes(&self) -> usize {
         self.graph.checkpoint_bytes()
     }
+    pub fn lane_span_bytes(&self) -> usize {
+        self.graph.lane_span_bytes()
+    }
     pub fn clear_window(&self) {
         *self.graph.window_cache.lock().unwrap() = None;
         *self.graph.geometry_cache.lock().unwrap() = None;
@@ -918,10 +933,11 @@ mod performance_regressions {
                 cold.sort_by(f64::total_cmp);
                 warm.sort_by(f64::total_cmp);
                 eprintln!(
-                    "rows={count} width={width} construct_s={:.3} retained_bytes={} checkpoint_bytes={} first_touch_ms_p50_p95_p99={:?} warm_ms_p50_p95_p99={:?}",
+                    "rows={count} width={width} construct_s={:.3} retained_bytes={} checkpoint_bytes={} lane_span_bytes={} first_touch_ms_p50_p95_p99={:?} warm_ms_p50_p95_p99={:?}",
                     construction.as_secs_f64(),
                     fixture.retained_bytes(),
                     fixture.checkpoint_bytes(),
+                    fixture.lane_span_bytes(),
                     [cold[50], cold[95], cold[99]],
                     [warm[50], warm[95], warm[99]]
                 );

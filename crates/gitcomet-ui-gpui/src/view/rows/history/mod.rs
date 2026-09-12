@@ -22,15 +22,25 @@ impl HistoryView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        Self::render_history_rows(this, range, cx)
+        Self::render_history_rows(this, range, None, cx)
     }
 
+    /// `placement` is the indexed viewport's (row height, sub-row offset): rows
+    /// then position themselves absolutely instead of each sitting in a wrapper
+    /// layout node of its own.
     pub(in crate::view) fn render_history_rows(
         this: &mut Self,
         range: Range<usize>,
+        placement: Option<(f64, f64)>,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         this.sync_history_loading_rows(range.clone(), cx);
+        let range_start = range.start;
+        let row_top = move |list_ix: usize| {
+            placement.map(|(height, within)| {
+                px(((list_ix - range_start) as f64 * height - within) as f32)
+            })
+        };
         this.clear_history_row_hover_if_scrolled(cx);
         let (_, worktree_counts) = this.ensure_history_worktree_summary_cache();
         let indexed = this.indexed.presentation.is_some();
@@ -117,6 +127,7 @@ impl HistoryView {
                         return Some(worktree_uncommitted_history_row(
                             theme,
                             ui_scale,
+                            row_top(list_ix),
                             col_branch,
                             col_graph,
                             col_author,
@@ -152,6 +163,7 @@ impl HistoryView {
                         return Some(working_tree_summary_history_row(
                             theme,
                             ui_scale,
+                            row_top(list_ix),
                             col_branch,
                             col_graph,
                             col_author,
@@ -234,6 +246,7 @@ impl HistoryView {
                     Some(history_table_row(
                         theme,
                         ui_scale,
+                        row_top(list_ix),
                         branch_names,
                         col_branch,
                         col_graph,
@@ -268,14 +281,19 @@ impl HistoryView {
                         cx,
                     ))
                 })()
-                .unwrap_or_else(|| this.history_loading_row(list_ix, cx))
+                .unwrap_or_else(|| this.history_loading_row(list_ix, row_top(list_ix), cx))
             })
             .collect()
     }
-    fn history_loading_row(&self, list_ix: usize, cx: &mut gpui::Context<Self>) -> AnyElement {
+    fn history_loading_row(
+        &self,
+        list_ix: usize,
+        row_top: Option<Pixels>,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
         let height = history_row_height(self.ui_scale());
         let Some(shown) = self.indexed.presentation.as_ref() else {
-            return div().h(height).into_any_element();
+            return place_history_row(div().h(height), row_top).into_any_element();
         };
         let raw = self.indexed.plan.row_at(list_ix).and_then(|row| match row {
             HistoryListRow::Commit { visible_ix }
@@ -299,16 +317,17 @@ impl HistoryView {
                 .loading
                 .skeleton_visible(list_ix, cx.background_executor().now())
             {
-                self.history_skeleton_row(list_ix).into_any_element()
-            } else {
-                div()
-                    .id(("history_loading", list_ix))
-                    .h(height)
-                    .w_full()
+                self.history_skeleton_row(list_ix, row_top)
                     .into_any_element()
+            } else {
+                place_history_row(
+                    div().id(("history_loading", list_ix)).h(height).w_full(),
+                    row_top,
+                )
+                .into_any_element()
             };
         }
-        div()
+        let row = div()
             .id(("history_loading", list_ix))
             .debug_selector(move || format!("history_loading_error_{list_ix}"))
             .h(height)
@@ -325,11 +344,15 @@ impl HistoryView {
                         this.retry_indexed_window(repo_id, snapshot.clone(), block);
                     }),
                 )
-            })
-            .into_any_element()
+            });
+        place_history_row(row, row_top).into_any_element()
     }
 
-    pub(in crate::view) fn history_skeleton_row(&self, list_ix: usize) -> AnyElement {
+    pub(in crate::view) fn history_skeleton_row(
+        &self,
+        list_ix: usize,
+        row_top: Option<Pixels>,
+    ) -> AnyElement {
         let scale = self.ui_scale();
         let (graph, author, date, sha) = self.history_visible_columns();
         let pad = scale.px(HISTORY_COL_HANDLE_PX / 2.0);
@@ -352,7 +375,7 @@ impl HistoryView {
                 .overflow_hidden()
                 .child(bar(scale.px(content_width)))
         };
-        div()
+        let row = div()
             .id(("history_skeleton", list_ix))
             .debug_selector(move || format!("history_skeleton_{list_ix}"))
             .h(history_row_height(scale))
@@ -375,8 +398,17 @@ impl HistoryView {
             )
             .when(author, |row| row.child(cell(self.history_col_author, 80.0)))
             .when(date, |row| row.child(cell(self.history_col_date, 64.0)))
-            .when(sha, |row| row.child(cell(self.history_col_sha, 48.0)))
-            .into_any_element()
+            .when(sha, |row| row.child(cell(self.history_col_sha, 48.0)));
+        place_history_row(row, row_top).into_any_element()
+    }
+}
+
+/// Rows in the indexed viewport position themselves; a wrapper node per row
+/// would double the list's layout work.
+fn place_history_row<E: Styled>(row: E, top: Option<Pixels>) -> E {
+    match top {
+        Some(top) => row.absolute().left_0().w_full().top(top),
+        None => row,
     }
 }
 
@@ -428,6 +460,7 @@ fn history_scope_shows_graph_color_marker(scope: gitcomet_core::domain::LogScope
 fn history_table_row(
     theme: AppTheme,
     ui_scale: ui_scale::UiScale,
+    row_top: Option<Pixels>,
     branch_names: HistoryBranchNamesMode,
     col_branch: Pixels,
     col_graph: Pixels,
@@ -605,7 +638,7 @@ fn history_table_row(
         );
     }
 
-    row.into_any_element()
+    place_history_row(row, row_top).into_any_element()
 }
 
 /// One linked worktree's uncommitted changes, rendered directly above the commit
@@ -618,6 +651,7 @@ fn history_table_row(
 fn worktree_uncommitted_history_row(
     theme: AppTheme,
     ui_scale: ui_scale::UiScale,
+    row_top: Option<Pixels>,
     col_branch: Pixels,
     col_graph: Pixels,
     col_author: Pixels,
@@ -875,13 +909,14 @@ fn worktree_uncommitted_history_row(
         }
     }
 
-    row.into_any_element()
+    place_history_row(row, row_top).into_any_element()
 }
 
 #[allow(clippy::too_many_arguments)]
 fn working_tree_summary_history_row(
     theme: AppTheme,
     ui_scale: ui_scale::UiScale,
+    row_top: Option<Pixels>,
     col_branch: Pixels,
     col_graph: Pixels,
     col_author: Pixels,
@@ -1104,7 +1139,7 @@ fn working_tree_summary_history_row(
         }
     }
 
-    row.into_any_element()
+    place_history_row(row, row_top).into_any_element()
 }
 
 mod markdown_preview_rows;

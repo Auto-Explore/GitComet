@@ -493,6 +493,13 @@ impl HistoryIndexBuilder {
         cancellation.check_cancelled()?;
         drop(keyed);
         drop(self.parent_ids);
+        // The tables were grown a commit at a time; the doubling slack is a few
+        // MiB on a two-million-commit history and is retained for its lifetime.
+        self.index.ids.shrink_to_fit();
+        self.index.parent_offsets.shrink_to_fit();
+        self.index.external_edges.shrink_to_fit();
+        self.index.external_ids.shrink_to_fit();
+        self.index.probable_stashes.shrink_to_fit();
         Ok(Arc::new(self.index))
     }
 }
@@ -879,6 +886,46 @@ mod lookup_regressions {
             pushed.as_secs_f64(),
             started.elapsed().as_secs_f64(),
             index.estimated_bytes() as f64 / 1048576.0
+        );
+    }
+
+    #[test]
+    fn finished_index_retains_no_growth_slack() {
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot("slack".into()),
+            HistoryMode::FullReachable,
+            20,
+        )
+        .unwrap();
+        let mut ids = Vec::new();
+        for row in 0..70_000u32 {
+            let mut id = [0u8; 20];
+            id[..4].copy_from_slice(&row.to_be_bytes());
+            let parent = ids.last().copied();
+            builder
+                .push(
+                    &id,
+                    parent.iter().map(|parent: &[u8; 20]| parent.as_slice()),
+                    row % 5_000 == 0,
+                )
+                .unwrap();
+            ids.push(id);
+        }
+        let index = builder.finish(&CancellationToken::new()).unwrap();
+        assert_eq!(index.ids.capacity(), index.ids.len());
+        assert_eq!(index.parent_offsets.capacity(), index.parent_offsets.len());
+        assert_eq!(index.parents.capacity(), index.parents.len());
+        assert_eq!(
+            index.probable_stashes.capacity(),
+            index.probable_stashes.len()
+        );
+        assert_eq!(
+            index.estimated_bytes(),
+            index.len() * 20
+                + (index.len() * 2 + 1) * 4
+                + (index.len() - 1) * 4
+                + 65_537 * 4
+                + 14 * 4
         );
     }
 

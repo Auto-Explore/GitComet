@@ -1468,6 +1468,11 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(100);
+    // Visible rows; sweeping it separates the rows' cost from the window's.
+    let rows: f32 = std::env::var("GITCOMET_BENCH_ROWS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(38.0);
     cx.update(|app| {
         crate::ui_scale::set_current(app, scale);
     });
@@ -1549,7 +1554,7 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
     });
     cx.simulate_resize(gpui::size(
         size.width,
-        size.height - px(viewport as f32) + px(38.0 * height as f32),
+        size.height - px(viewport as f32) + px(rows * height as f32),
     ));
     cx.run_until_parked();
     let mut timings = Vec::new();
@@ -1558,6 +1563,18 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
     let mut input = Vec::new();
     let mut allocations = crate::perf_alloc::PerfAllocMetrics::default();
     let bounds = cx.debug_bounds("indexed_history_viewport").unwrap();
+    // Production caches the shell views; tests mount them uncached because the
+    // reuse path does not replay debug bounds. GITCOMET_BENCH_CACHED_VIEWS=1
+    // switches to the shipping configuration once setup no longer needs them,
+    // and two warm-up frames fill the caches before timing starts.
+    let _cached_views = std::env::var_os("GITCOMET_BENCH_CACHED_VIEWS")
+        .map(|_| crate::view::enable_stable_cached_views_for_test());
+    for _ in 0..2 {
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+    }
     for frame in 0..100 {
         let _capture = history_perf::capture();
         let started = Instant::now();
@@ -1573,9 +1590,20 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
         input.push(started.elapsed().as_secs_f64() * 1000.0);
         let _draw_capture = history_perf::capture();
         let draw_started = Instant::now();
+        // The default draw forces a refresh, as a hover change would. Set
+        // GITCOMET_BENCH_NO_REFRESH=1 to time the notify-only frame a wheel
+        // event produces when nothing else invalidated the window.
         let (_, allocation) = crate::perf_alloc::measure_allocations(|| {
             cx.update(|window, app| {
-                window.refresh();
+                if std::env::var_os("GITCOMET_BENCH_NO_REFRESH").is_none() {
+                    window.refresh();
+                }
+                view.read(app)
+                    .main_pane
+                    .read(app)
+                    .history_view
+                    .clone()
+                    .update(app, |_, cx| cx.notify());
                 let _ = window.draw(app);
             })
         });
@@ -1629,5 +1657,34 @@ fn indexed_history_real_frame_benchmark(cx: &mut gpui::TestAppContext) {
         timings[95],
         timings[99],
         paths.iter().max().unwrap()
+    );
+    // UI-thread cost of handing the shown window to a rebuild: jump a block
+    // and time the synchronous part of the rebuild request. Measured last so
+    // the in-flight rebuild cannot disturb the frames above.
+    let mut rebuild_us = Vec::new();
+    for step in 1..=5 {
+        rebuild_us.push(cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .history_view
+                .clone()
+                .update(app, |history, cx| {
+                    {
+                        let mut interaction = history.scroll_interaction.borrow_mut();
+                        let logical = interaction.logical.as_mut().unwrap();
+                        logical.set_position((10_000.0 + 300.0 * step as f64) * logical.height);
+                    }
+                    let started = Instant::now();
+                    history.prepare_indexed_window(cx);
+                    started.elapsed().as_secs_f64() * 1e6
+                })
+        }));
+        cx.run_until_parked();
+    }
+    rebuild_us.sort_by(f64::total_cmp);
+    eprintln!(
+        "GPUI window rebuild request ui_thread_us_min={:.1} median={:.1} max={:.1}",
+        rebuild_us[0], rebuild_us[2], rebuild_us[4]
     );
 }

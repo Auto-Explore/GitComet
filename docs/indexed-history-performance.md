@@ -207,6 +207,108 @@ Same workstation and harnesses as above; "before" is commit 9b217890.
 The ignored `history_index_finish_phase_timing` and
 `integration_containment_walk_timing` tests reproduce the last two rows in-tree.
 
+## Follow-up 2: quads for straight lanes, one layout node per row
+
+Profiling the release frame benchmark after the follow-up above put about 90%
+of samples inside GPUI (taffy layout, bounds tree, style refinement, element-id
+hashing) and 10% in the allocator; the graph painter was under 3%. Sweeping
+`GITCOMET_BENCH_ROWS` (4 versus 38 visible rows on the same binary) showed the
+history rows themselves cost 0.86 ms of a 2.69 ms test-profile frame, with
+about 114 allocations and 89 KB per row, most of it lyon tessellation of
+straight lane segments.
+
+- Straight vertical lane runs are painted as quads: the same rectangle a
+  butt-capped stroke yields, without a tessellated path per segment. Only
+  elbows and join stubs remain paths. Quads paint under paths within a layer, so
+  on the collapsed edge line an elbow now covers a straight run that used to
+  be painted after it; nothing else changes.
+  (`indexed_history_actual_paint_paths_are_bounded_by_displayed_columns` now
+  asserts straight rows tessellate nothing.)
+- Rows in the indexed viewport position themselves absolutely instead of each
+  sitting in a wrapper layout node.
+- The benchmark's `GPUI window rebuild request` probe measured the UI-thread
+  cost of handing the shown window to a rebuild at about 12 µs, so sharing the
+  window across threads was not pursued.
+
+| Case, 80 px graph, before → after | Test profile | Release |
+| --- | ---: | ---: |
+| Draw p50 at 38 rows, 64 lanes | 2.69 → 2.49 ms | 1.69 → 1.54 ms |
+| Draw p50 at 38 rows, 5,261 lanes | 2.67 → 2.42 ms | 1.73 → 1.56 ms |
+| Draw p50 at 4 rows, 64 lanes | 1.83 → 1.84 ms | — → 1.17 ms |
+| Allocations per draw, 38 rows | 10,199 → 7,169 | 8,896 → 5,987 |
+| Allocated bytes per draw, 38 rows | 6.06 → 3.27 MB | 5.61 → 2.86 MB |
+| Tessellated paths per frame | 400 → 0 | 400 → 0 |
+
+### What the benchmark's default frame overstates
+
+The test binary mounts the shell views uncached (`stable_cached_views_enabled`
+is false under `cfg(test)`), and the measured draw forces `window.refresh()`.
+Shipping builds wrap the title bar, action bar, tabs bar, status bar, sidebar,
+main pane and details pane in `AnyView::cached`, and a wheel event only
+notifies the history view, so a scroll frame reuses every other pane's
+prepaint and paint and lays out only the dirty subtree. `GITCOMET_BENCH_CACHED_VIEWS=1`
+opts the benchmark into the shipping configuration after setup and
+`GITCOMET_BENCH_NO_REFRESH=1` times that notify-only frame:
+
+| Shipping-shaped frame, 80 px graph | Test profile | Release |
+| --- | ---: | ---: |
+| Draw p50 at 38 rows, 64 lanes | 1.29 ms | 0.84 ms |
+| Draw p50 at 38 rows, 5,261 lanes | 1.30 ms | 0.85 ms |
+| Draw p50 at 4 rows, 64 lanes | 0.79 ms | 0.50 ms |
+| Allocations per draw, 38 rows | 3,015 | 2,509 |
+| Refresh frame (hover change) at 38 rows, cached views | — | 1.59 ms |
+
+So a release scroll frame costs about 0.84 ms, of which the rows are about
+0.34 ms, roughly 10 µs each; the rest is the window's own layout and the cached
+placeholders. A hover change or tooltip forces a refresh frame at about twice
+that. Lane count no longer matters.
+
+## Follow-up 3: memory on large repositories
+
+Measured with the ignored backend benchmark, which now reports resident and
+peak-resident memory from `/proc/self/status`, on the chromium checkout
+(1,922,916 commits, 66 GB of packs, a commit-graph chain):
+
+| Phase | Resident MiB | Peak MiB |
+| --- | ---: | ---: |
+| Repository opened | 8.7 | 8.7 |
+| Index built (59.1 MiB of index) | 222 | 707 |
+| Forty 256-row blocks read | 406 | 707 |
+| Every block read once, before this follow-up | 1,906 | 1,906 |
+| Every block read once, after | 891 | 896 |
+
+Three things stand out. The build's peak is gix's date-order topology walk,
+which computes in-degrees over every commit before yielding, plus the mapped
+commit-graph; the builder's own tables are the 59 MiB that remain. The heap
+structures are modest: at two million rows and 5,261 lanes the checkpoints are
+now 51 MB and the lane spans 0.45 MB. What grows as a large history is scrolled
+is the pack mapping: every page of a pack that a commit read touches stays
+resident until the mapping is dropped, and `unsafe_code = "forbid"` rules out
+advising the kernel directly.
+
+- Indexed range reads now go through a dedicated object store that is re-opened
+  every 64 blocks (`range_reader_repo`). Dropping the previous store unmaps its
+  packs; a fresh open costs a config parse. Warm block reads stayed at 2.1 ms
+  p50 and `indexed_range_reads_reopen_their_object_store_every_sixty_four_blocks`
+  pins the cadence and result equality. The remaining growth is dominated by
+  pack index pages, which every lookup re-touches: chromium's nine `.idx` files
+  total 974 MB and its commit-graph 123 MB, and there is no multi-pack index.
+- Checkpoints store one target and one colour per column, five bytes a column,
+  instead of a twelve-byte record per live lane carrying its column and a lane
+  identity; only the main lane's column is kept, since the identity is compared
+  with nothing else. 2M rows × 5,261 lanes: 123,042,752 → 51,359,273 bytes,
+  first-touch 40-row p95 1.14 → 1.13 ms. `dense_checkpoints_keep_holes_and_the_main_lane`
+  checks hole reuse and head handling across restores against the oracle.
+- The finished index shrinks its tables to size: 63.1 → 59.1 MiB at chromium
+  scale (`finished_index_retains_no_growth_slack`).
+
+Further index compaction, not done: splitting parents into a first-parent
+column plus an overflow table for merges would save about 6 MiB of the 59 on
+chromium at unchanged lookup cost with a rank bitset; referencing IDs by
+commit-graph position instead of storing the 20-byte table would save about
+30 MiB where a complete commit-graph exists, at the cost of a fallback path and
+ID reads through the mapped graph.
+
 ## Verification
 
 The full core, state, backend log-integration and GPUI library suites passed:

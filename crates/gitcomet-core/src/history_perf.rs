@@ -13,11 +13,13 @@ pub enum Work {
     ComparisonCard,
     PaintPath,
     ContainmentWalk,
+    PaintSegmentQuad,
+    RangeStoreReopen,
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
 thread_local! {
-    static COUNTS: std::cell::Cell<Option<[u64; 10]>> = const { std::cell::Cell::new(None) };
+    static COUNTS: std::cell::Cell<Option<[u64; 12]>> = const { std::cell::Cell::new(None) };
 }
 
 #[inline]
@@ -34,11 +36,11 @@ pub fn record(work: Work) {
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
-pub struct Capture(Option<[u64; 10]>);
+pub struct Capture(Option<[u64; 12]>);
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub fn capture() -> Capture {
-    Capture(COUNTS.with(|counts| counts.replace(Some([0; 10]))))
+    Capture(COUNTS.with(|counts| counts.replace(Some([0; 12]))))
 }
 
 #[cfg(any(test, feature = "benchmarks"))]

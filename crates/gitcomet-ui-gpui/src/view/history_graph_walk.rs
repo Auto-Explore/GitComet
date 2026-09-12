@@ -11,17 +11,20 @@ struct LiveLane {
     color: LaneColorIx,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct SavedLane {
-    target: u32,
-    id: u32,
-    col: u16,
-    color: LaneColorIx,
-}
+/// A column with no lane in a checkpoint. Live targets are row indices, which
+/// the index keeps below this value.
+const NO_LANE: u32 = u32::MAX;
 
+/// A frontier stored one target and one colour per column: five bytes a
+/// column, where a list of live lanes spelled out the column and a lane
+/// identity for twelve. The identity only ever distinguishes the main lane, so
+/// its column is kept instead; every other restored lane gets identity zero,
+/// which no walk assigns (identities start at one).
 #[derive(Clone, Debug)]
 pub(in crate::view) struct GraphCheckpoint {
-    lanes: Vec<SavedLane>,
+    targets: Box<[u32]>,
+    colors: Box<[LaneColorIx]>,
+    main_col: Option<u16>,
     next_id: u32,
     next_color: usize,
     main: Option<u32>,
@@ -32,43 +35,53 @@ pub(in crate::view) struct GraphCheckpoint {
 impl GraphCheckpoint {
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn estimated_bytes(&self) -> usize {
-        self.lanes.capacity() * std::mem::size_of::<SavedLane>()
+        self.targets.len() * std::mem::size_of::<u32>()
+            + self.colors.len() * std::mem::size_of::<LaneColorIx>()
     }
     #[cfg(test)]
     pub fn lane_capacity_slack(&self) -> usize {
-        self.lanes.capacity() - self.lanes.len()
+        0
+    }
+    #[cfg(test)]
+    fn width(&self) -> usize {
+        self.targets.len()
     }
     pub fn restore(&self) -> GraphWalk {
         gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::CheckpointRestore);
         // Sized up front: a wide frontier restores thousands of lanes on every
         // window miss, and growing the map from empty rehashes it a dozen times.
-        let width = self
-            .lanes
-            .last()
-            .map_or(0, |lane| usize::from(lane.col) + 1);
+        let live = self
+            .targets
+            .iter()
+            .filter(|&&target| target != NO_LANE)
+            .count();
         let mut walk = GraphWalk {
             next_id: self.next_id,
             next_color: self.next_color,
             main: self.main,
             main_target: self.main_target,
             pending: self.pending,
-            lanes: Vec::with_capacity(width),
-            targets: FxHashMap::with_capacity_and_hasher(self.lanes.len(), Default::default()),
+            lanes: Vec::with_capacity(self.targets.len()),
+            targets: FxHashMap::with_capacity_and_hasher(live, Default::default()),
             free: BTreeSet::new(),
             colors: [0; LANE_COLOR_PALETTE_SIZE],
         };
-        for saved in &self.lanes {
-            let col = usize::from(saved.col);
-            while walk.lanes.len() < col {
-                walk.free.insert(walk.lanes.len());
+        for (col, (&target, &color)) in self.targets.iter().zip(&*self.colors).enumerate() {
+            if target == NO_LANE {
+                walk.free.insert(col);
                 walk.lanes.push(None);
+                continue;
             }
+            let id = match (self.main_col, self.main) {
+                (Some(main_col), Some(main)) if usize::from(main_col) == col => main,
+                _ => 0,
+            };
             walk.place(
                 col,
                 LiveLane {
-                    id: saved.id,
-                    target: saved.target,
-                    color: saved.color,
+                    id,
+                    target,
+                    color,
                     born: usize::MAX,
                 },
             );
@@ -129,19 +142,28 @@ impl GraphWalk {
         walk
     }
     pub fn checkpoint(&self) -> GraphCheckpoint {
-        // Exact capacity: a checkpoint is retained per 1,024 rows, and a
-        // size-hinted collect keeps power-of-two slack on every one of them.
-        let mut lanes = Vec::with_capacity(self.lanes.iter().flatten().count());
-        lanes.extend(self.lanes.iter().enumerate().filter_map(|(col, lane)| {
-            lane.map(|lane| SavedLane {
-                target: lane.target,
-                id: lane.id,
-                col: lane_col(col),
-                color: lane.color,
-            })
-        }));
+        // Trailing holes are trimmed after every step, so the dense width is
+        // the frontier's; boxed slices carry no growth slack.
+        let targets = self
+            .lanes
+            .iter()
+            .map(|lane| lane.map_or(NO_LANE, |lane| lane.target))
+            .collect();
+        let colors = self
+            .lanes
+            .iter()
+            .map(|lane| lane.map_or(0, |lane| lane.color))
+            .collect();
+        let main_col = self.main.and_then(|main| {
+            self.lanes
+                .iter()
+                .position(|lane| lane.is_some_and(|lane| lane.id == main))
+                .map(lane_col)
+        });
         GraphCheckpoint {
-            lanes,
+            targets,
+            colors,
+            main_col,
             next_id: self.next_id,
             next_color: self.next_color,
             main: self.main,
@@ -404,19 +426,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checkpoints_carry_no_capacity_slack() {
+    fn checkpoints_cost_five_bytes_per_column_and_restore_presized() {
         for width in [1usize, 64, 512, 5261] {
             let mut walk = GraphWalk::new(None);
             for row in 0..width {
                 walk.step(row, &[row + width], false, false);
             }
             let checkpoint = walk.checkpoint();
-            assert_eq!(checkpoint.lanes.len(), width);
+            assert_eq!(checkpoint.width(), width);
             assert_eq!(checkpoint.lane_capacity_slack(), 0, "width={width}");
-            assert_eq!(
-                checkpoint.estimated_bytes(),
-                width * std::mem::size_of::<SavedLane>()
-            );
+            assert_eq!(checkpoint.estimated_bytes(), width * 5);
             let restored = checkpoint.restore();
             assert_eq!(restored.lanes.len(), width);
             assert_eq!(
@@ -425,6 +444,48 @@ mod tests {
                 "restore is sized up front"
             );
             assert!(restored.targets.capacity() >= width);
+        }
+    }
+
+    /// Holes and the main lane survive the dense layout: a restored walk must
+    /// keep producing the original frontier's rows, hole reuse included.
+    #[test]
+    fn dense_checkpoints_keep_holes_and_the_main_lane() {
+        // Six parallel lanes; the lane through column 2 ends at rows 8 and 20
+        // and is only re-born six rows later, so the checkpoints at rows 12 and
+        // 24 are taken while the frontier has an interior hole. Every eleventh
+        // row is a branch head, so head handling crosses restores too.
+        let mut walk = GraphWalk::new(Some(3));
+        let mut original = super::super::oracle::OracleGraphWalk::new(Some(3));
+        let parents = |row: usize| -> SmallVec<[usize; 4]> {
+            let mut parents = SmallVec::new();
+            if row != 8 && row != 20 {
+                parents.push(row + 6);
+            }
+            if row % 15 == 0 {
+                parents.push(row + 7);
+            }
+            parents
+        };
+        for row in 0..300 {
+            let parents = parents(row);
+            if row.is_multiple_of(12) && row > 0 {
+                let checkpoint = walk.checkpoint();
+                if row == 12 || row == 24 {
+                    assert!(
+                        checkpoint.targets.contains(&NO_LANE),
+                        "row {row}: the lane ended six rows earlier must still be a hole"
+                    );
+                }
+                assert!(
+                    checkpoint.main_col.is_some(),
+                    "row {row}: the seeded main lane follows first parents throughout"
+                );
+                walk = checkpoint.restore();
+            }
+            let expected = original.step(row, &parents, parents.len() > 1, row % 11 == 0);
+            let actual = walk.step(row, &parents, parents.len() > 1, row % 11 == 0);
+            assert_eq!(actual, expected, "row={row}");
         }
     }
 

@@ -257,13 +257,14 @@ pub(super) fn paint_history_graph(
     );
     for (col, lane_paint) in incoming {
         let x = x_for_col(col);
-        let mut path = PathBuilder::stroke(stroke_width);
-        path.move_to(point(left + x, y_top));
-        path.line_to(point(left + x, y_center));
-        if let Ok(p) = path.build() {
-            gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
-            window.paint_path(p, segment_color(x, lane_paint.color_ix));
-        }
+        paint_vertical_segment(
+            left + x,
+            y_top,
+            y_center,
+            stroke_width,
+            segment_color(x, lane_paint.color_ix),
+            window,
+        );
     }
 
     // Incoming join edges into the node (used both for merge commits and fork points).
@@ -331,13 +332,14 @@ pub(super) fn paint_history_graph(
                 window,
             );
         } else {
-            let mut path = PathBuilder::stroke(stroke_width);
-            path.move_to(point(left + x_out, y_center));
-            path.line_to(point(left + x_out, y_bottom));
-            if let Ok(p) = path.build() {
-                gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
-                window.paint_path(p, color);
-            }
+            paint_vertical_segment(
+                left + x_out,
+                y_center,
+                y_bottom,
+                stroke_width,
+                color,
+                window,
+            );
         }
     }
 
@@ -803,8 +805,6 @@ pub(super) fn paint_history_graph_band(
     window: &mut Window,
     cx: &mut App,
 ) {
-    use gpui::PathBuilder;
-
     if lanes.is_empty() {
         return;
     }
@@ -870,23 +870,17 @@ pub(super) fn paint_history_graph_band(
             let x = x_for_col(col);
             let from_y = if top { y_top } else { y_center };
             let to_y = if !top { y_bottom } else { y_center };
-            let mut path = PathBuilder::stroke(stroke_width);
-            path.move_to(point(left + x, from_y));
-            path.line_to(point(left + x, to_y));
-            if let Ok(p) = path.build() {
-                // The lane's own colour, not the node's: a branch head keeps the
-                // descendant lane's colour above the node, and the commit below
-                // paints its matching stub the same way -- including its wash, or the
-                // seam between the two rows reappears. The exception is the edge line
-                // beside a node on it, which matches the node like a commit row's.
-                let color = if edge_takes_node_colour(node_x_offset, x, edge_x) {
-                    node.color
-                } else {
-                    lane_wash_color(theme, lane.color_ix, row_ix, selected_lane)
-                };
-                gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
-                window.paint_path(p, color);
-            }
+            // The lane's own colour, not the node's: a branch head keeps the
+            // descendant lane's colour above the node, and the commit below
+            // paints its matching stub the same way -- including its wash, or the
+            // seam between the two rows reappears. The exception is the edge line
+            // beside a node on it, which matches the node like a commit row's.
+            let color = if edge_takes_node_colour(node_x_offset, x, edge_x) {
+                node.color
+            } else {
+                lane_wash_color(theme, lane.color_ix, row_ix, selected_lane)
+            };
+            paint_vertical_segment(left + x, from_y, to_y, stroke_width, color, window);
         }
     }
 
@@ -943,6 +937,28 @@ fn graph_col_x(col: usize, margin_x: Pixels, col_gap: Pixels, edge_x: Pixels) ->
 /// clear of the message border, but never left of column 0.
 fn graph_edge_x(margin_x: Pixels, margin_right: Pixels, width: Pixels) -> Pixels {
     (width - margin_right).max(margin_x)
+}
+
+/// A straight vertical run of a lane. A quad rather than a tessellated path:
+/// it is the same rectangle a butt-capped stroke yields, without lyon's per-path
+/// buffers, and verticals are most of what a row draws. Quads paint under any
+/// path in the layer, so only an elbow can now cover a straight run.
+fn paint_vertical_segment(
+    x: Pixels,
+    y_from: Pixels,
+    y_to: Pixels,
+    stroke_width: Pixels,
+    color: gpui::Rgba,
+    window: &mut Window,
+) {
+    gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintSegmentQuad);
+    window.paint_quad(fill(
+        Bounds::new(
+            point(x - stroke_width * 0.5, y_from),
+            size(stroke_width, y_to - y_from),
+        ),
+        color,
+    ));
 }
 
 /// Whether two x-offsets draw as one line. A connector between them is no elbow.
@@ -1966,7 +1982,13 @@ mod coalescing_regressions {
                             .h(px(28.0))
                         },
                     );
-                    counts.push(history_perf::count(Work::PaintPath));
+                    // Straight lanes are quads now; only elbows tessellate.
+                    assert_eq!(
+                        history_perf::count(Work::PaintPath),
+                        0,
+                        "pixels={pixels} band={band} width={width}"
+                    );
+                    counts.push(history_perf::count(Work::PaintSegmentQuad));
                 }
                 assert!(counts[0] > 0);
                 assert!(

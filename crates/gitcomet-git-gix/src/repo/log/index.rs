@@ -118,7 +118,7 @@ impl GixRepo {
                 "history range is outside its snapshot".into(),
             )));
         }
-        let repo = self._repo.to_thread_local();
+        let repo = self.range_reader_repo()?;
         let mut decode = CommitDecodeState::default();
         let mut header_buf = Vec::new();
         let mut commits = Vec::with_capacity(range.len());

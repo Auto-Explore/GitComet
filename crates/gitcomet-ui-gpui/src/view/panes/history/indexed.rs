@@ -1130,7 +1130,12 @@ impl HistoryView {
         let range = logical.visible_range();
         // All physical coordinates remain local to the viewport. GPUI's f32
         // Pixels never represents millions of row heights.
-        let rows = Self::render_history_rows(self, range.clone(), cx);
+        let rows = Self::render_history_rows(
+            self,
+            range.clone(),
+            Some((logical.height, logical.within)),
+            cx,
+        );
         let interaction = self.scroll_interaction.clone();
         let view = cx.entity().downgrade();
         let measure = gpui::canvas(
@@ -1171,15 +1176,7 @@ impl HistoryView {
                     .overflow_hidden()
                     .on_scroll_wheel(cx.listener(Self::history_wheel))
                     .child(measure)
-                    .children(rows.into_iter().enumerate().map(|(ix, row)| {
-                        div()
-                            .absolute()
-                            .left_0()
-                            .w_full()
-                            .top(px((ix as f64 * logical.height - logical.within) as f32))
-                            .h(row_height)
-                            .child(row)
-                    })),
+                    .children(rows),
             )
             .child(
                 components::Scrollbar::new(
