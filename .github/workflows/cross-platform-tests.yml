@@ -89,6 +89,7 @@ jobs:
             bash \
             curl \
             findutils \
+            fontconfig-devel \
             gcc \
             gcc-c++ \
             git \
@@ -100,6 +101,8 @@ jobs:
             libxcb-devel \
             libxkbcommon-devel \
             libxkbcommon-x11-devel
+      - name: Verify Fontconfig dependency
+        run: pkg-config --libs --cflags fontconfig
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Show Git version
         run: git --version
