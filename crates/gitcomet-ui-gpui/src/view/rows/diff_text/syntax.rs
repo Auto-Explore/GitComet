@@ -143,6 +143,15 @@ const TS_COMBINED_INJECTION_MAX_BYTES: usize = 128 * 1024;
 /// (~3 MB worst case). Past it the windowed fallback above takes over.
 const TS_COMBINED_LAYER_MAX_RANGES: usize = 65_536;
 
+/// What a click may spend building the combined layers it needs to answer.
+///
+/// Normally nothing: a row has to be drawn before it can be clicked, and drawing
+/// builds them. The cell is empty only when the root parse used up the whole
+/// foreground budget and the chunk build has not caught up, and a click is still
+/// an input event, so it gets the same 50 ms a cold root parse gets in
+/// `MainPaneView::file_diff_pair_syntax_document`.
+const TS_CLICK_COMBINED_LAYER_BUDGET: Duration = Duration::from_millis(50);
+
 /// Context on each side of the rendered window that a combined injection is still
 /// parsed with.
 ///
@@ -544,6 +553,32 @@ impl PreparedSyntaxTreeState {
                 .flatten()
             })
             .as_deref()
+    }
+
+    /// Layers for an interactive lookup: the built answer if there is one, else a
+    /// build capped at `deadline`.
+    ///
+    /// Deliberately not `get_or_init`. The inner `None` means "declined, use the
+    /// windowed fallback", a permanent decision the chunk builds also read, so a
+    /// slow click must not record one -- it would downgrade the whole document's
+    /// rendering. On a miss the cell stays unset, this lookup falls through to
+    /// the host tree, and the next chunk build fills it off the input path.
+    fn combined_layers_within(&self, deadline: Instant) -> Option<&[PreparedCombinedLayer]> {
+        if let Some(built) = self.combined_layers.get() {
+            return built.as_deref();
+        }
+        let spec = tree_sitter_highlight_spec(self.language)?;
+        let built = build_prepared_combined_layers(
+            spec,
+            &self.tree,
+            self.text.as_bytes(),
+            &self.line_starts,
+            self.source_hash,
+            Some(deadline),
+            TS_COMBINED_LAYER_MAX_RANGES,
+        )?;
+        let _ = self.combined_layers.set(built);
+        self.combined_layers.get()?.as_deref()
     }
 }
 

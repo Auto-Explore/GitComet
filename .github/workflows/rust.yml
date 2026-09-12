@@ -92,6 +92,43 @@ jobs:
     - name: Build (app — headless)
       run: cargo build -p gitcomet $APP_FEATURES --verbose
 
+  # The GPUI view layer. Excluded from the workspace runs everywhere else, so
+  # without this job its ~4000 tests never ran in CI at all — which is how a
+  # whole class of syntax-highlighting regression shipped unnoticed.
+  #
+  # `#[gpui::test]` is headless: it builds a TestAppContext with a NoopTextSystem
+  # and never opens a window, so no display server is needed. The native packages
+  # below are link-time requirements of the crate, not runtime ones.
+  ui-gpui:
+    name: GPUI view suite (headless)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    needs: build
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - name: Install Linux UI native dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          pkg-config \
+          libxcb1-dev \
+          libxkbcommon-dev \
+          libxkbcommon-x11-dev
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      with:
+        toolchain: stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    # Default features on purpose: `benchmarks` pulls in a separate set of
+    # targets with their own known failures and is not what this job guards.
+    #
+    # The syntax corpus sweeps skip unless fixtures/syntax_test is fetched, so
+    # the language-coverage sweeps are NOT part of this gate. Everything written
+    # against inline fixtures, which is all of the regression tests, does run.
+    - name: GPUI view tests
+      run: cargo test -p gitcomet-ui-gpui --verbose
+
   # Core merge algorithm correctness — Phase 1A/1B/1C portability tests
   merge-algorithm:
     name: Merge algorithm parity (t6403/t6427)

@@ -1036,9 +1036,13 @@ impl MainPaneView {
         if this.is_collapsed_diff_projection_active() {
             let theme = this.theme;
             let language = this.file_diff_cache_language;
-            let old_document_text: Arc<str> = this.file_diff_old_text.clone().into();
+            let old_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                .into();
             let old_line_starts = Arc::clone(&this.file_diff_old_line_starts);
-            let new_document_text: Arc<str> = this.file_diff_new_text.clone().into();
+            let new_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitRight)
+                .into();
             let new_line_starts = Arc::clone(&this.file_diff_new_line_starts);
             let pinned_hunk_shell_width = collapsed_hunk_shell_width(&this.diff_scroll, min_width);
             let pinned_hunk_shell_scroll = this.diff_scroll.clone();
@@ -1267,9 +1271,13 @@ impl MainPaneView {
         if this.is_file_diff_view_active() {
             let theme = this.theme;
             let language = this.file_diff_cache_language;
-            let old_document_text: Arc<str> = this.file_diff_old_text.clone().into();
+            let old_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                .into();
             let old_line_starts = Arc::clone(&this.file_diff_old_line_starts);
-            let new_document_text: Arc<str> = this.file_diff_new_text.clone().into();
+            let new_document_text: Arc<str> = this
+                .file_diff_side_document_text(DiffTextRegion::SplitRight)
+                .into();
             let new_line_starts = Arc::clone(&this.file_diff_new_line_starts);
             // Inline syntax is now projected from the real old/new (split)
             // documents instead of parsing a synthetic mixed inline stream.
@@ -1828,9 +1836,11 @@ impl MainPaneView {
             let syntax_document = this.file_diff_split_prepared_syntax_document(region);
             let syntax_mode = DiffSyntaxMode::Auto;
             let document_text: Arc<str> = if is_left {
-                this.file_diff_old_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                    .into()
             } else {
-                this.file_diff_new_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitRight)
+                    .into()
             };
             let line_starts = if is_left {
                 Arc::clone(&this.file_diff_old_line_starts)
@@ -2023,9 +2033,11 @@ impl MainPaneView {
             let syntax_document = this.file_diff_split_prepared_syntax_document(region);
             let syntax_mode = DiffSyntaxMode::Auto;
             let document_text: Arc<str> = if is_left {
-                this.file_diff_old_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitLeft)
+                    .into()
             } else {
-                this.file_diff_new_text.clone().into()
+                this.file_diff_side_document_text(DiffTextRegion::SplitRight)
+                    .into()
             };
             let line_starts = if is_left {
                 Arc::clone(&this.file_diff_old_line_starts)

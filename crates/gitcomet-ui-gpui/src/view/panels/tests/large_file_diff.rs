@@ -178,6 +178,11 @@ fn source_backed_diff_click_syntax_prepares_a_two_megabyte_document_off_thread(
     let unified = format!("@@ -{target_line} +{target_line} @@\n-{old_target}+{new_target}");
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
+            // This test drives the click-triggered worker, so the eager
+            // source-backed prepare must not install the document first.
+            this.main_pane.update(cx, |pane, _| {
+                pane.set_eager_source_backed_syntax_prepare_for_tests(false);
+            });
             let mut repo = opening_repo_state(repo_id, &workdir);
             set_test_file_status(
                 &mut repo,
@@ -630,7 +635,7 @@ fn large_file_diff_keeps_prepared_syntax_documents_above_old_line_gate(
 }
 
 #[gpui::test]
-fn source_backed_file_diff_uses_auto_fallback_highlighting_in_full_and_collapsed(
+fn source_backed_file_diff_highlights_agree_with_auto_in_full_and_collapsed(
     cx: &mut gpui::TestAppContext,
 ) {
     #[derive(Clone, Debug, PartialEq)]
@@ -839,7 +844,7 @@ index 1111111..2222222 100644
         assert_eq!(
             paint_snapshot(&record),
             *expected,
-            "{label} should use Auto syntax fallback for source-backed file rows"
+            "{label}: a source-backed side now has a whole-document tree, and it must agree with the single-line Auto answer on a line with no cross-line construct"
         );
     }
 
@@ -901,10 +906,14 @@ index 1111111..2222222 100644
         });
     });
 
-    wait_for_main_pane_condition(
+    // The sides stay source-backed -- no resident text is ever materialized --
+    // but each now gets a whole-document tree from the background worker, so the
+    // rows below are the *upgraded* answer rather than the single-line fallback.
+    wait_for_main_pane_condition_with_timeout(
         cx,
         &view,
-        "source-backed file-diff cache without resident full text",
+        "source-backed file-diff documents without resident full text",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
             pane.file_diff_cache_inflight.is_none()
                 && pane.file_diff_cache_path == Some(workdir.join(&path))
@@ -915,10 +924,10 @@ index 1111111..2222222 100644
                 && pane.file_diff_new_line_starts.len() >= 70
                 && pane
                     .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
-                    .is_none()
+                    .is_some()
                 && pane
                     .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
-                    .is_none()
+                    .is_some()
                 && pane.file_diff_cache_rows.iter().any(|row| {
                     row.new_line == Some(target_line)
                         && row.kind == gitcomet_core::file_diff::FileDiffRowKind::Context
@@ -990,6 +999,357 @@ index 1111111..2222222 100644
         target_line,
         &expected,
     );
+}
+
+/// A source-backed diff must colour constructs that span lines.
+///
+/// This is the regression that made a template's diff look broken. Both sides of
+/// an ordinary worktree diff are files on disk, so neither had a whole-document
+/// tree and every row was tokenized on its own. Anything spanning lines was then
+/// invisible: the whole of a `<script>` body rendered bare, and a closing tag
+/// kept its brackets but lost its name.
+///
+/// Both discriminators are asserted, because either alone can pass by accident.
+/// The script body separates "has a document" from "has none" (the single-line
+/// tokenizer produces literally nothing there), and `</div>` separates
+/// whole-document from per-line tokens on a line the fallback *does* colour.
+#[gpui::test]
+fn source_backed_diff_colours_cross_line_constructs_without_a_click(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(889);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_source_backed_cross_line_syntax",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&source_dir).expect("create cross-line syntax fixture dir");
+
+    // `title` is the only difference between the sides, so every row below is
+    // context and both sides index the same shape.
+    let page = |title: &str| {
+        format!(
+            "<!doctype html>\n\
+             <html>\n\
+             <head>\n\
+             <script type=\"application/ld+json\">\n\
+             {{\n\
+             \"@context\": \"https://schema.org\",\n\
+             \"name\": \"{title}\"\n\
+             }}\n\
+             </script>\n\
+             </head>\n\
+             <body>\n\
+             <div class=\"card\">\n\
+             <span>hi</span>\n\
+             </div>\n\
+             </body>\n\
+             </html>\n"
+        )
+    };
+    let path = std::path::PathBuf::from("page.html");
+    let old_source_path = source_dir.join("old.html");
+    let new_source_path = source_dir.join("new.html");
+    let old_text = page("Old");
+    let new_text = page("New");
+    std::fs::write(&old_source_path, &old_text).expect("write old cross-line source");
+    std::fs::write(&new_source_path, &new_text).expect("write new cross-line source");
+
+    // 1-based lines in the fixture above.
+    let json_body_line = 6u32;
+    let closing_div_line = 14u32;
+    let unified = format!(
+        "@@ -7,1 +7,1 @@\n-{}\n+{}\n",
+        old_text.lines().nth(6).expect("old json name line"),
+        new_text.lines().nth(6).expect("new json name line"),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, &unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        old_source_path.clone(),
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        new_source_path.clone(),
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    // No click anywhere in this test: the document has to arrive on its own.
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "source-backed cross-line syntax document",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_new_text.is_empty()
+                && pane.file_diff_cache_language == Some(rows::DiffSyntaxLanguage::Html)
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some()
+        },
+        |pane| {
+            format!(
+                "inflight={:?} language={:?} new_text_len={} right_doc={:?}",
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_language,
+                pane.file_diff_new_text.len(),
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
+            )
+        },
+    );
+
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Full);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                pane.clear_diff_text_style_caches();
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let visible_ix_for = |cx: &mut gpui::VisualTestContext, new_line: u32| {
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (0..pane.diff_visible_len())
+                .find(|&visible_ix| {
+                    pane.diff_mapped_ix_for_visible_ix(visible_ix)
+                        .and_then(|row_ix| pane.file_diff_split_render_data(row_ix))
+                        .is_some_and(|row| row.new_line == Some(new_line))
+                })
+                .unwrap_or_else(|| panic!("no visible row for new line {new_line}"))
+        })
+    };
+
+    let json_visible_ix = visible_ix_for(cx, json_body_line);
+    let json_record =
+        draw_paint_record_for_visible_ix(cx, &view, json_visible_ix, DiffTextRegion::SplitRight);
+    assert!(
+        json_record.text.contains("@context"),
+        "expected the JSON-LD body row, got {:?}",
+        json_record.text
+    );
+    assert!(
+        json_record
+            .highlights
+            .iter()
+            .any(|(_, color, _)| color.is_some()),
+        "a line inside a <script type=\"application/ld+json\"> body is one opaque leaf to the \
+         single-line tokenizer, so colour here proves the whole-document tree reached the row: {:?}",
+        json_record.highlights
+    );
+
+    let div_visible_ix = visible_ix_for(cx, closing_div_line);
+    let div_record =
+        draw_paint_record_for_visible_ix(cx, &view, div_visible_ix, DiffTextRegion::SplitRight);
+    assert_eq!(
+        div_record.text.trim(),
+        "</div>",
+        "expected the closing div row"
+    );
+    assert_eq!(
+        div_record.highlights.len(),
+        3,
+        "</div> is two brackets plus the tag name whole-document, and only the two brackets \
+         per-line: {:?}",
+        div_record.highlights
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup cross-line syntax fixture");
+}
+
+/// Defect A in the diff view: clicking a tag in a template.
+///
+/// The preview and the diff panes share the prepared engine and this lookup, but
+/// they reach it through different row plumbing, so both are pinned. This one is
+/// also source-backed, which is the ordinary worktree case and the one that had
+/// no whole-document tree to consult at all.
+#[gpui::test]
+fn source_backed_template_diff_click_lights_whole_tags(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(890);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_source_backed_template_pair",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&source_dir).expect("create template pair fixture dir");
+
+    let page = |label: &str| {
+        format!(
+            "{{% block body %}}\n<div class=\"card\">\n  <span>{label}</span>\n</div>\n{{% endblock %}}\n"
+        )
+    };
+    let path = std::path::PathBuf::from("page.njk");
+    let old_source_path = source_dir.join("old.njk");
+    let new_source_path = source_dir.join("new.njk");
+    let old_text = page("old");
+    let new_text = page("new");
+    std::fs::write(&old_source_path, &old_text).expect("write old template source");
+    std::fs::write(&new_source_path, &new_text).expect("write new template source");
+    let unified = format!(
+        "@@ -3,1 +3,1 @@\n-{}\n+{}\n",
+        old_text.lines().nth(2).expect("old span line"),
+        new_text.lines().nth(2).expect("new span line"),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, &unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        old_source_path.clone(),
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        new_source_path.clone(),
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "source-backed template diff document",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_language == Some(rows::DiffSyntaxLanguage::Jinja)
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some()
+        },
+        |pane| {
+            format!(
+                "inflight={:?} language={:?} right_doc={:?}",
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_language,
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
+            )
+        },
+    );
+
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Full);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                pane.clear_diff_text_style_caches();
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let visible_ix_for = |cx: &mut gpui::VisualTestContext, new_line: u32| {
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (0..pane.diff_visible_len())
+                .find(|&visible_ix| {
+                    pane.diff_mapped_ix_for_visible_ix(visible_ix)
+                        .and_then(|row_ix| pane.file_diff_inline_render_data(row_ix))
+                        .is_some_and(|row| row.new_line == Some(new_line))
+                })
+                .unwrap_or_else(|| panic!("no visible row for new line {new_line}"))
+        })
+    };
+    // `<div class="card">` is line 2, `</div>` line 4 (1-based).
+    let div_open_ix = visible_ix_for(cx, 2);
+    let div_close_ix = visible_ix_for(cx, 4);
+
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        div_open_ix,
+        DiffTextRegion::Inline,
+        1..4,
+        "template diff pair tag hitbox",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("clicking `<div ...>` in a template diff should light the element");
+        assert_eq!(pair.kind, rows::SyntaxPairKind::Tag);
+        let rows: Vec<usize> = pair
+            .spans
+            .iter()
+            .map(|span| span.source_visible_ix)
+            .collect();
+        assert!(
+            rows.contains(&div_open_ix) && rows.contains(&div_close_ix),
+            "both ends of the element should light, got rows {rows:?} for \
+             open={div_open_ix} close={div_close_ix}"
+        );
+        assert!(
+            !pane
+                .diff_text_local_pair_ranges(div_close_ix, DiffTextRegion::Inline)
+                .is_empty(),
+            "the closing tag row must reach the paint path"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup template pair fixture");
 }
 
 #[gpui::test]
@@ -3782,6 +4142,11 @@ fn a_click_too_slow_to_parse_in_budget_defers_instead_of_blocking(cx: &mut gpui:
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
+            // This test drives the click-triggered worker, so the eager
+            // source-backed prepare must not install the document first.
+            this.main_pane.update(cx, |pane, _| {
+                pane.set_eager_source_backed_syntax_prepare_for_tests(false);
+            });
             let mut repo = opening_repo_state(repo_id, &workdir);
             set_test_file_status(
                 &mut repo,

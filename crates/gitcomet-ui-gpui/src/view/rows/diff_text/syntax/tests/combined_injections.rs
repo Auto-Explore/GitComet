@@ -869,3 +869,117 @@ fn a_combined_layer_missing_the_foreground_budget_leaves_the_document_ready() {
         "the lazy build parses the layer exactly once"
     );
 }
+
+// ---- Clicks inside a combined layer ---------------------------------------
+
+/// The defect this section exists for.
+///
+/// A template's markup is one combined HTML layer, so while the pair lookup
+/// consulted only cached singles and the host tree, the Jinja tree -- which has
+/// all of that markup as one opaque `text` node -- was the only tree left, and
+/// clicking any tag answered nothing at any column. The same markup saved as
+/// `.html` paired correctly, which is what made the two views disagree.
+#[test]
+fn combined_layer_pair_lights_a_whole_tag_in_a_template() {
+    let text = "{% block body %}\n<div class=\"card\">\n  <span>hi</span>\n</div>\n{% endblock %}\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
+    // Drawing is what fills the injection cache, and a row must be drawn before
+    // it can be clicked. Without this the test silently exercises the host path.
+    let _ = syntax_tokens_for_prepared_document_line(document, 1);
+
+    let pair = prepared_document_syntax_pair_at_display_offset(document, 1, 2)
+        .expect("clicking the div element name should pair it with its closing tag");
+    assert_eq!(pair.kind, SyntaxPairKind::Tag);
+    assert_eq!(pair.open[0].line_ix, 1);
+    assert_eq!(
+        pair.open[0].display_range,
+        0..18,
+        "the whole start tag, attributes included"
+    );
+    assert_eq!(pair.close[0].line_ix, 3);
+    assert_eq!(pair.close[0].display_range, 0..6);
+}
+
+/// The same answer from both engines, which is the property that actually broke.
+///
+/// The editor uses the live engine and the diff panes the prepared one. They had
+/// diverged for a whole class of file without any test comparing them, so the
+/// editor looked right while the other views looked broken.
+#[test]
+fn live_and_prepared_agree_on_a_pair_inside_a_combined_layer() {
+    let text = "{% block body %}\n<div class=\"card\">\n  <span>hi</span>\n</div>\n{% endblock %}\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
+    let _ = syntax_tokens_for_prepared_document_line(document, 1);
+    let live = LiveSyntaxDocument::new(
+        DiffSyntaxLanguage::Jinja,
+        crate::kit::rope::Rope::from_str(text),
+        Vec::new().into(),
+        None,
+    )
+    .expect("jinja live document should build");
+    let snapshot = live.snapshot(AppTheme::gitcomet_dark());
+
+    let line_start = text.find("<div").expect("fixture has a div");
+    for column in 0..6 {
+        let prepared = prepared_document_syntax_pair_at_display_offset(document, 1, column);
+        let live_pair = snapshot.syntax_pair_at(line_start + column);
+        assert_eq!(
+            prepared.is_some(),
+            live_pair.is_some(),
+            "the two engines disagree on whether column {column} of `<div ...>` pairs"
+        );
+        if let (Some(prepared), Some(live_pair)) = (prepared, live_pair) {
+            assert_eq!(
+                prepared.kind, live_pair.kind,
+                "column {column} pairs as a different kind in each engine"
+            );
+        }
+    }
+}
+
+/// A caret in a `{% ... %}` gap is host-grammar territory.
+///
+/// The combined tree has no nodes between its ranges, so answering from it there
+/// would be inventing structure. This is the prepared mirror of
+/// `syntax_pair_at_never_straddles_a_combined_layer_gap`.
+#[test]
+fn combined_layer_pair_does_not_answer_inside_a_template_gap() {
+    let text = "<div>\n{% if cond %}\n<span>hi</span>\n{% endif %}\n</div>\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
+    for line_ix in 0..text.lines().count() {
+        let _ = syntax_tokens_for_prepared_document_line(document, line_ix);
+    }
+
+    // Column 3 of `{% if cond %}` is inside the template tag, which no HTML
+    // range covers. Whatever answers, it must not be an HTML tag pair.
+    if let Some(pair) = prepared_document_syntax_pair_at_display_offset(document, 1, 3) {
+        assert_ne!(
+            pair.kind,
+            SyntaxPairKind::Tag,
+            "a caret inside `{{% if %}}` must not be answered by the HTML layer"
+        );
+    }
+}
+
+/// Occurrences follow the injected grammar too, and share the pair lookup's
+/// layer selection so one click cannot resolve to two different grammars.
+#[test]
+fn occurrences_inside_a_combined_layer_span_every_range() {
+    let text = "<div id=\"card\">\n{% if cond %}\n<span data=\"card\">hi</span>\n{% endif %}\n</div>\n";
+    let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
+    for line_ix in 0..text.lines().count() {
+        let _ = syntax_tokens_for_prepared_document_line(document, line_ix);
+    }
+
+    // `card` on line 0, inside the attribute value.
+    let found = prepared_document_occurrences_at_display_offset(document, 0, 10);
+    assert!(
+        found.iter().any(|span| span.line_ix == 0),
+        "the clicked name is always part of its own answer: {found:?}"
+    );
+    assert!(
+        found.iter().any(|span| span.line_ix == 2),
+        "a name used on the far side of a `{{% if %}}` is still the same layer, so it must \
+         light too -- that is the whole point of a combined layer: {found:?}"
+    );
+}

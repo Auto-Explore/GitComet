@@ -421,12 +421,16 @@ pub(crate) fn prepared_line_span(
 /// at a caret boundary beyond the line, or when nothing pairs. Geometric clicks
 /// in trailing blank space are rejected by the view before reaching this API.
 ///
-/// Injections *are* consulted, and first -- see [`injected_syntax_pair_at`]. The
-/// injected region's own tree is kept for exactly this, because to the host
+/// Injections *are* consulted, and first -- see [`prepared_injected_layer_at`].
+/// The injected region's own tree is kept for exactly this, because to the host
 /// grammar an injected body is one opaque leaf: a delimiter inside it matches
 /// nothing, and the walk falls out to the enclosing element. That was the whole
 /// bug -- clicking the `<` of a `<html>` tag in a PHP file did nothing.
-/// Combined injections stay out of it, and the host tree remains the fallback.
+///
+/// Combined layers are consulted too, which matters most for templates: all of a
+/// `.njk`'s markup is one combined HTML layer, so while they were skipped here
+/// the Jinja host tree -- which has that markup as a single opaque `text` node --
+/// was the only tree left, and clicking any tag lit nothing at all.
 pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
     document: PreparedSyntaxDocument,
     line_ix: usize,
@@ -450,8 +454,11 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
             _ => false,
         }
     };
-    ensure_injection_chain_cached_for_pair_lookup(&state, offset);
-    let pair = injected_syntax_pair_at(text, state.source_hash, offset)
+    let combined_layers =
+        state.combined_layers_within(Instant::now() + TS_CLICK_COMBINED_LAYER_BUDGET);
+    ensure_injection_chain_cached_for_click_lookup(&state, offset, combined_layers);
+    let pair = prepared_injected_layer_at(&state, offset, combined_layers)
+        .and_then(|layer| syntax_pair_in_injected_layer(text, &layer, offset))
         .or_else(|| syntax_pair_in_tree(&state.tree, offset, &source_ranges_equal))?;
 
     let project = |range: &Range<usize>| -> Vec<PreparedSyntaxPairSpan> {
@@ -503,7 +510,20 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
 /// Shares the display/raw conversion and the line projection with
 /// [`prepared_document_syntax_pair_at_display_offset`], for the same reason:
 /// this is the only place holding both the tree's byte offsets and the text the
-/// rows were painted from.
+/// rows were painted from. It shares that function's layer selection too, so a
+/// click cannot resolve to one grammar for pairing and another for naming.
+///
+/// One click, one grammar's opinion: the injected answer is *not* unioned with
+/// the host's. A name in a `<script>` means the JavaScript one, and lighting a
+/// same-spelled attribute value beside it would be noise.
+///
+/// The scope falls out of the tree rather than needing a second filter, because
+/// [`syntax_occurrences_in_tree`] confirms every textual candidate against an
+/// exactly-matching named leaf. A single injection is handed only its own bytes.
+/// A combined layer is handed the whole document, but its tree was built with
+/// `set_included_ranges`, so it has no leaf inside a host gap and candidates
+/// there are dropped -- while a name used on both sides of a `{% for %}` is
+/// still one set, which is the entire point of a combined layer.
 pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
     document: PreparedSyntaxDocument,
     line_ix: usize,
@@ -533,7 +553,13 @@ pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
     };
     let offset = clicked.start + raw_offset;
 
-    let Some(found) = syntax_occurrences_in_tree(&state.tree, text, offset) else {
+    let combined_layers =
+        state.combined_layers_within(Instant::now() + TS_CLICK_COMBINED_LAYER_BUDGET);
+    ensure_injection_chain_cached_for_click_lookup(&state, offset, combined_layers);
+    let found = prepared_injected_layer_at(&state, offset, combined_layers)
+        .and_then(|layer| syntax_occurrences_in_injected_layer(text, &layer, offset))
+        .or_else(|| syntax_occurrences_in_tree(&state.tree, text, offset));
+    let Some(found) = found else {
         return Vec::new();
     };
     found
