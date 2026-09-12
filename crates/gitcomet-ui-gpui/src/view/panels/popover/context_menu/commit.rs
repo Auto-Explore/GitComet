@@ -19,6 +19,40 @@ fn multi_cherry_pick_plan(
     if !(selection.is_multi() && selection.contains(commit_id)) {
         return None;
     }
+    if let Some(index) = &repo.history_state.indexed.range_index {
+        let mut selected: Vec<_> = selection
+            .commits
+            .iter()
+            .filter_map(|id| index.position(id.as_ref()).map(|row| (row, id)))
+            .collect();
+        if selected.len() == selection.commits.len() {
+            selected.sort_unstable_by_key(|(row, _)| std::cmp::Reverse(*row));
+            let entries = selected
+                .iter()
+                .map(|(row, id)| {
+                    let summary = repo
+                        .history_state
+                        .indexed
+                        .commit(&index.snapshot, *row)
+                        .map_or_else(String::new, |commit| commit.summary.to_string());
+                    InteractiveRebaseEntry {
+                        action: InteractiveRebaseAction::Pick,
+                        commit_id: id.as_ref().to_owned(),
+                        message: summary.clone(),
+                        summary,
+                        new_message: None,
+                    }
+                })
+                .collect();
+            let colors = selected
+                .iter()
+                .map(|(_, id)| (id.as_ref().to_owned(), 0))
+                .collect();
+            return Some((entries, colors));
+        }
+        // Never silently cherry-pick just the loaded part of a selection.
+        return None;
+    }
     let Loadable::Ready(page) = &repo.log else {
         return None;
     };
@@ -154,13 +188,21 @@ fn model_with_header(
 
     let commit_summary = this
         .active_repo()
-        .and_then(|r| match &r.log {
-            Loadable::Ready(page) => page
-                .commits
-                .iter()
-                .find(|c| c.id == *commit_id)
-                .map(|c| format!("{} — {}", c.author, c.summary)),
-            _ => None,
+        .and_then(|r| {
+            if let Some(index) = &r.history_state.indexed.range_index
+                && let Some(row) = index.position(commit_id.as_ref())
+                && let Some(commit) = r.history_state.indexed.commit(&index.snapshot, row)
+            {
+                return Some(format!("{} — {}", commit.author, commit.summary));
+            }
+            match &r.log {
+                Loadable::Ready(page) => page
+                    .commits
+                    .iter()
+                    .find(|c| c.id == *commit_id)
+                    .map(|c| format!("{} — {}", c.author, c.summary)),
+                _ => None,
+            }
         })
         .unwrap_or_default();
 
@@ -225,11 +267,7 @@ fn model_with_header(
             if !(selection.is_multi() && selection.contains(commit_id)) {
                 return None;
             }
-            let Loadable::Ready(page) = &repo.log else {
-                return None;
-            };
-            let head = repo.head_commit_id()?;
-            gitcomet_core::squash::squash_eligibility(&page.commits, &selection.commits, &head)
+            repo.history_squash_plan()
         });
     if let Some(plan) = squash_plan {
         let label = format!("Squash {} commits", plan.commit_count).into();

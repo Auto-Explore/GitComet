@@ -858,10 +858,9 @@ impl PopoverHost {
                         else {
                             return;
                         };
-                        // Suggestions only cover the authors of the commits
-                        // loaded so far, and the backend filter is a
-                        // case-insensitive substring match, so a name that is
-                        // not in the list is still worth applying as typed.
+                        // Author discovery runs in the background, and the
+                        // backend accepts case-insensitive substring matches,
+                        // so a query absent from the list is still useful.
                         let target = match payload {
                             Some(target) => target,
                             None if !query.is_empty() => {

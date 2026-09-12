@@ -250,6 +250,8 @@ impl GitCometView {
                             mergetool_view_three_way: Some(mergetool_view_three_way),
                             change_tracking_height,
                             untracked_height,
+                            // The settings window owns branch-name placement.
+                            history_branch_names: None,
                             history_show_graph: Some(history_show_graph),
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),

@@ -1671,6 +1671,36 @@ impl Render for SettingsWindowView {
                         );
                     }
 
+                    git_log_card = git_log_card.child(
+                        self.summary_row(
+                            "settings_window_git_log_branch_names",
+                            "Branch names",
+                            self.history_branch_names.settings_label().into(),
+                            self.expanded_section == Some(SettingsSection::GitLogBranchNames),
+                            theme,
+                        ).on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::GitLogBranchNames, cx);
+                        })),
+                    );
+                    if self.expanded_section == Some(SettingsSection::GitLogBranchNames) {
+                        let mut options = self.detail_container(
+                            "settings_window_git_log_branch_names_container", theme,
+                        );
+                        for (mode, id) in [
+                            (HistoryBranchNamesMode::SeparateColumn, "settings_window_git_log_branch_names_separate"),
+                            (HistoryBranchNamesMode::Inline, "settings_window_git_log_branch_names_inline"),
+                        ] {
+                            options = options.child(
+                                self.option_row(id, mode.settings_label(), None,
+                                    self.history_branch_names == mode, theme)
+                                    .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_branch_names(mode, cx);
+                                    })),
+                            );
+                        }
+                        git_log_card = git_log_card.child(options);
+                    }
+
                     git_log_card = git_log_card.child(history_columns_row);
 
                     if self.expanded_section == Some(SettingsSection::GitLogColumns) {

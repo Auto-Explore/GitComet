@@ -285,6 +285,7 @@ enum SettingsSection {
     DiffViewMode,
     GitLogDefaultMode,
     GitLogColumns,
+    GitLogBranchNames,
     GitLogTagFetch,
     AllowedRemoteProtocols,
     RemoteMarkdownImages,
@@ -307,9 +308,10 @@ impl SettingsSection {
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
             Self::FileListLayout => SettingsCategory::ChangeTracking,
             Self::DiffContentMode | Self::Diff | Self::DiffViewMode => SettingsCategory::Diff,
-            Self::GitLogDefaultMode | Self::GitLogColumns | Self::GitLogTagFetch => {
-                SettingsCategory::GitLog
-            }
+            Self::GitLogDefaultMode
+            | Self::GitLogColumns
+            | Self::GitLogBranchNames
+            | Self::GitLogTagFetch => SettingsCategory::GitLog,
             Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
                 SettingsCategory::SecurityPrivacy
             }
@@ -537,6 +539,7 @@ pub(crate) struct SettingsWindowView {
     remote_markdown_image_policy: RemoteMarkdownImagePolicy,
     check_for_updates_on_startup: bool,
     diff_scroll_sync: DiffScrollSync,
+    history_branch_names: HistoryBranchNamesMode,
     history_show_graph: bool,
     history_show_author: bool,
     history_show_date: bool,
@@ -913,6 +916,7 @@ impl SettingsWindowView {
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
+        let history_branch_names = ui_preferences.history.branch_names;
         let history_show_graph = ui_preferences.history.show_graph;
         let history_show_author = ui_preferences.history.show_author;
         let history_show_date = ui_preferences.history.show_date;
@@ -1196,6 +1200,7 @@ impl SettingsWindowView {
             remote_markdown_image_policy,
             check_for_updates_on_startup,
             diff_scroll_sync,
+            history_branch_names,
             history_show_graph,
             history_show_author,
             history_show_date,

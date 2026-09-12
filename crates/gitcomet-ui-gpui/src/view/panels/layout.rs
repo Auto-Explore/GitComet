@@ -1,7 +1,12 @@
 use super::*;
+use crate::view::panes::{ComparisonCardCache, ComparisonOrderCache};
 use crate::view::rows::CommitCard;
 use gpui::{AnyElement, Div, Stateful};
 use rustc_hash::FxHashSet;
+
+#[cfg(test)]
+#[path = "layout_indexed_tests.rs"]
+mod indexed_tests;
 
 const STATUS_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
 
@@ -1061,10 +1066,16 @@ impl DetailsPaneView {
             });
     }
 
-    /// Selected commits resolved against the loaded log page, in log order
-    /// (youngest first). Ids missing from the page are skipped.
-    fn multi_selected_commits_in_log_order(repo: &RepoState) -> Vec<Commit> {
+    /// Selected IDs in displayed history order, independent of the bounded
+    /// metadata cache. Missing metadata must not shrink the selection's cards.
+    fn multi_selected_commit_ids_in_log_order(repo: &RepoState) -> Vec<CommitId> {
         let selection = &repo.history_state.multi_selection;
+        let indexed = &repo.history_state.indexed;
+        if let Some(index) = indexed.displayed_index.as_ref().or(indexed.index.as_ref()) {
+            let mut selected = selection.commits.as_ref().clone();
+            selected.sort_by_cached_key(|id| index.position(id.as_ref()).unwrap_or(usize::MAX));
+            return selected;
+        }
         let Loadable::Ready(page) = &repo.log else {
             return Vec::new();
         };
@@ -1076,7 +1087,7 @@ impl DetailsPaneView {
         page.commits
             .iter()
             .filter(|commit| selected.contains(&commit.id))
-            .cloned()
+            .map(|commit| commit.id.clone())
             .collect()
     }
 
@@ -1086,65 +1097,216 @@ impl DetailsPaneView {
     /// diff). A single leftover selection — every plain history click leaves one
     /// — describes an unrelated commit, so the mark + compare, branch/tag and
     /// working-tree flows derive their endpoints from the range itself, looking
-    /// each SHA up in the loaded log so its summary/author/time can be shown.
+    /// each SHA up in indexed ranges or the bootstrap page for its metadata.
     /// Ordered newest first (tip before base) to match the log. The working tree
     /// has no commit of its own, so a compare-against-working-tree range yields
     /// a single card.
-    fn range_comparison_commits(repo: &RepoState) -> Vec<Commit> {
+    fn range_comparison_commit_ids(repo: &RepoState) -> Vec<CommitId> {
         if repo.history_state.multi_selection.is_multi() {
-            let multi = Self::multi_selected_commits_in_log_order(repo);
-            if !multi.is_empty() {
-                return multi;
-            }
+            return Self::multi_selected_commit_ids_in_log_order(repo);
         }
         let Some(range) = repo.history_state.range_selection.as_ref() else {
             return Vec::new();
         };
-        let Loadable::Ready(page) = &repo.log else {
-            return Vec::new();
-        };
-        let find = |id: &CommitId| page.commits.iter().find(|c| &c.id == id).cloned();
-        let mut commits = Vec::new();
-        if let Some(to) = range.to.as_ref().and_then(&find) {
-            commits.push(to);
-        }
-        if let Some(from) = find(&range.from) {
-            commits.push(from);
-        }
-        commits
+        range
+            .to
+            .iter()
+            .chain(std::iter::once(&range.from))
+            .filter(|id| id.as_ref() != gitcomet_core::domain::EMPTY_TREE_ID)
+            .cloned()
+            .collect()
     }
 
-    /// [`Self::range_comparison_commits`] memoized on everything it reads:
-    /// the log page, the selection and the range, with each card's static
-    /// strings prepared once (they were re-formatted per card per frame).
-    fn range_comparison_commits_shared(&self, repo: &RepoState) -> std::rc::Rc<[CommitCard]> {
-        use std::hash::{Hash as _, Hasher as _};
-        let key = {
-            let mut hasher = rustc_hash::FxHasher::default();
-            repo.id.hash(&mut hasher);
-            repo.log_rev.hash(&mut hasher);
-            repo.history_state.selected_commit_rev.hash(&mut hasher);
-            match repo.history_state.range_selection.as_ref() {
-                Some(range) => {
-                    range.from.as_ref().hash(&mut hasher);
-                    range.to.as_ref().map(|id| id.as_ref()).hash(&mut hasher);
-                }
-                None => 0u8.hash(&mut hasher),
-            }
-            hasher.finish()
+    fn comparison_commits<'a>(repo: &'a RepoState, ids: &[CommitId]) -> Vec<Option<&'a Commit>> {
+        let indexed = &repo.history_state.indexed;
+        let page = match &repo.log {
+            Loadable::Ready(page) => Some(page),
+            _ => repo.history_state.retained_log_while_loading.as_ref(),
         };
-        if let Some((cached_key, commits)) = self.range_comparison_commits_cache.borrow().as_ref()
-            && *cached_key == key
-        {
-            return std::rc::Rc::clone(commits);
-        }
-        let commits: std::rc::Rc<[CommitCard]> = Self::range_comparison_commits(repo)
+        // Hash the fallback page once, including for legacy histories where it
+        // may contain thousands of commits. Never scan it per selected ID.
+        let bootstrap: FxHashMap<_, _> = page
             .into_iter()
-            .map(CommitCard::new)
+            .flat_map(|page| &page.commits)
+            .map(|commit| (&commit.id, commit))
             .collect();
-        *self.range_comparison_commits_cache.borrow_mut() =
-            Some((key, std::rc::Rc::clone(&commits)));
-        commits
+        // Resolve by immutable ID against the cache's own index: during handoff
+        // its row numbers can differ from those of the displayed presentation.
+        ids.iter()
+            .map(|id| {
+                indexed
+                    .range_index
+                    .as_ref()
+                    .and_then(|index| indexed.commit(&index.snapshot, index.position(id.as_ref())?))
+                    .or_else(|| bootstrap.get(id).copied())
+            })
+            .collect()
+    }
+
+    fn comparison_order_key(repo: &RepoState) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut key = rustc_hash::FxHasher::default();
+        repo.id.hash(&mut key);
+        repo.log_rev.hash(&mut key);
+        if !repo.history_state.multi_selection.is_multi()
+            && let Some(range) = &repo.history_state.range_selection
+        {
+            range.from.hash(&mut key);
+            range.to.hash(&mut key);
+        }
+        (Arc::as_ptr(&repo.history_state.multi_selection.commits) as usize).hash(&mut key);
+        repo.history_state
+            .indexed
+            .displayed_index
+            .as_ref()
+            .or(repo.history_state.indexed.index.as_ref())
+            .map(|index| Arc::as_ptr(index) as usize)
+            .hash(&mut key);
+        key.finish()
+    }
+
+    fn ensure_comparison_order(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let key = Self::comparison_order_key(repo);
+        if self
+            .comparison_order
+            .as_ref()
+            .is_some_and(|cache| cache.key == key)
+            || self.comparison_order_pending == Some(key)
+        {
+            return;
+        }
+        // Small endpoint comparisons are ready in their first frame. Large
+        // selections are sorted on the executor and published by generation.
+        if Self::comparison_count(repo) <= 256 {
+            let ordered = Arc::new(Self::range_comparison_commit_ids(repo));
+            self.comparison_order = Some(Self::comparison_order_cache(repo, key, ordered));
+            self.comparison_order_pending = None;
+            return;
+        }
+        let source = Self::comparison_order_cache(repo, key, Arc::new(Vec::new()));
+        let repo = repo.clone();
+        self.comparison_order_pending = Some(key);
+        cx.spawn(async move |view, cx| {
+            let ordered = cx
+                .background_executor()
+                .spawn(async move { Arc::new(Self::range_comparison_commit_ids(&repo)) })
+                .await;
+            let _ = view.update(cx, |this, cx| {
+                if this.comparison_order_pending != Some(key) {
+                    return;
+                }
+                this.comparison_order_pending = None;
+                if this
+                    .active_repo()
+                    .is_some_and(|repo| Self::comparison_order_key(repo) == key)
+                {
+                    this.comparison_order = Some(ComparisonOrderCache {
+                        ids: ordered,
+                        ..source
+                    });
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn comparison_order_cache(
+        repo: &RepoState,
+        key: u64,
+        ids: Arc<Vec<CommitId>>,
+    ) -> ComparisonOrderCache {
+        ComparisonOrderCache {
+            key,
+            ids,
+            _selection: repo.history_state.multi_selection.commits.clone(),
+            _index: repo
+                .history_state
+                .indexed
+                .displayed_index
+                .as_ref()
+                .or(repo.history_state.indexed.index.as_ref())
+                .cloned(),
+        }
+    }
+
+    fn comparison_count(repo: &RepoState) -> usize {
+        if repo.history_state.multi_selection.is_multi() {
+            repo.history_state.multi_selection.commits.len()
+        } else {
+            Self::range_comparison_commit_ids(repo).len()
+        }
+    }
+
+    #[cfg(test)]
+    fn range_comparison_commits_shared(&self, repo: &RepoState) -> std::rc::Rc<[CommitCard]> {
+        let ids = Self::range_comparison_commit_ids(repo);
+        self.comparison_cards(repo, &ids, 0)
+    }
+
+    /// Only the visible IDs and the blocks supplying their metadata invalidate cards.
+    fn comparison_cards(
+        &self,
+        repo: &RepoState,
+        ids: &[CommitId],
+        start: usize,
+    ) -> std::rc::Rc<[CommitCard]> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = rustc_hash::FxHasher::default();
+        repo.id.hash(&mut hasher);
+        repo.log_rev.hash(&mut hasher);
+        start.hash(&mut hasher);
+        ids.hash(&mut hasher);
+        let indexed = &repo.history_state.indexed;
+        let mut blocks =
+            smallvec::SmallVec::<[Arc<gitcomet_core::history_index::HistoryRange>; 4]>::new();
+        for id in ids {
+            let block = indexed
+                .range_index
+                .as_ref()
+                .and_then(|index| index.position(id.as_ref()))
+                .map(|raw| {
+                    raw / gitcomet_core::history_index::HISTORY_BLOCK_SIZE
+                        * gitcomet_core::history_index::HISTORY_BLOCK_SIZE
+                });
+            let block = block.and_then(|block| indexed.ranges.get(&block));
+            block
+                .map(|range| Arc::as_ptr(range) as usize)
+                .hash(&mut hasher);
+            if let Some(block) = block
+                && !blocks.iter().any(|old| Arc::ptr_eq(old, block))
+            {
+                blocks.push(block.clone());
+            }
+        }
+        let key = hasher.finish();
+        if let Some(cache) = &*self.range_comparison_commits_cache.borrow()
+            && cache.key == key
+        {
+            return cache.cards.clone();
+        }
+        let cards: std::rc::Rc<[CommitCard]> = ids
+            .iter()
+            .zip(Self::comparison_commits(repo, ids))
+            .map(|(id, commit)| {
+                gitcomet_core::history_perf::record(
+                    gitcomet_core::history_perf::Work::ComparisonCard,
+                );
+                commit.map_or_else(
+                    || CommitCard::unloaded(id),
+                    |commit| CommitCard::new(commit.clone()),
+                )
+            })
+            .collect();
+        *self.range_comparison_commits_cache.borrow_mut() = Some(ComparisonCardCache {
+            key,
+            cards: cards.clone(),
+            _blocks: blocks.into_vec(),
+        });
+        cards
     }
 
     /// One selected/compared-commit preview card: avatar, summary, an author +
@@ -1164,12 +1326,17 @@ impl DetailsPaneView {
         let short_sha = card.short_sha.clone();
         let summary = card.summary.clone();
         let author = card.author.clone();
-        let when: SharedString = format!(
-            "{} · {}",
-            author,
-            crate::view::date_time::format_relative_time(card.unix_secs, now)
-        )
-        .into();
+        let when: SharedString = card
+            .unix_secs
+            .map(|unix_secs| {
+                format!(
+                    "{} · {}",
+                    author,
+                    crate::view::date_time::format_relative_time(unix_secs, now)
+                )
+            })
+            .unwrap_or_default()
+            .into();
 
         div()
             .id(("commit_multi_row", ix))
@@ -1185,7 +1352,9 @@ impl DetailsPaneView {
             .when(show_border, |row| {
                 row.border_b_1().border_color(theme.colors.stroke.default)
             })
-            .child(components::author_avatar(theme, ui_scale, author.as_ref()))
+            .when(card.unix_secs.is_some(), |row| {
+                row.child(components::author_avatar(theme, ui_scale, author.as_ref()))
+            })
             .child(
                 div()
                     .flex_1()
@@ -1219,7 +1388,7 @@ impl DetailsPaneView {
     }
 
     /// Rows for both the comparison view's endpoint cards and the plain
-    /// multi-selection list. `range_comparison_commits` already resolves to the
+    /// multi-selection list. `range_comparison_commit_ids` already resolves to the
     /// multi-selection when that is what is being compared, so one renderer
     /// serves both and the two views cannot drift apart.
     pub(in super::super) fn render_multi_commit_rows(
@@ -1228,15 +1397,26 @@ impl DetailsPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let _ = cx;
+        this.ensure_comparison_order(cx);
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
-        let cards = this.range_comparison_commits_shared(repo);
-        let last_ix = cards.len().saturating_sub(1);
+        let key = Self::comparison_order_key(repo);
+        let Some(order) = this
+            .comparison_order
+            .as_ref()
+            .filter(|cache| cache.key == key)
+        else {
+            return Vec::new();
+        };
+        let ordered = &order.ids;
+        let start = range.start.min(ordered.len());
+        let end = range.end.min(ordered.len());
+        let cards = this.comparison_cards(repo, &ordered[start..end], start);
+        let last_ix = ordered.len().saturating_sub(1);
         let now = std::time::SystemTime::now();
         range
-            .filter_map(|ix| cards.get(ix).map(|card| (ix, card)))
+            .filter_map(|ix| cards.get(ix - start).map(|card| (ix, card)))
             .map(|(ix, card)| this.commit_card_element(ix, card, now, ix != last_ix))
             .collect()
     }
@@ -1637,7 +1817,7 @@ impl DetailsPaneView {
             let Some(range) = repo.history_state.range_selection.clone() else {
                 return div().into_any_element();
             };
-            let card_count = self.range_comparison_commits_shared(repo).len();
+            let card_count = Self::comparison_count(repo);
             // Only a genuine multi-selection is a "merged diff of N commits";
             // every other flow compares two named points, however many of them
             // happen to resolve to a card.
@@ -2227,9 +2407,7 @@ impl DetailsPaneView {
         let multi_count = self
             .active_repo()
             .filter(|repo| repo.history_state.multi_selection.is_multi())
-            .map(Self::multi_selected_commits_in_log_order)
-            .filter(|commits| commits.len() > 1)
-            .map(|commits| commits.len());
+            .map(|repo| repo.history_state.multi_selection.commits.len());
         if let (Some(repo_id), Some(count)) = (active_repo_id, multi_count) {
             return self.multi_commit_details_view(repo_id, count, cx);
         }

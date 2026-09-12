@@ -4,6 +4,14 @@ use std::sync::Arc;
 
 const ALL_AUTHORS_LABEL: &str = "All authors";
 
+pub(super) struct SuggestionCache {
+    repo_id: RepoId,
+    log_rev: u64,
+    authors_rev: u64,
+    scope: gitcomet_core::domain::HistoryMode,
+    names: Arc<[SharedString]>,
+}
+
 /// What activating a row does: clear the filter, or filter to one author.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum AuthorTarget {
@@ -20,15 +28,19 @@ pub(super) enum AuthorTarget {
 /// (the gix backend interns repeated author names, and history comes in runs by
 /// the same person), leaving one lowercase key per distinct spelling.
 fn collect_author_suggestions(commits: &[gitcomet_core::domain::Commit]) -> Vec<SharedString> {
+    collect_author_names(commits.iter().map(|commit| &commit.author))
+}
+
+fn collect_author_names<'a>(names: impl IntoIterator<Item = &'a Arc<str>>) -> Vec<SharedString> {
     let mut seen_spellings: FxHashSet<Arc<str>> = FxHashSet::default();
     let mut seen_folded: FxHashSet<String> = FxHashSet::default();
     let mut authors: Vec<SharedString> = Vec::new();
 
-    for commit in commits {
-        if !seen_spellings.insert(commit.author.clone()) {
+    for name in names {
+        if !seen_spellings.insert(name.clone()) {
             continue;
         }
-        let name = commit.author.trim();
+        let name = name.trim();
         if name.is_empty() {
             continue;
         }
@@ -47,16 +59,8 @@ fn collect_author_suggestions(commits: &[gitcomet_core::domain::Commit]) -> Vec<
     authors
 }
 
-/// Author suggestions for `repo_id`, memoized on the repository's log revision.
-///
-/// The popover re-renders on every mouse move over it, so this must not rescan
-/// the log per frame. `log_rev` bumps on every log replacement and is what the
-/// popover fingerprint hashes, so the memo and the re-render gate cannot drift.
-///
-/// Suggestions are only refreshed from an unfiltered, loaded log: once a filter
-/// is applied the log holds that author's commits alone, so recomputing would
-/// collapse the list to the name already selected and leave no way back to
-/// anyone else.
+/// Reuse the complete scope's author catalog; loaded commits provide initial
+/// suggestions while discovery runs. Neither source is rescanned per frame.
 pub(super) fn suggestions(this: &mut PopoverHost, repo_id: RepoId) -> Arc<[SharedString]> {
     let empty: Arc<[SharedString]> = Arc::from(Vec::new());
     let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
@@ -64,31 +68,49 @@ pub(super) fn suggestions(this: &mut PopoverHost, repo_id: RepoId) -> Arc<[Share
     };
 
     let log_rev = repo.history_state.log_rev;
-    if let Some((cached_repo, cached_rev, cached)) = &this.history_author_suggestions
-        && *cached_repo == repo_id
-        && *cached_rev == log_rev
+    let catalog = &repo.history_state.authors;
+    let scope = repo.history_state.history_scope;
+    if let Some(cached) = &this.history_author_suggestions
+        && cached.repo_id == repo_id
+        && cached.log_rev == log_rev
+        && cached.authors_rev == catalog.rev
+        && cached.scope == scope
     {
-        return cached.clone();
+        return cached.names.clone();
     }
 
     let filtered = repo.history_state.history_author_filter.is_some();
     let cached_for_repo = this
         .history_author_suggestions
         .as_ref()
-        .filter(|(cached_repo, ..)| *cached_repo == repo_id)
-        .map(|(.., cached)| cached.clone());
+        .filter(|cached| cached.repo_id == repo_id && cached.scope == scope)
+        .map(|cached| cached.names.clone());
 
     // A filtered log only describes the author already selected, so keep the
     // last list instead — unless there is nothing to keep (a filter restored
     // from the session), where a one-name list still beats an empty one.
-    let refresh_from_log = !filtered || cached_for_repo.is_none();
-    let authors = match (&repo.history_state.log, refresh_from_log) {
-        (Loadable::Ready(page), true) => Arc::from(collect_author_suggestions(&page.commits)),
-        // Filtered, or still loading: keep the list the user last saw.
-        _ => cached_for_repo.unwrap_or(empty),
+    let refreshing_catalog = catalog.matches_scope(scope)
+        && matches!(catalog.names, Loadable::Loading | Loadable::Error(_));
+    let authors = match &catalog.names {
+        Loadable::Ready(names) if catalog.matches_scope(scope) => {
+            Arc::from(collect_author_names(names.iter()))
+        }
+        _ if (filtered || refreshing_catalog) && cached_for_repo.is_some() => {
+            cached_for_repo.unwrap()
+        }
+        _ => match &repo.history_state.log {
+            Loadable::Ready(page) => Arc::from(collect_author_suggestions(&page.commits)),
+            _ => cached_for_repo.unwrap_or(empty),
+        },
     };
 
-    this.history_author_suggestions = Some((repo_id, log_rev, authors.clone()));
+    this.history_author_suggestions = Some(SuggestionCache {
+        repo_id,
+        log_rev,
+        authors_rev: catalog.rev,
+        scope,
+        names: authors.clone(),
+    });
     authors
 }
 
@@ -206,6 +228,20 @@ pub(super) fn panel(
     repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
+    if this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .is_some_and(|repo| repo.history_state.authors.needs_load(repo))
+    {
+        this.store.dispatch(Msg::HistoryAuthors(
+            gitcomet_state::history_authors::HistoryAuthorsMsg::Ensure {
+                repo_id,
+                retry: false,
+            },
+        ));
+    }
     let theme = this.theme;
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
@@ -239,8 +275,8 @@ pub(super) fn panel(
     let rows = rows_for_repo(this, repo_id);
     let targets = rows.targets;
 
-    // Suggestions only cover the commits loaded so far, so a name that is not
-    // in the list is still a valid filter — say so instead of a dead end.
+    // Free-form matching remains available while the full catalog is loading,
+    // and for substrings rather than exact author names.
     let empty_text = if query.is_empty() {
         "No authors"
     } else {
@@ -265,14 +301,37 @@ pub(super) fn panel(
         // (`scroll_picker_prompt_to_row`).
         .padded_query_row();
 
+    let status = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| match &repo.history_state.authors.names {
+            Loadable::Loading => Some("Loading authors…"),
+            Loadable::Error(_) => Some("Could not load all authors. Reopen to retry."),
+            _ => None,
+        });
+
     components::context_menu(
         theme,
-        prompt.render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
-            let Some(target) = targets.get(ix).cloned() else {
-                return;
-            };
-            apply(this, repo_id, target, cx);
-        }),
+        div()
+            .child(
+                prompt.render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
+                    let Some(target) = targets.get(ix).cloned() else {
+                        return;
+                    };
+                    apply(this, repo_id, target, cx);
+                }),
+            )
+            .when_some(status, |body, status| {
+                body.child(components::context_menu_label(
+                    theme,
+                    ui_scale_percent,
+                    status,
+                    Some(this.tooltip_host.clone()),
+                    cx,
+                ))
+            }),
     )
     // Fixed width: PickerPrompt rows size with `w_full`, which does not stretch
     // under fit-content parents.

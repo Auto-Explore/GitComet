@@ -609,6 +609,28 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_auto_save_file_edits(next, cx));
     }
 
+    fn dismiss_history_layout_popovers(&mut self, cx: &mut gpui::Context<Self>) {
+        self.dismiss_history_refs_menus(cx);
+        self.dismiss_commit_message_hover(cx);
+        if self.active_context_menu_invoker.as_deref() == Some("history_mode_header") {
+            self.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+        }
+    }
+
+    pub(in crate::view) fn set_history_branch_names(
+        &mut self,
+        next: HistoryBranchNamesMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.dismiss_history_layout_popovers(cx);
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.branch_names = next;
+        });
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_history_branch_names(next, cx));
+    }
+
     pub(in crate::view) fn set_history_column_preferences(
         &mut self,
         show_graph: bool,
@@ -617,6 +639,7 @@ impl GitCometView {
         show_sha: bool,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.dismiss_history_layout_popovers(cx);
         self.update_ui_preferences(cx, move |preferences| {
             preferences.history.show_graph = show_graph;
             preferences.history.show_author = show_author;
@@ -630,6 +653,7 @@ impl GitCometView {
     }
 
     pub(in crate::view) fn reset_history_column_widths(&mut self, cx: &mut gpui::Context<Self>) {
+        self.dismiss_history_layout_popovers(cx);
         self.main_pane
             .update(cx, |pane, cx| pane.reset_history_column_widths(cx));
         self.schedule_ui_settings_persist(cx);
