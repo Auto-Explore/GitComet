@@ -7,6 +7,8 @@ mod test_git_env;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
+#[path = "log_integration/authors.rs"]
+mod authors;
 #[path = "log_integration/snapshot_refresh.rs"]
 mod snapshot_refresh;
 #[cfg(windows)]

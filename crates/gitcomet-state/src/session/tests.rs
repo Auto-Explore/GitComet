@@ -26,6 +26,39 @@ fn unique_session_test_dir(label: &str) -> PathBuf {
     dir
 }
 
+#[test]
+fn history_branch_names_survives_other_session_writers() {
+    let dir = unique_session_test_dir("history-branch-names");
+    let path = dir.join("session.json");
+    assert_eq!(load_from_path(&path).history_branch_names, None);
+    for mode in ["inline", "separate_column"] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_branch_names: Some(mode.into()),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        // A later geometry/settings snapshot must not reset placement.
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_show_graph: Some(false),
+                window_width: Some(1200),
+                window_height: Some(800),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.history_branch_names.as_deref(), Some(mode));
+        assert_eq!(loaded.history_show_graph, Some(false));
+        assert_eq!(loaded.window_width, Some(1200));
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn assert_session_writer_waits_for_shared_lock(
     label: &str,
     persist: impl FnOnce(PathBuf) -> io::Result<()> + Send + 'static,

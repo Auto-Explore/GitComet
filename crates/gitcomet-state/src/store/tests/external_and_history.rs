@@ -1541,7 +1541,7 @@ fn refresh_preserves_selected_root_after_new_commit() {
     let selected = old.last().unwrap().id.clone();
     state.repos[0].set_selected_commit(Some(selected.clone()));
     state.repos[0].set_commit_multi_selection(crate::model::CommitMultiSelection {
-        commits: vec![selected.clone()],
+        commits: vec![selected.clone()].into(),
         anchor: Some(selected.clone()),
         ..Default::default()
     });
@@ -1687,7 +1687,7 @@ fn activation_refresh_reloads_the_depth_the_user_paginated_to() {
     let repo_state = &mut state.repos[0];
     repo_state.set_selected_commit(Some(selected.clone()));
     repo_state.set_commit_multi_selection(crate::model::CommitMultiSelection {
-        commits: vec![selected.clone()],
+        commits: vec![selected.clone()].into(),
         anchor: Some(selected.clone()),
         anchor_index: Some(450),
         anchor_log_rev: Some(repo_state.history_state.log_rev),
@@ -1729,7 +1729,7 @@ fn activation_refresh_reloads_the_depth_the_user_paginated_to() {
         "the selected commit must survive the refresh"
     );
     assert_eq!(
-        repo_state.history_state.multi_selection.commits,
+        *repo_state.history_state.multi_selection.commits,
         vec![selected]
     );
 }
@@ -2227,7 +2227,7 @@ fn log_loaded_reconciles_commit_multi_selection() {
     let repo_state = &mut state.repos[0];
     repo_state.history_state.history_scope = LogScope::CurrentBranch;
     repo_state.history_state.multi_selection = crate::model::CommitMultiSelection {
-        commits: vec![CommitId("kept".into()), CommitId("gone".into())],
+        commits: vec![CommitId("kept".into()), CommitId("gone".into())].into(),
         anchor: Some(CommitId("gone".into())),
         anchor_index: Some(1),
         anchor_log_rev: Some(repo_state.history_state.log_rev),
@@ -2253,7 +2253,7 @@ fn log_loaded_reconciles_commit_multi_selection() {
     );
 
     let sel = &state.repos[0].history_state.multi_selection;
-    assert_eq!(sel.commits, vec![CommitId("kept".into())]);
+    assert_eq!(*sel.commits, vec![CommitId("kept".into())]);
     assert_eq!(sel.anchor, None);
     assert_eq!(sel.anchor_index, None);
     assert_eq!(sel.anchor_log_rev, None);
@@ -2588,7 +2588,7 @@ fn log_loaded_keeps_a_not_yet_paged_selection_when_loading_more() {
     })));
     repo_state.set_selected_commit(Some(deep.clone()));
     repo_state.history_state.multi_selection = crate::model::CommitMultiSelection {
-        commits: vec![deep.clone()],
+        commits: vec![deep.clone()].into(),
         anchor: Some(deep.clone()),
         anchor_index: Some(0),
         anchor_log_rev: Some(repo_state.history_state.log_rev),
@@ -2632,7 +2632,7 @@ fn log_loaded_keeps_a_not_yet_paged_selection_when_loading_more() {
 
     let history = &state.repos[0].history_state;
     assert_eq!(history.selected_commit.as_ref(), Some(&deep));
-    assert_eq!(history.multi_selection.commits, vec![deep]);
+    assert_eq!(*history.multi_selection.commits, vec![deep]);
 }
 
 /// A first page *replaces* the log, so it can genuinely retire a selection —
@@ -2665,7 +2665,7 @@ fn log_loaded_first_page_keeps_the_commit_a_reveal_is_walking_toward() {
     repo_state.set_reveal_target(Some(target.clone()));
     repo_state.set_selected_commit(Some(target.clone()));
     repo_state.history_state.multi_selection = crate::model::CommitMultiSelection {
-        commits: vec![target.clone()],
+        commits: vec![target.clone()].into(),
         anchor: Some(target.clone()),
         anchor_index: Some(0),
         anchor_log_rev: Some(repo_state.history_state.log_rev),
@@ -2692,7 +2692,7 @@ fn log_loaded_first_page_keeps_the_commit_a_reveal_is_walking_toward() {
 
     let history = &state.repos[0].history_state;
     assert_eq!(history.selected_commit.as_ref(), Some(&target));
-    assert_eq!(history.multi_selection.commits, vec![target]);
+    assert_eq!(*history.multi_selection.commits, vec![target]);
 }
 
 #[test]

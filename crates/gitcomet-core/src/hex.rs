@@ -26,6 +26,31 @@ pub fn decode(hex: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Encode a supported Git object ID with a stack buffer and one shared allocation.
+pub fn encode_object_id(bytes: &[u8]) -> std::sync::Arc<str> {
+    assert!(matches!(bytes.len(), 20 | 32));
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut buffer = [0u8; 64];
+    for (byte, pair) in bytes.iter().zip(buffer.as_chunks_mut::<2>().0) {
+        pair[0] = HEX[(byte >> 4) as usize];
+        pair[1] = HEX[(byte & 15) as usize];
+    }
+    std::sync::Arc::from(std::str::from_utf8(&buffer[..bytes.len() * 2]).unwrap())
+}
+
+/// Compare binary bytes to hexadecimal text without a temporary buffer.
+pub fn matches(bytes: &[u8], hex: &str) -> bool {
+    hex.len() == bytes.len() * 2
+        && bytes
+            .iter()
+            .zip(hex.as_bytes().as_chunks::<2>().0)
+            .all(|(&byte, pair)| {
+                nibble(pair[0])
+                    .zip(nibble(pair[1]))
+                    .is_some_and(|(hi, lo)| byte == hi * 16 + lo)
+            })
+}
+
 fn nibble(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),

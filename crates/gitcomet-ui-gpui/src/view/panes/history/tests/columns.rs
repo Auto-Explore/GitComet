@@ -1,6 +1,35 @@
 use super::*;
 
 #[test]
+fn inline_refs_release_width_for_columns_and_graph_resizing() {
+    let mut layout = all_columns_visible_drag_layout();
+    let available = px(600.0);
+    assert_eq!(
+        history_visible_columns_for_layout(available, layout, 100),
+        (true, false, false)
+    );
+    layout.branch_w = px(0.0);
+    assert_eq!(
+        history_visible_columns_for_layout(available, layout, 100),
+        (true, true, false)
+    );
+    let params = history_column_resize_drag_params(HistoryColResizeHandle::Graph, layout, 100);
+    assert_eq!(
+        params.other_fixed_width,
+        layout.author_w + layout.date_w + layout.sha_w
+    );
+    let widths = history_reset_widths_for_available_width(
+        history_columns_available_width(px(396.0)),
+        HistoryBranchNamesMode::Inline,
+        true,
+        (true, true, true),
+        100,
+    );
+    assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_PX));
+    assert_eq!(widths.branch, px(HISTORY_COL_BRANCH_PX));
+}
+
+#[test]
 fn history_columns_available_width_reserves_scrollbar_gutter() {
     let gutter = history_scrollbar_gutter();
     assert_eq!(
@@ -100,26 +129,29 @@ fn graph_drag_ignores_auto_hidden_optional_columns() {
 fn reset_widths_clamp_default_graph_in_narrow_windows() {
     let widths = history_reset_widths_for_available_width(
         history_columns_available_width(px(396.0)),
+        HistoryBranchNamesMode::SeparateColumn,
         true,
         (true, true, true),
         100,
     );
 
-    assert_eq!(widths.branch, px(116.0));
-    assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
+    // The graph gives way first; the branch column keeps its default.
+    assert_eq!(widths.branch, px(HISTORY_COL_BRANCH_PX));
+    assert_eq!(widths.graph, px(30.0));
 }
 
 #[test]
 fn reset_widths_clamp_branch_after_graph_reaches_minimum() {
     let widths = history_reset_widths_for_available_width(
         history_columns_available_width(px(360.0)),
+        HistoryBranchNamesMode::SeparateColumn,
         true,
         (true, true, true),
         100,
     );
 
     assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
-    assert_eq!(widths.branch, px(80.0));
+    assert_eq!(widths.branch, px(96.0));
 }
 
 #[test]

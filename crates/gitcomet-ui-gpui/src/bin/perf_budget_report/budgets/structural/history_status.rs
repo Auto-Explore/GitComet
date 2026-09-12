@@ -1,6 +1,19 @@
 use super::super::*;
 
 pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
+    // The reporter alerts on shared runners and gates only dedicated runners.
+    StructuralBudgetSpec {
+        bench: "indexed_history_frames/5261_columns/80_pixels_100_percent",
+        metric: "warm_draw_p95_ms",
+        comparator: StructuralBudgetComparator::AtMost,
+        threshold: 16.7,
+    },
+    StructuralBudgetSpec {
+        bench: "indexed_history/100000_rows_5261_columns/warm",
+        metric: "paint_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 0.0,
+    },
     StructuralBudgetSpec {
         bench: "history_cache_build/stash_heavy",
         metric: "stash_helpers_filtered",

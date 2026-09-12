@@ -74,7 +74,10 @@ fn draw_comparison(
             }));
             repo.log_rev = 1;
             repo.history_state.multi_selection = CommitMultiSelection {
-                commits: (0..selected).map(|ix| CommitId(sha(ix).into())).collect(),
+                commits: (0..selected)
+                    .map(|ix| CommitId(sha(ix).into()))
+                    .collect::<Vec<_>>()
+                    .into(),
                 ..Default::default()
             };
             // Oldest is the base, newest the tip — the same ordering the

@@ -47,7 +47,7 @@ fn failed_detached_checkout_restores_head_after_unchanged_refresh(scope: LogScop
         repo.set_selected_commit(Some(rejected_target.clone()));
         let rev = repo.log_rev;
         repo.set_commit_multi_selection(crate::model::CommitMultiSelection {
-            commits: vec![rejected_target.clone()],
+            commits: vec![rejected_target.clone()].into(),
             anchor: Some(rejected_target.clone()),
             anchor_index: Some(1),
             anchor_log_rev: Some(rev),
@@ -143,7 +143,7 @@ fn unchanged_focus_keeps_the_entire_page_selection_and_revisions() {
     state.repos[0].set_selected_commit(Some(selected.clone()));
     let rev = state.repos[0].log_rev;
     state.repos[0].set_commit_multi_selection(crate::model::CommitMultiSelection {
-        commits: vec![selected.clone()],
+        commits: vec![selected.clone()].into(),
         anchor: Some(selected),
         anchor_index: Some(49_999),
         anchor_log_rev: Some(rev),
@@ -177,7 +177,7 @@ fn complete_deep_history_keeps_its_root_after_hundreds_of_new_commits() {
     let selected = before.commits.last().unwrap().id.clone();
     state.repos[0].set_selected_commit(Some(selected.clone()));
     state.repos[0].set_commit_multi_selection(crate::model::CommitMultiSelection {
-        commits: vec![selected.clone()],
+        commits: vec![selected.clone()].into(),
         anchor: Some(selected.clone()),
         ..Default::default()
     });

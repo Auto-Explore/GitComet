@@ -1220,6 +1220,7 @@ impl MainPaneView {
         self.diff_whitespace_mode = next;
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
+        self.diff_focused_change_block = None;
         self.rebuild_patch_visual_line_kinds_from_current_diff();
         self.diff_word_highlights.clear();
         self.diff_word_highlights_inflight = None;
@@ -1485,6 +1486,16 @@ impl MainPaneView {
 
     pub(in crate::view) fn history_tag_preferences(&self, cx: &gpui::App) -> (bool, bool) {
         self.history_view.read(cx).history_tag_preferences()
+    }
+
+    pub(in crate::view) fn set_history_branch_names(
+        &mut self,
+        next: HistoryBranchNamesMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view
+            .update(cx, |view, cx| view.set_history_branch_names(next, cx));
+        cx.notify();
     }
 
     pub(in crate::view) fn set_history_column_preferences(

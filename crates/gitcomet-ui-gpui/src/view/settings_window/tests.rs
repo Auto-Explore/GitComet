@@ -3232,3 +3232,84 @@ fn signature_verification_is_discoverable_in_settings_search() {
         );
     }
 }
+
+#[gpui::test]
+fn history_branch_names_options_update_every_main_window(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (first, first_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    first_cx.update(|_, app| open_settings_window(app));
+    first_cx.run_until_parked();
+    let settings_window = first_cx.update(|_, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .unwrap()
+    });
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (second, second_cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), second_cx);
+    settings_cx.simulate_resize(size(px(720.0), px(1200.0)));
+    settings_window
+        .update(&mut settings_cx, |settings, _, cx| {
+            assert_eq!(
+                settings.history_branch_names,
+                HistoryBranchNamesMode::SeparateColumn
+            );
+            settings.set_expanded_section(Some(SettingsSection::GitLogBranchNames), cx);
+        })
+        .unwrap();
+    settings_cx.run_until_parked();
+    for (mode, selector) in [
+        (
+            HistoryBranchNamesMode::Inline,
+            "settings_window_git_log_branch_names_inline",
+        ),
+        (
+            HistoryBranchNamesMode::SeparateColumn,
+            "settings_window_git_log_branch_names_separate",
+        ),
+    ] {
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let option = settings_cx
+            .debug_bounds(selector)
+            .expect("branch names option");
+        settings_cx.simulate_click(option.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+        settings_window
+            .update(&mut settings_cx, |settings, _, _| {
+                assert_eq!(settings.history_branch_names, mode);
+                assert_eq!(
+                    settings
+                        .preference_settings()
+                        .history_branch_names
+                        .as_deref(),
+                    Some(mode.key())
+                );
+            })
+            .unwrap();
+        settings_cx.update(|_, app| {
+            for view in [&first, &second] {
+                let root = view.read(app);
+                assert_eq!(
+                    root.ui_model.read(app).preferences.history.branch_names,
+                    mode
+                );
+                let history = root.main_pane.read(app).history_view.read(app);
+                assert_eq!(history.history_branch_names, mode);
+                assert_eq!(
+                    history.history_ref_column_width(),
+                    if mode == HistoryBranchNamesMode::Inline {
+                        px(0.0)
+                    } else {
+                        history.history_col_branch
+                    }
+                );
+            }
+        });
+    }
+}

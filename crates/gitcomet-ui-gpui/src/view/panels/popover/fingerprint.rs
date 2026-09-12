@@ -350,7 +350,10 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 
         PopoverKind::HistoryAuthorFilter { .. } => {
             repo.history_state.history_author_filter.hash(hasher);
-            // Author suggestions come from the loaded log pages.
+            repo.history_state.history_scope.hash(hasher);
+            repo.history_state.authors.rev.hash(hasher);
+            repo.load_epoch.hash(hasher);
+            repo.history_state.log_rev.hash(hasher);
             repo.log_rev.hash(hasher);
         }
 
