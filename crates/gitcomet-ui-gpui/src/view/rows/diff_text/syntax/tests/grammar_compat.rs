@@ -251,13 +251,13 @@ fn vendored_grammars_keep_the_small_state_retune() {
     // (grammar directory under vendor/, LARGE_STATE_COUNT as regenerated at
     // TS_SMALL_STATE_THRESHOLD=128)
     const RETUNED: &[(&str, usize)] = &[
-        ("tree-sitter-c-sharp", 1981),
+        ("tree-sitter-c-sharp", 2156),
         ("tree-sitter-coffee", 42),
         ("tree-sitter-cpp", 845),
-        ("tree-sitter-fsharp/fsharp", 2542),
+        ("tree-sitter-fsharp/fsharp", 2454),
         ("tree-sitter-fsharp/fsharp_signature", 2),
         ("tree-sitter-haskell", 117),
-        ("tree-sitter-julia", 4076),
+        ("tree-sitter-julia", 2069),
         ("tree-sitter-kotlin-sg", 1431),
         ("tree-sitter-objc", 2356),
         ("tree-sitter-ocaml/grammars/interface", 44),
@@ -268,9 +268,9 @@ fn vendored_grammars_keep_the_small_state_retune() {
         ("tree-sitter-powershell", 83),
         ("tree-sitter-ruby", 741),
         ("tree-sitter-rust", 67),
-        ("tree-sitter-scala", 504),
-        ("tree-sitter-sequel", 2),
-        ("tree-sitter-swift", 802),
+        ("tree-sitter-scala", 493),
+        ("tree-sitter-sequel", 6),
+        ("tree-sitter-swift", 805),
         ("tree-sitter-typescript/tsx", 176),
         ("tree-sitter-typescript/typescript", 166),
     ];
@@ -357,6 +357,307 @@ fn vendored_asm_grammar_parses_dotted_mnemonics_and_directives() {
         tree.root_node().to_sexp().contains("mnemonic"),
         "the `mnemonic` token is what makes `b.eq` one node: {}",
         tree.root_node().to_sexp(),
+    );
+}
+
+fn parse_vendored(language: tree_sitter::Language, source: &str) -> tree_sitter::Tree {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&language)
+        .expect("the vendored grammar should load");
+    parser.parse(source, None).expect("the source should parse")
+}
+
+/// A heredoc word over 255 bytes parses instead of aborting.
+///
+/// Ruby 0.23.1's scanner serialized the word length in one byte, so a longer
+/// word failed its own `assert(size == length)` on deserialize -- a SIGABRT,
+/// since nothing defines NDEBUG. See vendor/tree-sitter-ruby.
+#[test]
+fn vendored_ruby_grammar_survives_a_heredoc_word_over_255_bytes() {
+    let word = "A".repeat(300);
+    let source = format!("x = <<~{word}\n  body\n{word}\nputs x\n");
+    let tree = parse_vendored(tree_sitter_ruby::LANGUAGE.into(), &source);
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert!(sexp.contains("heredoc_body"), "{sexp}");
+}
+
+/// An ordinary CSV field may hold a space, one character, or a leading digit.
+///
+/// The 1.2.0 `text` token required two characters, banned spaces and banned a
+/// leading digit, so `New York` split into two fields and `B` did not parse at
+/// all -- 43 ERROR nodes in the corpus sample. See vendor/tree-sitter-csv.
+#[test]
+fn vendored_csv_grammar_parses_spaces_and_short_fields() {
+    let tree = parse_vendored(
+        tree_sitter_csv::LANGUAGE.into(),
+        "name,city,score\nB,New York,12\n",
+    );
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    let second_row = tree
+        .root_node()
+        .child(1)
+        .expect("the document should have a second row");
+    assert_eq!(
+        second_row.named_child_count(),
+        3,
+        "`B,New York,12` is three fields: {sexp}"
+    );
+}
+
+/// A NUL byte inside a comment or string is consumed rather than rescanned.
+///
+/// The scanner returned without advancing, so every later `/` rescanned up to
+/// the NUL: quadratic, and 18 s on a 64 KB file. The bound here is loose on
+/// purpose -- the fixed scanner does this in milliseconds, and the broken one
+/// cannot come close whatever the machine is doing. See
+/// vendor/tree-sitter-kotlin-sg.
+#[test]
+fn vendored_kotlin_grammar_does_not_rescan_a_nul_byte() {
+    let source = format!("{}\0", "/*".repeat(16 * 1024));
+    let started = std::time::Instant::now();
+    parse_vendored(tree_sitter_kotlin_sg::LANGUAGE.into(), &source);
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "parsing 32 KB of `/*` before a NUL took {elapsed:?}; the scanner is rescanning"
+    );
+}
+
+/// A class with two modifiers is a declaration, not an infix expression.
+///
+/// Without the dynamic precedence this parsed as `infix_expression` with a
+/// lambda body and no ERROR node, so the query coloured `public abstract class`
+/// as three variables. See vendor/tree-sitter-kotlin-sg.
+#[test]
+fn vendored_kotlin_grammar_reads_modifier_led_declarations() {
+    let tree = parse_vendored(
+        tree_sitter_kotlin_sg::LANGUAGE.into(),
+        "public abstract class B {}\ninternal open object First {}\n",
+    );
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert!(
+        sexp.contains("class_declaration") && sexp.contains("object_declaration"),
+        "both should be declarations: {sexp}"
+    );
+    assert!(
+        !sexp.contains("infix_expression"),
+        "neither should be an infix expression: {sexp}"
+    );
+}
+
+/// `case <type> when <expr>:` keeps its `when_clause`.
+///
+/// This is the regression the retune itself caused: regenerating with
+/// tree-sitter-cli 0.26.13 built a different automaton than upstream ships
+/// (STATE_COUNT 8500 against 8495) and turned this line into two ERROR nodes.
+/// vendor/tree-sitter-c-sharp is generated with 0.26.5 for that reason.
+#[test]
+fn vendored_csharp_grammar_parses_a_when_clause_on_a_type_pattern() {
+    let tree = parse_vendored(
+        tree_sitter_c_sharp::LANGUAGE.into(),
+        "class C { int M(object o) { switch (o) { case string when IsOid(o): return 1; } return 0; } }",
+    );
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert!(sexp.contains("when_clause"), "{sexp}");
+}
+
+/// `(x) && y` is a logical AND, not a cast of `&y`.
+///
+/// 0.23.5 read it as a cast, with no ERROR to show for it. See
+/// vendor/tree-sitter-c-sharp.
+#[test]
+fn vendored_csharp_grammar_reads_parenthesized_operand_before_logical_and() {
+    let tree = parse_vendored(
+        tree_sitter_c_sharp::LANGUAGE.into(),
+        "class C { void M(object o, bool c) { if ((o) && c) {} } }",
+    );
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert!(
+        sexp.contains("binary_expression") && !sexp.contains("cast_expression"),
+        "{sexp}"
+    );
+}
+
+/// Three CUE forms that the 2023 crates.io snapshot got silently wrong.
+///
+/// None of them produced an ERROR: `-2.5` split into `number` and a stray
+/// `.5`, `b =~ "x"` became a field plus a unary, and `b[2]` became a field plus
+/// a list. See vendor/tree-sitter-cue.
+#[test]
+fn vendored_cue_grammar_reads_negative_floats_regex_match_and_indexing() {
+    let tree = parse_vendored(
+        tree_sitter_cue::LANGUAGE.into(),
+        "a: -2.5\nb: c =~ \"x\"\nd: e[2]\ntls?: string\nport!: int\n",
+    );
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert!(sexp.contains("(float"), "`-2.5` is one float: {sexp}");
+    assert!(sexp.contains("index_expression"), "{sexp}");
+    assert!(
+        sexp.contains("optional") && sexp.contains("required"),
+        "`tls?:` and `port!:` are optional/required labels: {sexp}"
+    );
+}
+
+/// `const` fields in a struct definition parse.
+///
+/// 0.23.1 produced two ERROR nodes here; it is the most common of the fixes
+/// v0.25.0 brings. See vendor/tree-sitter-julia.
+#[test]
+fn vendored_julia_grammar_parses_const_struct_fields() {
+    let tree = parse_vendored(
+        tree_sitter_julia::LANGUAGE.into(),
+        "struct S\n    const x::Int\n    y::Float64\nend\n",
+    );
+    assert!(
+        !tree.root_node().has_error(),
+        "{}",
+        tree.root_node().to_sexp()
+    );
+}
+
+/// KDL 2 syntax parses, and so does the KDL 1 it replaced.
+///
+/// Real `.kdl` files are split between the two versions, so v2.0.0 would not be
+/// worth taking if it dropped v1. See vendor/tree-sitter-kdl.
+#[test]
+fn vendored_kdl_grammar_parses_both_kdl_versions() {
+    let v2 = parse_vendored(
+        tree_sitter_kdl::LANGUAGE.into(),
+        "node #true #null (u8)3 key=#false {\n  child \"a\"\n}\n",
+    );
+    assert!(!v2.root_node().has_error(), "{}", v2.root_node().to_sexp());
+
+    let v1 = parse_vendored(
+        tree_sitter_kdl::LANGUAGE.into(),
+        "node true null key=false {\n  child r#\"raw\"#\n}\n",
+    );
+    assert!(!v1.root_node().has_error(), "{}", v1.root_node().to_sexp());
+}
+
+/// The KDL query compiles promptly.
+///
+/// Every `node` pattern in it is anchored on the `name:` field. Matching a
+/// `node` child positionally instead makes tree-sitter enumerate the node's
+/// possible children, and on this grammar that takes seconds -- minutes for
+/// `(node (node_field ...))`. It is a startup cost paid on the first `.kdl`
+/// file opened, so it is worth a tripwire.
+#[test]
+fn kdl_highlights_query_compiles_promptly() {
+    let lang: tree_sitter::Language = tree_sitter_kdl::LANGUAGE.into();
+    let started = std::time::Instant::now();
+    tree_sitter::Query::new(&lang, KDL_HIGHLIGHTS_QUERY)
+        .expect("vendored KDL highlights.scm should compile");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "the KDL highlights query took {elapsed:?} to compile; a `node` pattern lost its `name:` field"
+    );
+}
+
+#[test]
+fn vendored_cue_query_compiles() {
+    let lang: tree_sitter::Language = tree_sitter_cue::LANGUAGE.into();
+    tree_sitter::Query::new(&lang, CUE_HIGHLIGHTS_QUERY)
+        .expect("vendored CUE highlights.scm should compile");
+}
+
+#[test]
+fn vendored_swift_queries_compile() {
+    let lang: tree_sitter::Language = tree_sitter_swift::LANGUAGE.into();
+    // `nil` became `nil_literal` upstream, so this query and the grammar have to
+    // be updated together or the app panics on the first Swift file.
+    tree_sitter::Query::new(&lang, tree_sitter_swift::HIGHLIGHTS_QUERY)
+        .expect("vendored Swift highlights.scm should compile");
+    tree_sitter::Query::new(&lang, tree_sitter_swift::INJECTIONS_QUERY)
+        .expect("vendored Swift injections.scm should compile");
+}
+
+/// Swift's `try!` keeps its `!`, and a prefix operator binds to the whole
+/// navigation expression.
+///
+/// `-v.x` parsed as `(-v).x` before. The `try!` half is also the observable
+/// end of the LLP64 shift fix: where that undefined shift folds to zero, the
+/// scanner stops suppressing `!` after `try` and this parses as `try (!foo)()`.
+#[test]
+fn vendored_swift_grammar_reads_try_bang_and_prefix_navigation() {
+    let tree = parse_vendored(
+        tree_sitter_swift::LANGUAGE.into(),
+        "func f(v: P) -> Int {\n  let a = try! g()\n  let b = -v.x\n  return b\n}\n",
+    );
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert!(
+        sexp.contains("prefix_expression"),
+        "`-v.x` is a prefix expression over the navigation: {sexp}"
+    );
+}
+
+/// Two Scala forms that used to ERROR, one per fix family.
+///
+/// `implicit` in front of a parenthesized lambda parameter list, and a
+/// multi-statement `while` body. See vendor/tree-sitter-scala.
+#[test]
+fn vendored_scala_grammar_closes_two_parse_gaps() {
+    let tree = parse_vendored(
+        tree_sitter_scala::LANGUAGE.into(),
+        "object A {\n  val f = implicit (x: Int) => x\n  def g(c: Boolean): Unit =\n    while (c) {\n      println(1)\n      println(2)\n    }\n}\n",
+    );
+    assert!(
+        !tree.root_node().has_error(),
+        "{}",
+        tree.root_node().to_sexp()
+    );
+}
+
+/// Backtick-quoted identifiers and `HAVING` without `GROUP BY`.
+///
+/// Both produced two ERROR nodes on 0.3.11. See vendor/tree-sitter-sequel.
+#[test]
+fn vendored_sequel_grammar_parses_backticks_and_bare_having() {
+    let backticks = parse_vendored(
+        tree_sitter_sequel::LANGUAGE.into(),
+        "SELECT `my col`, `a-b` FROM `tbl`;",
+    );
+    assert!(
+        !backticks.root_node().has_error(),
+        "{}",
+        backticks.root_node().to_sexp()
+    );
+
+    let having = parse_vendored(
+        tree_sitter_sequel::LANGUAGE.into(),
+        "SELECT x, count(*) FROM t HAVING count(*) > 1;",
+    );
+    assert!(
+        !having.root_node().has_error(),
+        "{}",
+        having.root_node().to_sexp()
+    );
+}
+
+/// `static member val` is an auto-property, not a method named `val`.
+///
+/// Reading it as a method swallowed the declaration that followed into an
+/// application expression, with no ERROR node. See vendor/tree-sitter-fsharp.
+#[test]
+fn vendored_fsharp_grammar_reads_static_member_val() {
+    let tree = parse_vendored(
+        tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
+        "type Counter() =\n    static member val Count = 0 with get, set\n    member this.Bump() = 1\n",
+    );
+    let sexp = tree.root_node().to_sexp();
+    assert!(!tree.root_node().has_error(), "{sexp}");
+    assert_eq!(
+        sexp.matches("member_defn").count(),
+        2,
+        "the second member must not be swallowed by the first: {sexp}"
     );
 }
 

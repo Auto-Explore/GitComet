@@ -637,6 +637,120 @@
     }
   },
   {
+    "type": "alter_materialized_view",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "change_ownership",
+          "named": true
+        },
+        {
+          "type": "keyword_alter",
+          "named": true
+        },
+        {
+          "type": "keyword_exists",
+          "named": true
+        },
+        {
+          "type": "keyword_if",
+          "named": true
+        },
+        {
+          "type": "keyword_materialized",
+          "named": true
+        },
+        {
+          "type": "keyword_view",
+          "named": true
+        },
+        {
+          "type": "object_reference",
+          "named": true
+        },
+        {
+          "type": "rename_object",
+          "named": true
+        },
+        {
+          "type": "set_schema",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "alter_policy",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "keyword_alter",
+          "named": true
+        },
+        {
+          "type": "keyword_check",
+          "named": true
+        },
+        {
+          "type": "keyword_current_role",
+          "named": true
+        },
+        {
+          "type": "keyword_current_user",
+          "named": true
+        },
+        {
+          "type": "keyword_on",
+          "named": true
+        },
+        {
+          "type": "keyword_policy",
+          "named": true
+        },
+        {
+          "type": "keyword_public",
+          "named": true
+        },
+        {
+          "type": "keyword_session_user",
+          "named": true
+        },
+        {
+          "type": "keyword_to",
+          "named": true
+        },
+        {
+          "type": "keyword_using",
+          "named": true
+        },
+        {
+          "type": "keyword_with",
+          "named": true
+        },
+        {
+          "type": "object_reference",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "rename_object",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "alter_role",
     "named": true,
     "fields": {
@@ -1208,7 +1322,19 @@
           "named": true
         },
         {
+          "type": "keyword_disable",
+          "named": true
+        },
+        {
+          "type": "keyword_enable",
+          "named": true
+        },
+        {
           "type": "keyword_exists",
+          "named": true
+        },
+        {
+          "type": "keyword_force",
           "named": true
         },
         {
@@ -1216,7 +1342,23 @@
           "named": true
         },
         {
+          "type": "keyword_level",
+          "named": true
+        },
+        {
+          "type": "keyword_no",
+          "named": true
+        },
+        {
           "type": "keyword_only",
+          "named": true
+        },
+        {
+          "type": "keyword_row",
+          "named": true
+        },
+        {
+          "type": "keyword_security",
           "named": true
         },
         {
@@ -2443,6 +2585,10 @@
             "named": true
           },
           {
+            "type": "keyword_rlike",
+            "named": true
+          },
+          {
             "type": "not_distinct_from",
             "named": true
           },
@@ -2452,6 +2598,10 @@
           },
           {
             "type": "not_like",
+            "named": true
+          },
+          {
+            "type": "not_rlike",
             "named": true
           },
           {
@@ -3784,6 +3934,10 @@
           "named": true
         },
         {
+          "type": "keyword_procedure",
+          "named": true
+        },
+        {
           "type": "keyword_role",
           "named": true
         },
@@ -3821,6 +3975,25 @@
         },
         {
           "type": "object_reference",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "composite_field",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "field",
+          "named": true
+        },
+        {
+          "type": "keyword_hash",
           "named": true
         }
       ]
@@ -3970,6 +4143,25 @@
       "types": [
         {
           "type": "constraint",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "covering_columns",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "index_fields",
+          "named": true
+        },
+        {
+          "type": "keyword_include",
           "named": true
         }
       ]
@@ -4432,6 +4624,10 @@
       "required": true,
       "types": [
         {
+          "type": "covering_columns",
+          "named": true
+        },
+        {
           "type": "index_fields",
           "named": true
         },
@@ -4504,6 +4700,14 @@
           "named": true
         },
         {
+          "type": "tablespace",
+          "named": true
+        },
+        {
+          "type": "tablet_split",
+          "named": true
+        },
+        {
           "type": "where",
           "named": true
         }
@@ -4572,6 +4776,176 @@
         },
         {
           "type": "object_reference",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "create_policy",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "keyword_all",
+          "named": true
+        },
+        {
+          "type": "keyword_as",
+          "named": true
+        },
+        {
+          "type": "keyword_check",
+          "named": true
+        },
+        {
+          "type": "keyword_create",
+          "named": true
+        },
+        {
+          "type": "keyword_current_role",
+          "named": true
+        },
+        {
+          "type": "keyword_current_user",
+          "named": true
+        },
+        {
+          "type": "keyword_delete",
+          "named": true
+        },
+        {
+          "type": "keyword_for",
+          "named": true
+        },
+        {
+          "type": "keyword_insert",
+          "named": true
+        },
+        {
+          "type": "keyword_on",
+          "named": true
+        },
+        {
+          "type": "keyword_permissive",
+          "named": true
+        },
+        {
+          "type": "keyword_policy",
+          "named": true
+        },
+        {
+          "type": "keyword_public",
+          "named": true
+        },
+        {
+          "type": "keyword_restrictive",
+          "named": true
+        },
+        {
+          "type": "keyword_select",
+          "named": true
+        },
+        {
+          "type": "keyword_session_user",
+          "named": true
+        },
+        {
+          "type": "keyword_to",
+          "named": true
+        },
+        {
+          "type": "keyword_update",
+          "named": true
+        },
+        {
+          "type": "keyword_using",
+          "named": true
+        },
+        {
+          "type": "keyword_with",
+          "named": true
+        },
+        {
+          "type": "object_reference",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "create_procedure",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "function_arguments",
+          "named": true
+        },
+        {
+          "type": "function_language",
+          "named": true
+        },
+        {
+          "type": "function_safety",
+          "named": true
+        },
+        {
+          "type": "function_security",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "keyword_create",
+          "named": true
+        },
+        {
+          "type": "keyword_definer",
+          "named": true
+        },
+        {
+          "type": "keyword_exists",
+          "named": true
+        },
+        {
+          "type": "keyword_if",
+          "named": true
+        },
+        {
+          "type": "keyword_not",
+          "named": true
+        },
+        {
+          "type": "keyword_or",
+          "named": true
+        },
+        {
+          "type": "keyword_procedure",
+          "named": true
+        },
+        {
+          "type": "keyword_replace",
+          "named": true
+        },
+        {
+          "type": "object_reference",
+          "named": true
+        },
+        {
+          "type": "procedure_body",
           "named": true
         }
       ]
@@ -6338,6 +6712,88 @@
     }
   },
   {
+    "type": "drop_materialized_view",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "keyword_cascade",
+          "named": true
+        },
+        {
+          "type": "keyword_drop",
+          "named": true
+        },
+        {
+          "type": "keyword_exists",
+          "named": true
+        },
+        {
+          "type": "keyword_if",
+          "named": true
+        },
+        {
+          "type": "keyword_materialized",
+          "named": true
+        },
+        {
+          "type": "keyword_restrict",
+          "named": true
+        },
+        {
+          "type": "keyword_view",
+          "named": true
+        },
+        {
+          "type": "object_reference",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "drop_procedure",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "keyword_cascade",
+          "named": true
+        },
+        {
+          "type": "keyword_drop",
+          "named": true
+        },
+        {
+          "type": "keyword_exists",
+          "named": true
+        },
+        {
+          "type": "keyword_if",
+          "named": true
+        },
+        {
+          "type": "keyword_procedure",
+          "named": true
+        },
+        {
+          "type": "keyword_restrict",
+          "named": true
+        },
+        {
+          "type": "object_reference",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "drop_role",
     "named": true,
     "fields": {},
@@ -6810,6 +7266,10 @@
           "named": true
         },
         {
+          "type": "keyword_hash",
+          "named": true
+        },
+        {
           "type": "keyword_last",
           "named": true
         },
@@ -6974,6 +7434,10 @@
         },
         {
           "type": "group_by",
+          "named": true
+        },
+        {
+          "type": "having",
           "named": true
         },
         {
@@ -7913,6 +8377,89 @@
           "named": true
         },
         {
+          "type": "list",
+          "named": true
+        },
+        {
+          "type": "literal",
+          "named": true
+        },
+        {
+          "type": "object_id",
+          "named": true
+        },
+        {
+          "type": "parameter",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "subquery",
+          "named": true
+        },
+        {
+          "type": "subscript",
+          "named": true
+        },
+        {
+          "type": "unary_expression",
+          "named": true
+        },
+        {
+          "type": "window_function",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "having",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "array",
+          "named": true
+        },
+        {
+          "type": "between_expression",
+          "named": true
+        },
+        {
+          "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "case",
+          "named": true
+        },
+        {
+          "type": "cast",
+          "named": true
+        },
+        {
+          "type": "exists",
+          "named": true
+        },
+        {
+          "type": "field",
+          "named": true
+        },
+        {
+          "type": "interval",
+          "named": true
+        },
+        {
+          "type": "invocation",
+          "named": true
+        },
+        {
           "type": "keyword_having",
           "named": true
         },
@@ -7966,8 +8513,12 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
+        {
+          "type": "composite_field",
+          "named": true
+        },
         {
           "type": "field",
           "named": true
@@ -8632,6 +9183,11 @@
     "fields": {}
   },
   {
+    "type": "keyword_rlike",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "keyword_serial",
     "named": true,
     "fields": {}
@@ -9140,6 +9696,25 @@
     }
   },
   {
+    "type": "not_rlike",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "keyword_not",
+          "named": true
+        },
+        {
+          "type": "keyword_rlike",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "not_similar_to",
     "named": true,
     "fields": {},
@@ -9624,6 +10199,125 @@
     }
   },
   {
+    "type": "procedure_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "array",
+          "named": true
+        },
+        {
+          "type": "between_expression",
+          "named": true
+        },
+        {
+          "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "case",
+          "named": true
+        },
+        {
+          "type": "cast",
+          "named": true
+        },
+        {
+          "type": "dollar_quote",
+          "named": true
+        },
+        {
+          "type": "exists",
+          "named": true
+        },
+        {
+          "type": "field",
+          "named": true
+        },
+        {
+          "type": "function_declaration",
+          "named": true
+        },
+        {
+          "type": "interval",
+          "named": true
+        },
+        {
+          "type": "invocation",
+          "named": true
+        },
+        {
+          "type": "keyword_as",
+          "named": true
+        },
+        {
+          "type": "keyword_atomic",
+          "named": true
+        },
+        {
+          "type": "keyword_begin",
+          "named": true
+        },
+        {
+          "type": "keyword_declare",
+          "named": true
+        },
+        {
+          "type": "keyword_end",
+          "named": true
+        },
+        {
+          "type": "keyword_return",
+          "named": true
+        },
+        {
+          "type": "list",
+          "named": true
+        },
+        {
+          "type": "literal",
+          "named": true
+        },
+        {
+          "type": "object_id",
+          "named": true
+        },
+        {
+          "type": "parameter",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "statement",
+          "named": true
+        },
+        {
+          "type": "subquery",
+          "named": true
+        },
+        {
+          "type": "subscript",
+          "named": true
+        },
+        {
+          "type": "unary_expression",
+          "named": true
+        },
+        {
+          "type": "window_function",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "program",
     "named": true,
     "root": true,
@@ -9642,6 +10336,49 @@
         },
         {
           "type": "transaction",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "refresh_materialized_view",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "keyword_concurrently",
+          "named": true
+        },
+        {
+          "type": "keyword_data",
+          "named": true
+        },
+        {
+          "type": "keyword_materialized",
+          "named": true
+        },
+        {
+          "type": "keyword_no",
+          "named": true
+        },
+        {
+          "type": "keyword_refresh",
+          "named": true
+        },
+        {
+          "type": "keyword_view",
+          "named": true
+        },
+        {
+          "type": "keyword_with",
+          "named": true
+        },
+        {
+          "type": "object_reference",
           "named": true
         }
       ]
@@ -10392,6 +11129,14 @@
           "named": true
         },
         {
+          "type": "alter_materialized_view",
+          "named": true
+        },
+        {
+          "type": "alter_policy",
+          "named": true
+        },
+        {
           "type": "alter_role",
           "named": true
         },
@@ -10464,6 +11209,14 @@
           "named": true
         },
         {
+          "type": "create_policy",
+          "named": true
+        },
+        {
+          "type": "create_procedure",
+          "named": true
+        },
+        {
           "type": "create_role",
           "named": true
         },
@@ -10513,6 +11266,14 @@
         },
         {
           "type": "drop_index",
+          "named": true
+        },
+        {
+          "type": "drop_materialized_view",
+          "named": true
+        },
+        {
+          "type": "drop_procedure",
           "named": true
         },
         {
@@ -10888,6 +11649,10 @@
           "named": true
         },
         {
+          "type": "refresh_materialized_view",
+          "named": true
+        },
+        {
           "type": "reset_statement",
           "named": true
         },
@@ -10941,6 +11706,10 @@
         },
         {
           "type": "where",
+          "named": true
+        },
+        {
+          "type": "while_statement",
           "named": true
         },
         {
@@ -11748,6 +12517,48 @@
         },
         {
           "type": "keyword_sort",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tablespace",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "keyword_tablespace",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "tablet_split",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "keyword_into",
+          "named": true
+        },
+        {
+          "type": "keyword_split",
+          "named": true
+        },
+        {
+          "type": "keyword_tablets",
           "named": true
         }
       ]
@@ -12653,6 +13464,97 @@
     }
   },
   {
+    "type": "while_statement",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "array",
+          "named": true
+        },
+        {
+          "type": "between_expression",
+          "named": true
+        },
+        {
+          "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "case",
+          "named": true
+        },
+        {
+          "type": "cast",
+          "named": true
+        },
+        {
+          "type": "exists",
+          "named": true
+        },
+        {
+          "type": "field",
+          "named": true
+        },
+        {
+          "type": "interval",
+          "named": true
+        },
+        {
+          "type": "invocation",
+          "named": true
+        },
+        {
+          "type": "keyword_while",
+          "named": true
+        },
+        {
+          "type": "list",
+          "named": true
+        },
+        {
+          "type": "literal",
+          "named": true
+        },
+        {
+          "type": "object_id",
+          "named": true
+        },
+        {
+          "type": "parameter",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "statement",
+          "named": true
+        },
+        {
+          "type": "subquery",
+          "named": true
+        },
+        {
+          "type": "subscript",
+          "named": true
+        },
+        {
+          "type": "unary_expression",
+          "named": true
+        },
+        {
+          "type": "window_function",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "window_clause",
     "named": true,
     "fields": {},
@@ -13146,7 +14048,15 @@
     "named": true
   },
   {
+    "type": "keyword_current_role",
+    "named": true
+  },
+  {
     "type": "keyword_current_timestamp",
+    "named": true
+  },
+  {
+    "type": "keyword_current_user",
     "named": true
   },
   {
@@ -13222,6 +14132,10 @@
     "named": true
   },
   {
+    "type": "keyword_disable",
+    "named": true
+  },
+  {
     "type": "keyword_distinct",
     "named": true
   },
@@ -13247,6 +14161,10 @@
   },
   {
     "type": "keyword_else",
+    "named": true
+  },
+  {
+    "type": "keyword_enable",
     "named": true
   },
   {
@@ -13447,6 +14365,10 @@
   },
   {
     "type": "keyword_in",
+    "named": true
+  },
+  {
+    "type": "keyword_include",
     "named": true
   },
   {
@@ -13790,7 +14712,15 @@
     "named": true
   },
   {
+    "type": "keyword_permissive",
+    "named": true
+  },
+  {
     "type": "keyword_plain",
+    "named": true
+  },
+  {
+    "type": "keyword_policy",
     "named": true
   },
   {
@@ -13815,6 +14745,10 @@
   },
   {
     "type": "keyword_program",
+    "named": true
+  },
+  {
+    "type": "keyword_public",
     "named": true
   },
   {
@@ -13843,6 +14777,10 @@
   },
   {
     "type": "keyword_referencing",
+    "named": true
+  },
+  {
+    "type": "keyword_refresh",
     "named": true
   },
   {
@@ -13891,6 +14829,10 @@
   },
   {
     "type": "keyword_restricted",
+    "named": true
+  },
+  {
+    "type": "keyword_restrictive",
     "named": true
   },
   {
@@ -13966,6 +14908,10 @@
     "named": true
   },
   {
+    "type": "keyword_session_user",
+    "named": true
+  },
+  {
     "type": "keyword_set",
     "named": true
   },
@@ -14003,6 +14949,10 @@
   },
   {
     "type": "keyword_spgist",
+    "named": true
+  },
+  {
+    "type": "keyword_split",
     "named": true
   },
   {
@@ -14059,6 +15009,10 @@
   },
   {
     "type": "keyword_tablespace",
+    "named": true
+  },
+  {
+    "type": "keyword_tablets",
     "named": true
   },
   {
@@ -14247,6 +15201,10 @@
   },
   {
     "type": "keyword_where",
+    "named": true
+  },
+  {
+    "type": "keyword_while",
     "named": true
   },
   {

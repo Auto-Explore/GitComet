@@ -63,6 +63,12 @@ that shows up 1:1 in the executable's `.rodata`:
 The already-vendored `coffee` (6.47 → 4.73 MB) and `ruby` (2.00 → 1.72 MB) were
 regenerated at the same setting and are included in that total.
 
+Those numbers are from the original pass. Several grammars have been moved
+forward to newer upstream revisions since, which changes both columns — `julia`
+shrank by half when upstream halved its automaton, `sequel` grew with three
+years of new statements — so treat the table as the shape of the win rather than
+current figures. Each grammar's own `Cargo.toml` header carries what it is now.
+
 `perl` is deliberately **not** on this list even though it would save 1.19 MB.
 See "When regeneration is not safe" below.
 
@@ -72,11 +78,36 @@ The threshold is consumed only by the renderer. It selects how a state's actions
 are *written*, never which states exist or what they do — so the automaton is
 identical and every parse is identical.
 
-That is checked rather than assumed. Every retuned grammar was built twice and
-made to parse a real sample from `fixtures/syntax_test`: once as vendored here,
-once from upstream's own `parser.c` compiled the way cargo used to compile it.
-The `ts_node_string` output has to match byte for byte. That check is what found
-both problems described below.
+That holds only while the CLI you regenerate with builds the same automaton
+upstream shipped, which is **not** guaranteed by the ABI and not guaranteed by
+staying inside one minor version. Compare the counts against upstream's own
+`parser.c` — the one in their repository at the rev you vendored, or in the
+crates.io tarball — and accept only `LARGE_STATE_COUNT` moving:
+
+```sh
+grep -E '^#define (STATE_COUNT|SYMBOL_COUNT|TOKEN_COUNT|EXTERNAL_TOKEN_COUNT|FIELD_COUNT|PRODUCTION_ID_COUNT)' \
+  vendor/tree-sitter-<name>/src/parser.c
+```
+
+`grammar.json` and `node-types.json` should come out byte-identical too.
+
+**This was assumed rather than checked once, and the drift shipped.** The
+original pass compared `ts_node_string` on one corpus sample per grammar, which
+is far too weak: `tree-sitter-c-sharp` went out with `STATE_COUNT` 8058 where
+upstream ships 8053, and `case string when IsOid(x):` — valid C# — became two
+`ERROR` nodes. `tree-sitter-typescript` drifted the same way (5878/5994 against
+5870/5986), though 8,749 real files parsed identically there, so nothing was
+visible. Both are regenerated with **tree-sitter-cli 0.26.5**, which reproduces
+upstream's parsers exactly; 0.26.13 does not. Their `Cargo.toml` headers say so,
+and `vendored_csharp_grammar_parses_a_when_clause_on_a_type_pattern` guards the
+C# case.
+
+So: pick the CLI by what reproduces upstream's counts, not by what is newest.
+Upstream's `package.json` `devDependencies.tree-sitter-cli` is the first thing
+to try. One caveat — a CLI older than 0.26 emits pre-0.26 parser source
+(`.version`, `TSLexMode`), which does not compile against the shared headers in
+`vendor/tree-sitter-headers`, so 0.26.x is the practical floor even when an
+older CLI is what upstream used.
 
 ### When regeneration is not safe
 
@@ -177,5 +208,30 @@ ABI 15 additionally requires a `tree-sitter.json`; `fsharp` and `swift` have one
 written here because upstream's published crate omits it.
 
 Confirm the result before committing: `LARGE_STATE_COUNT` in the new `parser.c`
-should have dropped, and `cargo test -p gitcomet-ui-gpui --lib syntax_corpus`
-should still pass.
+should have dropped, every other count should match upstream's own `parser.c`
+(see "Why this is safe"), and `cargo test -p gitcomet-ui-gpui --lib syntax`
+should still pass — `vendored_grammars_keep_the_small_state_retune` holds the
+`LARGE_STATE_COUNT` bounds, so a regeneration that moves one updates that list.
+
+## Taking a newer upstream
+
+The grammars here are pinned, so nothing tells you when upstream fixes a bug.
+The last sweep was 2026-09-12; what came of it is in each `Cargo.toml` header.
+The routine that worked:
+
+1. Find the rev each copy corresponds to by hashing its `grammar.js`,
+   `scanner.c` and queries against upstream's history, rather than trusting the
+   version number — several crates.io releases are not the tag they claim, and
+   `tree-sitter-cue 0.0.1` is a snapshot of an unmerged PR.
+2. Read every commit since that touches `grammar.js`, `grammar/`, `src/scanner.c`
+   or `queries/`, and ignore the rest.
+3. **Prove each fix**: build the pinned and the new grammar, parse the samples in
+   `fixtures/syntax_test` plus a real corpus, and compare ERROR/MISSING counts
+   and trees. Several "fixes" are tree-shape changes that cost more than they
+   give — `cpp` and `ocaml` were declined on that basis.
+4. Check the query. A grammar that renames or removes a node breaks the `.scm`
+   that names it, and `language.rs` `.expect()`s that compile, so the app panics
+   rather than losing a colour. `swift`, `cue` and `kdl` all needed their query
+   updated in the same commit as the grammar.
+5. Watch for a fork that lags: `tree-sitter-kotlin-sg` is ast-grep's fork of
+   fwcd's grammar, and the fixes land in fwcd first.

@@ -1,6 +1,24 @@
-# Vendored from the `tree-sitter-swift 0.7.3` crates.io release
-# (https://github.com/alex-pinkus/tree-sitter-swift, MIT -- see LICENSE), to
-# regenerate `src/parser.c` with a larger small-state threshold.
+# Vendored from https://github.com/alex-pinkus/tree-sitter-swift at 00bbb0a
+# (MIT -- see LICENSE), to regenerate `src/parser.c` with a larger small-state
+# threshold.
+#
+# Past the 0.7.3 release for 6ab8d1d, which fixes undefined behaviour that only
+# bites on Windows: `OP_SYMBOL_SUPPRESSOR[BANG] = 1UL << FAKE_TRY_BANG` shifts by
+# 32, and `unsigned long` is 32 bits under LLP64. Whether that lands on bit 32
+# (correct), 0, or bit 31 is up to the compiler's constant folding -- at 0,
+# `try! foo()` silently parses as `try (!foo)()`. Seven parse fixes ride along:
+# prefix operators binding to navigation targets (`-v.x` was `(-v).x`),
+# `if let x = try await f() {}` reading its block as a trailing closure, `#if` as
+# a first member, `as? T ?? x`, `where` on switch-case patterns, continued
+# bitwise expressions, and `@Test()`.
+#
+# `grammar.js` is vendored now (the crates.io release shipped only
+# `src/grammar.json`) because upstream's default branch commits no `parser.c`.
+#
+# `queries/highlights.scm` moves with the grammar and must: e89a6d6 makes `nil` a
+# named `nil_literal`, so 0.7.3's query fails to compile against this parser, and
+# `language.rs` `.expect()`s that compile -- a mismatch panics the app rather
+# than losing one colour.
 #
 # `tree-sitter generate` decides per parse state whether to emit a dense row in
 # `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in
@@ -8,7 +26,7 @@
 # `threshold = min(64, symbol_count / 2)`. That 64 is only the break-even for a
 # grammar with <= 128 symbols; every large grammar has far more, so thousands of
 # states get a dense row costing several times the compact form. Regenerating
-# with `TS_SMALL_STATE_THRESHOLD=128` saves 1.10 MiB here.
+# with `TS_SMALL_STATE_THRESHOLD=128` cuts the dense rows from 2128 to 805 here.
 #
 # It is a representation change only -- the automaton, and so every parse tree, is
 # byte-identical. `vendor/README.md` has the procedure and the proof.

@@ -1,6 +1,13 @@
-# Vendored from the `tree-sitter-julia 0.23.1` crates.io release
+# Vendored from the `tree-sitter-julia` v0.25.0 tag
 # (https://github.com/tree-sitter/tree-sitter-julia, MIT -- see the note below), to
 # regenerate `src/parser.c` with a larger small-state threshold.
+#
+# The tag, not crates.io: upstream deleted its publish workflow, so 0.23.1 is
+# still the newest release. v0.25.0 fixes `const` fields in a struct, unary
+# `±a`, and `(1;; 2)` -- 208 -> 181 files with errors across JuliaLang/julia and
+# DataFrames.jl -- and halves the tables (STATE_COUNT 19618 -> 8267) while
+# parsing ~40% faster. It also drops emoji identifiers, which are valid Julia;
+# that is upstream's deliberate choice and the one thing this bump costs.
 #
 # `tree-sitter generate` decides per parse state whether to emit a dense row in
 # `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in
@@ -8,14 +15,16 @@
 # `threshold = min(64, symbol_count / 2)`. That 64 is only the break-even for a
 # grammar with <= 128 symbols; every large grammar has far more, so thousands of
 # states get a dense row costing several times the compact form. Regenerating
-# with `TS_SMALL_STATE_THRESHOLD=128` saves 1.46 MiB here.
+# with `TS_SMALL_STATE_THRESHOLD=128` halves the dense rows here (upstream's own
+# v0.25.0 parser.c has LARGE_STATE_COUNT 4085; this one has 2069).
 #
 # It is a representation change only -- the automaton, and so every parse tree, is
 # byte-identical. `vendor/README.md` has the procedure and the proof.
 #
-# Generated with tree-sitter-cli 0.26.13 at ABI 14, the ABI upstream ships,
-# and the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the
-# README there.
+# Generated with tree-sitter-cli 0.26.13 at ABI 15, the ABI upstream ships as of
+# v0.25.0, and the `tree_sitter/` headers come from vendor/tree-sitter-headers --
+# see the README there. Every count matches upstream's own parser.c, and
+# node-types.json is byte-identical.
 #
 # Upstream's published crate contains no LICENSE file -- it is excluded from the
 # package, though the repository has one and the crate metadata declares MIT.

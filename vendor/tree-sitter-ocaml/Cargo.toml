@@ -17,11 +17,12 @@
 # and the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the
 # README there.
 #
-# `queries/` *is* vendored here, unlike most of vendor/: GitComet reads this
-# grammar's upstream query consts rather than authoring its own, so dropping the
-# directory would compile them out (`vendor/tree-sitter-build` sets the
-# `with_*_query` cfgs from the files that are present) and the language would go
-# uncoloured.
+# `queries/` *is* vendored here, unlike most of vendor/, but not for the reason
+# the other query-carrying crates give: what the app ships is GitComet's own
+# `queries/ocaml_highlights.scm` (upstream's, minus `(shebang)`). Only a test
+# reads `tree_sitter_ocaml::HIGHLIGHTS_QUERY`, and dropping the directory would
+# compile that const out (`vendor/tree-sitter-build` sets the `with_*_query`
+# cfgs from the files that are present) and stop the crate building.
 [package]
 name = "tree-sitter-ocaml"
 description = "OCaml grammar for tree-sitter"

@@ -262,11 +262,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -626,11 +626,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -982,11 +982,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -1472,11 +1472,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -2001,11 +2001,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -2485,6 +2485,10 @@
           "named": true
         },
         {
+          "type": "nil_literal",
+          "named": true
+        },
+        {
           "type": "oct_literal",
           "named": true
         },
@@ -2847,11 +2851,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -3095,6 +3099,10 @@
         },
         {
           "type": "nil_coalescing_expression",
+          "named": true
+        },
+        {
+          "type": "nil_literal",
           "named": true
         },
         {
@@ -3442,11 +3450,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -3818,11 +3826,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -4103,6 +4111,10 @@
         },
         {
           "type": "nil_coalescing_expression",
+          "named": true
+        },
+        {
+          "type": "nil_literal",
           "named": true
         },
         {
@@ -4504,11 +4516,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -4976,11 +4988,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -5615,11 +5627,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -5987,11 +5999,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -6443,11 +6455,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -6803,11 +6815,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -7223,11 +7235,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -7579,11 +7591,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -7830,6 +7842,10 @@
           "named": true
         },
         {
+          "type": "nil_literal",
+          "named": true
+        },
+        {
           "type": "oct_literal",
           "named": true
         },
@@ -7981,6 +7997,10 @@
         },
         {
           "type": "multi_line_string_literal",
+          "named": true
+        },
+        {
+          "type": "nil_literal",
           "named": true
         },
         {
@@ -8264,11 +8284,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -8614,11 +8634,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -9116,6 +9136,10 @@
           "named": true
         },
         {
+          "type": "nil_literal",
+          "named": true
+        },
+        {
           "type": "oct_literal",
           "named": true
         },
@@ -9470,11 +9494,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -9830,11 +9854,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -10300,11 +10324,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -10626,6 +10650,10 @@
         },
         {
           "type": "nil_coalescing_expression",
+          "named": true
+        },
+        {
+          "type": "nil_literal",
           "named": true
         },
         {
@@ -11194,11 +11222,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -11566,11 +11594,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -12004,11 +12032,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -12422,11 +12450,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -13388,11 +13416,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -13965,11 +13993,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -14476,11 +14504,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -14836,11 +14864,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -15453,11 +15481,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -15877,11 +15905,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -16179,6 +16207,10 @@
         },
         {
           "type": "nil_coalescing_expression",
+          "named": true
+        },
+        {
+          "type": "nil_literal",
           "named": true
         },
         {
@@ -16933,11 +16965,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -17389,11 +17421,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -17945,11 +17977,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -18313,11 +18345,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -18722,11 +18754,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -19106,11 +19138,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -19456,11 +19488,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -19879,11 +19911,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -20235,11 +20267,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -20806,6 +20838,10 @@
           "named": true
         },
         {
+          "type": "nil_literal",
+          "named": true
+        },
+        {
           "type": "oct_literal",
           "named": true
         },
@@ -21062,6 +21098,10 @@
         },
         {
           "type": "nil_coalescing_expression",
+          "named": true
+        },
+        {
+          "type": "nil_literal",
           "named": true
         },
         {
@@ -21422,11 +21462,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -21877,11 +21917,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -22258,11 +22298,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -22844,11 +22884,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -23547,11 +23587,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -23911,11 +23951,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -24412,11 +24452,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -24796,6 +24836,10 @@
           "named": true
         },
         {
+          "type": "nil_literal",
+          "named": true
+        },
+        {
           "type": "oct_literal",
           "named": true
         },
@@ -25099,6 +25143,10 @@
         },
         {
           "type": "nil_coalescing_expression",
+          "named": true
+        },
+        {
+          "type": "nil_literal",
           "named": true
         },
         {
@@ -25407,6 +25455,10 @@
         },
         {
           "type": "nil_coalescing_expression",
+          "named": true
+        },
+        {
+          "type": "nil_literal",
           "named": true
         },
         {
@@ -25774,11 +25826,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -26221,6 +26273,10 @@
           "named": true
         },
         {
+          "type": "nil_literal",
+          "named": true
+        },
+        {
           "type": "oct_literal",
           "named": true
         },
@@ -26587,11 +26643,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -26953,11 +27009,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -27303,11 +27359,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -27653,11 +27709,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -28082,11 +28138,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -28463,11 +28519,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -29754,11 +29810,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -30070,6 +30126,10 @@
           "named": true
         },
         {
+          "type": "nil_literal",
+          "named": true
+        },
+        {
           "type": "oct_literal",
           "named": true
         },
@@ -30306,6 +30366,10 @@
         },
         {
           "type": "nil_coalescing_expression",
+          "named": true
+        },
+        {
+          "type": "nil_literal",
           "named": true
         },
         {
@@ -30550,6 +30614,10 @@
         },
         {
           "type": "nil_coalescing_expression",
+          "named": true
+        },
+        {
+          "type": "nil_literal",
           "named": true
         },
         {
@@ -30970,11 +31038,11 @@
             "named": true
           },
           {
-            "type": "nil",
-            "named": false
+            "type": "nil_coalescing_expression",
+            "named": true
           },
           {
-            "type": "nil_coalescing_expression",
+            "type": "nil_literal",
             "named": true
           },
           {
@@ -31758,8 +31826,8 @@
     "named": false
   },
   {
-    "type": "nil",
-    "named": false
+    "type": "nil_literal",
+    "named": true
   },
   {
     "type": "nonisolated",

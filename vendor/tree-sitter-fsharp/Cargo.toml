@@ -1,6 +1,17 @@
-# Vendored from the `tree-sitter-fsharp 0.3.11` crates.io release
-# (https://github.com/ionide/tree-sitter-fsharp, MIT -- see LICENSE), to
-# regenerate `src/parser.c` with a larger small-state threshold.
+# Vendored from https://github.com/ionide/tree-sitter-fsharp at 0d3ccbb
+# (MIT -- see LICENSE), to regenerate `src/parser.c` with a larger small-state
+# threshold.
+#
+# Past the 0.3.11 release for two fixes in valid F#, both of which used to
+# produce no ERROR and the wrong tree: `static member val Count = 0 with get,
+# set` fell through to the generic member rule with `val` as the method name and
+# swallowed the declaration after it into an application expression, and
+# `new (args) as this = ...` parsed only by accident, as an application of the
+# identifiers `as` and `this`. The same commit reserves `as`, `namespace`,
+# `open` and `type`, which makes F# that FSC rejects report an error here too.
+#
+# Both parsers match upstream's own counts (fsharp 22357/538,
+# fsharp_signature 15412/412).
 #
 # `tree-sitter generate` decides per parse state whether to emit a dense row in
 # `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in

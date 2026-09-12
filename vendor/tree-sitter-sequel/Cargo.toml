@@ -1,6 +1,24 @@
-# Vendored from the `tree-sitter-sequel 0.3.11` crates.io release
-# (https://github.com/derekstride/tree-sitter-sql.git, MIT -- see the note below), to
-# regenerate `src/parser.c` with a larger small-state threshold.
+# Vendored from https://github.com/derekstride/tree-sitter-sql at b7057b7
+# (MIT -- see the note below), to regenerate `src/parser.c` with a larger
+# small-state threshold and to drop three T-SQL rules.
+#
+# Past the 0.3.11 release for two fixes and a pile of new statements, none of
+# them released: backtick-quoted identifiers (`` `my col` ``, 2 ERRORs -> 0) and
+# HAVING without GROUP BY (2 -> 0), plus CREATE/ALTER POLICY, row level
+# security, CREATE PROCEDURE, RLIKE/REGEXP, MATERIALIZED VIEW and index
+# options. The MySQL corpus sample goes from 24 ERROR nodes to 18.
+#
+# `grammar.js` is upstream's post-224f3a4 split: the rules now live in
+# `grammar/`, which is vendored with it.
+#
+# **Three T-SQL rules are removed here**, marked `GitComet:` in
+# `grammar/statements/index.js`, `create-function.js` and `create-procedure.js`.
+# They are `repeat($.statement)` with no separator, which costs 11,800 parse
+# states (STATE_COUNT 29,311 against the 18,810 here; `.rodata` 3.87 MB against
+# 2.11 MB) for syntax that only parses when the body has no semicolons. A T-SQL
+# `CREATE PROCEDURE p AS SELECT 1;` errors, exactly as it does on 0.3.11, so
+# this gives up a gain rather than causing a regression; simple `WHILE cond
+# stmt` and Postgres dollar-quoted bodies parse.
 #
 # `tree-sitter generate` decides per parse state whether to emit a dense row in
 # `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in
@@ -8,10 +26,12 @@
 # `threshold = min(64, symbol_count / 2)`. That 64 is only the break-even for a
 # grammar with <= 128 symbols; every large grammar has far more, so thousands of
 # states get a dense row costing several times the compact form. Regenerating
-# with `TS_SMALL_STATE_THRESHOLD=128` saves 0.44 MiB here.
+# with `TS_SMALL_STATE_THRESHOLD=128` leaves 6 dense rows here.
 #
 # It is a representation change only -- the automaton, and so every parse tree, is
-# byte-identical. `vendor/README.md` has the procedure and the proof.
+# byte-identical. `vendor/README.md` has the procedure and the proof. Upstream
+# commits no `parser.c`, so there is no upstream build to compare counts with;
+# STATE_COUNT 18810 / SYMBOL_COUNT 763 is what this grammar generates.
 #
 # Generated with tree-sitter-cli 0.26.13 at ABI 14, the ABI upstream ships,
 # and the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the

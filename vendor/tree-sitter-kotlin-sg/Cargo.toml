@@ -2,6 +2,18 @@
 # (https://github.com/ast-grep/tree-sitter-kotlin, MIT -- see LICENSE), to
 # regenerate `src/parser.c` with a larger small-state threshold.
 #
+# `grammar.js` and `src/scanner.c` are now from ast-grep's *parent*,
+# https://github.com/fwcd/tree-sitter-kotlin, at 1852ea1 (unreleased). ast-grep's
+# fork is fwcd f66d290 plus a crate-metadata commit, and fixes land in fwcd
+# first -- check there, not in the fork, before the next update. That brought:
+#
+#   * 24e8fcb: a NUL byte inside a comment or string was never consumed, so
+#     every later `/` rescanned up to it -- quadratic, 18 s on a 64 KB file.
+#   * 6cf02d4, 1852ea1: `public abstract class B {}` parsed as an infix
+#     expression, so the query coloured its keywords as variables.
+#
+# fwcd's own `parser.c` has the same STATE_COUNT (10180) and SYMBOL_COUNT (374).
+#
 # `tree-sitter generate` decides per parse state whether to emit a dense row in
 # `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in
 # `ts_small_parse_table` (scanned), using
