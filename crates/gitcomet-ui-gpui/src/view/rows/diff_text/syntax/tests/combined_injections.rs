@@ -881,7 +881,8 @@ fn a_combined_layer_missing_the_foreground_budget_leaves_the_document_ready() {
 /// `.html` paired correctly, which is what made the two views disagree.
 #[test]
 fn combined_layer_pair_lights_a_whole_tag_in_a_template() {
-    let text = "{% block body %}\n<div class=\"card\">\n  <span>hi</span>\n</div>\n{% endblock %}\n";
+    let text =
+        "{% block body %}\n<div class=\"card\">\n  <span>hi</span>\n</div>\n{% endblock %}\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
     // Drawing is what fills the injection cache, and a row must be drawn before
     // it can be clicked. Without this the test silently exercises the host path.
@@ -907,7 +908,8 @@ fn combined_layer_pair_lights_a_whole_tag_in_a_template() {
 /// editor looked right while the other views looked broken.
 #[test]
 fn live_and_prepared_agree_on_a_pair_inside_a_combined_layer() {
-    let text = "{% block body %}\n<div class=\"card\">\n  <span>hi</span>\n</div>\n{% endblock %}\n";
+    let text =
+        "{% block body %}\n<div class=\"card\">\n  <span>hi</span>\n</div>\n{% endblock %}\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
     let _ = syntax_tokens_for_prepared_document_line(document, 1);
     let live = LiveSyntaxDocument::new(
@@ -965,7 +967,8 @@ fn combined_layer_pair_does_not_answer_inside_a_template_gap() {
 /// layer selection so one click cannot resolve to two different grammars.
 #[test]
 fn occurrences_inside_a_combined_layer_span_every_range() {
-    let text = "<div id=\"card\">\n{% if cond %}\n<span data=\"card\">hi</span>\n{% endif %}\n</div>\n";
+    let text =
+        "<div id=\"card\">\n{% if cond %}\n<span data=\"card\">hi</span>\n{% endif %}\n</div>\n";
     let document = prepare_test_document(DiffSyntaxLanguage::Jinja, text);
     for line_ix in 0..text.lines().count() {
         let _ = syntax_tokens_for_prepared_document_line(document, line_ix);

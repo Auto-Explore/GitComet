@@ -730,9 +730,10 @@ fn combined_layer_nested_single_at(
             .into_iter()
             .filter(|single| offset >= single.byte_start && offset < single.byte_end)
             .filter(|single| {
-                layer.ranges.iter().any(|range| {
-                    range.start <= single.byte_start && single.byte_end <= range.end
-                })
+                layer
+                    .ranges
+                    .iter()
+                    .any(|range| range.start <= single.byte_start && single.byte_end <= range.end)
             })
             .min_by_key(|single| single.byte_end.saturating_sub(single.byte_start))
         {

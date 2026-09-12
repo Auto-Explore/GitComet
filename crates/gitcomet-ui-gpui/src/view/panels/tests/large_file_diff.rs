@@ -1014,9 +1014,7 @@ index 1111111..2222222 100644
 /// tokenizer produces literally nothing there), and `</div>` separates
 /// whole-document from per-line tokens on a line the fallback *does* colour.
 #[gpui::test]
-fn source_backed_diff_colours_cross_line_constructs_without_a_click(
-    cx: &mut gpui::TestAppContext,
-) {
+fn source_backed_diff_colours_cross_line_constructs_without_a_click(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
