@@ -142,15 +142,48 @@ fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
     }
 }
 
+/// The repo of a command that writes sequencer state or moves HEAD. Counted
+/// from the effect that schedules it, and released by the matching
+/// [`crate::msg::RepoCommandKind`] in `repo_command_finished`.
+fn sequencer_effect_repo(effect: &Effect) -> Option<RepoId> {
+    match effect {
+        Effect::MergeRef { repo_id, .. }
+        | Effect::SquashRef { repo_id, .. }
+        | Effect::SquashCommits { repo_id, .. }
+        | Effect::Reset { repo_id, .. }
+        | Effect::Rebase { repo_id, .. }
+        | Effect::RebaseContinue { repo_id, .. }
+        | Effect::RebaseAbort { repo_id }
+        | Effect::InteractiveRebase { repo_id, .. }
+        | Effect::InteractiveCherryPick { repo_id, .. }
+        | Effect::CherryPickCommit { repo_id, .. }
+        | Effect::RevertCommit { repo_id, .. }
+        | Effect::MergeAbort { repo_id } => Some(*repo_id),
+        _ => None,
+    }
+}
+
+fn track_sequencer_effects(state: &mut AppState, effects: &[Effect]) {
+    for repo_id in effects.iter().filter_map(sequencer_effect_repo) {
+        if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+            repo_state.sequencer_actions_in_flight =
+                repo_state.sequencer_actions_in_flight.saturating_add(1);
+            repo_state.bump_ops_rev();
+        }
+    }
+}
+
 /// Continue and Abort act on sequencer state another command may still be
 /// writing: a revert shows REVERT_HEAD while its commit step waits on a slow
-/// signer, and an Abort then would reset under the commit.
+/// signer, and an Abort then would reset under the commit. Only such commands
+/// count — a merge tool or a submodule clone can run for minutes without
+/// touching it.
 fn sequencer_step_blocked(state: &mut AppState, repo_id: RepoId) -> bool {
     let busy = state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .is_some_and(|repo| repo.local_actions_in_flight > 0);
+        .is_some_and(|repo| repo.sequencer_actions_in_flight > 0);
     if busy {
         util::push_notification(
             state,
@@ -879,6 +912,7 @@ pub(super) fn reduce(
     }
 
     let mut effects = reduce_inner(repos, id_alloc, state, msg);
+    track_sequencer_effects(state, &effects);
     effects::follow_history_selection(state, &mut effects);
 
     finalize_reduced_state(state, reconcile.then_some(push));
@@ -1406,9 +1440,11 @@ fn reduce_inner(
             effects::reveal_commit(state, repo_id, reference)
         }
         Msg::FinishCommitReveal { repo_id } => effects::finish_commit_reveal(state, repo_id),
-        Msg::ResolveCommitLookup { repo_id, reference } => {
-            effects::resolve_commit_lookup(state, repo_id, reference)
-        }
+        Msg::ResolveCommitLookup {
+            repo_id,
+            reference,
+            purpose,
+        } => effects::resolve_commit_lookup(state, repo_id, reference, purpose),
         Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
         Msg::ViewerNavBack { repo_id } => {
             diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
@@ -2084,6 +2120,7 @@ fn reduce_inner(
         Msg::CancelInteractiveCherryPickSetup { repo_id } => {
             actions_emit_effects::cancel_interactive_cherry_pick_setup(state, repo_id)
         }
+        Msg::MergeAbort { repo_id } if sequencer_step_blocked(state, repo_id) => Vec::new(),
         Msg::MergeAbort { repo_id } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::merge_abort(repo_id)
@@ -2436,6 +2473,12 @@ fn reduce_inner(
             requested_ids,
             result,
         ),
+        Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggested { repo_id, message }) => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                repo_state.set_suggested_commit_message(Some(message));
+            }
+            Vec::new()
+        }
         Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded { repo_id, result }) => {
             external_and_history::merge_commit_message_loaded(state, repo_id, result)
         }
@@ -2607,8 +2650,9 @@ fn reduce_inner(
             repo_id,
             reference,
             request,
+            purpose,
             result,
-        }) => effects::commit_lookup_resolved(state, repo_id, reference, request, result),
+        }) => effects::commit_lookup_resolved(state, repo_id, reference, request, purpose, result),
         Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
             repo_id,
             from,

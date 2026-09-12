@@ -1493,3 +1493,58 @@ fn multi_cherry_pick_applies_picks_around_a_dropped_commit() {
     );
     assert!(!repo.join("two.txt").exists(), "dropped commit was applied");
 }
+
+#[test]
+fn cherry_pick_is_refused_while_another_operation_is_in_progress() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "side"]);
+    commit_file(&repo, "side.txt", "side\n", "side change");
+    run_git(&repo, &["checkout", "-b", "source", &base]);
+    let picked = commit_file(&repo, "o.txt", "o\n", "pick me");
+    run_git(&repo, &["checkout", "main"]);
+    run_git(&repo, &["merge", "--no-ff", "--no-commit", "side"]);
+    assert!(repo.join(".git/MERGE_HEAD").exists());
+
+    let err = open_backend(&repo)
+        .cherry_pick_with_output(&commit_id(&picked), false, None)
+        .expect_err("a pick must not be folded into the open merge");
+
+    assert!(
+        err.to_string().contains("a merge is in progress"),
+        "unexpected error: {err}"
+    );
+    assert!(repo.join(".git/MERGE_HEAD").exists(), "the merge survives");
+    assert!(
+        !git_stdout(&repo, &["status", "--porcelain"]).contains("o.txt"),
+        "the pick must not be staged into the merge"
+    );
+}
+
+#[test]
+fn cherry_pick_without_commit_refuses_staged_changes() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "source"]);
+    let picked = commit_file(&repo, "o.txt", "o\n", "pick me");
+    run_git(&repo, &["checkout", "-b", "target", &base]);
+    fs::write(repo.join("staged.txt"), "staged\n").expect("write staged file");
+    run_git(&repo, &["add", "staged.txt"]);
+
+    let err = open_backend(&repo)
+        .cherry_pick_with_output(&commit_id(&picked), false, None)
+        .expect_err("staged work must not be folded into the pick");
+
+    assert!(
+        err.to_string().contains("staged changes"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["status", "--porcelain"]),
+        "A  staged.txt"
+    );
+}

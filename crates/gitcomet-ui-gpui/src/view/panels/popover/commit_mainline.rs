@@ -59,7 +59,7 @@ fn parent_ids(repo: &RepoState, commit_id: &CommitId) -> (Vec<CommitId>, bool) {
             .map(|commit| commit.parent_ids.iter().cloned().collect())
             .unwrap_or_default()
     };
-    let lookup = &repo.history_state.commit_lookup;
+    let lookup = &repo.history_state.mainline_lookup;
     match &lookup.result {
         Loadable::Ready(commit) if lookup.reference.as_ref() == Some(commit_id) => {
             (commit.parent_ids.iter().cloned().collect(), false)
@@ -258,7 +258,7 @@ mod tests {
             (vec![CommitId("aaaa".into())], true)
         );
 
-        repo.history_state.commit_lookup = CommitLookup {
+        repo.history_state.mainline_lookup = CommitLookup {
             request: 1,
             reference: Some(merge.clone()),
             result: Loadable::Ready(commit(&merge, &["aaaa", "bbbb"])),
@@ -267,7 +267,7 @@ mod tests {
         assert_eq!((parents.len(), pending), (2, false));
 
         // A failed lookup falls back to the rows; the backend re-validates.
-        repo.history_state.commit_lookup.result = Loadable::Error("unsupported".into());
+        repo.history_state.mainline_lookup.result = Loadable::Error("unsupported".into());
         assert_eq!(
             parent_ids(&repo, &merge),
             (vec![CommitId("aaaa".into())], false)

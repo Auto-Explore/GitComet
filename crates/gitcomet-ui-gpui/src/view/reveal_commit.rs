@@ -302,8 +302,11 @@ impl RevealCommitView {
             return;
         }
         let reference = CommitId(self.query.as_ref().into());
-        self.store
-            .dispatch(Msg::ResolveCommitLookup { repo_id, reference });
+        self.store.dispatch(Msg::ResolveCommitLookup {
+            repo_id,
+            reference,
+            purpose: gitcomet_state::model::CommitLookupPurpose::RevealDialog,
+        });
     }
 
     /// Reveal whatever the row is offering.

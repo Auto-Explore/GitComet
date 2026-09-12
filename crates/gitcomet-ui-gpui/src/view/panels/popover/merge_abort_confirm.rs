@@ -59,7 +59,7 @@ pub(super) fn panel(
         ),
         AbortMode::Revert => (
             "Abort revert?",
-            "This will abort the current revert and restore the previous state. Any resolved conflicts and staged reverted changes will be lost.",
+            "This will stop the current revert and reset the working tree to HEAD. Any resolved conflicts and staged reverted changes will be lost; commits an earlier step already made stay on the branch.",
             "git revert --abort",
             "revert_abort_go",
             "Abort revert",

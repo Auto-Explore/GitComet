@@ -2383,9 +2383,9 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
          to re-derive or reorder them"
     );
 
-    // The messages above never finished; Continue/Abort wait for those
-    // (`continue_and_abort_wait_for_a_running_local_action`).
-    state.repos[0].local_actions_in_flight = 0;
+    // The messages above never finished; Continue/Abort wait for the
+    // sequencer ones (`continue_and_abort_wait_only_for_sequencer_commands`).
+    state.repos[0].sequencer_actions_in_flight = 0;
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -2399,7 +2399,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             auth: None,
         }]
     ));
-    state.repos[0].local_actions_in_flight = 0;
+    state.repos[0].sequencer_actions_in_flight = 0;
 
     let effects = reduce(
         &mut repos,
@@ -2411,6 +2411,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         effects.as_slice(),
         [Effect::RebaseAbort { repo_id: RepoId(1) }]
     ));
+    state.repos[0].sequencer_actions_in_flight = 0;
 
     let effects = reduce(
         &mut repos,
@@ -4071,7 +4072,7 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
 }
 
 #[test]
-fn continue_and_abort_wait_for_a_running_local_action() {
+fn continue_and_abort_wait_only_for_sequencer_commands() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -4082,17 +4083,31 @@ fn continue_and_abort_wait_for_a_running_local_action() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     ));
+    state.active_repo = Some(repo_id);
+    let commit_id = CommitId("3333333333333333333333333333333333333333".into());
     // A revert's commit step still running while REVERT_HEAD is on disk.
-    state.repos[0].local_actions_in_flight = 1;
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RevertCommit {
+            repo_id,
+            commit_id: commit_id.clone(),
+            commit: true,
+            mainline: None,
+            summary: "revert me".into(),
+        },
+    );
+    assert_eq!(state.repos[0].sequencer_actions_in_flight, 1);
 
     for msg in [
         Msg::RebaseAbort { repo_id },
         Msg::RebaseContinue { repo_id },
+        Msg::MergeAbort { repo_id },
     ] {
         let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
         assert!(effects.is_empty(), "{effects:?}");
     }
-    assert_eq!(state.repos[0].local_actions_in_flight, 1);
     assert!(
         state
             .notifications
@@ -4101,14 +4116,250 @@ fn continue_and_abort_wait_for_a_running_local_action() {
         "a blocked Continue/Abort should say why"
     );
 
-    state.repos[0].local_actions_in_flight = 0;
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Revert {
+                commit_id,
+                commit: true,
+                mainline: None,
+                summary: "revert me".into(),
+            },
+            result: Ok(CommandOutput::empty_success("git revert 3333333")),
+        }),
+    );
+    assert_eq!(state.repos[0].sequencer_actions_in_flight, 0);
+
+    // A merge tool blocks for as long as the user keeps it open, but touches
+    // no sequencer state, so it must not lock Continue/Abort out.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LaunchMergetool {
+            repo_id,
+            path: PathBuf::from("conflicted.txt"),
+        },
+    );
+    assert!(state.repos[0].local_actions_in_flight > 0);
+
     let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::RebaseAbort { repo_id },
     );
-    assert!(matches!(effects.as_slice(), [Effect::RebaseAbort { .. }]));
+    assert!(
+        matches!(effects.as_slice(), [Effect::RebaseAbort { .. }]),
+        "a running merge tool must not block Abort: {effects:?}"
+    );
+}
+
+#[test]
+fn a_suggested_commit_message_is_stored_for_the_commit_box() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let before = state.repos[0].suggested_commit_message_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitMessageSuggested {
+            repo_id,
+            message: "Revert \"change\"".to_string(),
+        }),
+    );
+
+    assert_eq!(
+        state.repos[0].suggested_commit_message.as_deref(),
+        Some("Revert \"change\"")
+    );
+    assert_ne!(state.repos[0].suggested_commit_message_rev, before);
+}
+
+#[test]
+fn the_mainline_lookup_does_not_disturb_the_reveal_dialogs() {
+    use crate::model::CommitLookupPurpose;
+
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let typed = CommitId("aaaaaaaa".into());
+    let merge = CommitId("bbbbbbbb".into());
+
+    // The Go-to dialog is resolving what the user typed.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveCommitLookup {
+            repo_id,
+            reference: typed.clone(),
+            purpose: CommitLookupPurpose::RevealDialog,
+        },
+    );
+    // Opening a revert/cherry-pick confirmation asks for a merge's parents.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveCommitLookup {
+            repo_id,
+            reference: merge.clone(),
+            purpose: CommitLookupPurpose::MainlineParents,
+        },
+    );
+    let Some(Effect::ResolveCommitLookup { request, .. }) = effects.first().cloned() else {
+        panic!("expected a lookup effect: {effects:?}");
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitLookupResolved {
+            repo_id,
+            reference: merge.clone(),
+            request,
+            purpose: CommitLookupPurpose::MainlineParents,
+            result: Err(Error::new(ErrorKind::Backend("nope".to_string()))),
+        }),
+    );
+
+    let history = &state.repos[0].history_state;
+    assert_eq!(history.commit_lookup.reference.as_ref(), Some(&typed));
+    assert!(
+        history.commit_lookup.result.is_loading(),
+        "the Go-to dialog's own lookup must still be in flight"
+    );
+    assert_eq!(history.mainline_lookup.reference.as_ref(), Some(&merge));
+    assert!(matches!(history.mainline_lookup.result, Loadable::Error(_)));
+}
+
+#[test]
+fn sequencer_commands_release_their_in_flight_count() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    let commit_id = CommitId("3333333333333333333333333333333333333333".into());
+
+    // Every counted effect must be released by the command it schedules.
+    let cases: Vec<(Msg, RepoCommandKind)> = vec![
+        (
+            Msg::RevertCommit {
+                repo_id,
+                commit_id: commit_id.clone(),
+                commit: true,
+                mainline: None,
+                summary: "revert me".into(),
+            },
+            RepoCommandKind::Revert {
+                commit_id: commit_id.clone(),
+                commit: true,
+                mainline: None,
+                summary: "revert me".into(),
+            },
+        ),
+        (
+            Msg::CherryPickCommit {
+                repo_id,
+                commit_id: commit_id.clone(),
+                commit: true,
+                mainline: None,
+                summary: "pick me".into(),
+            },
+            RepoCommandKind::CherryPick {
+                commit_id: commit_id.clone(),
+                commit: true,
+                mainline: None,
+                summary: "pick me".into(),
+            },
+        ),
+        (
+            Msg::RebaseContinue { repo_id },
+            RepoCommandKind::RebaseContinue,
+        ),
+        (Msg::RebaseAbort { repo_id }, RepoCommandKind::RebaseAbort),
+        (Msg::MergeAbort { repo_id }, RepoCommandKind::MergeAbort),
+        (
+            Msg::Rebase {
+                repo_id,
+                onto: "main".into(),
+            },
+            RepoCommandKind::Rebase {
+                onto: "main".into(),
+            },
+        ),
+        (
+            Msg::Reset {
+                repo_id,
+                target: "HEAD~1".into(),
+                mode: gitcomet_core::services::ResetMode::Mixed,
+            },
+            RepoCommandKind::Reset {
+                mode: gitcomet_core::services::ResetMode::Mixed,
+                target: "HEAD~1".into(),
+            },
+        ),
+        (
+            Msg::MergeRef {
+                repo_id,
+                reference: "topic".into(),
+            },
+            RepoCommandKind::MergeRef {
+                reference: "topic".into(),
+            },
+        ),
+    ];
+
+    for (msg, command) in cases {
+        let label = format!("{command:?}");
+        reduce(&mut repos, &id_alloc, &mut state, msg);
+        assert_eq!(
+            state.repos[0].sequencer_actions_in_flight, 1,
+            "{label} should count while it runs"
+        );
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command,
+                result: Ok(CommandOutput::empty_success("git")),
+            }),
+        );
+        assert_eq!(
+            state.repos[0].sequencer_actions_in_flight, 0,
+            "{label} should release its count"
+        );
+    }
 }
 
 #[test]

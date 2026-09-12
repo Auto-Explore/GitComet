@@ -18,7 +18,14 @@ pub(super) fn panel(
     let summary = commit_mainline::commit_summary(this, repo_id, &commit_id);
     let repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
     let destination = merge_commit_destination_label(repo);
+    // `revert_with_output` refuses a dirty index, so do not let the user
+    // confirm into that error.
+    let staged_changes = repo.is_some_and(|repo| {
+        repo.staged_status_entries()
+            .is_some_and(|entries| !entries.is_empty())
+    });
     let actions_disabled = mainline.pending
+        || staged_changes
         || !merge_commit_repo_is_ready(repo)
         || commit_mainline::mainline_actions_disabled(mainline_choices.len(), selected_mainline);
 
@@ -48,6 +55,15 @@ pub(super) fn panel(
             theme,
             "Commit the revert immediately? No stages the reverted changes without committing.",
         );
+    if mainline.pending {
+        dialog = dialog.note(theme, "Checking the commit's parents…");
+    }
+    if staged_changes {
+        dialog = dialog.note(
+            theme,
+            "Commit or unstage your staged changes first: a revert needs a clean index.",
+        );
+    }
     if is_merge {
         dialog = dialog
             .note(

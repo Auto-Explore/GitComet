@@ -1298,10 +1298,6 @@ impl GitRepository for SlowSubmoduleRepo {
         Self::unsupported()
     }
 
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        Self::unsupported()
-    }
-
     fn list_submodules(&self) -> Result<Vec<Submodule>> {
         std::thread::sleep(Duration::from_millis(250));
         Ok(Vec::new())
@@ -1438,10 +1434,6 @@ impl GitRepository for SlowStashRepo {
     }
 
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        Self::unsupported()
-    }
-
-    fn revert(&self, _id: &CommitId) -> Result<()> {
         Self::unsupported()
     }
 

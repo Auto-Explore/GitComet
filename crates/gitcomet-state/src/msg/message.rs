@@ -505,6 +505,7 @@ pub enum Msg {
     ResolveCommitLookup {
         repo_id: RepoId,
         reference: CommitId,
+        purpose: crate::model::CommitLookupPurpose,
     },
     /// Exit file browsing and keep the explorer on the working tree.
     ResetBrowseToLive {
@@ -1209,6 +1210,12 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<Option<String>, Error>,
     },
+    /// The message git prepared for the next commit (after a `--no-commit`
+    /// revert), offered as the commit box's starting text.
+    CommitMessageSuggested {
+        repo_id: RepoId,
+        message: String,
+    },
     HoverCommitMessageLoaded {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -1296,6 +1303,7 @@ pub enum InternalMsg {
         /// The `Effect::ResolveCommitLookup` request this answers; a reply that
         /// lost a race against a newer lookup is dropped.
         request: u64,
+        purpose: crate::model::CommitLookupPurpose,
         result: Result<Commit, Error>,
     },
     RangeFilesLoaded {

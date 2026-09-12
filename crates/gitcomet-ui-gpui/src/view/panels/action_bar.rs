@@ -468,10 +468,11 @@ impl Render for ActionBarView {
         let rebase_has_unstaged_conflicts =
             self.active_repo().is_some_and(|r| r.has_unstaged_conflicts);
         // A revert shows REVERT_HEAD while its commit step still runs; the
-        // reducer also refuses Continue/Abort until it finishes.
+        // reducer also refuses Continue/Abort until it finishes. A merge tool
+        // or submodule clone does not count.
         let sequencer_step_busy = self
             .active_repo()
-            .is_some_and(|r| r.local_actions_in_flight > 0);
+            .is_some_and(|r| r.sequencer_actions_in_flight > 0);
         const SEQUENCER_BUSY_TOOLTIP: &str = "Wait for the running Git operation to finish";
 
         let (pull_count, push_count) = self

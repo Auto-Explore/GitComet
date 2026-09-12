@@ -145,6 +145,15 @@ fn clear_loading<T>(loadable: &mut Loadable<T>) -> bool {
 
 fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
     repo_state.loads_in_flight.clear();
+    // A dropped reply would otherwise leave a dialog waiting on it forever.
+    for lookup in [
+        &mut repo_state.history_state.commit_lookup,
+        &mut repo_state.history_state.mainline_lookup,
+    ] {
+        if lookup.result.is_loading() {
+            lookup.result = Loadable::NotLoaded;
+        }
+    }
     // The cancelled walk's reply is dropped by the repo-load guard, so nothing
     // downstream will ever clear the count it left on screen.
     repo_state.set_log_scan_progress(None);

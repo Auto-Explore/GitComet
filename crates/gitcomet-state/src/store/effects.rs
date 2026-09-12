@@ -559,12 +559,14 @@ fn send_unavailable_git_effect_result(
         Effect::ResolveCommitLookup {
             repo_id,
             reference,
+            purpose,
             request,
         } => send(Msg::Internal(
             crate::msg::InternalMsg::CommitLookupResolved {
                 repo_id,
                 reference,
                 request,
+                purpose,
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -2052,13 +2054,14 @@ pub(super) fn schedule_effect(
         Effect::ResolveCommitLookup {
             repo_id,
             reference,
+            purpose,
             request,
         } => {
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_resolve_commit_lookup(
-                    executor, repos, msg_tx, repo_id, reference, request,
+                    executor, repos, msg_tx, repo_id, reference, purpose, request,
                 );
             }
         }

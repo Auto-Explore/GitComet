@@ -1054,6 +1054,19 @@ pub struct HistoryState {
     /// Carries no `_rev` counterpart because no pane fingerprints it: the
     /// dialog is its own entity and repaints itself when this changes.
     pub commit_lookup: CommitLookup,
+    /// Parents for the open cherry-pick/revert confirmation; see
+    /// [`CommitLookupPurpose`].
+    pub mainline_lookup: CommitLookup,
+}
+
+/// Which dialog a commit lookup answers. They resolve different references at
+/// the same time, so each owns its slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommitLookupPurpose {
+    /// The Reveal Commit dialog's preview row.
+    RevealDialog,
+    /// The parent list the cherry-pick/revert confirmations pick a mainline from.
+    MainlineParents,
 }
 
 /// A resolved-or-failed answer to "what commit does this reference name?".
@@ -1121,6 +1134,7 @@ impl Default for HistoryState {
             squash_preview_rev: 0,
             squash_preview_pending: None,
             commit_lookup: CommitLookup::default(),
+            mainline_lookup: CommitLookup::default(),
         }
     }
 }
@@ -1576,6 +1590,9 @@ pub struct RepoState {
     pub push_in_flight: u32,
     pub worktrees_in_flight: u32,
     pub local_actions_in_flight: u32,
+    /// Commands that write sequencer state or move HEAD. Continue and Abort
+    /// wait for these alone, so a merge tool cannot lock them out.
+    pub sequencer_actions_in_flight: u32,
     pub commit_in_flight: u32,
 
     pub open: Loadable<()>,
@@ -1635,6 +1652,10 @@ pub struct RepoState {
     pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
     pub interactive_cherry_pick_setup: Option<InteractiveCherryPickSetup>,
     pub merge_message_rev: u64,
+    /// Commit message git prepared for the next commit (a staged revert), and
+    /// a rev so the commit box can apply it exactly once.
+    pub suggested_commit_message: Option<String>,
+    pub suggested_commit_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
     /// Uncommitted-change counts for the *other* linked worktrees, so the
@@ -1691,6 +1712,7 @@ impl RepoState {
             push_in_flight: 0,
             worktrees_in_flight: 0,
             local_actions_in_flight: 0,
+            sequencer_actions_in_flight: 0,
             commit_in_flight: 0,
             open: Loadable::Loading,
             history_state: HistoryState::default(),
@@ -1737,6 +1759,8 @@ impl RepoState {
             interactive_rebase_setup: None,
             interactive_cherry_pick_setup: None,
             merge_message_rev: 0,
+            suggested_commit_message: None,
+            suggested_commit_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
             worktree_dirty: Loadable::NotLoaded,
@@ -2323,8 +2347,19 @@ impl RepoState {
 
     /// Start a new Reveal Commit lookup, returning the request id the reply has
     /// to carry to be accepted.
-    pub(crate) fn begin_commit_lookup(&mut self, reference: CommitId) -> u64 {
-        let lookup = &mut self.history_state.commit_lookup;
+    pub(crate) fn commit_lookup_mut(&mut self, purpose: CommitLookupPurpose) -> &mut CommitLookup {
+        match purpose {
+            CommitLookupPurpose::RevealDialog => &mut self.history_state.commit_lookup,
+            CommitLookupPurpose::MainlineParents => &mut self.history_state.mainline_lookup,
+        }
+    }
+
+    pub(crate) fn begin_commit_lookup(
+        &mut self,
+        purpose: CommitLookupPurpose,
+        reference: CommitId,
+    ) -> u64 {
+        let lookup = self.commit_lookup_mut(purpose);
         lookup.request = lookup.request.wrapping_add(1);
         lookup.reference = Some(reference);
         lookup.result = Loadable::Loading;
@@ -2332,11 +2367,17 @@ impl RepoState {
     }
 
     /// Record a lookup reply, ignoring one that a newer lookup has overtaken.
-    pub(crate) fn finish_commit_lookup(&mut self, request: u64, result: Loadable<Commit>) {
-        if self.history_state.commit_lookup.request != request {
+    pub(crate) fn finish_commit_lookup(
+        &mut self,
+        purpose: CommitLookupPurpose,
+        request: u64,
+        result: Loadable<Commit>,
+    ) {
+        let lookup = self.commit_lookup_mut(purpose);
+        if lookup.request != request {
             return;
         }
-        self.history_state.commit_lookup.result = result;
+        lookup.result = result;
     }
 
     /// Selecting a worktree row takes the details pane over, so the commit
@@ -2549,6 +2590,11 @@ impl RepoState {
         message: Loadable<Arc<str>>,
     ) {
         self.hover_commit_message = Some((commit_id, message));
+    }
+
+    pub(crate) fn set_suggested_commit_message(&mut self, message: Option<String>) {
+        self.suggested_commit_message = message;
+        self.suggested_commit_message_rev = self.suggested_commit_message_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_merge_commit_message(&mut self, v: Loadable<Option<String>>) {

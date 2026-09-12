@@ -181,6 +181,7 @@ pub enum Effect {
     ResolveCommitLookup {
         repo_id: RepoId,
         reference: CommitId,
+        purpose: crate::model::CommitLookupPurpose,
         /// Echoed back on the reply so a completion that lost a race against a
         /// newer lookup can be dropped. See `CommitLookup::request`.
         request: u64,

@@ -1387,6 +1387,7 @@ pub(super) fn schedule_revert_commit(
     auth: Option<StagedGitAuth>,
 ) {
     let command_commit_id = commit_id.clone();
+    let suggestion_tx = msg_tx.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -1399,9 +1400,21 @@ pub(super) fn schedule_revert_commit(
             summary,
         },
         move |repo| {
-            run_with_git_auth(auth, || {
+            let output = run_with_git_auth(auth, || {
                 repo.revert_with_output(&commit_id, commit, mainline)
-            })
+            });
+            // A staged revert leaves git's message behind; offer it to the
+            // commit box the user now has to type in.
+            if !commit
+                && output.is_ok()
+                && let Ok(Some(message)) = repo.commit_message_template()
+            {
+                send_or_log(
+                    &suggestion_tx,
+                    Msg::Internal(InternalMsg::CommitMessageSuggested { repo_id, message }),
+                );
+            }
+            output
         },
     );
 }

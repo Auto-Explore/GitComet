@@ -698,3 +698,181 @@ fn failing_prepare_commit_msg_hook_leaves_a_resumable_revert() {
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD~1"]), change);
     assert_no_revert_state(&repo);
 }
+
+/// base(f=a, g=0) → cG(g=1) → cF(f=b) → undo(g=0) → head(f=c).
+/// Reverting cF conflicts; reverting cG is already undone.
+fn setup_revert_sequence_repo(repo: &Path) -> (String, String) {
+    init_repo(repo);
+    fs::write(repo.join("g.txt"), "0\n").expect("write g");
+    commit_file(repo, "f.txt", "a\n", "base");
+    let c_g = commit_file(repo, "g.txt", "1\n", "g one");
+    let c_f = commit_file(repo, "f.txt", "b\n", "f b");
+    commit_file(repo, "g.txt", "0\n", "undo g by hand");
+    commit_file(repo, "f.txt", "c\n", "f c");
+    (c_g, c_f)
+}
+
+#[test]
+fn revert_sequence_continue_pauses_at_the_next_conflict() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "f.txt", "a\n", "base");
+    let first = commit_file(&repo, "f.txt", "b\n", "f b");
+    let second = commit_file(&repo, "f.txt", "c\n", "f c");
+    commit_file(&repo, "f.txt", "d\n", "f d");
+    let conflict = git_output(&repo, &["revert", "--no-edit", &second, &first]);
+    assert!(
+        !conflict.status.success(),
+        "the first revert should conflict"
+    );
+    fs::write(repo.join("f.txt"), "x\n")
+        .expect("resolve to something the next revert cannot apply to");
+    run_git(&repo, &["add", "f.txt"]);
+
+    let output = open_backend(&repo)
+        .rebase_continue_with_output()
+        .expect("a sequence that advanced and paused again is not a failure");
+
+    assert_eq!(output.command, "git revert --continue");
+    assert_ne!(
+        output.exit_code,
+        Some(0),
+        "the paused exit code drives the \"paused at the next conflict\" summary"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
+        "Revert \"f c\"",
+        "the resolved step is committed"
+    );
+    assert_eq!(sequencer_state(&repo), SequencerState::Revert);
+    assert_eq!(status(&repo), "UU f.txt");
+}
+
+#[test]
+fn revert_sequence_continue_skips_a_step_that_is_already_undone() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (c_g, c_f) = setup_revert_sequence_repo(&repo);
+    let conflict = git_output(&repo, &["revert", "--no-edit", &c_f, &c_g]);
+    assert!(!conflict.status.success(), "reverting f should conflict");
+    fs::write(repo.join("f.txt"), "a\n").expect("resolve");
+    run_git(&repo, &["add", "f.txt"]);
+
+    let output = open_backend(&repo)
+        .rebase_continue_with_output()
+        .expect("one Continue finishes the sequence");
+
+    assert!(
+        output.command.starts_with("git revert --"),
+        "unexpected command: {}",
+        output.command
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
+        "Revert \"f b\"",
+        "the empty step is skipped rather than stopping the sequence"
+    );
+    assert_no_revert_state(&repo);
+    assert_eq!(status(&repo), "");
+}
+
+#[test]
+fn an_abbreviated_id_still_resumes_a_stopped_revert() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let change = setup_revertable_repo(&repo);
+    run_git(&repo, &["config", "commit.gpgsign", "true"]);
+    run_git(&repo, &["config", "gpg.program", "false"]);
+    open_backend(&repo)
+        .revert_with_output(&commit_id(&change), true, None)
+        .expect_err("signing failure");
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+
+    let abbreviated = commit_id(&change[..8]);
+    let output = open_backend(&repo)
+        .revert_with_output(&abbreviated, true, None)
+        .expect("an abbreviated id names the same stopped revert");
+
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD~1"]), change);
+    assert_eq!(output.command, format!("git revert {}", &change[..8]));
+    assert_no_revert_state(&repo);
+}
+
+#[test]
+fn a_sequencer_directory_git_ignores_does_not_block_revert() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let change = setup_revertable_repo(&repo);
+    // Git reports no operation for a todo whose first command it cannot read,
+    // and refuses only to start a *sequence*; a single revert still runs.
+    fs::create_dir_all(repo.join(".git/sequencer")).expect("create sequencer dir");
+    fs::write(repo.join(".git/sequencer/todo"), "# nothing here\n").expect("write todo");
+    assert_eq!(sequencer_state(&repo), SequencerState::None);
+
+    open_backend(&repo)
+        .revert_with_output(&commit_id(&change), true, None)
+        .expect("a revert git itself would allow");
+
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD~1"]), change);
+
+    // The no-op path cleans up after itself, and must not take a sequencer
+    // directory it did not create with it.
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let change = setup_revertable_repo(&repo);
+    commit_file(&repo, "file.txt", "old\n", "undo change by hand");
+    fs::create_dir_all(repo.join(".git/sequencer")).expect("create sequencer dir");
+    fs::write(repo.join(".git/sequencer/todo"), "# nothing here\n").expect("write todo");
+
+    let output = open_backend(&repo)
+        .revert_with_output(&commit_id(&change), true, None)
+        .expect("nothing to revert");
+
+    assert!(
+        output.stdout.contains(REVERT_NOTHING_TO_REVERT_SENTINEL),
+        "{output:?}"
+    );
+    assert!(
+        repo.join(".git/sequencer").exists(),
+        "another operation's directory must survive"
+    );
+    assert!(!repo.join(".git/REVERT_HEAD").exists());
+}
+
+#[test]
+fn aborting_a_leftover_sequence_reports_that_head_was_kept() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let change = setup_conflicting_revert_repo(&repo);
+    let other = commit_file(&repo, "other.txt", "other\n", "other");
+    let conflict = git_output(&repo, &["revert", "--no-edit", &change, &other]);
+    assert!(
+        !conflict.status.success(),
+        "the first revert should conflict"
+    );
+    fs::write(repo.join("file.txt"), "resolved\n").expect("resolve");
+    run_git(&repo, &["add", "file.txt"]);
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "--no-edit"],
+    );
+    let head_before = head(&repo);
+
+    let output = open_backend(&repo)
+        .rebase_abort_with_output()
+        .expect("abort clears the leftover sequence");
+
+    assert!(
+        output
+            .stdout
+            .contains(gitcomet_core::services::REVERT_ABORT_KEPT_HEAD_SENTINEL),
+        "git refused to rewind, so the summary must not claim a restore: {output:?}"
+    );
+    assert_eq!(
+        head(&repo),
+        head_before,
+        "the manual commit is still on the branch"
+    );
+    assert_no_revert_state(&repo);
+}

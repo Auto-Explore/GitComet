@@ -44,6 +44,9 @@ pub(super) fn panel(
     let mut dialog = ConfirmDialog::new("Commit cherry-picked commit?", DIALOG_380_WIDTH)
         .text(theme, format!("Apply {short} to the current branch?"))
         .note(theme, "Commit the cherry-picked change immediately?");
+    if mainline.pending {
+        dialog = dialog.note(theme, "Checking the commit's parents…");
+    }
     if is_merge {
         dialog = dialog.section(commit_mainline::mainline_section(
             theme,

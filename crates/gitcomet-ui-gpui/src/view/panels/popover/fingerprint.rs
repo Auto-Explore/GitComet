@@ -416,11 +416,18 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // The parent list arrives from a lookup issued on open, and the
         // buttons follow the repo's busy state.
         PopoverKind::CherryPickCommitConfirm { .. } | PopoverKind::RevertCommitConfirm { .. } => {
-            let lookup = &repo.history_state.commit_lookup;
+            let lookup = &repo.history_state.mainline_lookup;
             lookup.request.hash(hasher);
             lookup.reference.hash(hasher);
             std::mem::discriminant(&lookup.result).hash(hasher);
             repo.history_state.commit_details_rev.hash(hasher);
+            // Summaries and ref labels come from the rows; the buttons follow
+            // the repo's busy state and its staged files.
+            repo.history_state.log_rev.hash(hasher);
+            view_fingerprint::hash_loadable_kind(&repo.history_state.file_history, hasher);
+            repo.branches_rev.hash(hasher);
+            repo.remote_branches_rev.hash(hasher);
+            repo.staged_status_rev.hash(hasher);
             repo.history_rewrite_busy().hash(hasher);
         }
 

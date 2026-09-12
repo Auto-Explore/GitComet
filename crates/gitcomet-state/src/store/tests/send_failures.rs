@@ -143,9 +143,6 @@ impl GitRepository for ReadyOpenRepo {
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         Ok(())
     }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         Ok(())
     }
@@ -395,9 +392,6 @@ impl GitRepository for BlockingDiffRepo {
         Ok(())
     }
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        Ok(())
-    }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
         Ok(())
     }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
