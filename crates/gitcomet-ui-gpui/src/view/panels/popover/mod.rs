@@ -10,6 +10,7 @@ mod branch_picker;
 mod checkout_remote_branch_prompt;
 mod cherry_pick_commit_confirm;
 mod clone_repo;
+mod commit_mainline;
 mod commit_prompt;
 pub(in super::super) mod context_menu;
 mod create_branch_from_ref_prompt;
@@ -36,6 +37,7 @@ mod remote_remove_confirm;
 mod rename_branch_prompt;
 mod repo_picker;
 mod reset_prompt;
+mod revert_commit_confirm;
 mod rows_cache;
 mod search_inputs;
 mod squash_prompt;
@@ -123,6 +125,8 @@ const STASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0,
 /// default.
 const HISTORY_AUTHOR_FILTER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 240.0, 420.0);
 const REPO_TAB_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(360.0);
+/// Rows read "origin — github.com/owner/repo", so wider than a plain menu.
+const REMOTE_WEB_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(360.0, 260.0, 520.0);
 const PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(420.0, 420.0, 820.0);
 const LARGE_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(520.0, 520.0, 820.0);
 const DIALOG_320_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
@@ -216,10 +220,9 @@ pub(in super::super) struct PopoverHost {
     hook_activity_history_scroll: ScrollHandle,
     hook_activity_hooks_scroll: ScrollHandle,
     hook_activity_output_scroll: ScrollHandle,
-    /// Explicit 1-based mainline selected for the currently open single
-    /// merge-commit cherry-pick confirmation. Reset every time that dialog
-    /// opens; drafts are intentionally session-local.
-    cherry_pick_mainline: Option<usize>,
+    /// Explicit 1-based mainline selected in the open merge-commit
+    /// cherry-pick or revert confirmation. Reset every time either opens.
+    commit_mainline: Option<usize>,
     context_menu_focus_handle: FocusHandle,
     /// Focus held by the App/Add Repository menu or staging confirmation invoker,
     /// restored when dismissed without replacing it with another prompt.
@@ -506,7 +509,9 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::BranchSectionMenu { .. }
             | PopoverKind::SubmoduleInnerDiffMenu { .. }
             | PopoverKind::Repo {
-                kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { .. }),
+                kind: RepoPopoverKind::Remote(
+                    RemotePopoverKind::Menu { .. } | RemotePopoverKind::OpenInBrowserMenu,
+                ),
                 ..
             }
             | PopoverKind::StashMenu { .. }
@@ -537,6 +542,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
         PopoverKind::StashDropConfirm { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::CherryPickCommitConfirm { .. }
+            | PopoverKind::RevertCommitConfirm { .. }
             | PopoverKind::MergeCommitConfirm { .. }
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::RebaseOntoConfirm { .. }
@@ -834,6 +840,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::PushSetUpstreamPrompt { .. }
         | PopoverKind::ForcePushConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
+        | PopoverKind::RevertCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::BranchExistsPrompt { .. }
@@ -904,6 +911,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::ResetPrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
+        | PopoverKind::RevertCommitConfirm { .. }
         | PopoverKind::MergeCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
         PopoverKind::BranchExistsPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
@@ -1004,6 +1012,10 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),
+            ..
+        } => Some(REMOTE_WEB_PICKER_WIDTH),
         PopoverKind::CommitFileSortMenu { .. } => Some(SORT_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings

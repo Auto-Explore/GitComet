@@ -125,6 +125,10 @@ impl PopoverHost {
                         PopoverKind::remote(repo_id, RemotePopoverKind::Menu { name }),
                         cx,
                     ),
+                    RemotePopoverKind::OpenInBrowserMenu => self.context_menu_view(
+                        PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
+                        cx,
+                    ),
                 },
                 RepoPopoverKind::Worktree(worktree_kind) => match worktree_kind {
                     WorktreePopoverKind::SectionMenu => self.context_menu_view(
@@ -191,6 +195,9 @@ impl PopoverHost {
             }
             PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
                 cherry_pick_commit_confirm::panel(self, repo_id, commit_id, cx)
+            }
+            PopoverKind::RevertCommitConfirm { repo_id, commit_id } => {
+                revert_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
             PopoverKind::MergeCommitConfirm { repo_id, commit_id } => {
                 merge_commit_confirm::panel(self, repo_id, commit_id, cx)

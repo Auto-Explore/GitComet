@@ -1191,19 +1191,26 @@ fn sequencer_paused(output: &CommandOutput) -> bool {
 }
 
 /// Continue/abort share one UI action and backend entry point for rebases,
-/// `git am`, and cherry-picks. Use the command that actually ran so native
-/// cherry-picks are not recorded as rebases in action history.
+/// `git am`, cherry-picks, and reverts. Use the command that actually ran so
+/// they are not all recorded as rebases in action history.
 fn sequencer_operation_label(output: &CommandOutput, error: Option<&Error>) -> &'static str {
-    let is_cherry_pick = |command: &str| command.trim_start().starts_with("git cherry-pick");
-    if is_cherry_pick(&output.command) {
-        return "Cherry-pick";
-    }
-    if let Some((command, _)) = error.and_then(try_format_git_backend_error)
-        && is_cherry_pick(&command)
-    {
-        return "Cherry-pick";
-    }
-    "Rebase"
+    let label_for = |command: &str| {
+        let command = command.trim_start();
+        if command.starts_with("git cherry-pick") {
+            Some("Cherry-pick")
+        } else if command.starts_with("git revert") {
+            Some("Revert")
+        } else {
+            None
+        }
+    };
+    label_for(&output.command)
+        .or_else(|| {
+            error
+                .and_then(try_format_git_backend_error)
+                .and_then(|(command, _)| label_for(&command))
+        })
+        .unwrap_or("Rebase")
 }
 
 fn summarize_command(
@@ -1250,6 +1257,7 @@ fn summarize_command(
             }
             RepoCommandKind::InteractiveCherryPick { .. } => "Cherry-pick",
             RepoCommandKind::CherryPick { .. } => "Cherry-pick",
+            RepoCommandKind::Revert { .. } => "Revert",
             RepoCommandKind::MergeAbort => "Merge",
             RepoCommandKind::CreateTag { .. } => "Tag",
             RepoCommandKind::DeleteTag { .. } => "Tag",
@@ -1484,7 +1492,9 @@ fn summarize_command(
         RepoCommandKind::Rebase { onto } => format!("Rebase onto {onto}: Completed"),
         RepoCommandKind::RebaseContinue => {
             let operation = sequencer_operation_label(output, None);
-            if sequencer_paused(output) {
+            if output.command == "git revert --skip" {
+                "Revert: Skipped; the resolution left nothing to commit".to_string()
+            } else if sequencer_paused(output) {
                 format!("{operation}: Paused at the next conflict")
             } else {
                 format!("{operation}: Continued")
@@ -1533,6 +1543,35 @@ fn summarize_command(
                     format!("Cherry-picked {short}: {summary}")
                 } else {
                     format!("Cherry-picked {short} without committing: {summary}")
+                }
+            }
+        }
+        RepoCommandKind::Revert {
+            commit_id,
+            commit,
+            summary,
+            ..
+        } => {
+            let sha = commit_id.as_ref();
+            let short = sha.get(0..7).unwrap_or(sha);
+            if output
+                .stdout
+                .contains(gitcomet_core::services::REVERT_NOTHING_TO_REVERT_SENTINEL)
+            {
+                format!(
+                    "Nothing to revert: the current branch no longer has the changes from {short}."
+                )
+            } else {
+                let summary = summary.lines().next().unwrap_or("").trim();
+                let subject = if summary.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {summary}")
+                };
+                if *commit {
+                    format!("Reverted {short}{subject}")
+                } else {
+                    format!("Reverted {short} without committing{subject}")
                 }
             }
         }
@@ -2639,6 +2678,28 @@ mod tests {
         );
         assert_eq!(cherry_pick_abort_summary, "Cherry-pick: Aborted");
 
+        for (command, kind, expected) in [
+            (
+                "git revert --continue",
+                RepoCommandKind::RebaseContinue,
+                "Revert: Continued",
+            ),
+            (
+                "git revert --skip",
+                RepoCommandKind::RebaseContinue,
+                "Revert: Skipped; the resolution left nothing to commit",
+            ),
+            (
+                "git revert --abort",
+                RepoCommandKind::RebaseAbort,
+                "Revert: Aborted",
+            ),
+        ] {
+            let (_, summary) =
+                summarize_command(&kind, &command_output(command, "", ""), true, None);
+            assert_eq!(summary, expected, "{command}");
+        }
+
         let mut paused_cherry_pick = command_output("git cherry-pick --continue", "", "");
         paused_cherry_pick.exit_code = Some(1);
         let (_, cherry_pick_pause_summary) = summarize_command(
@@ -2727,6 +2788,39 @@ mod tests {
             cherry_pick_already_applied_summary,
             "Current branch already has all the changes from the cherry-picked commit."
         );
+
+        let revert = |commit: bool, summary: &str| RepoCommandKind::Revert {
+            commit_id: CommitId("abcdef1234567890".into()),
+            commit,
+            mainline: None,
+            summary: summary.into(),
+        };
+        for (kind, stdout, expected) in [
+            (
+                revert(true, "fix parser\n\nbody"),
+                "",
+                "Reverted abcdef1: fix parser",
+            ),
+            (
+                revert(false, "fix parser"),
+                "",
+                "Reverted abcdef1 without committing: fix parser",
+            ),
+            (revert(true, ""), "", "Reverted abcdef1"),
+            (
+                revert(true, "fix parser"),
+                gitcomet_core::services::REVERT_NOTHING_TO_REVERT_SENTINEL,
+                "Nothing to revert: the current branch no longer has the changes from abcdef1.",
+            ),
+        ] {
+            let (_, summary) = summarize_command(
+                &kind,
+                &command_output("git revert abcdef1", stdout, ""),
+                true,
+                None,
+            );
+            assert_eq!(summary, expected);
+        }
 
         let (_, merge_abort_summary) = summarize_command(
             &RepoCommandKind::MergeAbort,

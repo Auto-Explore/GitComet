@@ -300,7 +300,13 @@ pub enum SequencerState {
     None,
     RebaseOrApply,
     CherryPick,
+    /// A revert paused on `REVERT_HEAD` (conflict, `--no-commit`, or failed commit step).
+    Revert,
 }
+
+/// Marker a revert puts in its command output when git applied nothing because
+/// the branch no longer has the reverted changes, so no commit was created.
+pub const REVERT_NOTHING_TO_REVERT_SENTINEL: &str = "GITCOMET_REVERT_NOTHING_TO_REVERT";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveRebaseEntry {
@@ -1018,6 +1024,18 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn revert(&self, id: &CommitId) -> Result<()>;
+    /// Reverts a single commit. `commit: false` leaves the inverse staged with
+    /// the revert paused; `mainline` follows [`Self::cherry_pick_with_output`].
+    fn revert_with_output(
+        &self,
+        _id: &CommitId,
+        _commit: bool,
+        _mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git revert is not implemented for this backend",
+        )))
+    }
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashEntry>>;
@@ -1918,6 +1936,7 @@ mod tests {
         assert_unsupported(repo.commit_amend("message"));
         assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
         assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
+        assert_unsupported(repo.revert_with_output(&commit, true, None));
         assert_unsupported(repo.rebase_with_output("main"));
         assert_unsupported(repo.rebase_continue_with_output());
         assert_unsupported(repo.rebase_abort_with_output());

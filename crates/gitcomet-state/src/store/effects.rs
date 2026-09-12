@@ -821,9 +821,24 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::RevertCommit { repo_id, .. } => {
-            send_repo_action_unavailable(repo_id, RepoActionKind::RevertCommit, runtime, &send)
-        }
+        Effect::RevertCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::Revert {
+                    commit_id,
+                    commit,
+                    mainline,
+                    summary,
+                },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::CreateBranch { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::CreateBranch, runtime, &send)
         }
@@ -2333,8 +2348,16 @@ pub(super) fn schedule_effect(
                 executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary,
             );
         }
-        Effect::RevertCommit { repo_id, commit_id } => {
-            repo_actions::schedule_revert_commit(executor, repos, msg_tx, repo_id, commit_id);
+        Effect::RevertCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        } => {
+            repo_commands::schedule_revert_commit(
+                executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary,
+            );
         }
         Effect::CreateBranch {
             repo_id,

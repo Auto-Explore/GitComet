@@ -90,6 +90,18 @@ pub(super) fn model_with_update_checks_disabled(
         !can_locate,
         AppMenuAction::LocateFileInExplorer,
     );
+    let can_open_remote = this
+        .active_repo()
+        .is_some_and(|repo| remote_web_request(repo).unavailable_reason().is_none());
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_open_remote_in_browser",
+        crate::menu_labels::OPEN_REMOTE_IN_BROWSER,
+        Shortcut::Secondary("K"),
+        !can_open_remote,
+        AppMenuAction::OpenRemoteInBrowser,
+    );
 
     // Sits with the other repository-scoped views rather than the app-wide rows
     // above: it opens a panel about *this* repo's history.
@@ -181,6 +193,12 @@ pub(super) fn activate(
             let _ = this.root_view.update(cx, |root, cx| {
                 root.locate_open_file_in_explorer(cx);
             });
+        }
+        AppMenuAction::OpenRemoteInBrowser => {
+            this.close_popover_and_restore_focus(window, cx);
+            // Dispatched, not called: this runs inside the host's update, and
+            // opening the picker would update the host again.
+            window.dispatch_action(Box::new(crate::view::OpenRemoteInBrowser), cx);
         }
         AppMenuAction::Settings => {
             this.close_popover_and_restore_focus(window, cx);

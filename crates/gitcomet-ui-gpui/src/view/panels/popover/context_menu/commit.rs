@@ -455,7 +455,7 @@ fn model_with_header(
         });
     }
     items.push(ContextMenuItem::Entry {
-        label: "Revert".into(),
+        label: format!("Revert {short}…").into(),
         icon: Some("icons/undo.svg".into()),
         shortcut: Some("R".into()),
         disabled: history_rewrite_disabled,

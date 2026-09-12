@@ -175,6 +175,10 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    RevertCommitConfirm {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     MergeCommitConfirm {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -428,6 +432,8 @@ pub(crate) enum RepoPopoverKind {
     Submodule(SubmodulePopoverKind),
 }
 
+/// `OpenInBrowserMenu` picks which remote's web page to open when several
+/// remotes have one; its rows are rebuilt from the remotes on every render.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RemotePopoverKind {
     AddPrompt,
@@ -435,6 +441,7 @@ pub(crate) enum RemotePopoverKind {
     RemoveConfirm { name: String },
     Menu { name: String },
     DeleteBranchConfirm { remote: String, branch: String },
+    OpenInBrowserMenu,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

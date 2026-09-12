@@ -970,7 +970,6 @@ fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
             | RepoActionKind::CheckoutRemoteBranch
             | RepoActionKind::CheckoutCommit
             | RepoActionKind::CherryPickCommit
-            | RepoActionKind::RevertCommit
             | RepoActionKind::CreateBranchAndCheckout
             | RepoActionKind::RenameBranch
     )

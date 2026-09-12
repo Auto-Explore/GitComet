@@ -4,8 +4,9 @@ use gitcomet_core::auth::{
     GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, clear_session_passphrase,
     clear_staged_git_auth, load_session_passphrases, stage_git_auth_for_current_thread,
 };
+use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::ErrorKind;
-use gitcomet_core::services::{GitBackend, GitRepository};
+use gitcomet_core::services::{GitBackend, GitRepository, SequencerState};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
@@ -33,6 +34,15 @@ fn run_git(repo: &Path, args: &[&str]) {
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn git_stdout(repo: &Path, args: &[&str]) -> String {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo).args(args);
+    test_git_env::apply(&mut cmd);
+    let output = cmd.output().expect("run git command");
+    assert!(output.status.success(), "git {args:?} failed");
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
 fn ssh_signing_available() -> bool {
@@ -146,6 +156,59 @@ fn successful_ssh_signing_passphrase_is_reused_for_the_session() {
     open(&repo)
         .commit("second signed commit")
         .expect("second signed commit should reuse the session passphrase");
+
+    clear_session_passphrase();
+}
+
+#[test]
+fn revert_needing_a_signing_passphrase_resumes_with_continue() {
+    if !ssh_signing_available() {
+        eprintln!("skipping: ssh-keygen with `-Y sign` is unavailable");
+        return;
+    }
+    let _auth_guard = auth_test_lock();
+    test_git_env::ensure_initialized();
+    clear_staged_git_auth();
+    clear_session_passphrase();
+    let dir = tempfile::tempdir().expect("create temp directory");
+    let repo = init_signing_repo(dir.path());
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    fs::write(repo.join("file.txt"), "changed").expect("update file");
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "change"],
+    );
+    let change = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let error = open(&repo)
+        .revert_with_output(&CommitId(change.clone().into()), true, None)
+        .expect_err("revert commit should need a passphrase");
+    let ErrorKind::Git(failure) = error.kind() else {
+        panic!("expected structured Git failure, got {:?}", error.kind());
+    };
+    assert!(String::from_utf8_lossy(failure.stderr()).contains(SSH_PASSPHRASE_PROMPT_MARKER));
+    assert_eq!(
+        open(&repo).sequencer_state().unwrap(),
+        SequencerState::Revert
+    );
+
+    stage_git_auth_for_current_thread(StagedGitAuth {
+        kind: GitAuthKind::Passphrase,
+        username: None,
+        secret: PASSPHRASE.to_string(),
+    });
+    let output = open(&repo)
+        .rebase_continue_with_output()
+        .expect("continue should sign with the staged passphrase");
+    clear_staged_git_auth();
+
+    assert_eq!(output.command, "git revert --continue");
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD~1"]), change);
+    assert!(git_stdout(&repo, &["cat-file", "-p", "HEAD"]).contains("gpgsig"));
+    assert_eq!(open(&repo).sequencer_state().unwrap(), SequencerState::None);
 
     clear_session_passphrase();
 }

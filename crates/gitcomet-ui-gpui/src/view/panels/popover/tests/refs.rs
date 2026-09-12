@@ -888,6 +888,332 @@ fn remote_menu_lists_fetch_and_prune_actions(cx: &mut gpui::TestAppContext) {
     });
 }
 
+fn web_remote(name: &str, url: Option<&str>) -> gitcomet_core::domain::Remote {
+    gitcomet_core::domain::Remote {
+        name: name.to_string(),
+        url: url.map(str::to_string),
+    }
+}
+
+/// The context menu `kind` builds for a repository with these remotes.
+fn remote_menu_model_with(
+    cx: &mut gpui::TestAppContext,
+    remotes: Vec<gitcomet_core::domain::Remote>,
+    kind: RemotePopoverKind,
+) -> ContextMenuModel {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(22);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::env::temp_dir().join("gitcomet_ui_test_remote_web_menu"),
+                },
+            );
+            repo.remotes = Loadable::Ready(Arc::new(remotes));
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this.ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+        });
+    });
+    // A separate update: the host picks the state up when effects flush.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_model(&PopoverKind::remote(repo_id, kind), cx)
+            })
+        })
+        .expect("expected a context menu model")
+    })
+}
+
+fn entry_ix(model: &ContextMenuModel, wanted: &str) -> usize {
+    model
+        .items
+        .iter()
+        .position(
+            |item| matches!(item, ContextMenuItem::Entry { label, .. } if label.as_ref() == wanted),
+        )
+        .unwrap_or_else(|| panic!("expected a `{wanted}` entry"))
+}
+
+#[gpui::test]
+fn remote_menu_opens_that_remotes_web_page(cx: &mut gpui::TestAppContext) {
+    let model = remote_menu_model_with(
+        cx,
+        vec![
+            web_remote("origin", Some("git@github.com:org/repo.git")),
+            web_remote("upstream", Some("https://gitlab.com/upstream/repo.git")),
+        ],
+        RemotePopoverKind::Menu {
+            name: "upstream".to_string(),
+        },
+    );
+
+    let ix = entry_ix(&model, "Open in web browser");
+    let ContextMenuItem::Entry {
+        disabled, action, ..
+    } = &model.items[ix]
+    else {
+        unreachable!();
+    };
+    assert!(!disabled);
+    assert!(matches!(
+        action.as_ref(),
+        ContextMenuAction::OpenWebUrl { url } if url == "https://gitlab.com/upstream/repo"
+    ));
+    assert_eq!(
+        model.entry_tooltips.get(&ix).map(|tip| tip.as_ref()),
+        Some("https://gitlab.com/upstream/repo")
+    );
+    assert_eq!(
+        entry_ix(&model, "Edit fetch URL…"),
+        ix + 1,
+        "it leads the remote's URL group"
+    );
+}
+
+#[gpui::test]
+fn remote_menu_disables_open_in_web_browser_without_a_web_page(cx: &mut gpui::TestAppContext) {
+    for (name, reason) in [
+        ("local", "This remote's URL doesn't point to a web page"),
+        ("no-url", "This remote has no URL"),
+    ] {
+        let model = remote_menu_model_with(
+            cx,
+            vec![
+                web_remote("local", Some("/srv/git/repo.git")),
+                web_remote("no-url", None),
+            ],
+            RemotePopoverKind::Menu {
+                name: name.to_string(),
+            },
+        );
+        let ix = entry_ix(&model, "Open in web browser");
+        assert!(
+            matches!(
+                &model.items[ix],
+                ContextMenuItem::Entry { disabled: true, .. }
+            ),
+            "{name}"
+        );
+        assert_eq!(
+            model.entry_tooltips.get(&ix).map(|tip| tip.as_ref()),
+            Some(reason)
+        );
+    }
+}
+
+#[gpui::test]
+fn open_in_browser_picker_lists_web_remotes_origin_first(cx: &mut gpui::TestAppContext) {
+    let model = remote_menu_model_with(
+        cx,
+        vec![
+            web_remote("backup", Some("https://gitlab.com/org/backup.git")),
+            web_remote("local", Some("/srv/git/repo.git")),
+            web_remote("origin", Some("git@github.com:org/repo.git")),
+            web_remote("upstream", Some("https://github.com/other/repo.git")),
+        ],
+        RemotePopoverKind::OpenInBrowserMenu,
+    );
+
+    let entries: Vec<(usize, &str, Option<&str>, &str)> = model
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, item)| match item {
+            ContextMenuItem::Entry {
+                label,
+                shortcut,
+                action,
+                ..
+            } => match action.as_ref() {
+                ContextMenuAction::OpenWebUrl { url } => Some((
+                    ix,
+                    label.as_ref(),
+                    shortcut.as_ref().map(|s| s.as_ref()),
+                    url.as_str(),
+                )),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let rows: Vec<_> = entries
+        .iter()
+        .map(|(_, label, shortcut, url)| (*label, *shortcut, *url))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                "origin — github.com/org/repo",
+                Some("1"),
+                "https://github.com/org/repo"
+            ),
+            (
+                "backup — gitlab.com/org/backup",
+                Some("2"),
+                "https://gitlab.com/org/backup"
+            ),
+            (
+                "upstream — github.com/other/repo",
+                Some("3"),
+                "https://github.com/other/repo"
+            ),
+        ],
+        "local remotes have no page to list"
+    );
+    let (origin_ix, backup_ix) = (entries[0].0, entries[1].0);
+    assert_eq!(model.first_selectable(), Some(origin_ix));
+    assert_eq!(
+        super::super::context_menu::context_menu_shortcut_entry_ix(&model, "2"),
+        Some(backup_ix)
+    );
+    assert_eq!(
+        model.entry_tooltips.get(&origin_ix).map(|tip| tip.as_ref()),
+        Some("https://github.com/org/repo")
+    );
+}
+
+fn picker_entries(model: &ContextMenuModel) -> Vec<(usize, String, Option<String>)> {
+    model
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, item)| match item {
+            ContextMenuItem::Entry {
+                label, shortcut, ..
+            } => Some((
+                ix,
+                label.to_string(),
+                shortcut.as_ref().map(|s| s.to_string()),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[gpui::test]
+fn open_in_browser_picker_numbers_only_the_first_nine_rows(cx: &mut gpui::TestAppContext) {
+    let remotes = (0..11)
+        .map(|n| {
+            let name = format!("fork{n:02}");
+            let url = format!("https://github.com/{name}/repo.git");
+            web_remote(&name, Some(&url))
+        })
+        .collect();
+    let model = remote_menu_model_with(cx, remotes, RemotePopoverKind::OpenInBrowserMenu);
+
+    let shortcuts: Vec<Option<String>> = picker_entries(&model)
+        .into_iter()
+        .map(|(_, _, shortcut)| shortcut)
+        .collect();
+    let mut expected: Vec<Option<String>> = (1..=9).map(|n| Some(n.to_string())).collect();
+    expected.extend([None, None]);
+    assert_eq!(shortcuts, expected, "digits run out after nine rows");
+    assert_eq!(
+        super::super::context_menu::context_menu_shortcut_entry_ix(&model, "0"),
+        None,
+        "0 is not a row key"
+    );
+}
+
+#[gpui::test]
+fn open_in_browser_picker_selectors_follow_row_position(cx: &mut gpui::TestAppContext) {
+    // Remote names may contain `/`, so selectors use positions, not names.
+    let model = remote_menu_model_with(
+        cx,
+        vec![
+            web_remote("origin", Some("git@github.com:org/repo.git")),
+            web_remote("team/fork", Some("https://github.com/team/fork.git")),
+        ],
+        RemotePopoverKind::OpenInBrowserMenu,
+    );
+    let entries = picker_entries(&model);
+    let (fork_ix, fork_label, _) = &entries[1];
+    assert_eq!(fork_label, "team/fork — github.com/team/fork");
+    assert_eq!(
+        model
+            .entry_debug_selectors
+            .get(fork_ix)
+            .map(|selector| selector.as_ref()),
+        Some("open_remote_in_browser_1")
+    );
+}
+
+#[gpui::test]
+fn open_in_browser_picker_lists_a_shared_page_once(cx: &mut gpui::TestAppContext) {
+    let model = remote_menu_model_with(
+        cx,
+        vec![
+            web_remote("https", Some("https://github.com/org/repo.git")),
+            web_remote("origin", Some("git@github.com:org/repo.git")),
+            web_remote("upstream", Some("https://gitlab.com/upstream/repo.git")),
+        ],
+        RemotePopoverKind::OpenInBrowserMenu,
+    );
+    let labels: Vec<String> = picker_entries(&model)
+        .into_iter()
+        .map(|(_, label, _)| label)
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "origin — github.com/org/repo",
+            "upstream — gitlab.com/upstream/repo"
+        ]
+    );
+}
+
+#[gpui::test]
+fn remote_menu_never_puts_credentials_in_the_link(cx: &mut gpui::TestAppContext) {
+    let model = remote_menu_model_with(
+        cx,
+        vec![web_remote(
+            "origin",
+            Some("https://user:token@github.com/org/repo.git"),
+        )],
+        RemotePopoverKind::Menu {
+            name: "origin".to_string(),
+        },
+    );
+    let ix = entry_ix(&model, "Open in web browser");
+    let ContextMenuItem::Entry { action, .. } = &model.items[ix] else {
+        unreachable!();
+    };
+    assert!(matches!(
+        action.as_ref(),
+        ContextMenuAction::OpenWebUrl { url } if url == "https://github.com/org/repo"
+    ));
+    assert_eq!(
+        model.entry_tooltips.get(&ix).map(|tip| tip.as_ref()),
+        Some("https://github.com/org/repo")
+    );
+}
+
+#[gpui::test]
+fn open_in_browser_picker_shows_an_empty_state(cx: &mut gpui::TestAppContext) {
+    let model = remote_menu_model_with(
+        cx,
+        vec![web_remote("local", Some("/srv/git/repo.git"))],
+        RemotePopoverKind::OpenInBrowserMenu,
+    );
+    assert_eq!(model.first_selectable(), None);
+    assert!(model.items.iter().any(|item| matches!(
+        item,
+        ContextMenuItem::Label(text) if text.as_ref() == "No remote has a web page to open"
+    )));
+}
+
 #[gpui::test]
 fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));

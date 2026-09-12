@@ -3646,7 +3646,11 @@ mod tests {
         repo.local_actions_in_flight = 1;
         assert!(repo.history_rewrite_busy());
 
-        for state in [SequencerState::CherryPick, SequencerState::RebaseOrApply] {
+        for state in [
+            SequencerState::CherryPick,
+            SequencerState::RebaseOrApply,
+            SequencerState::Revert,
+        ] {
             let mut repo = new_repo();
             repo.sequencer_state = Loadable::Ready(state);
             assert!(repo.history_rewrite_busy(), "sequencer {state:?}");

@@ -3,7 +3,7 @@
 //! Turns a repository's `origin` remote URL (SSH or HTTPS) into a web URL for
 //! a specific commit or file on the hosting forge (GitHub, GitLab, Bitbucket,
 //! Azure DevOps, Gitea/Codeberg, AWS CodeCommit, or any GitHub-style forge
-//! such as a self-hosted Gitea instance).
+//! such as a self-hosted Gitea instance), or into the repository page itself.
 
 use gitcomet_core::domain::{Remote, RemoteBranch};
 
@@ -149,6 +149,51 @@ fn web_base(remotes: &[Remote]) -> Option<ForgeWebBase> {
     parse_remote_url(url)
 }
 
+/// A remote whose URL points at a repository page on a forge.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct RemoteWebPage {
+    pub(super) remote: String,
+    pub(super) url: String,
+}
+
+impl RemoteWebPage {
+    /// The page without its scheme, e.g. `github.com/Auto-Explore/GitComet`.
+    pub(super) fn display_address(&self) -> &str {
+        self.url
+            .split_once("://")
+            .map_or(self.url.as_str(), |(_, address)| address)
+    }
+}
+
+/// The repository page a remote URL points at, e.g.
+/// `https://github.com/Auto-Explore/GitComet`.
+pub(super) fn remote_web_url(url: &str) -> Option<String> {
+    parse_remote_url(url).map(|base| base.web_root)
+}
+
+/// Every remote with a web page, `origin` first and the rest in the given
+/// order. A page two remotes share (ssh and https of one repo) is listed once,
+/// under the first.
+pub(super) fn remote_web_pages(remotes: &[Remote]) -> Vec<RemoteWebPage> {
+    let origin_first = remotes
+        .iter()
+        .filter(|remote| remote.name == "origin")
+        .chain(remotes.iter().filter(|remote| remote.name != "origin"));
+    let mut pages: Vec<RemoteWebPage> = Vec::new();
+    for remote in origin_first {
+        let Some(url) = remote.url.as_deref().and_then(remote_web_url) else {
+            continue;
+        };
+        if pages.iter().all(|page| page.url != url) {
+            pages.push(RemoteWebPage {
+                remote: remote.name.clone(),
+                url,
+            });
+        }
+    }
+    pages
+}
+
 fn parse_remote_url(url: &str) -> Option<ForgeWebBase> {
     let url = url.trim();
     if url.is_empty() {
@@ -164,26 +209,40 @@ fn parse_remote_url(url: &str) -> Option<ForgeWebBase> {
         && path.contains('/')
     {
         let host = user_host.rsplit('@').next()?;
-        return build_base(host, path, "https");
+        return build_base(host, None, path, "https");
     }
 
-    // Scheme URLs: https://, http://, git://, ssh://, git+ssh://.
+    // Scheme URLs: https://, http://, git://, ssh:// and git's two aliases for
+    // it, git+ssh:// and ssh+git://.
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_ascii_lowercase();
     if !matches!(
         scheme.as_str(),
-        "https" | "http" | "git" | "ssh" | "git+ssh"
+        "https" | "http" | "git" | "ssh" | "git+ssh" | "ssh+git"
     ) {
         return None;
     }
-    // Strip userinfo (`git@`) and any port before the path.
-    let rest = rest.split('@').next_back()?;
-    let (host, path) = rest.split_once('/')?;
-    let host = host.split(':').next()?;
-    build_base(host, path, &scheme)
+    let (authority, path) = rest.split_once('/')?;
+    // Userinfo (`git@`, `user:token@`) only ever precedes the host.
+    let host_port = authority.rsplit('@').next()?;
+    let (host, port) = host_port
+        .split_once(':')
+        .map_or((host_port, None), |(host, port)| (host, Some(port)));
+    build_base(host, web_port(&scheme, port), path, &scheme)
 }
 
-fn build_base(host: &str, path: &str, scheme: &str) -> Option<ForgeWebBase> {
+/// The port to keep in the web root: an http(s) remote's port is the web
+/// server's, while an ssh/git port says nothing about where the web UI is.
+fn web_port<'a>(scheme: &str, port: Option<&'a str>) -> Option<&'a str> {
+    let port = port.filter(|port| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))?;
+    match (scheme, port) {
+        ("https", "443") | ("http", "80") => None,
+        ("https" | "http", port) => Some(port),
+        _ => None,
+    }
+}
+
+fn build_base(host: &str, port: Option<&str>, path: &str, scheme: &str) -> Option<ForgeWebBase> {
     let host = host.trim().to_ascii_lowercase();
     let path = path.trim();
     if host.is_empty() || (host != "localhost" && !host.contains('.')) {
@@ -198,7 +257,7 @@ fn build_base(host: &str, path: &str, scheme: &str) -> Option<ForgeWebBase> {
     if host.starts_with("git-codecommit.") {
         return code_commit_base(&host, path);
     }
-    let owner_repo = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
+    let owner_repo = repo_path(path);
     if owner_repo.is_empty() || !owner_repo.contains('/') {
         return None;
     }
@@ -216,10 +275,18 @@ fn build_base(host: &str, path: &str, scheme: &str) -> Option<ForgeWebBase> {
     } else {
         "https"
     };
+    let port = port.map(|port| format!(":{port}")).unwrap_or_default();
     Some(ForgeWebBase {
         kind,
-        web_root: format!("{scheme}://{host}/{owner_repo}"),
+        web_root: format!("{scheme}://{host}{port}/{owner_repo}"),
     })
+}
+
+/// A remote's repository path without its slashes or `.git` suffix, so
+/// `/org/repo.git/` and `org/repo` name the same repository.
+fn repo_path(path: &str) -> &str {
+    let path = path.trim_matches('/');
+    path.strip_suffix(".git").unwrap_or(path)
 }
 
 /// The hosts that host Azure DevOps git repositories: the current
@@ -238,8 +305,7 @@ fn is_azure_devops_host(host: &str) -> bool {
 /// `v3/{org}/{project}/{repo}` path and the legacy `*.visualstudio.com` hosts
 /// keep the organization in the hostname.
 fn azure_devops_base(host: &str, path: &str) -> Option<ForgeWebBase> {
-    let owner_repo = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
-    let parts: Vec<&str> = owner_repo.split('/').collect();
+    let parts: Vec<&str> = repo_path(path).split('/').collect();
     let web_root = match (host, parts.as_slice()) {
         ("dev.azure.com", [org, project, "_git", repo]) => {
             format!("https://dev.azure.com/{org}/{project}/_git/{repo}")
@@ -272,8 +338,7 @@ fn code_commit_base(host: &str, path: &str) -> Option<ForgeWebBase> {
     if region.is_empty() || region.contains('.') {
         return None;
     }
-    let repo = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
-    let repo = repo.strip_prefix("v1/repos/")?;
+    let repo = repo_path(path).strip_prefix("v1/repos/")?;
     if repo.is_empty() || repo.contains('/') {
         return None;
     }
@@ -471,6 +536,46 @@ mod tests {
         assert_eq!(
             commit_permalink(&remotes, "abc123").as_deref(),
             Some("http://github.com/org/repo/commit/abc123")
+        );
+    }
+
+    #[test]
+    fn web_urls_keep_an_http_port_but_drop_an_ssh_port() {
+        // Gitea's default port; the web UI is served on it too.
+        let gitea = [remote("origin", "http://localhost:3000/org/repo.git")];
+        assert_eq!(
+            commit_permalink(&gitea, "abc123").as_deref(),
+            Some("http://localhost:3000/org/repo/commit/abc123")
+        );
+        let https = [remote(
+            "origin",
+            "https://git.example.com:8443/org/repo.git",
+        )];
+        assert_eq!(
+            commit_permalink(&https, "abc123").as_deref(),
+            Some("https://git.example.com:8443/org/repo/commit/abc123")
+        );
+        let default_port = [remote("origin", "https://github.com:443/org/repo.git")];
+        assert_eq!(
+            commit_permalink(&default_port, "abc123").as_deref(),
+            Some("https://github.com/org/repo/commit/abc123")
+        );
+    }
+
+    #[test]
+    fn userinfo_is_stripped_from_the_host_only() {
+        let token = [remote(
+            "origin",
+            "https://user:token@github.com/org/repo.git",
+        )];
+        assert_eq!(
+            commit_permalink(&token, "abc123").as_deref(),
+            Some("https://github.com/org/repo/commit/abc123")
+        );
+        let at_in_path = [remote("origin", "https://git.example.com/org/repo@v2.git")];
+        assert_eq!(
+            commit_permalink(&at_in_path, "abc123").as_deref(),
+            Some("https://git.example.com/org/repo@v2/commit/abc123")
         );
     }
 
@@ -697,6 +802,370 @@ mod tests {
             url: None,
         }];
         assert_eq!(commit_permalink(&no_url, "abc123"), None);
+    }
+
+    #[test]
+    fn remote_web_url_is_the_repository_page() {
+        for (url, expected) in [
+            (
+                "git@github.com:Auto-Explore/GitComet.git",
+                "https://github.com/Auto-Explore/GitComet",
+            ),
+            (
+                "https://github.com/Auto-Explore/GitComet",
+                "https://github.com/Auto-Explore/GitComet",
+            ),
+            (
+                "https://user:token@github.com/org/repo.git",
+                "https://github.com/org/repo",
+            ),
+            (
+                "ssh://git@git.example.com:2222/org/repo.git",
+                "https://git.example.com/org/repo",
+            ),
+            (
+                "https://git.example.com:8443/org/repo.git",
+                "https://git.example.com:8443/org/repo",
+            ),
+            (
+                "http://localhost:3000/org/repo.git",
+                "http://localhost:3000/org/repo",
+            ),
+            (
+                "git@gitlab.com:group/subgroup/repo.git",
+                "https://gitlab.com/group/subgroup/repo",
+            ),
+            (
+                "git@ssh.dev.azure.com:v3/org/project/repo",
+                "https://dev.azure.com/org/project/_git/repo",
+            ),
+            (
+                "https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/my-repo",
+                "https://eu-west-1.console.aws.amazon.com/codesuite/codecommit/repositories/my-repo",
+            ),
+        ] {
+            assert_eq!(remote_web_url(url).as_deref(), Some(expected), "{url}");
+        }
+    }
+
+    #[test]
+    fn remote_web_url_rejects_local_and_unsupported_urls() {
+        for url in [
+            "",
+            "/srv/git/repo.git",
+            "C:/git/repo.git",
+            "file:///srv/git/repo.git",
+            "https://github.com/owner",
+        ] {
+            assert_eq!(remote_web_url(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn remote_web_pages_put_origin_first_then_keep_order() {
+        let remotes = [
+            remote("backup", "https://gitlab.com/org/backup.git"),
+            remote("origin", "git@github.com:org/repo.git"),
+            remote("upstream", "git@github.com:other/repo.git"),
+        ];
+        let pages = remote_web_pages(&remotes);
+        let names: Vec<&str> = pages.iter().map(|page| page.remote.as_str()).collect();
+        assert_eq!(names, ["origin", "backup", "upstream"]);
+        assert_eq!(pages[0].url, "https://github.com/org/repo");
+    }
+
+    #[test]
+    fn remote_web_pages_skip_remotes_without_a_web_page() {
+        let remotes = [
+            Remote {
+                name: "no-url".to_string(),
+                url: None,
+            },
+            remote("local", "/srv/git/repo.git"),
+            remote("upstream", "https://github.com/org/repo.git"),
+        ];
+        let pages = remote_web_pages(&remotes);
+        assert_eq!(
+            pages,
+            [RemoteWebPage {
+                remote: "upstream".to_string(),
+                url: "https://github.com/org/repo".to_string(),
+            }]
+        );
+        assert!(remote_web_pages(&[]).is_empty());
+    }
+
+    #[test]
+    fn remote_web_pages_list_a_shared_page_once() {
+        let remotes = [
+            remote("https", "https://github.com/org/repo.git"),
+            remote("origin", "git@github.com:org/repo.git"),
+        ];
+        let pages = remote_web_pages(&remotes);
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].remote, "origin");
+    }
+
+    #[test]
+    fn repo_path_strips_slashes_and_one_git_suffix() {
+        for (path, expected) in [
+            ("org/repo", "org/repo"),
+            ("org/repo.git", "org/repo"),
+            ("/org/repo.git/", "org/repo"),
+            ("org/repo/", "org/repo"),
+            ("org/repo.git.git", "org/repo.git"),
+            ("org/.github", "org/.github"),
+            ("/", ""),
+        ] {
+            assert_eq!(repo_path(path), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn web_port_keeps_only_a_non_default_http_port() {
+        for (scheme, port, expected) in [
+            ("https", Some("8443"), Some("8443")),
+            ("http", Some("3000"), Some("3000")),
+            ("http", Some("443"), Some("443")),
+            ("https", Some("443"), None),
+            ("http", Some("80"), None),
+            ("ssh", Some("2222"), None),
+            ("git", Some("9418"), None),
+            ("git+ssh", Some("22"), None),
+            ("https", Some(""), None),
+            ("https", Some("80a"), None),
+            ("https", None, None),
+        ] {
+            assert_eq!(web_port(scheme, port), expected, "{scheme} {port:?}");
+        }
+    }
+
+    #[test]
+    fn remote_web_url_lowercases_scheme_and_host_but_keeps_the_path() {
+        assert_eq!(
+            remote_web_url("HTTPS://GitHub.COM/Org/Repo.git").as_deref(),
+            Some("https://github.com/Org/Repo")
+        );
+        assert_eq!(
+            remote_web_url("git@GitLab.com:Group/Repo.git").as_deref(),
+            Some("https://gitlab.com/Group/Repo")
+        );
+    }
+
+    #[test]
+    fn remote_web_url_trims_surrounding_whitespace() {
+        assert_eq!(
+            remote_web_url("  git@github.com:org/repo.git\n").as_deref(),
+            Some("https://github.com/org/repo")
+        );
+    }
+
+    #[test]
+    fn remote_web_url_serves_git_and_ssh_schemes_over_https() {
+        for url in [
+            "git://github.com/org/repo.git",
+            "ssh://github.com/org/repo.git",
+            "git+ssh://git@github.com/org/repo.git",
+            "ssh+git://git@github.com/org/repo.git",
+        ] {
+            assert_eq!(
+                remote_web_url(url).as_deref(),
+                Some("https://github.com/org/repo"),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_web_url_accepts_scp_syntax_without_a_user() {
+        assert_eq!(
+            remote_web_url("github.com:org/repo.git").as_deref(),
+            Some("https://github.com/org/repo")
+        );
+    }
+
+    #[test]
+    fn remote_web_url_ignores_trailing_slashes() {
+        for url in [
+            "https://github.com/org/repo/",
+            "https://github.com/org/repo.git/",
+            "ssh://git@github.com/org/repo.git/",
+        ] {
+            assert_eq!(
+                remote_web_url(url).as_deref(),
+                Some("https://github.com/org/repo"),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_web_url_never_carries_credentials() {
+        for url in [
+            "https://user:token@github.com/org/repo.git",
+            "https://user:p@ss@github.com/org/repo.git",
+            "https://user:p%40ss@github.com/org/repo.git",
+            "http://token@git.example.com:8080/org/repo.git",
+            "ssh://user:token@github.com/org/repo.git",
+            "https://token@dev.azure.com/org/project/_git/repo",
+        ] {
+            let web = remote_web_url(url).unwrap_or_else(|| panic!("{url} has a page"));
+            assert!(
+                !web.contains("token") && !web.contains("ss@") && !web.contains("user"),
+                "{url} leaked into {web}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_web_url_rejects_hosts_without_a_domain() {
+        for url in [
+            "git@gitserver:org/repo.git",
+            "ssh://git@gitserver/org/repo.git",
+            "https://intranet/org/repo",
+        ] {
+            assert_eq!(remote_web_url(url), None, "{url}");
+        }
+        assert_eq!(
+            remote_web_url("ssh://git@localhost:2222/org/repo.git").as_deref(),
+            Some("https://localhost/org/repo"),
+            "localhost is the one dotless host allowed"
+        );
+    }
+
+    #[test]
+    fn remote_web_url_rejects_unsupported_schemes() {
+        for url in [
+            "ftp://github.com/org/repo.git",
+            "rsync://github.com/org/repo.git",
+            "file:///srv/git/org/repo.git",
+            "codecommit::us-east-1://my-repo",
+        ] {
+            assert_eq!(remote_web_url(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn remote_web_url_needs_an_owner_and_a_repository() {
+        for url in [
+            "git@github.example.com:repo.git",
+            "https://github.example.com/repo.git",
+            "https://github.example.com/",
+            "https://github.example.com",
+        ] {
+            assert_eq!(remote_web_url(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn remote_web_url_keeps_deep_gitlab_subgroups() {
+        assert_eq!(
+            remote_web_url("https://gitlab.com/a/b/c/d.git").as_deref(),
+            Some("https://gitlab.com/a/b/c/d")
+        );
+    }
+
+    #[test]
+    fn remote_web_url_maps_every_azure_devops_shape() {
+        for (url, expected) in [
+            (
+                "https://org@dev.azure.com/org/project/_git/repo",
+                "https://dev.azure.com/org/project/_git/repo",
+            ),
+            (
+                "git@ssh.dev.azure.com:v3/org/project/repo",
+                "https://dev.azure.com/org/project/_git/repo",
+            ),
+            (
+                "git@vs-ssh.visualstudio.com:v3/org/project/repo",
+                "https://org.visualstudio.com/project/_git/repo",
+            ),
+            (
+                "https://org.visualstudio.com/project/_git/repo",
+                "https://org.visualstudio.com/project/_git/repo",
+            ),
+        ] {
+            assert_eq!(remote_web_url(url).as_deref(), Some(expected), "{url}");
+        }
+        assert_eq!(
+            remote_web_url("https://dev.azure.com/org/project/repo"),
+            None
+        );
+    }
+
+    #[test]
+    fn remote_web_url_maps_code_commit_over_https_and_ssh() {
+        let console =
+            "https://eu-west-1.console.aws.amazon.com/codesuite/codecommit/repositories/my-repo";
+        for url in [
+            "https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/my-repo",
+            "ssh://git-codecommit.eu-west-1.amazonaws.com/v1/repos/my-repo",
+        ] {
+            assert_eq!(remote_web_url(url).as_deref(), Some(console), "{url}");
+        }
+    }
+
+    #[test]
+    fn remote_web_pages_skip_an_origin_without_a_web_page() {
+        let remotes = [
+            remote("origin", "/srv/git/repo.git"),
+            remote("upstream", "https://github.com/org/repo.git"),
+        ];
+        let names: Vec<String> = remote_web_pages(&remotes)
+            .into_iter()
+            .map(|page| page.remote)
+            .collect();
+        assert_eq!(names, ["upstream"]);
+    }
+
+    #[test]
+    fn remote_web_pages_treat_host_case_as_the_same_page() {
+        let remotes = [
+            remote("origin", "git@GitHub.com:org/repo.git"),
+            remote("https", "https://github.com/org/repo"),
+        ];
+        assert_eq!(remote_web_pages(&remotes).len(), 1);
+    }
+
+    #[test]
+    fn remote_web_pages_keep_the_first_of_two_remotes_sharing_a_page() {
+        let remotes = [
+            remote("alpha", "https://github.com/org/repo.git"),
+            remote("beta", "git@github.com:org/repo.git"),
+        ];
+        let pages = remote_web_pages(&remotes);
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].remote, "alpha");
+    }
+
+    #[test]
+    fn display_address_keeps_the_port() {
+        let page = RemoteWebPage {
+            remote: "gitea".to_string(),
+            url: "http://localhost:3000/org/repo".to_string(),
+        };
+        assert_eq!(page.display_address(), "localhost:3000/org/repo");
+    }
+
+    #[test]
+    fn file_permalink_keeps_an_https_port() {
+        let remotes = [remote(
+            "origin",
+            "https://git.example.com:8443/org/repo.git",
+        )];
+        assert_eq!(
+            file_permalink(&remotes, "main", "a.txt").as_deref(),
+            Some("https://git.example.com:8443/org/repo/blob/main/a.txt")
+        );
+    }
+
+    #[test]
+    fn display_address_drops_the_scheme() {
+        let page = RemoteWebPage {
+            remote: "origin".to_string(),
+            url: "https://github.com/org/repo".to_string(),
+        };
+        assert_eq!(page.display_address(), "github.com/org/repo");
     }
 
     #[test]

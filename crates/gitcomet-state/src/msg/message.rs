@@ -31,7 +31,6 @@ pub enum RepoActionKind {
     CheckoutRemoteBranch,
     CheckoutCommit,
     CherryPickCommit,
-    RevertCommit,
     CreateBranch,
     CreateBranchAndCheckout,
     RenameBranch,
@@ -62,7 +61,6 @@ impl RepoActionKind {
         match self {
             Self::CheckoutBranch | Self::CheckoutRemoteBranch | Self::CheckoutCommit => "Checkout",
             Self::CherryPickCommit => "Cherry-pick",
-            Self::RevertCommit => "Revert",
             Self::CreateBranch => "Create branch",
             Self::CreateBranchAndCheckout => "Create branch and checkout",
             Self::RenameBranch => "Rename branch",
@@ -573,6 +571,9 @@ pub enum Msg {
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+        summary: String,
     },
     CreateBranch {
         repo_id: RepoId,
