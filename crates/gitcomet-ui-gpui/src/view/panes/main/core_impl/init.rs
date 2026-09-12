@@ -400,6 +400,7 @@ impl MainPaneView {
             diff_text_query_cache_generation: 0,
             diff_selection_anchor: None,
             diff_selection_range: None,
+            diff_focused_change_block: None,
             diff_text_selecting: false,
             diff_text_selection_owner: Default::default(),
             diff_text_anchor: None,

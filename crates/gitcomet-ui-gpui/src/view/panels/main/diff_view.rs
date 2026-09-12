@@ -1935,16 +1935,8 @@ impl MainPaneView {
 
             if !is_image_diff_view {
                 let nav_entries = self.diff_nav_entries();
-                let can_nav_prev = diff_navigation::diff_nav_prev_target(
-                    &nav_entries,
-                    self.diff_nav_prev_current_ix(),
-                )
-                .is_some();
-                let can_nav_next = diff_navigation::diff_nav_next_target(
-                    &nav_entries,
-                    self.diff_nav_next_current_ix(),
-                )
-                .is_some();
+                let can_nav_prev = self.diff_nav_prev_target_ix(&nav_entries).is_some();
+                let can_nav_next = self.diff_nav_next_target_ix(&nav_entries).is_some();
 
                 let prev_hunk_btn = components::Button::new("diff_prev_hunk", "")
                     .start_slot(svg_icon(
@@ -1960,11 +1952,7 @@ impl MainPaneView {
                     })
                     .gitcomet_tooltip(
                         theme,
-                        format!(
-                            "Previous change (F2 / Shift+F7 / {})",
-                            crate::view::shortcut_labels::alt_shortcut("Up")
-                        )
-                        .into(),
+                        crate::view::shortcut_labels::previous_change_tooltip().into(),
                     );
 
                 let next_hunk_btn = components::Button::new("diff_next_hunk", "")
@@ -1981,11 +1969,7 @@ impl MainPaneView {
                     })
                     .gitcomet_tooltip(
                         theme,
-                        format!(
-                            "Next change (F3 / F7 / {})",
-                            crate::view::shortcut_labels::alt_shortcut("Down")
-                        )
-                        .into(),
+                        crate::view::shortcut_labels::next_change_tooltip().into(),
                     );
 
                 let diff_inline_btn = components::Button::new("diff_inline", "Inline")
