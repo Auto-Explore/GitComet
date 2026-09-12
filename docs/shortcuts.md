@@ -134,8 +134,8 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Close search, clear selection, or close the current diff | `Escape` | `Escape` | Exact behavior depends on the current diff state. |
 | Previous file in the status list | `F1` | `F1` | Working tree and conflict-oriented diff flows. |
 | Next file in the status list | `F4` | `F4` | Working tree and conflict-oriented diff flows. |
-| Previous change | `F2`, `Shift-F7`, `Option-Up` | `F2`, `Shift-F7`, `Alt-Up` | Raw diff and conflict diff views. |
-| Next change | `F3`, `F7`, `Option-Down` | `F3`, `F7`, `Alt-Down` | Raw diff and conflict diff views. |
+| Previous change | `F2`, `Shift-F7`, `Option-Up` | `F2`, `Shift-F7`, `Alt-Up` | Moves one change block (a run of consecutive changed lines) at a time, landing on its first line, in Full, Collapsed, and whole-commit diffs alike. The conflict resolver moves by conflict instead. |
+| Next change | `F3`, `F7`, `Option-Down` | `F3`, `F7`, `Alt-Down` | Same unit as Previous change. With nothing selected, goes to the first change block. |
 | Switch to inline diff | `Option-I` | `Alt-I` | Raw file diff only. Conflict resolver keeps split layout. |
 | Enter or leave the file editor | `Option-E` | `Alt-E` | Not while a text field has focus. Escape also leaves the editor. |
 | Save the edited file | `Cmd-S` | `Ctrl-S` | Only while the editor's buffer has focus; outside it the same chord stages the file. |
@@ -173,3 +173,5 @@ These shortcuts apply in the standalone focused diff window opened for difftool-
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Close the window | `Cmd-W`, `Ctrl-W`, `Escape`, `Q` | `Ctrl-W`, `Escape`, `Q` | `Ctrl-W` remains accepted on macOS as an extra alias. |
+| Previous change | `F2`, `Shift-F7`, `Option-Up` | `F2`, `Shift-F7`, `Alt-Up` | One change block at a time, as in the main diff view. |
+| Next change | `F3`, `F7`, `Option-Down` | `F3`, `F7`, `Alt-Down` | One change block at a time, as in the main diff view. |

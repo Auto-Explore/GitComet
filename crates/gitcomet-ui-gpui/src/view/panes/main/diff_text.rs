@@ -99,6 +99,7 @@ impl MainPaneView {
     pub(in super::super::super) fn clear_diff_selection_state(&mut self) {
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
+        self.diff_focused_change_block = None;
         self.clear_diff_text_selection();
     }
 

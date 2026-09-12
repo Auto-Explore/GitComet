@@ -50,7 +50,7 @@ pub(super) fn dismiss_tooltips_on_mouse_down(cx: &mut App) {
     cx.set_global(TooltipDismissEpoch(next));
 }
 
-pub(super) trait GitCometTooltipExt: gpui::StatefulInteractiveElement + Sized {
+pub(crate) trait GitCometTooltipExt: gpui::StatefulInteractiveElement + Sized {
     fn gitcomet_tooltip(self, theme: AppTheme, text: SharedString) -> Self {
         self.tooltip(move |_window, cx| {
             let epoch = current_tooltip_dismiss_epoch(cx);

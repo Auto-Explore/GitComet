@@ -2882,6 +2882,86 @@ pub(in crate::view) struct CollapsedDiffProjectionIdentity {
     pub(in crate::view) file_content_signature: Option<u64>,
 }
 
+/// The `ensure_diff_visible_indices` cache key: changes whenever the visible
+/// rows are laid out afresh.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffVisibleLayoutKey {
+    pub(in crate::view) len: usize,
+    pub(in crate::view) view: DiffViewMode,
+    pub(in crate::view) is_file_view: bool,
+    pub(in crate::view) projection_rev: u64,
+}
+
+/// Which sides of a diff a row, or a whole block, changes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct DiffChangeSides {
+    pub(in crate::view) removed: bool,
+    pub(in crate::view) added: bool,
+}
+
+impl DiffChangeSides {
+    pub(in crate::view) fn union(self, other: Self) -> Self {
+        Self {
+            removed: self.removed || other.removed,
+            added: self.added || other.added,
+        }
+    }
+}
+
+/// The change block F2/F3 last landed on, for the accent bar and outline
+/// that mark it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffFocusedChangeBlock {
+    /// Visual row navigation selected; the marks hide once the selection moves.
+    pub(in crate::view) anchor: usize,
+    /// Source-visible rows, so word-wrap continuations are covered too.
+    pub(in crate::view) rows: std::ops::Range<usize>,
+    /// Split views outline the old column only if the block removes something
+    /// and the new column only if it adds something.
+    pub(in crate::view) sides: DiffChangeSides,
+    pub(in crate::view) layout: DiffVisibleLayoutKey,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum DiffChangeSide {
+    Removed,
+    Added,
+}
+
+/// How one visual row paints its part of the focused block's marks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct FocusedChangeBlockRow {
+    /// First and last visual rows close the outline.
+    pub(in crate::view) top: bool,
+    pub(in crate::view) bottom: bool,
+    /// What this row itself changes; inline rows outline in their own colour.
+    pub(in crate::view) row_sides: DiffChangeSides,
+    pub(in crate::view) block_sides: DiffChangeSides,
+}
+
+impl FocusedChangeBlockRow {
+    /// Inline rows outline in their own colour; a `\ No newline` marker row,
+    /// which changes nothing itself, borrows the block's.
+    pub(in crate::view) fn inline_outline(self) -> DiffChangeSide {
+        if self.row_sides.removed {
+            DiffChangeSide::Removed
+        } else if self.row_sides.added || !self.block_sides.removed {
+            DiffChangeSide::Added
+        } else {
+            DiffChangeSide::Removed
+        }
+    }
+
+    /// A split column is outlined only if the block changes that side.
+    pub(in crate::view) fn column_outline(self, old_side: bool) -> Option<DiffChangeSide> {
+        if old_side {
+            self.block_sides.removed.then_some(DiffChangeSide::Removed)
+        } else {
+            self.block_sides.added.then_some(DiffChangeSide::Added)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum CollapsedDiffVisibleRow {
     HunkHeader {
@@ -3179,6 +3259,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_text_query_cache_generation: u64,
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
+    pub(in crate::view) diff_focused_change_block: Option<DiffFocusedChangeBlock>,
     pub(in crate::view) diff_text_selecting: bool,
     pub(in crate::view) diff_text_anchor: Option<DiffTextPos>,
     pub(in crate::view) diff_text_head: Option<DiffTextPos>,

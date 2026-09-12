@@ -1220,6 +1220,7 @@ impl MainPaneView {
         self.diff_whitespace_mode = next;
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
+        self.diff_focused_change_block = None;
         self.rebuild_patch_visual_line_kinds_from_current_diff();
         self.diff_word_highlights.clear();
         self.diff_word_highlights_inflight = None;

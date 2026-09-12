@@ -131,7 +131,7 @@ pub(super) fn shift_resolved_output_marker(
 }
 
 impl MainPaneView {
-    pub(super) fn diff_source_visible_len(&self) -> usize {
+    pub(in crate::view) fn diff_source_visible_len(&self) -> usize {
         // A file preview has no diff rows: its source rows are the file's
         // lines, and they wrap through the same projection.
         if self.is_file_preview_active() {

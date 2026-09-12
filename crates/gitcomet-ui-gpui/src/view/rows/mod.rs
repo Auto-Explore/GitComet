@@ -1135,7 +1135,9 @@ pub(in crate::view) use self::diff_canvas::{
 };
 #[cfg(test)]
 pub(in crate::view) use self::diff_canvas::{
-    DiffPaintRecord, clear_diff_paint_log_for_tests, diff_paint_log_for_tests,
+    DiffPaintRecord, FocusedChangeBlockPaint, clear_diff_paint_log_for_tests,
+    clear_focused_change_block_paint_log_for_tests, diff_paint_log_for_tests,
+    focused_change_block_paint_log_for_tests,
 };
 
 #[cfg(test)]
