@@ -2141,13 +2141,19 @@ async fn the_editor_renders_nunjucks_with_the_jinja_grammar(cx: &mut gpui::TestA
         gitcomet_state::model::RepoId(964),
         "file_editor_nunjucks_highlights",
         "index.njk",
+        // Front matter (yaml), markup (html) and a script body (javascript,
+        // depth 2) all on one fixture, since each is its own layer.
         concat!(
+            "---\n",
+            "title: Home\n",
+            "---\n",
             "{# navigation #}\n",
             "<nav class=\"menu\">\n",
             "  {% for item in items %}\n",
             "    <a href=\"{{ item.url }}\">{{ item.label | upper }}</a>\n",
             "  {% endfor %}\n",
             "</nav>\n",
+            "<script>\nconst open = false;\n</script>\n",
         ),
     )
     .await;

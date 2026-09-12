@@ -86,6 +86,10 @@
           "named": true
         },
         {
+          "type": "class_as_reference",
+          "named": true
+        },
+        {
           "type": "conjunct_pattern",
           "named": true
         },
@@ -4912,10 +4916,6 @@
       "required": true,
       "types": [
         {
-          "type": "access_modifier",
-          "named": true
-        },
-        {
           "type": "anon_record_type",
           "named": true
         },
@@ -6369,23 +6369,11 @@
           "named": true
         },
         {
-          "type": "byref_type",
-          "named": true
-        },
-        {
-          "type": "compound_type",
-          "named": true
-        },
-        {
           "type": "constrained_type",
           "named": true
         },
         {
           "type": "flexible_type",
-          "named": true
-        },
-        {
-          "type": "function_type",
           "named": true
         },
         {

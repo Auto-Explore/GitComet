@@ -79,6 +79,7 @@ const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
 const JINJA_HIGHLIGHTS_QUERY: &str = include_str!("queries/jinja_highlights.scm");
 const JINJA_INJECTIONS_QUERY: &str = include_str!("queries/jinja_injections.scm");
+const JINJA_TEXT_INJECTIONS_QUERY: &str = include_str!("queries/jinja_text_injections.scm");
 const VUE_HIGHLIGHTS_QUERY: &str = include_str!("queries/vue_highlights.scm");
 const VUE_INJECTIONS_QUERY: &str = include_str!("queries/vue_injections.scm");
 const MARKDOWN_HIGHLIGHTS_QUERY: &str = tree_sitter_md::HIGHLIGHT_QUERY_BLOCK;
@@ -120,27 +121,37 @@ const SVELTE_INJECTIONS_QUERY: &str = include_str!("queries/svelte_injections.sc
 const TS_MAX_INJECTION_DEPTH: usize = 2;
 const TS_INJECTION_CACHE_MAX_ENTRIES: usize = 32;
 
-/// Ceilings for one `(#set! injection.combined)` layer in the *prepared* path.
+/// Ceilings for the *windowed fallback* of a `(#set! injection.combined)` layer in
+/// the prepared path (`apply_combined_injection_tokens`).
+///
+/// The normal path parses each combined group once per document, with the root
+/// tree, and stores it on `PreparedSyntaxTreeState` -- so its cost is the root
+/// parse's cost class and needs no ceiling beyond the allocation guard below. The
+/// fallback re-parses per 64-row window, clipped by
+/// [`combined_injection_clip_region`] *before* these are applied (a template's
+/// `(text)` nodes are document-sized, so unclipped they always trip the byte
+/// ceiling). It also handles nested scripts spanning template gaps; those trees
+/// are not retained in the single-range injection cache.
 ///
 /// Hard limits rather than a time budget: the prepared path cannot repair a layer
 /// dropped by a `ControlFlow::Break` -- that mechanism exists only in `live.rs` --
 /// so a budgeted layer would appear and vanish with scroll timing.
-///
-/// Both are measured *after* the ranges are clipped by
-/// [`combined_injection_clip_region`], and that ordering is load-bearing. A
-/// template grammar hands out one `(text)` node per gap between tags, so an
-/// unclipped node is document-sized: a 1900-line `.njk` is a single 138KB range,
-/// which tripped the byte ceiling for every window and dropped HTML highlighting
-/// from the whole file.
-///
-/// The byte ceiling is the one that bounds cost, since a combined parse lexes only
-/// included bytes. The range ceiling is only an allocation guard on the
-/// `Vec<tree_sitter::Range>`, sized so template density cannot reach it -- at 512 an
-/// ordinary 8-column table row (~950 ranges in a clipped window) tripped it.
-///
-/// `live.rs` deliberately has no equivalent; see `parse_injection_layers`.
 const TS_COMBINED_INJECTION_MAX_RANGES: usize = 16_384;
 const TS_COMBINED_INJECTION_MAX_BYTES: usize = 128 * 1024;
+
+/// Allocation guard on a whole-document combined layer's `Vec<tree_sitter::Range>`
+/// (~3 MB worst case). Past it the windowed fallback above takes over.
+const TS_COMBINED_LAYER_MAX_RANGES: usize = 65_536;
+
+/// What a click may spend building combined layers and recovering evicted
+/// nested injection trees, shared across the entire injection chain.
+///
+/// Normally nothing: a row has to be drawn before it can be clicked, and drawing
+/// builds them. The cell is empty only when the root parse used up the whole
+/// foreground budget and the chunk build has not caught up, and a click is still
+/// an input event, so it gets the same 50 ms a cold root parse gets in
+/// `MainPaneView::file_diff_pair_syntax_document`.
+const TS_CLICK_INJECTION_BUDGET: Duration = Duration::from_millis(50);
 
 /// Context on each side of the rendered window that a combined injection is still
 /// parsed with.
@@ -198,6 +209,16 @@ thread_local! {
     static TS_INCREMENTAL_FALLBACK_COUNT: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static TS_DOCUMENT_HASH_COUNT: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static TS_COMBINED_LAYER_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static TS_COMBINED_LAYER_PARSED_BYTES: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static TS_INJECTION_TREE_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+    /// Makes the combined-layer deadline already expired on a budgeted prepare,
+    /// isolating "root fits, layer does not" from parse timing.
+    #[cfg(test)]
+    static TS_FORCE_COMBINED_LAYER_DEADLINE_MISS: Cell<bool> = const { Cell::new(false) };
 }
 
 fn invalidate_ts_parser_language_fast_path() {
@@ -510,8 +531,60 @@ struct PreparedSyntaxTreeState {
     source_hash: u64,
     source_version: u64,
     tree: tree_sitter::Tree,
+    /// Whole-document combined injection layers, parsed with `tree` and shared
+    /// across the chunk workers. `None` inside = over the range guard, so chunks
+    /// use the windowed fallback.
+    combined_layers: Arc<OnceLock<Option<Vec<PreparedCombinedLayer>>>>,
     #[cfg(test)]
     parse_mode: TreesitterParseReuseMode,
+}
+
+impl PreparedSyntaxTreeState {
+    /// Backstop for states built without the eager parse (test fixtures): an
+    /// unbudgeted build on first use.
+    fn combined_layers(&self) -> Option<&[PreparedCombinedLayer]> {
+        self.combined_layers
+            .get_or_init(|| {
+                let spec = tree_sitter_highlight_spec(self.language)?;
+                build_prepared_combined_layers(
+                    spec,
+                    &self.tree,
+                    self.text.as_bytes(),
+                    &self.line_starts,
+                    self.source_hash,
+                    None,
+                    TS_COMBINED_LAYER_MAX_RANGES,
+                )
+                .flatten()
+            })
+            .as_deref()
+    }
+
+    /// Layers for an interactive lookup: the built answer if there is one, else a
+    /// build capped at `deadline`.
+    ///
+    /// Deliberately not `get_or_init`. The inner `None` means "declined, use the
+    /// windowed fallback", a permanent decision the chunk builds also read, so a
+    /// slow click must not record one -- it would downgrade the whole document's
+    /// rendering. On a miss the cell stays unset, this lookup falls through to
+    /// the host tree, and the next chunk build fills it off the input path.
+    fn combined_layers_within(&self, deadline: Instant) -> Option<&[PreparedCombinedLayer]> {
+        if let Some(built) = self.combined_layers.get() {
+            return built.as_deref();
+        }
+        let spec = tree_sitter_highlight_spec(self.language)?;
+        let built = build_prepared_combined_layers(
+            spec,
+            &self.tree,
+            self.text.as_bytes(),
+            &self.line_starts,
+            self.source_hash,
+            Some(deadline),
+            TS_COMBINED_LAYER_MAX_RANGES,
+        )?;
+        let _ = self.combined_layers.set(built);
+        self.combined_layers.get()?.as_deref()
+    }
 }
 
 #[derive(Clone, Debug)]

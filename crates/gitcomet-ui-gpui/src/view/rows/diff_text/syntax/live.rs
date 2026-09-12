@@ -172,7 +172,7 @@ fn parse_masked_tree(
 /// below never surfaces it while it is stale.
 ///
 /// The capture source is a closure rather than a concrete iterator so that
-/// depth-1 injections can be added by merging several layers' cursors into one
+/// injected layers can be added by merging several layers' cursors into one
 /// ordered stream, without touching this function.
 fn sweep_runs(
     mut next_capture: impl FnMut() -> Option<(Range<usize>, SyntaxTokenKind)>,
@@ -341,6 +341,8 @@ pub(in crate::view) struct LiveSyntaxLayer {
     spec: &'static TreesitterHighlightSpec,
     tree: tree_sitter::Tree,
     ranges: Vec<Range<usize>>,
+    /// 1 for a layer injected by the root, 2 for one injected by a layer.
+    depth: u8,
 }
 
 impl LiveSyntaxLayer {
@@ -356,10 +358,9 @@ impl LiveSyntaxLayer {
     }
 }
 
-/// Depth-1 only. An injection inside an injection is not pursued: it is rare,
-/// it multiplies parse cost on the keystroke path, and the read-only diff panes
-/// draw the same line at the same depth (`TS_MAX_INJECTION_DEPTH`).
-/// Parse the depth-1 injected grammars found in `tree`.
+/// Parse the injected grammars found in `tree`, to `TS_MAX_INJECTION_DEPTH` so
+/// the editor agrees with the diff panes: a template's HTML is depth 1, and its
+/// `<script>` bodies are depth 2.
 ///
 /// `budget` is a ceiling for *all* layers together, not per layer. Handing each
 /// one its own copy let a document with N injections spend N × budget on the
@@ -379,11 +380,66 @@ fn parse_injection_layers(
     mask: &[Range<usize>],
     budget: Option<Duration>,
 ) -> (Vec<LiveSyntaxLayer>, bool) {
+    // One deadline for the whole set, so the cost of injections is bounded by
+    // the budget rather than by how many there are.
+    let deadline = budget.map(|budget| Instant::now() + budget);
+    let mut layers = Vec::new();
+    let targets = collect_injection_targets(rope, spec, tree, 0..rope.len());
+    let mut dropped = parse_layers_for_targets(rope, mask, targets, None, 1, deadline, &mut layers);
+
+    // Each layer's own injections, clipped to the layer's ranges: a raw_text
+    // spanning a `{% if %}` gap must not hand the template bytes to JSON.
+    let mut parents = 0..layers.len();
+    for depth in 2..=TS_MAX_INJECTION_DEPTH as u8 {
+        let mut nested = Vec::new();
+        for parent in &layers[parents.clone()] {
+            if parent.spec.injection_query.is_none() {
+                continue;
+            }
+            let targets = collect_injection_targets(rope, parent.spec, &parent.tree, parent.hull());
+            dropped |= parse_layers_for_targets(
+                rope,
+                mask,
+                targets,
+                Some(&parent.ranges),
+                depth,
+                deadline,
+                &mut nested,
+            );
+        }
+        if nested.is_empty() {
+            break;
+        }
+        parents = layers.len()..layers.len() + nested.len();
+        layers.extend(nested);
+    }
+    (layers, dropped)
+}
+
+/// What one tree's injection query asks for: single layers, one per match, and
+/// combined groups, one per pattern. A truncated query drops the groups
+/// entirely — losing one range out of a combined set changes the document the
+/// injected grammar sees, so half a group is worse than none.
+struct InjectionTargets {
+    singles: Vec<(DiffSyntaxLanguage, Range<usize>)>,
+    groups: Vec<(DiffSyntaxLanguage, usize, Vec<Range<usize>>)>,
+}
+
+fn collect_injection_targets(
+    rope: &Rope,
+    spec: &TreesitterHighlightSpec,
+    tree: &tree_sitter::Tree,
+    scope: Range<usize>,
+) -> InjectionTargets {
+    let mut targets = InjectionTargets {
+        singles: Vec::new(),
+        groups: Vec::new(),
+    };
     let Some(query) = spec.injection_query.as_ref() else {
-        return (Vec::new(), false);
+        return targets;
     };
     let Some(content_ix) = query.capture_index_for_name("injection.content") else {
-        return (Vec::new(), false);
+        return targets;
     };
     let language_ix = query
         .capture_index_for_name("injection.language")
@@ -394,7 +450,6 @@ fn parse_injection_layers(
 
     // Collect first, parse second: the query cursor is a thread-local, so
     // parsing a layer while still holding it would re-enter the borrow.
-    let mut found: Vec<(DiffSyntaxLanguage, Range<usize>)> = Vec::new();
     let mut combined_ranges: FxHashMap<(DiffSyntaxLanguage, usize), Vec<Range<usize>>> =
         FxHashMap::default();
     let mut truncated = false;
@@ -402,7 +457,7 @@ fn parse_injection_layers(
         TS_CURSOR.with(|cursor| {
             let mut cursor = cursor.borrow_mut();
             cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
-            cursor.set_byte_range(0..rope.len());
+            cursor.set_byte_range(scope);
             cursor.set_containing_byte_range(0..usize::MAX);
             let mut matches = cursor.matches(query, tree.root_node(), RopeTextProvider(rope));
             tree_sitter::StreamingIterator::advance(&mut matches);
@@ -421,7 +476,7 @@ fn parse_injection_layers(
                                     .or_default()
                                     .push(range);
                             } else {
-                                found.push((language, range));
+                                targets.singles.push((language, range));
                             }
                         }
                     }
@@ -438,67 +493,76 @@ fn parse_injection_layers(
     // duplicates, so keying the sort on the range alone lets a different
     // language at the same span sit between two identical entries and defeat it
     // — leaving two layers for one region, parsed twice and merged twice.
-    found.sort_by(|(a_language, a_range), (b_language, b_range)| {
-        (a_range.start, a_range.end, *a_language).cmp(&(b_range.start, b_range.end, *b_language))
-    });
-    found.dedup();
+    targets
+        .singles
+        .sort_by(|(a_language, a_range), (b_language, b_range)| {
+            (a_range.start, a_range.end, *a_language).cmp(&(
+                b_range.start,
+                b_range.end,
+                *b_language,
+            ))
+        });
+    targets.singles.dedup();
 
-    // One deadline for the whole set, so the cost of injections is bounded by
-    // the budget rather than by how many there are.
-    let deadline = budget.map(|budget| Instant::now() + budget);
-    let mut layers = Vec::with_capacity(found.len());
+    // No TS_COMBINED_INJECTION_MAX_* ceiling here, deliberately, and do not add
+    // one. Those are the prepared path's windowed fallback, measured against a
+    // 64-row window; this path is not windowed, so they capped on document size,
+    // costing a 600-line `.njk` all of its HTML while the diff pane still
+    // highlighted it. `deadline` already bounds this parse, and a layer it drops
+    // sets `dropped` so the off-thread reparse restores it.
+    if has_combined && !truncated {
+        targets.groups = combined_injection_groups_in_apply_order(combined_ranges);
+    }
+    targets
+}
+
+/// Parses every target into `out`, at `depth`. With `clip_to` (the parent
+/// layer's ranges) each target is cut down to the bytes the parent actually
+/// owns, and skipped if nothing is left.
+///
+/// A layer that fails to parse is dropped: only its own span loses
+/// highlighting, the document around it is untouched. The return carries that
+/// up so it can be repaired off-thread.
+fn parse_layers_for_targets(
+    rope: &Rope,
+    mask: &[Range<usize>],
+    targets: InjectionTargets,
+    clip_to: Option<&[Range<usize>]>,
+    depth: u8,
+    deadline: Option<Instant>,
+    out: &mut Vec<LiveSyntaxLayer>,
+) -> bool {
     let mut dropped = false;
-    for (language, range) in found {
+    let singles = targets
+        .singles
+        .into_iter()
+        .map(|(language, range)| (language, vec![range]));
+    let groups = targets
+        .groups
+        .into_iter()
+        .map(|(language, _, ranges)| (language, ranges));
+    for (language, ranges) in singles.chain(groups) {
         let Some(layer_spec) = tree_sitter_highlight_spec(language) else {
             continue;
         };
-        // A layer that fails to parse is dropped: only its own span loses
-        // highlighting, the document around it is untouched. `dropped` carries
-        // that up so it can be repaired off-thread.
-        match parse_included_range(
-            layer_spec,
-            rope,
-            mask,
-            std::slice::from_ref(&range),
-            deadline,
-        ) {
-            Some(tree) => layers.push(LiveSyntaxLayer {
+        let ranges = match clip_to {
+            Some(parent) => intersect_sorted_ranges(&ranges, parent),
+            None => ranges,
+        };
+        if ranges.is_empty() {
+            continue;
+        }
+        match parse_included_range(layer_spec, rope, mask, &ranges, deadline) {
+            Some(tree) => out.push(LiveSyntaxLayer {
                 spec: layer_spec,
                 tree,
-                ranges: vec![range],
+                ranges,
+                depth,
             }),
             None => dropped = true,
         }
     }
-
-    // One layer per combined pattern, covering every match of it. A truncated
-    // query means tree-sitter silently discarded matches; dropping a range out of
-    // a combined set changes the document the injected grammar sees, so the whole
-    // group is abandoned to the host grammar rather than parsed half-complete.
-    if has_combined && !truncated {
-        let groups = combined_injection_groups_in_apply_order(combined_ranges);
-        // No TS_COMBINED_INJECTION_MAX_* ceiling here, deliberately, and do not add
-        // one. Those are the prepared path's stand-in for a budget and are measured
-        // against a 64-row window; this path is not windowed -- `set_byte_range`
-        // above is the whole rope -- so here they capped on document size, costing a
-        // 600-line `.njk` all of its HTML while the diff pane still highlighted it.
-        // `deadline` already bounds this parse, and a layer it drops sets `dropped`
-        // so the off-thread reparse restores it.
-        for (language, _, ranges) in groups {
-            let Some(layer_spec) = tree_sitter_highlight_spec(language) else {
-                continue;
-            };
-            match parse_included_range(layer_spec, rope, mask, &ranges, deadline) {
-                Some(tree) => layers.push(LiveSyntaxLayer {
-                    spec: layer_spec,
-                    tree,
-                    ranges,
-                }),
-                None => dropped = true,
-            }
-        }
-    }
-    (layers, dropped)
+    dropped
 }
 
 /// Resolve the language for an injection match, reading capture text from the
@@ -620,7 +684,7 @@ pub(in crate::view) struct LiveSyntaxDocument {
     rope: Rope,
     mask: Arc<[Range<usize>]>,
     tree: tree_sitter::Tree,
-    /// Depth-1 injected grammars, rebuilt whenever the root tree is reparsed.
+    /// Injected grammars, depth 1 then 2, rebuilt whenever the root tree is reparsed.
     injections: Vec<LiveSyntaxLayer>,
     stale: bool,
     version: u64,
@@ -850,6 +914,7 @@ impl LiveSyntaxDocument {
                     spec: layer.spec,
                     tree: layer.tree.clone(),
                     ranges: layer.ranges.clone(),
+                    depth: layer.depth,
                 })
                 .collect(),
             palette: syntax_highlight_palette(theme),
@@ -963,7 +1028,7 @@ impl LiveSyntaxSnapshot {
                         &inner.rope,
                         pass.clone(),
                         text_len,
-                        1,
+                        layer.depth,
                         &layer.ranges,
                         &mut hits,
                     );
@@ -1055,10 +1120,11 @@ impl LiveSyntaxSnapshot {
         let source_ranges_equal = |left: Range<usize>, right: Range<usize>| {
             inner.rope.text_for_range(left) == inner.rope.text_for_range(right)
         };
-        // Injected grammars first: a brace inside an interpolated region is the
-        // inner grammar's. Layer trees are parsed with `included_ranges`, so
-        // their node offsets are already document coordinates.
-        for layer in &inner.injections {
+        // Injected grammars first, deepest first (layers are appended by depth):
+        // a brace inside an interpolated region is the inner grammar's. Layer
+        // trees are parsed with `included_ranges`, so their node offsets are
+        // already document coordinates.
+        for layer in inner.injections.iter().rev() {
             // Membership, not the hull: a caret sitting in a `{% ... %}` gap between
             // two ranges of a combined layer is host-grammar territory, and the
             // combined tree has no nodes there to answer with.
@@ -1574,7 +1640,7 @@ mod tests {
     /// [`super::prepared`] is driven here with the root tree alone, while the
     /// live snapshot merges its injected layers, so an injected region is a
     /// known divergence rather than a regression.
-    fn assert_engines_agree(
+    pub(super) fn assert_engines_agree(
         language: DiffSyntaxLanguage,
         text: &str,
         probes: &[(&str, SyntaxTokenKind)],
@@ -2250,7 +2316,7 @@ mod tests {
 /// not left as opaque HTML raw text.
 ///
 /// This is what the editable resolved output was missing relative to the
-/// read-only diff panes above it, which have had depth-1 injections all along.
+/// read-only diff panes above it, which have had injections all along.
 #[cfg(test)]
 mod injection_tests {
     use super::*;
@@ -2544,6 +2610,134 @@ mod injection_tests {
             None,
         )
         .expect("jinja live document should build")
+    }
+
+    /// The template's HTML is depth 1, so its script bodies are depth 2 -- which
+    /// the diff panes have always coloured and the editor used to leave bare.
+    #[test]
+    fn script_bodies_inside_a_template_are_highlighted_as_javascript() {
+        let text = "{% block body %}\n<script>\nconst answer = 42;\n</script>\n{% endblock %}\n";
+        let document = jinja_document(text);
+        assert!(
+            document.injections.iter().any(|layer| layer.depth == 2),
+            "the script body should be a depth-2 layer under the HTML layer"
+        );
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+        let highlights = snapshot.highlights_for_byte_range(0..text.len());
+        assert!(
+            !styles_for(&highlights, text, "const").is_empty(),
+            "`const` inside a template's <script> should carry the JavaScript style"
+        );
+    }
+
+    /// An ld+json body that spans a `{% if %}` is one `raw_text` to HTML, but the
+    /// nested JSON layer must only see the bytes the HTML layer itself owns.
+    #[test]
+    fn nested_layer_ranges_exclude_the_template_gaps() {
+        let text = "<script type=\"application/ld+json\">\n{\"a\": 1{% if x %}, \"b\": 2{% endif %}}\n</script>\n";
+        let document = jinja_document(text);
+        let gap = text.find("{% if x %}").expect("gap");
+        let gap = gap..gap + "{% if x %}".len();
+        let json = document
+            .injections
+            .iter()
+            .find(|layer| layer.depth == 2)
+            .expect("the JSON body should be a depth-2 layer");
+        assert!(
+            json.ranges.len() >= 2,
+            "the JSON layer must be split around the template tag: {:?}",
+            json.ranges
+        );
+        assert!(
+            json.ranges
+                .iter()
+                .all(|range| range.end <= gap.start || range.start >= gap.end),
+            "no JSON range may cover the `{{% if %}}` bytes: {:?}",
+            json.ranges
+        );
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+        let highlights = snapshot.highlights_for_byte_range(0..text.len());
+        let palette = syntax_highlight_palette(AppTheme::gitcomet_dark());
+        let keyword = palette
+            .style(SyntaxTokenKind::KeywordControl)
+            .expect("keyword style");
+        assert!(
+            styles_for(&highlights, text, "if x").contains(&&keyword),
+            "the template's `if` keeps the Jinja keyword style through the nested layer"
+        );
+    }
+
+    /// Both engines stop at `TS_MAX_INJECTION_DEPTH`: a JSDoc comment inside a
+    /// script inside a template would be depth 3.
+    #[test]
+    fn nested_layers_stop_at_the_shared_depth_cap() {
+        let text = "{% block body %}\n<script>\n/** @param {number} n */\nfunction f(n) {}\n</script>\n{% endblock %}\n";
+        let document = jinja_document(text);
+        assert!(
+            document.injections.iter().any(|layer| layer.depth == 2),
+            "the script body is reached"
+        );
+        assert!(
+            document
+                .injections
+                .iter()
+                .all(|layer| usize::from(layer.depth) <= TS_MAX_INJECTION_DEPTH),
+            "no layer may exceed the cap"
+        );
+        assert!(
+            !document.injections.iter().any(|layer| std::ptr::eq(
+                layer.spec,
+                tree_sitter_highlight_spec(DiffSyntaxLanguage::Jsdoc).expect("jsdoc spec")
+            )),
+            "a depth-3 JSDoc layer must not be parsed"
+        );
+    }
+
+    /// Nested layers ride the same deadline as the first level, and a starved
+    /// one is reported so the background reparse restores it.
+    #[test]
+    fn nested_layers_the_budget_could_not_finish_are_reported_as_dropped() {
+        let body = (0..4_000)
+            .map(|ix| format!("const answer{ix} = {ix} + compute{ix}(1, 2, 3);"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let text = format!("{{% block body %}}\n<script>\n{body}\n</script>\n{{% endblock %}}\n");
+        let document = jinja_document(&text);
+        let rope = Rope::from_str(&text);
+
+        let (complete, dropped) =
+            parse_injection_layers(&rope, document.spec, &document.tree, &[], None);
+        assert!(!dropped, "nothing is dropped without a deadline");
+        assert!(
+            complete.iter().any(|layer| layer.depth == 2),
+            "an unbudgeted pass reaches the script body"
+        );
+
+        let (_, dropped) = parse_injection_layers(
+            &rope,
+            document.spec,
+            &document.tree,
+            &[],
+            Some(Duration::ZERO),
+        );
+        assert!(dropped, "a starved nested layer must be reported");
+    }
+
+    #[test]
+    fn the_two_engines_agree_on_a_template_with_a_script_body() {
+        let mut text = String::from("{% block body %}\n<ul class=\"list\">\n");
+        for ix in 0..40 {
+            text.push_str(&format!("  <li>{{{{ item{ix} | upper }}}}</li>\n"));
+        }
+        text.push_str("</ul>\n<script>\nconst answer = 42;\n</script>\n{% endblock %}\n");
+        super::tests::assert_engines_agree(
+            DiffSyntaxLanguage::Jinja,
+            &text,
+            &[
+                ("ul", SyntaxTokenKind::Tag),
+                ("const", SyntaxTokenKind::Keyword),
+            ],
+        );
     }
 
     fn dense_jinja_table(rows: usize, cells: usize) -> String {

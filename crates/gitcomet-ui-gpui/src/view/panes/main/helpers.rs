@@ -3352,6 +3352,11 @@ pub(crate) struct MainPaneView {
     /// The value identifies the syntax generation that owns the marker, so a
     /// superseded worker cannot remove a newer generation's marker.
     pub(in crate::view) file_diff_click_syntax_inflight: FxHashMap<DiffTextRegion, u64>,
+    /// Test-only switch for the eager source-backed prepare. Off, a source-backed
+    /// side gets a document only when clicked, which is what the click-path tests
+    /// are there to cover and what they would otherwise stop exercising.
+    #[cfg(test)]
+    pub(in crate::view) eager_source_backed_syntax_prepare: bool,
     /// Test-only mutation point after a click worker has parsed but before its
     /// result is returned to the UI thread.
     #[cfg(test)]

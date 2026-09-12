@@ -430,6 +430,10 @@
         {
           "type": "access_modifier",
           "named": true
+        },
+        {
+          "type": "class_as_reference",
+          "named": true
         }
       ]
     }
@@ -3199,10 +3203,6 @@
           "named": true
         },
         {
-          "type": "identifier",
-          "named": true
-        },
-        {
           "type": "interface_implementation",
           "named": true
         }
@@ -3659,10 +3659,6 @@
       "types": [
         {
           "type": "_type",
-          "named": true
-        },
-        {
-          "type": "access_modifier",
           "named": true
         },
         {
@@ -4713,11 +4709,51 @@
       "required": true,
       "types": [
         {
-          "type": "_type",
+          "type": "anon_record_type",
+          "named": true
+        },
+        {
+          "type": "constrained_type",
+          "named": true
+        },
+        {
+          "type": "flexible_type",
+          "named": true
+        },
+        {
+          "type": "generic_type",
           "named": true
         },
         {
           "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "list_type",
+          "named": true
+        },
+        {
+          "type": "paren_type",
+          "named": true
+        },
+        {
+          "type": "postfix_type",
+          "named": true
+        },
+        {
+          "type": "simple_type",
+          "named": true
+        },
+        {
+          "type": "static_type",
+          "named": true
+        },
+        {
+          "type": "struct_type",
+          "named": true
+        },
+        {
+          "type": "type_argument",
           "named": true
         }
       ]

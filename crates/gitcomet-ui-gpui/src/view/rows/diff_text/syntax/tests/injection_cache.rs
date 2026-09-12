@@ -360,7 +360,7 @@ fn injection_cache_lru_eviction_preserves_recent_entries() {
             cache.borrow_mut().insert(
                 key,
                 CachedInjection {
-                    all_line_tokens: vec![],
+                    all_line_tokens: Some(vec![]),
                     injection_line_starts: vec![],
                     injection_start_line_ix: 0,
                     tree: empty_injection_tree(),
@@ -406,7 +406,7 @@ fn injection_cache_lru_eviction_preserves_recent_entries() {
         cache.insert(
             overflow_key,
             CachedInjection {
-                all_line_tokens: vec![],
+                all_line_tokens: Some(vec![]),
                 injection_line_starts: vec![],
                 injection_start_line_ix: 0,
                 tree: empty_injection_tree(),

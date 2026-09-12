@@ -7,6 +7,12 @@
 # markers at column 0. The corpus sample that documents that rule broke on the
 # sentence describing it and parsed the next fifty lines as code.
 #
+# `src/scanner.c` is upstream's master at ad907a6 ("fix heredoc serialization
+# buffer overflows", unreleased). The 0.23.1 scanner stored a heredoc word's
+# length in one byte, so a word over 255 bytes failed its own
+# `assert(size == length)` on deserialize and aborted the app -- asserts are live
+# here, because nothing defines NDEBUG.
+#
 # `src/parser.c` is 15 MB of generated tables, which is what this grammar costs;
 # git stores it at roughly 0.5 MB compressed. It is regenerated with
 # tree-sitter-cli 0.26.13 (ABI 15) and the `tree_sitter/` headers come from

@@ -1,0 +1,42 @@
+# Vendored from https://github.com/bennypowers/tree-sitter-jinja-dialects
+# at v0.1.1 (MIT, see LICENSE), which is also the newest crates.io release.
+#
+# Vendored for one grammar change: a `front_matter` external token (grammar.js,
+# src/scanner.c). Eleventy `.njk` files open with a `---` YAML block, and
+# upstream lexes it into the first `text` node, where no query can reach it to
+# inject YAML. Parser regenerated with tree-sitter-cli 0.26.5, which reproduces
+# upstream's automaton exactly (baseline STATE_COUNT 640 / SYMBOL_COUNT 175 /
+# TOKEN_COUNT 108 before the change; see the counts in src/parser.c after).
+#
+# Same shape as every other vendored grammar here (vendor/README.md):
+# `bindings/rust/lib.rs` is upstream verbatim, `src/` too except that its
+# `tree_sitter/` headers come from vendor/tree-sitter-headers, `build.rs` is a
+# one-line call into vendor/tree-sitter-build, and `queries/` is not vendored
+# because GitComet keeps its own in
+# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/. The package name is
+# upstream's so `tree_sitter_jinja_dialects::LANGUAGE` call sites are unchanged.
+[package]
+name = "tree-sitter-jinja-dialects"
+description = "Parser for Jinja2 and daughter languages: nunjucks, twig"
+version = "0.1.1"
+repository = "https://github.com/bennypowers/tree-sitter-jinja-dialects"
+authors = ["Benny Powers <web@bennypowers.com>"]
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+name = "tree_sitter_jinja_dialects"
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+# For lib.rs's own test module; tracks `tree-sitter` in the root Cargo.toml.
+[dev-dependencies]
+tree-sitter = "0.27.0"

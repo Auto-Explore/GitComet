@@ -77,6 +77,13 @@ impl GitCometView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        // UI tests use GPUI's deterministic scheduler. A real blocking worker
+        // cannot wake its foreground tasks, and tests must not install desktop
+        // files into the developer's or CI runner's data directory.
+        #[cfg(test)]
+        let _ = cx;
+
+        #[cfg(not(test))]
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
                 let result: Result<(std::path::PathBuf, std::path::PathBuf), String> =
@@ -243,5 +250,36 @@ mod tests {
             true,
             Some("KDE")
         ));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn window_tests_do_not_install_desktop_integration() {
+        // Run in a subprocess so an empty XDG directory and the absent opt-out
+        // apply to startup without changing the environment of parallel tests.
+        // Existing desktop files otherwise hide the CI-only auto-install path.
+        let data_home = tempfile::tempdir().expect("temporary desktop data directory");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "app::tests::close_button_closes_only_the_clicked_window_after_opening_a_new_window",
+            ])
+            .env("XDG_DATA_HOME", data_home.path())
+            .env_remove("GITCOMET_NO_DESKTOP_INSTALL")
+            .output()
+            .expect("run window test with no installed desktop files");
+        assert!(
+            output.status.success(),
+            "window test failed with an empty desktop data directory:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            std::fs::read_dir(data_home.path())
+                .expect("read desktop data directory")
+                .next()
+                .is_none(),
+            "UI tests must leave the desktop data directory untouched",
+        );
     }
 }

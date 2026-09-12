@@ -539,6 +539,39 @@ pub(super) fn file_image_diff_cache_debug_snapshot(pane: &MainPaneView) -> Strin
     )
 }
 
+/// Scrolls `visible_ix` into view, draws, and returns what that row painted.
+///
+/// A virtualized row cannot be observed until it is on screen, so the scroll is
+/// part of the observation rather than a separate step. Several tests grew their
+/// own nested copy of this; prefer this one.
+pub(super) fn draw_paint_record_for_visible_ix(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    visible_ix: usize,
+    region: DiffTextRegion,
+) -> rows::DiffPaintRecord {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        rows::clear_diff_paint_log_for_tests();
+        let _ = window.draw(app);
+        rows::diff_paint_log_for_tests()
+            .into_iter()
+            .find(|record| record.visible_ix == visible_ix && record.region == region)
+            .unwrap_or_else(|| {
+                panic!("expected paint record for visible_ix={visible_ix} region={region:?}")
+            })
+    })
+}
+
 pub(super) fn draw_and_drain_test_window(cx: &mut gpui::VisualTestContext) {
     cx.update(|window, app| {
         let _ = window.draw(app);

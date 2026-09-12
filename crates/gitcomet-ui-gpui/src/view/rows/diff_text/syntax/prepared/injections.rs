@@ -326,10 +326,68 @@ pub(crate) fn ensure_injection_cached(
     injection: TreesitterInjectionMatch,
     parent_document_byte_start: usize,
 ) -> bool {
+    if !ensure_injection_tree_cached(
+        input,
+        line_starts,
+        injection,
+        parent_document_byte_start,
+        None,
+    ) {
+        return false;
+    }
+    let pending = TS_INJECTION_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entry = cache.get(&injection)?;
+        entry.all_line_tokens.is_none().then(|| entry.clone())
+    });
+    let Some(mut entry) = pending else {
+        return true;
+    };
+    let Some(highlight) = tree_sitter_highlight_spec(injection.language) else {
+        return false;
+    };
+    let local_start = injection.byte_start - parent_document_byte_start;
+    let local_end = injection.byte_end - parent_document_byte_start;
+    entry.all_line_tokens = Some(collect_treesitter_document_line_tokens_for_line_window_at(
+        &entry.tree,
+        highlight,
+        &input[local_start..local_end],
+        &entry.injection_line_starts,
+        0,
+        entry.injection_line_starts.len(),
+        injection.document_hash,
+        injection.byte_start,
+    ));
+    entry.last_access = next_injection_access();
+    // Nested token collection can evict the parent. Keep the completed entry
+    // locally until all descendants have released their cache borrows.
+    TS_INJECTION_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.contains_key(&injection) {
+            evict_injection_cache_if_full(&mut cache);
+        }
+        cache.insert(injection, entry);
+    });
+    true
+}
+
+/// Recover just the tree for a click, sharing the caller's remaining budget.
+/// Tokenization is deliberately deferred: it queries every line and can rebuild
+/// further injections, neither of which is needed to answer the click.
+fn ensure_injection_tree_cached(
+    input: &[u8],
+    line_starts: &[usize],
+    injection: TreesitterInjectionMatch,
+    parent_document_byte_start: usize,
+    deadline: Option<Instant>,
+) -> bool {
     TS_INJECTION_CACHE.with(|cache| {
         if let Some(entry) = cache.borrow_mut().get_mut(&injection) {
             entry.last_access = next_injection_access();
             return true;
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return false;
         }
 
         let Some(local_byte_start) = injection.byte_start.checked_sub(parent_document_byte_start)
@@ -340,43 +398,39 @@ pub(crate) fn ensure_injection_cached(
         else {
             return false;
         };
-        let injection_byte_range =
-            local_byte_start.min(input.len())..local_byte_end.min(input.len());
-        if injection_byte_range.is_empty() {
-            return false;
-        }
-        let Ok(injection_text) = std::str::from_utf8(&input[injection_byte_range.clone()]) else {
+        let Some(injection_input) = input.get(local_byte_start..local_byte_end) else {
             return false;
         };
-        if injection_text.is_empty() {
+        if injection_input.is_empty() {
             return false;
         }
-        let injection_input = treesitter_document_input_from_text(injection_text);
-        if injection_input.line_starts.is_empty() {
-            return false;
-        }
+        // Reuse the parent's line index instead of copying and scanning the
+        // whole script before the budgeted parse starts. Exclude a phantom
+        // line at the injection's end, just like document input preparation.
+        let injection_start_line_ix = line_ix_for_byte(line_starts, local_byte_start);
+        let mut injection_line_starts = vec![0];
+        injection_line_starts.extend(
+            line_starts
+                .iter()
+                .skip(injection_start_line_ix.saturating_add(1))
+                .take_while(|&&start| start < local_byte_end)
+                .map(|start| start - local_byte_start),
+        );
         let Some(highlight) = tree_sitter_highlight_spec(injection.language) else {
             return false;
         };
         let Some(tree) = with_ts_parser_parse_result(&highlight.ts_language, |parser| {
-            parse_treesitter_tree(parser, injection_input.text.as_bytes(), None, None)
+            let budget =
+                deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            if budget.is_some_and(|budget| budget.is_zero()) {
+                return None;
+            }
+            parse_treesitter_tree(parser, injection_input, None, budget)
         }) else {
             return false;
         };
-
-        let injection_line_count = injection_input.line_starts.len();
-        let all_line_tokens = collect_treesitter_document_line_tokens_for_line_window_at(
-            &tree,
-            highlight,
-            injection_input.text.as_bytes(),
-            injection_input.line_starts.as_ref(),
-            0,
-            injection_line_count,
-            injection.document_hash,
-            injection.byte_start,
-        );
-
-        let injection_start_line_ix = line_ix_for_byte(line_starts, local_byte_start);
+        #[cfg(test)]
+        TS_INJECTION_TREE_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         let access = next_injection_access();
 
         let mut cache = cache.borrow_mut();
@@ -384,8 +438,8 @@ pub(crate) fn ensure_injection_cached(
         cache.insert(
             injection,
             CachedInjection {
-                all_line_tokens,
-                injection_line_starts: injection_input.line_starts.as_ref().to_vec(),
+                all_line_tokens: None,
+                injection_line_starts,
                 injection_start_line_ix,
                 tree,
                 last_access: access,
@@ -410,38 +464,59 @@ pub(crate) fn injection_content_hash(content: &[u8]) -> u64 {
     hasher.finish()
 }
 
-/// The pair at `offset` as the *injected* grammar sees it.
+/// The innermost injected tree owning `offset`, in a form the pair and the
+/// occurrence lookup can both consume without knowing which kind it came from.
 ///
-/// Tried before the host tree by [`prepared_document_syntax_pair_at_display_offset`],
-/// for the same reason `LiveSyntaxSnapshot::syntax_pair_at` tries its layers
-/// first: a bracket inside an injected region belongs to the grammar that region
-/// is written in. To PHP, the whole of a file's inline HTML is one `text` node,
-/// so without this a click on a tag there found no delimiter and fell through to
-/// whatever PHP block enclosed it -- which is why clicking a bracket appeared to
-/// do nothing while clicking a column away appeared to work.
+/// The two kinds differ only in their coordinates, and `base` erases that. A
+/// single injection is parsed over a slice, so its nodes are layer-local and
+/// `base` is the slice's start; a combined layer is parsed with
+/// `set_included_ranges` over the whole document, so its nodes are already in
+/// document coordinates and `base` is 0. Callers slice `text[text_span]`,
+/// subtract `base` from the offset, and add it back to every range they get out.
+pub(crate) struct PreparedInjectedLayerAt {
+    pub(crate) tree: tree_sitter::Tree,
+    pub(crate) base: usize,
+    pub(crate) text_span: Range<usize>,
+}
+
+/// Resolve `offset` to the injected grammar that owns it.
 ///
-/// `document_hash` scopes the search to the caller's own document and
+/// Tried before the host tree by both click lookups, for the same reason
+/// `LiveSyntaxSnapshot::syntax_pair_at` tries its layers first: a bracket inside
+/// an injected region belongs to the grammar that region is written in. To PHP,
+/// the whole of a file's inline HTML is one `text` node, so without this a click
+/// on a tag there found no delimiter and fell through to whatever PHP block
+/// enclosed it -- which is why clicking a bracket appeared to do nothing while
+/// clicking a column away appeared to work.
+///
+/// **Singles before combined layers, and that is deepest-first rather than an
+/// arbitrary preference.** Every combined layer is depth 1, because
+/// `build_prepared_combined_layers` queries only the root tree; so any cached
+/// single overlapping a layer's ranges was produced *inside* that layer, at
+/// depth 2. Reversing the two would hand a `{` in the JavaScript of a `<script>`
+/// in a template to the HTML tree, which has the body as one `raw_text` leaf and
+/// would answer with the enclosing `<script>` tag instead. Do not switch this to
+/// "narrower span wins" either: a body straddling a `{% %}` gap is *wider* than
+/// either host range it crosses.
+///
+/// `state.source_hash` scopes the cache search to the caller's own document and
 /// `content_hash` is re-checked against its text rather than trusted: the cache
 /// is a thread-local shared by every document, and two of them can easily have
 /// an injection at the same byte range -- with the same bytes in it, under
 /// different grammars. Neither check subsumes the other, so both run.
-///
-/// Combined injections are deliberately not consulted. Their ranges are stitched
-/// from several disjoint spans, so a single `byte_start` shift cannot map their
-/// offsets back, and the host grammar remains the right answer in the gaps
-/// between them.
-pub(crate) fn injected_syntax_pair_at(
-    text: &str,
-    document_hash: u64,
+pub(crate) fn prepared_injected_layer_at(
+    state: &PreparedSyntaxTreeState,
     offset: usize,
-) -> Option<SyntaxPair> {
-    TS_INJECTION_CACHE.with(|cache| {
+    combined_layers: Option<&[PreparedCombinedLayer]>,
+) -> Option<PreparedInjectedLayerAt> {
+    let text = state.text.as_ref();
+    let single = TS_INJECTION_CACHE.with(|cache| {
         let cache = cache.borrow();
         // The innermost injection wins, the same rule the tree walk uses: an
         // injection nested inside another is the more specific answer.
         let mut best: Option<(&TreesitterInjectionMatch, &CachedInjection)> = None;
         for (key, entry) in cache.iter() {
-            if key.document_hash != document_hash {
+            if key.document_hash != state.source_hash {
                 continue;
             }
             if offset < key.byte_start || offset >= key.byte_end {
@@ -461,23 +536,91 @@ pub(crate) fn injected_syntax_pair_at(
             }
         }
         let (key, entry) = best?;
-        let local = offset.checked_sub(key.byte_start)?;
-        let content = text.as_bytes().get(key.byte_start..key.byte_end)?;
-        let source_ranges_equal =
-            |left: Range<usize>, right: Range<usize>| match (content.get(left), content.get(right))
-            {
-                (Some(left), Some(right)) => left == right,
-                _ => false,
-            };
-        let pair = syntax_pair_in_tree(&entry.tree, local, &source_ranges_equal)?;
-        let shift = |range: Range<usize>| {
-            range.start.saturating_add(key.byte_start)..range.end.saturating_add(key.byte_start)
-        };
-        Some(SyntaxPair {
-            open: shift(pair.open),
-            close: shift(pair.close),
-            kind: pair.kind,
+        Some(PreparedInjectedLayerAt {
+            tree: entry.tree.clone(),
+            base: key.byte_start,
+            text_span: key.byte_start..key.byte_end,
         })
+    });
+    if single.is_some() {
+        return single;
+    }
+
+    // Deepest last appended, so reverse, exactly as `syntax_pair_at` does.
+    for layer in combined_layers.unwrap_or_default().iter().rev() {
+        if combined_layer_owns_offset(layer, offset) {
+            return Some(PreparedInjectedLayerAt {
+                tree: layer.tree.clone(),
+                base: 0,
+                text_span: 0..text.len(),
+            });
+        }
+    }
+    None
+}
+
+/// Membership in the layer's own ranges, never its hull.
+///
+/// A caret sitting in a `{% ... %}` gap between two ranges of a combined layer is
+/// host-grammar territory, and the combined tree has no nodes there to answer
+/// with. The bounds are inclusive at both ends on purpose: a caret directly after
+/// an injected region's last character still belongs to it. Both rules are copied
+/// from `LiveSyntaxSnapshot::syntax_pair_at` so the two engines cannot disagree.
+pub(crate) fn combined_layer_owns_offset(layer: &PreparedCombinedLayer, offset: usize) -> bool {
+    layer
+        .ranges
+        .binary_search_by(|range| {
+            if offset < range.start {
+                std::cmp::Ordering::Greater
+            } else if offset > range.end {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .is_ok()
+}
+
+/// Every use of the name at `offset` as `layer`'s grammar sees it, in document
+/// coordinates.
+pub(crate) fn syntax_occurrences_in_injected_layer(
+    text: &str,
+    layer: &PreparedInjectedLayerAt,
+    offset: usize,
+) -> Option<SyntaxOccurrences> {
+    let content = text.get(layer.text_span.clone())?;
+    let local = offset.checked_sub(layer.base)?;
+    let found = syntax_occurrences_in_tree(&layer.tree, content, local)?;
+    let shift = |range: Range<usize>| {
+        range.start.saturating_add(layer.base)..range.end.saturating_add(layer.base)
+    };
+    Some(SyntaxOccurrences {
+        token: shift(found.token),
+        ranges: found.ranges.into_iter().map(shift).collect(),
+    })
+}
+
+/// The pair at `offset` as `layer`'s grammar sees it, in document coordinates.
+pub(crate) fn syntax_pair_in_injected_layer(
+    text: &str,
+    layer: &PreparedInjectedLayerAt,
+    offset: usize,
+) -> Option<SyntaxPair> {
+    let content = text.as_bytes().get(layer.text_span.clone())?;
+    let local = offset.checked_sub(layer.base)?;
+    let source_ranges_equal =
+        |left: Range<usize>, right: Range<usize>| match (content.get(left), content.get(right)) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        };
+    let pair = syntax_pair_in_tree(&layer.tree, local, &source_ranges_equal)?;
+    let shift = |range: Range<usize>| {
+        range.start.saturating_add(layer.base)..range.end.saturating_add(layer.base)
+    };
+    Some(SyntaxPair {
+        open: shift(pair.open),
+        close: shift(pair.close),
+        kind: pair.kind,
     })
 }
 
@@ -492,10 +635,21 @@ pub(crate) fn injected_syntax_pair_at(
 /// same cache construction path used by token painting. Walking through cached
 /// parents matters too: a parent can survive the LRU while its narrower child
 /// was evicted.
-pub(crate) fn ensure_injection_chain_cached_for_pair_lookup(
+///
+/// `combined_layers` lets the walk start from a combined layer's tree as well as
+/// the host's. Without it, a `<script>` body inside a template that the LRU has
+/// dropped can never be rebuilt: the host grammar hands out the surrounding
+/// markup as one opaque `text` node, so the body is not among *its* singles at
+/// all, and only the layer that parsed the markup knows the body is there.
+pub(crate) fn ensure_injection_chain_cached_for_click_lookup(
     state: &PreparedSyntaxTreeState,
     offset: usize,
+    combined_layers: Option<&[PreparedCombinedLayer]>,
+    deadline: Instant,
 ) {
+    if Instant::now() >= deadline {
+        return;
+    }
     let Some(highlight) = tree_sitter_highlight_spec(state.language) else {
         return;
     };
@@ -510,33 +664,43 @@ pub(crate) fn ensure_injection_chain_cached_for_pair_lookup(
         state.source_hash,
         0,
     );
-    let Some(injection) = matches
+    let host_single = matches
         .singles
         .into_iter()
         .filter(|injection| offset >= injection.byte_start && offset < injection.byte_end)
-        .min_by_key(|injection| injection.byte_end.saturating_sub(injection.byte_start))
-    else {
-        return;
+        .min_by_key(|injection| injection.byte_end.saturating_sub(injection.byte_start));
+    let (injection, depth) = match host_single {
+        Some(injection) => (injection, 1),
+        // The host grammar does not own this offset, so ask the combined layer
+        // that does. Its tree is already in document coordinates, hence a
+        // `document_byte_start` of 0 where the nested walk below has to pass
+        // `parent.byte_start`.
+        None => {
+            let Some(nested) =
+                combined_layer_nested_single_at(state, offset, combined_layers, line_ix, deadline)
+            else {
+                return;
+            };
+            (nested, 2)
+        }
     };
-    // `ensure_injection_cached` is normally called inside the host token
-    // collector's depth guard. Pair lookup enters the equivalent guards itself
-    // so rebuilding a nested entry cannot parse deeper than the configured
-    // root-to-injection limit.
-    let Some(root_depth_guard) = InjectionDepthGuard::enter() else {
-        return;
-    };
-    let mut depth_guards = vec![root_depth_guard];
-    if !ensure_injection_cached(
+    if !ensure_injection_tree_cached(
         state.text.as_bytes(),
         state.line_starts.as_ref(),
         injection,
         0,
+        Some(deadline),
     ) {
         return;
     }
 
     let mut parent = injection;
-    for _ in 1..TS_MAX_INJECTION_DEPTH {
+    // Tree recovery does not recurse through token collection. Count the
+    // chain's depth here, including a combined parent, using the same limit.
+    for _ in depth..TS_MAX_INJECTION_DEPTH {
+        if Instant::now() >= deadline {
+            break;
+        }
         let Some((tree, line_starts)) = TS_INJECTION_CACHE.with(|cache| {
             cache
                 .borrow()
@@ -575,15 +739,70 @@ pub(crate) fn ensure_injection_chain_cached_for_pair_lookup(
         else {
             break;
         };
-        let Some(child_depth_guard) = InjectionDepthGuard::enter() else {
-            break;
-        };
-        if !ensure_injection_cached(input, &line_starts, child, parent.byte_start) {
+        if !ensure_injection_tree_cached(
+            input,
+            &line_starts,
+            child,
+            parent.byte_start,
+            Some(deadline),
+        ) {
             break;
         }
-        depth_guards.push(child_depth_guard);
         parent = child;
     }
+}
+
+/// The injection a combined layer declares over `offset`, if any.
+///
+/// Only bodies lying wholly inside the layer's own ranges are returned. One that
+/// straddles a `{% ... %}` gap is parsed ad hoc by the token path over its owned
+/// pieces and never cached, because the cache key is a single byte range and
+/// cannot describe a stitched one. Such a click falls through to the layer
+/// itself, which answers with the enclosing element -- for a `<script>` that is
+/// its tag pair, which is a reasonable answer rather than a wrong one.
+fn combined_layer_nested_single_at(
+    state: &PreparedSyntaxTreeState,
+    offset: usize,
+    combined_layers: Option<&[PreparedCombinedLayer]>,
+    line_ix: usize,
+    deadline: Instant,
+) -> Option<TreesitterInjectionMatch> {
+    for layer in combined_layers.unwrap_or_default().iter().rev() {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        if !combined_layer_owns_offset(layer, offset) {
+            continue;
+        }
+        let Some(layer_spec) = tree_sitter_highlight_spec(layer.language) else {
+            continue;
+        };
+        let matches = collect_treesitter_injection_matches_for_line_window_at(
+            &layer.tree,
+            layer_spec,
+            state.text.as_bytes(),
+            state.line_starts.as_ref(),
+            line_ix,
+            line_ix.saturating_add(1),
+            state.source_hash,
+            0,
+        );
+        if let Some(found) = matches
+            .singles
+            .into_iter()
+            .filter(|single| offset >= single.byte_start && offset < single.byte_end)
+            .filter(|single| {
+                layer
+                    .ranges
+                    .iter()
+                    .any(|range| range.start <= single.byte_start && single.byte_end <= range.end)
+            })
+            .min_by_key(|single| single.byte_end.saturating_sub(single.byte_start))
+        {
+            return Some(found);
+        }
+    }
+    None
 }
 
 pub(crate) fn collect_injected_tokens_for_parent_line_window(
@@ -601,10 +820,11 @@ pub(crate) fn collect_injected_tokens_for_parent_line_window(
     TS_INJECTION_CACHE.with(|cache| {
         let cache = cache.borrow();
         let cached = cache.get(&injection)?;
+        let all_line_tokens = cached.all_line_tokens.as_ref()?;
 
         let injection_end_line_ix = cached
             .injection_start_line_ix
-            .saturating_add(cached.all_line_tokens.len());
+            .saturating_add(all_line_tokens.len());
         let parent_start_line_ix = start_line_ix.max(cached.injection_start_line_ix);
         let parent_end_line_ix = end_line_ix.min(injection_end_line_ix);
         if parent_start_line_ix >= parent_end_line_ix {
@@ -632,8 +852,7 @@ pub(crate) fn collect_injected_tokens_for_parent_line_window(
                 .checked_sub(parent_document_byte_start)?;
             let absolute_line_start = injection_start_in_parent.saturating_add(local_line_start);
             let offset_within_parent = absolute_line_start.saturating_sub(parent_line_start);
-            let tokens = cached
-                .all_line_tokens
+            let tokens = all_line_tokens
                 .get(local_line_ix)
                 .cloned()
                 .unwrap_or_default();

@@ -67,8 +67,9 @@ pub(crate) struct TreesitterInjectionMatch {
 
 #[derive(Clone)]
 pub(crate) struct CachedInjection {
-    /// Full tokenized lines in injection-local coordinates (all lines of the injection).
-    pub(crate) all_line_tokens: Vec<Vec<SyntaxToken>>,
+    /// Full tokenized lines in injection-local coordinates. Click recovery only
+    /// builds the tree; `None` leaves tokenization to the next token request.
+    pub(crate) all_line_tokens: Option<Vec<Vec<SyntaxToken>>>,
     /// Line starts for the injection text, used for coordinate remapping.
     pub(crate) injection_line_starts: Vec<usize>,
     /// First line in the parent document that this injection starts on.
