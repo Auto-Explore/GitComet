@@ -326,10 +326,68 @@ pub(crate) fn ensure_injection_cached(
     injection: TreesitterInjectionMatch,
     parent_document_byte_start: usize,
 ) -> bool {
+    if !ensure_injection_tree_cached(
+        input,
+        line_starts,
+        injection,
+        parent_document_byte_start,
+        None,
+    ) {
+        return false;
+    }
+    let pending = TS_INJECTION_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entry = cache.get(&injection)?;
+        entry.all_line_tokens.is_none().then(|| entry.clone())
+    });
+    let Some(mut entry) = pending else {
+        return true;
+    };
+    let Some(highlight) = tree_sitter_highlight_spec(injection.language) else {
+        return false;
+    };
+    let local_start = injection.byte_start - parent_document_byte_start;
+    let local_end = injection.byte_end - parent_document_byte_start;
+    entry.all_line_tokens = Some(collect_treesitter_document_line_tokens_for_line_window_at(
+        &entry.tree,
+        highlight,
+        &input[local_start..local_end],
+        &entry.injection_line_starts,
+        0,
+        entry.injection_line_starts.len(),
+        injection.document_hash,
+        injection.byte_start,
+    ));
+    entry.last_access = next_injection_access();
+    // Nested token collection can evict the parent. Keep the completed entry
+    // locally until all descendants have released their cache borrows.
+    TS_INJECTION_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.contains_key(&injection) {
+            evict_injection_cache_if_full(&mut cache);
+        }
+        cache.insert(injection, entry);
+    });
+    true
+}
+
+/// Recover just the tree for a click, sharing the caller's remaining budget.
+/// Tokenization is deliberately deferred: it queries every line and can rebuild
+/// further injections, neither of which is needed to answer the click.
+fn ensure_injection_tree_cached(
+    input: &[u8],
+    line_starts: &[usize],
+    injection: TreesitterInjectionMatch,
+    parent_document_byte_start: usize,
+    deadline: Option<Instant>,
+) -> bool {
     TS_INJECTION_CACHE.with(|cache| {
         if let Some(entry) = cache.borrow_mut().get_mut(&injection) {
             entry.last_access = next_injection_access();
             return true;
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return false;
         }
 
         let Some(local_byte_start) = injection.byte_start.checked_sub(parent_document_byte_start)
@@ -340,43 +398,39 @@ pub(crate) fn ensure_injection_cached(
         else {
             return false;
         };
-        let injection_byte_range =
-            local_byte_start.min(input.len())..local_byte_end.min(input.len());
-        if injection_byte_range.is_empty() {
-            return false;
-        }
-        let Ok(injection_text) = std::str::from_utf8(&input[injection_byte_range.clone()]) else {
+        let Some(injection_input) = input.get(local_byte_start..local_byte_end) else {
             return false;
         };
-        if injection_text.is_empty() {
+        if injection_input.is_empty() {
             return false;
         }
-        let injection_input = treesitter_document_input_from_text(injection_text);
-        if injection_input.line_starts.is_empty() {
-            return false;
-        }
+        // Reuse the parent's line index instead of copying and scanning the
+        // whole script before the budgeted parse starts. Exclude a phantom
+        // line at the injection's end, just like document input preparation.
+        let injection_start_line_ix = line_ix_for_byte(line_starts, local_byte_start);
+        let mut injection_line_starts = vec![0];
+        injection_line_starts.extend(
+            line_starts
+                .iter()
+                .skip(injection_start_line_ix.saturating_add(1))
+                .take_while(|&&start| start < local_byte_end)
+                .map(|start| start - local_byte_start),
+        );
         let Some(highlight) = tree_sitter_highlight_spec(injection.language) else {
             return false;
         };
         let Some(tree) = with_ts_parser_parse_result(&highlight.ts_language, |parser| {
-            parse_treesitter_tree(parser, injection_input.text.as_bytes(), None, None)
+            let budget =
+                deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            if budget.is_some_and(|budget| budget.is_zero()) {
+                return None;
+            }
+            parse_treesitter_tree(parser, injection_input, None, budget)
         }) else {
             return false;
         };
-
-        let injection_line_count = injection_input.line_starts.len();
-        let all_line_tokens = collect_treesitter_document_line_tokens_for_line_window_at(
-            &tree,
-            highlight,
-            injection_input.text.as_bytes(),
-            injection_input.line_starts.as_ref(),
-            0,
-            injection_line_count,
-            injection.document_hash,
-            injection.byte_start,
-        );
-
-        let injection_start_line_ix = line_ix_for_byte(line_starts, local_byte_start);
+        #[cfg(test)]
+        TS_INJECTION_TREE_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         let access = next_injection_access();
 
         let mut cache = cache.borrow_mut();
@@ -384,8 +438,8 @@ pub(crate) fn ensure_injection_cached(
         cache.insert(
             injection,
             CachedInjection {
-                all_line_tokens,
-                injection_line_starts: injection_input.line_starts.as_ref().to_vec(),
+                all_line_tokens: None,
+                injection_line_starts,
                 injection_start_line_ix,
                 tree,
                 last_access: access,
@@ -591,7 +645,11 @@ pub(crate) fn ensure_injection_chain_cached_for_click_lookup(
     state: &PreparedSyntaxTreeState,
     offset: usize,
     combined_layers: Option<&[PreparedCombinedLayer]>,
+    deadline: Instant,
 ) {
+    if Instant::now() >= deadline {
+        return;
+    }
     let Some(highlight) = tree_sitter_highlight_spec(state.language) else {
         return;
     };
@@ -611,40 +669,38 @@ pub(crate) fn ensure_injection_chain_cached_for_click_lookup(
         .into_iter()
         .filter(|injection| offset >= injection.byte_start && offset < injection.byte_end)
         .min_by_key(|injection| injection.byte_end.saturating_sub(injection.byte_start));
-    let injection = match host_single {
-        Some(injection) => injection,
+    let (injection, depth) = match host_single {
+        Some(injection) => (injection, 1),
         // The host grammar does not own this offset, so ask the combined layer
         // that does. Its tree is already in document coordinates, hence a
         // `document_byte_start` of 0 where the nested walk below has to pass
         // `parent.byte_start`.
         None => {
             let Some(nested) =
-                combined_layer_nested_single_at(state, offset, combined_layers, line_ix)
+                combined_layer_nested_single_at(state, offset, combined_layers, line_ix, deadline)
             else {
                 return;
             };
-            nested
+            (nested, 2)
         }
     };
-    // `ensure_injection_cached` is normally called inside the host token
-    // collector's depth guard. Pair lookup enters the equivalent guards itself
-    // so rebuilding a nested entry cannot parse deeper than the configured
-    // root-to-injection limit.
-    let Some(root_depth_guard) = InjectionDepthGuard::enter() else {
-        return;
-    };
-    let mut depth_guards = vec![root_depth_guard];
-    if !ensure_injection_cached(
+    if !ensure_injection_tree_cached(
         state.text.as_bytes(),
         state.line_starts.as_ref(),
         injection,
         0,
+        Some(deadline),
     ) {
         return;
     }
 
     let mut parent = injection;
-    for _ in 1..TS_MAX_INJECTION_DEPTH {
+    // Tree recovery does not recurse through token collection. Count the
+    // chain's depth here, including a combined parent, using the same limit.
+    for _ in depth..TS_MAX_INJECTION_DEPTH {
+        if Instant::now() >= deadline {
+            break;
+        }
         let Some((tree, line_starts)) = TS_INJECTION_CACHE.with(|cache| {
             cache
                 .borrow()
@@ -683,13 +739,15 @@ pub(crate) fn ensure_injection_chain_cached_for_click_lookup(
         else {
             break;
         };
-        let Some(child_depth_guard) = InjectionDepthGuard::enter() else {
-            break;
-        };
-        if !ensure_injection_cached(input, &line_starts, child, parent.byte_start) {
+        if !ensure_injection_tree_cached(
+            input,
+            &line_starts,
+            child,
+            parent.byte_start,
+            Some(deadline),
+        ) {
             break;
         }
-        depth_guards.push(child_depth_guard);
         parent = child;
     }
 }
@@ -707,8 +765,12 @@ fn combined_layer_nested_single_at(
     offset: usize,
     combined_layers: Option<&[PreparedCombinedLayer]>,
     line_ix: usize,
+    deadline: Instant,
 ) -> Option<TreesitterInjectionMatch> {
     for layer in combined_layers.unwrap_or_default().iter().rev() {
+        if Instant::now() >= deadline {
+            return None;
+        }
         if !combined_layer_owns_offset(layer, offset) {
             continue;
         }
@@ -758,10 +820,11 @@ pub(crate) fn collect_injected_tokens_for_parent_line_window(
     TS_INJECTION_CACHE.with(|cache| {
         let cache = cache.borrow();
         let cached = cache.get(&injection)?;
+        let all_line_tokens = cached.all_line_tokens.as_ref()?;
 
         let injection_end_line_ix = cached
             .injection_start_line_ix
-            .saturating_add(cached.all_line_tokens.len());
+            .saturating_add(all_line_tokens.len());
         let parent_start_line_ix = start_line_ix.max(cached.injection_start_line_ix);
         let parent_end_line_ix = end_line_ix.min(injection_end_line_ix);
         if parent_start_line_ix >= parent_end_line_ix {
@@ -789,8 +852,7 @@ pub(crate) fn collect_injected_tokens_for_parent_line_window(
                 .checked_sub(parent_document_byte_start)?;
             let absolute_line_start = injection_start_in_parent.saturating_add(local_line_start);
             let offset_within_parent = absolute_line_start.saturating_sub(parent_line_start);
-            let tokens = cached
-                .all_line_tokens
+            let tokens = all_line_tokens
                 .get(local_line_ix)
                 .cloned()
                 .unwrap_or_default();

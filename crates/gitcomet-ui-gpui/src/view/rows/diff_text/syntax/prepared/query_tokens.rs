@@ -578,23 +578,19 @@ pub(crate) fn apply_injection_query_tokens_for_document(
             let whole = injection.byte_start..injection.byte_end;
             let pieces = intersect_sorted_ranges(std::slice::from_ref(&whole), owned);
             if pieces.as_slice() != std::slice::from_ref(&whole) {
-                // A `<script>` body spanning a `{% %}` gap: parse only the owned
-                // pieces, as a combined layer would, so the injected grammar never
-                // sees the host's bytes.
-                if !pieces.is_empty()
-                    && let Some(spec) = tree_sitter_highlight_spec(injection.language)
-                    && let Some(tree) =
-                        parse_combined_injection_tree(spec, input, context.line_starts, &pieces)
-                {
-                    splice_combined_layer_tokens(
-                        &tree,
-                        spec,
-                        &pieces,
-                        input,
-                        document_hash,
-                        context,
-                    );
-                }
+                // A `<script>` body spanning a template gap is not retained in
+                // the single-range cache. Its pieces can span the whole file,
+                // so use the windowed fallback's context margin and ceilings
+                // before parsing them for each token chunk.
+                apply_combined_injection_tokens(
+                    &CombinedInjectionGroup {
+                        language: injection.language,
+                        ranges: pieces,
+                    },
+                    input,
+                    document_hash,
+                    context,
+                );
                 continue;
             }
         }
@@ -828,6 +824,9 @@ pub(crate) fn parse_combined_injection_tree_with_deadline(
         #[cfg(test)]
         if tree.is_some() {
             TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+            TS_COMBINED_LAYER_PARSED_BYTES.with(|bytes| {
+                bytes.set(bytes.get() + ranges.iter().map(|range| range.len()).sum::<usize>());
+            });
         }
         tree
     })
@@ -922,8 +921,8 @@ pub(crate) fn clip_injection_ranges_to_region(
 }
 
 /// Windowed fallback: parses one combined group clipped to the window and splices
-/// its tokens into `context.per_line`. Reached only when
-/// `build_prepared_combined_layers` declined (see it).
+/// its tokens into `context.per_line`. Used when whole-document preparation
+/// declined and for nested bodies spanning gaps in a combined parent.
 pub(crate) fn apply_combined_injection_tokens(
     group: &CombinedInjectionGroup,
     input: &[u8],

@@ -454,9 +454,9 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
             _ => false,
         }
     };
-    let combined_layers =
-        state.combined_layers_within(Instant::now() + TS_CLICK_COMBINED_LAYER_BUDGET);
-    ensure_injection_chain_cached_for_click_lookup(&state, offset, combined_layers);
+    let deadline = Instant::now() + TS_CLICK_INJECTION_BUDGET;
+    let combined_layers = state.combined_layers_within(deadline);
+    ensure_injection_chain_cached_for_click_lookup(&state, offset, combined_layers, deadline);
     let pair = prepared_injected_layer_at(&state, offset, combined_layers)
         .and_then(|layer| syntax_pair_in_injected_layer(text, &layer, offset))
         .or_else(|| syntax_pair_in_tree(&state.tree, offset, &source_ranges_equal))?;
@@ -553,9 +553,9 @@ pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
     };
     let offset = clicked.start + raw_offset;
 
-    let combined_layers =
-        state.combined_layers_within(Instant::now() + TS_CLICK_COMBINED_LAYER_BUDGET);
-    ensure_injection_chain_cached_for_click_lookup(&state, offset, combined_layers);
+    let deadline = Instant::now() + TS_CLICK_INJECTION_BUDGET;
+    let combined_layers = state.combined_layers_within(deadline);
+    ensure_injection_chain_cached_for_click_lookup(&state, offset, combined_layers, deadline);
     let found = prepared_injected_layer_at(&state, offset, combined_layers)
         .and_then(|layer| syntax_occurrences_in_injected_layer(text, &layer, offset))
         .or_else(|| syntax_occurrences_in_tree(&state.tree, text, offset));

@@ -831,6 +831,197 @@ fn nested_script_layer_inside_a_combined_layer_skips_the_template_gap() {
     );
 }
 
+fn large_template_script(gap: &str) -> String {
+    let half = "const value = (123); // padding for a large inline script\n".repeat(20_000);
+    let text = format!("<script>\n{half}{gap}\n{half}</script>\n");
+    assert!(text.len() > 2 * 1024 * 1024);
+    text
+}
+
+#[test]
+fn nested_script_with_template_gaps_bounds_each_chunk_parse() {
+    let text = large_template_script("{{ template_value }}");
+    let document = prepare_test_document_from_shared_text(DiffSyntaxLanguage::Jinja, &text);
+    let state = prepared_document_tree_state(document).expect("prepared tree");
+    let _ = state.combined_layers().expect("prepared HTML layer");
+
+    // The HTML raw_text capture covers the entire 2 MiB script in every
+    // window. Only the bytes around each requested chunk may be reparsed.
+    for line_ix in [128, 20_000, 39_000] {
+        TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.set(0));
+        TS_COMBINED_LAYER_PARSED_BYTES.with(|bytes| bytes.set(0));
+        let started = Instant::now();
+        let tokens = syntax_tokens_for_prepared_document_line(document, line_ix)
+            .expect("script line tokens");
+        assert!(has_token_kind_and_text(
+            text.lines().nth(line_ix).expect("script line"),
+            &tokens,
+            SyntaxTokenKind::Keyword,
+            "const",
+        ));
+        let chunk_start =
+            line_ix / TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS;
+        let clip = combined_injection_clip_region(
+            &state.line_starts,
+            text.len(),
+            chunk_start,
+            chunk_start + TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS,
+        );
+        let parsed_bytes = TS_COMBINED_LAYER_PARSED_BYTES.with(Cell::get);
+        assert_eq!(TS_COMBINED_LAYER_PARSE_COUNT.with(Cell::get), 1);
+        assert!(parsed_bytes > 0 && parsed_bytes <= clip.len());
+        assert!(parsed_bytes <= TS_COMBINED_INJECTION_MAX_BYTES);
+        eprintln!(
+            "nested chunk at {line_ix}: {parsed_bytes} parsed bytes, {:?}",
+            started.elapsed()
+        );
+    }
+}
+
+#[test]
+fn nested_script_with_template_gaps_obeys_the_window_byte_ceiling() {
+    let row = format!(
+        "const value = \"{}{{{{ template_value }}}}\";\n",
+        "x".repeat(4096)
+    );
+    assert!(row.len() < TS_MAX_BYTES_TO_QUERY);
+    let text = format!(
+        "<script>\n{}</script>\n",
+        row.repeat(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS)
+    );
+    let document = prepare_test_document_from_shared_text(DiffSyntaxLanguage::Jinja, &text);
+    let state = prepared_document_tree_state(document).expect("prepared tree");
+    let layers = state.combined_layers().expect("prepared HTML layer");
+    let matches = collect_treesitter_injection_matches_for_line_window(
+        &layers[0].tree,
+        tree_sitter_highlight_spec(DiffSyntaxLanguage::Html).expect("HTML spec"),
+        text.as_bytes(),
+        &state.line_starts,
+        0,
+        TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS,
+        state.source_hash,
+    );
+    assert!(matches.singles.iter().any(|injection| {
+        injection.language == DiffSyntaxLanguage::JavaScript
+            && injection.byte_end - injection.byte_start > TS_COMBINED_INJECTION_MAX_BYTES
+    }));
+    TS_COMBINED_LAYER_PARSE_COUNT.with(|count| count.set(0));
+    let _ = syntax_tokens_for_prepared_document_line(document, 1).expect("line tokens");
+    assert_eq!(
+        TS_COMBINED_LAYER_PARSE_COUNT.with(Cell::get),
+        0,
+        "an oversized chunk must not bypass the fallback's byte ceiling",
+    );
+}
+
+#[test]
+fn nested_script_click_recovery_honors_the_remaining_deadline() {
+    TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    let text = large_template_script("");
+    let document = prepare_test_document_from_shared_text(DiffSyntaxLanguage::Jinja, &text);
+    let state = prepared_document_tree_state(document).expect("prepared tree");
+    let layers = state.combined_layers().expect("prepared HTML layer");
+    let offset = text.find('(').expect("script parenthesis");
+    let started = Instant::now();
+    ensure_injection_chain_cached_for_click_lookup(
+        &state,
+        offset,
+        Some(layers),
+        started + Duration::from_millis(1),
+    );
+    assert!(
+        TS_INJECTION_CACHE.with(|cache| cache.borrow().is_empty()),
+        "a 2 MiB cold script cannot be rebuilt within a 1 ms remaining click budget",
+    );
+    eprintln!("nested click with 1 ms remaining: {:?}", started.elapsed());
+
+    let column = offset - state.line_starts[1];
+    let started = Instant::now();
+    let _ = prepared_document_syntax_pair_at_display_offset(document, 1, column);
+    assert!(TS_INJECTION_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .values()
+            .all(|entry| entry.all_line_tokens.is_none())
+    }));
+    eprintln!(
+        "cold nested click with the default budget: {:?}",
+        started.elapsed()
+    );
+
+    // A timeout must not poison the parser or prevent a later token worker
+    // from recovering the complete script.
+    let tokens = syntax_tokens_for_prepared_document_line(document, 1).expect("script tokens");
+    assert!(has_token_kind_and_text(
+        text.lines().nth(1).expect("script line"),
+        &tokens,
+        SyntaxTokenKind::Keyword,
+        "const",
+    ));
+    let started = Instant::now();
+    let pair = prepared_document_syntax_pair_at_display_offset(document, 1, column)
+        .expect("warm script tree should answer the click");
+    assert_eq!(pair.kind, SyntaxPairKind::Bracket);
+    eprintln!("warm nested click: {:?}", started.elapsed());
+    TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+#[test]
+fn nested_script_clicks_build_trees_without_tokenizing_and_later_paint_reuses_them() {
+    TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    let text = "<script>const value = (123);\nconsole.log(value);</script>\n";
+    let document = prepare_test_document_from_shared_text(DiffSyntaxLanguage::Jinja, text);
+    let state = prepared_document_tree_state(document).expect("prepared tree");
+    let layers = state.combined_layers().expect("prepared HTML layer");
+    let offset = text.find('(').expect("script parenthesis");
+    ensure_injection_chain_cached_for_click_lookup(&state, offset, Some(layers), Instant::now());
+    assert!(TS_INJECTION_CACHE.with(|cache| cache.borrow().is_empty()));
+
+    let pair = prepared_document_syntax_pair_at_display_offset(document, 0, offset)
+        .expect("cold script tree should answer a bracket click");
+    assert_eq!(pair.kind, SyntaxPairKind::Bracket);
+    let key = TS_INJECTION_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let (key, entry) = cache.iter().next().expect("click retained the script tree");
+        assert_eq!(cache.len(), 1);
+        assert_eq!(key.language, DiffSyntaxLanguage::JavaScript);
+        assert!(
+            entry.all_line_tokens.is_none(),
+            "clicks must not build tokens"
+        );
+        *key
+    });
+    TS_INJECTION_TREE_PARSE_COUNT.with(|count| count.set(0));
+
+    let occurrences = prepared_document_occurrences_at_display_offset(
+        document,
+        0,
+        text.find("value").expect("script identifier"),
+    );
+    assert_eq!(occurrences.len(), 2);
+    let tokens = syntax_tokens_for_prepared_document_line(document, 0).expect("script tokens");
+    assert!(has_token_kind_and_text(
+        text.lines().next().expect("script line"),
+        &tokens,
+        SyntaxTokenKind::Keyword,
+        "const",
+    ));
+    TS_INJECTION_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entry = cache.get(&key).expect("script tree remains cached");
+        assert!(
+            entry.all_line_tokens.is_some(),
+            "painting completes the tokens"
+        );
+    });
+    assert_eq!(
+        TS_INJECTION_TREE_PARSE_COUNT.with(Cell::get),
+        0,
+        "occurrences and painting must reuse the click's tree"
+    );
+    TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
 /// The layer parse shares the root parse's foreground budget, but missing it
 /// must not turn a document that used to be `Ready` into `TimedOut`: the
 /// document comes back with the layers unbuilt and the first chunk build parses

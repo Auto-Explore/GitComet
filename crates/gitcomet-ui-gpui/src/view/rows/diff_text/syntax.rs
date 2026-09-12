@@ -130,8 +130,8 @@ const TS_INJECTION_CACHE_MAX_ENTRIES: usize = 32;
 /// fallback re-parses per 64-row window, clipped by
 /// [`combined_injection_clip_region`] *before* these are applied (a template's
 /// `(text)` nodes are document-sized, so unclipped they always trip the byte
-/// ceiling), and it is reached only when the whole-document query overflowed
-/// the match limit or a group exceeded [`TS_COMBINED_LAYER_MAX_RANGES`].
+/// ceiling). It also handles nested scripts spanning template gaps; those trees
+/// are not retained in the single-range injection cache.
 ///
 /// Hard limits rather than a time budget: the prepared path cannot repair a layer
 /// dropped by a `ControlFlow::Break` -- that mechanism exists only in `live.rs` --
@@ -143,14 +143,15 @@ const TS_COMBINED_INJECTION_MAX_BYTES: usize = 128 * 1024;
 /// (~3 MB worst case). Past it the windowed fallback above takes over.
 const TS_COMBINED_LAYER_MAX_RANGES: usize = 65_536;
 
-/// What a click may spend building the combined layers it needs to answer.
+/// What a click may spend building combined layers and recovering evicted
+/// nested injection trees, shared across the entire injection chain.
 ///
 /// Normally nothing: a row has to be drawn before it can be clicked, and drawing
 /// builds them. The cell is empty only when the root parse used up the whole
 /// foreground budget and the chunk build has not caught up, and a click is still
 /// an input event, so it gets the same 50 ms a cold root parse gets in
 /// `MainPaneView::file_diff_pair_syntax_document`.
-const TS_CLICK_COMBINED_LAYER_BUDGET: Duration = Duration::from_millis(50);
+const TS_CLICK_INJECTION_BUDGET: Duration = Duration::from_millis(50);
 
 /// Context on each side of the rendered window that a combined injection is still
 /// parsed with.
@@ -210,6 +211,10 @@ thread_local! {
     static TS_DOCUMENT_HASH_COUNT: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static TS_COMBINED_LAYER_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static TS_COMBINED_LAYER_PARSED_BYTES: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static TS_INJECTION_TREE_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
     /// Makes the combined-layer deadline already expired on a budgeted prepare,
     /// isolating "root fits, layer does not" from parse timing.
     #[cfg(test)]
