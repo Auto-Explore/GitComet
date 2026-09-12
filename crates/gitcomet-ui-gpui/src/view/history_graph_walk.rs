@@ -34,16 +34,26 @@ impl GraphCheckpoint {
     pub fn estimated_bytes(&self) -> usize {
         self.lanes.capacity() * std::mem::size_of::<SavedLane>()
     }
+    #[cfg(test)]
+    pub fn lane_capacity_slack(&self) -> usize {
+        self.lanes.capacity() - self.lanes.len()
+    }
     pub fn restore(&self) -> GraphWalk {
         gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::CheckpointRestore);
+        // Sized up front: a wide frontier restores thousands of lanes on every
+        // window miss, and growing the map from empty rehashes it a dozen times.
+        let width = self
+            .lanes
+            .last()
+            .map_or(0, |lane| usize::from(lane.col) + 1);
         let mut walk = GraphWalk {
             next_id: self.next_id,
             next_color: self.next_color,
             main: self.main,
             main_target: self.main_target,
             pending: self.pending,
-            lanes: Vec::new(),
-            targets: FxHashMap::default(),
+            lanes: Vec::with_capacity(width),
+            targets: FxHashMap::with_capacity_and_hasher(self.lanes.len(), Default::default()),
             free: BTreeSet::new(),
             colors: [0; LANE_COLOR_PALETTE_SIZE],
         };
@@ -119,20 +129,19 @@ impl GraphWalk {
         walk
     }
     pub fn checkpoint(&self) -> GraphCheckpoint {
+        // Exact capacity: a checkpoint is retained per 1,024 rows, and a
+        // size-hinted collect keeps power-of-two slack on every one of them.
+        let mut lanes = Vec::with_capacity(self.lanes.iter().flatten().count());
+        lanes.extend(self.lanes.iter().enumerate().filter_map(|(col, lane)| {
+            lane.map(|lane| SavedLane {
+                target: lane.target,
+                id: lane.id,
+                col: lane_col(col),
+                color: lane.color,
+            })
+        }));
         GraphCheckpoint {
-            lanes: self
-                .lanes
-                .iter()
-                .enumerate()
-                .filter_map(|(col, lane)| {
-                    lane.map(|lane| SavedLane {
-                        target: lane.target,
-                        id: lane.id,
-                        col: lane_col(col),
-                        color: lane.color,
-                    })
-                })
-                .collect(),
+            lanes,
             next_id: self.next_id,
             next_color: self.next_color,
             main: self.main,
@@ -339,14 +348,22 @@ impl GraphWalk {
                 LanePaint::lane(lane.color, false, lane.born == row)
             })
         };
-        let next = changed
+        let next: SmallVec<[(usize, LanePaint); 4]> = changed
             .into_iter()
             .map(|col| (col, outgoing(self.lanes.get(col).copied().flatten())))
             .collect();
-        let lanes_next = if materialize {
-            self.lanes.iter().map(|lane| outgoing(*lane)).collect()
+        let (lanes_next, from_node_cols) = if materialize {
+            // Every lane born this row is a changed column, so the summary
+            // needs no second pass over the frontier.
+            (
+                self.lanes.iter().map(|lane| outgoing(*lane)).collect(),
+                next.iter()
+                    .filter(|(_, lane)| lane.is_active() && lane.starts_at_node())
+                    .map(|(col, _)| lane_col(*col))
+                    .collect(),
+            )
         } else {
-            LanePaints::new()
+            (LanePaints::new(), FromNodeCols::new())
         };
         let mut edges = GraphEdges::new();
         for &parent in parents.iter().skip(1) {
@@ -373,6 +390,7 @@ impl GraphWalk {
                 node_col: lane_col(node),
                 node_color_ix: node_color,
                 is_merge: merge,
+                from_node_cols,
             },
             now,
             next,
@@ -384,6 +402,31 @@ impl GraphWalk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkpoints_carry_no_capacity_slack() {
+        for width in [1usize, 64, 512, 5261] {
+            let mut walk = GraphWalk::new(None);
+            for row in 0..width {
+                walk.step(row, &[row + width], false, false);
+            }
+            let checkpoint = walk.checkpoint();
+            assert_eq!(checkpoint.lanes.len(), width);
+            assert_eq!(checkpoint.lane_capacity_slack(), 0, "width={width}");
+            assert_eq!(
+                checkpoint.estimated_bytes(),
+                width * std::mem::size_of::<SavedLane>()
+            );
+            let restored = checkpoint.restore();
+            assert_eq!(restored.lanes.len(), width);
+            assert_eq!(
+                restored.lanes.capacity(),
+                width,
+                "restore is sized up front"
+            );
+            assert!(restored.targets.capacity() >= width);
+        }
+    }
 
     #[test]
     fn transitions_and_restored_checkpoints_match_original_frontier() {

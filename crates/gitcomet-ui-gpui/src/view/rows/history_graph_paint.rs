@@ -27,6 +27,136 @@ fn x_key(x: Pixels) -> u32 {
     f32::from(x).to_bits()
 }
 
+/// The first column [`graph_col_x`] pins to the edge x; every column from here
+/// on draws at that one x.
+fn pinned_from_col(margin_x: Pixels, col_gap: Pixels, edge_x: Pixels) -> usize {
+    let natural = |col: usize| margin_x + col_gap * (col as f32);
+    if col_gap <= px(0.0) {
+        return if natural(0) >= edge_x { 0 } else { usize::MAX };
+    }
+    let mut col = ((edge_x - margin_x) / col_gap).max(0.0).ceil() as usize;
+    while col > 0 && natural(col - 1) >= edge_x {
+        col -= 1;
+    }
+    while col < usize::from(u16::MAX) && natural(col) < edge_x {
+        col += 1;
+    }
+    col
+}
+
+type LaneItem = (usize, history_graph::LanePaint);
+
+/// [`coalesced`] over a dense lane array without visiting every lane.
+///
+/// Columns before `pin_col` each draw at their own x, so every included lane
+/// there wins outright. Columns from `pin_col` on all draw at the edge x, where
+/// one geometry wants the last selected lane, or else the last lane: a backward
+/// scan finds it without hashing the whole frontier, and stops as soon as it
+/// has it. `extra_tail` carries the (selected, plain) winners of a second edge
+/// geometry the caller resolved from row summaries. Winners come out in
+/// `coalesced`'s order: plain ones by column, then selected ones by column.
+fn coalesced_lanes(
+    lanes: &[history_graph::LanePaint],
+    pin_col: usize,
+    selection_possible: bool,
+    include: impl Fn(usize, history_graph::LanePaint) -> bool,
+    selected: impl Fn(usize, history_graph::LanePaint) -> bool,
+    extra_tail: (Option<LaneItem>, Option<LaneItem>),
+) -> SmallVec<[LaneItem; 8]> {
+    let mut winners: SmallVec<[LaneItem; 8]> = SmallVec::new();
+    let mut chosen: SmallVec<[LaneItem; 2]> = SmallVec::new();
+    let displayed = pin_col.min(lanes.len());
+    for (col, &lane) in lanes[..displayed].iter().enumerate() {
+        if include(col, lane) {
+            if selected(col, lane) {
+                chosen.push((col, lane));
+            } else {
+                winners.push((col, lane));
+            }
+        }
+    }
+    let mut tail_chosen = None;
+    let mut tail_plain = None;
+    for col in (displayed..lanes.len()).rev() {
+        let lane = lanes[col];
+        if !include(col, lane) {
+            continue;
+        }
+        if selection_possible && selected(col, lane) {
+            tail_chosen = Some((col, lane));
+            break;
+        }
+        if tail_plain.is_none() {
+            tail_plain = Some((col, lane));
+            if !selection_possible {
+                break;
+            }
+        }
+    }
+    let mut tail: SmallVec<[LaneItem; 2]> = SmallVec::new();
+    if tail_chosen.is_none() {
+        tail.extend(tail_plain);
+    }
+    if extra_tail.0.is_none() {
+        tail.extend(extra_tail.1);
+    }
+    tail.sort_unstable_by_key(|(col, _)| *col);
+    winners.extend(tail);
+    winners.extend(chosen);
+    let mut tail: SmallVec<[LaneItem; 2]> = SmallVec::new();
+    tail.extend(tail_chosen);
+    tail.extend(extra_tail.0);
+    tail.sort_unstable_by_key(|(col, _)| *col);
+    winners.extend(tail);
+    winners
+}
+
+/// The row's continuations, coalesced like [`coalesced`] keyed on x and on
+/// whether the lane elbows out of the node. Lanes born at the node that land on
+/// the edge line come from the row's summary, so an unpinned node never forces a
+/// scan of the pinned columns.
+fn continuing_winners(
+    row: &history_graph::GraphRow,
+    pin_col: usize,
+    node_pinned: bool,
+    selection_possible: bool,
+    selected: impl Fn(usize, history_graph::LanePaint) -> bool,
+) -> SmallVec<[LaneItem; 8]> {
+    let mut extra = (None, None);
+    if !node_pinned {
+        for &col in row.from_node_cols.iter().rev() {
+            let col = usize::from(col);
+            if col < pin_col {
+                break;
+            }
+            let Some(&lane) = row.lanes_next.get(col) else {
+                continue;
+            };
+            if !(lane.is_active() && lane.starts_at_node()) {
+                continue;
+            }
+            if selection_possible && selected(col, lane) {
+                extra.0 = Some((col, lane));
+                break;
+            }
+            if extra.1.is_none() {
+                extra.1 = Some((col, lane));
+                if !selection_possible {
+                    break;
+                }
+            }
+        }
+    }
+    coalesced_lanes(
+        &row.lanes_next,
+        pin_col,
+        selection_possible,
+        |col, lane| lane.is_active() && !(col >= pin_col && !node_pinned && lane.starts_at_node()),
+        selected,
+        extra,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint_history_graph(
     theme: AppTheme,
@@ -92,6 +222,8 @@ pub(super) fn paint_history_graph(
             selected_lane.is_some_and(|lane| lane.covers(theme, row_ix, color_ix))
         })
     };
+    let pin_col = pinned_from_col(margin_x, col_gap, edge_x);
+    let selection_possible = selected_lane.is_some_and(|lane| lane.covers_row(row_ix));
 
     // Whether column `col` draws a vertical down from the top edge of this row.
     let has_incoming_vertical = |col: usize| {
@@ -111,18 +243,17 @@ pub(super) fn paint_history_graph(
     };
 
     // Incoming vertical segments.
-    let incoming = coalesced(
-        row.lanes_now
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|&(col, lane)| {
-                lane.is_active()
-                    && (lane.incoming() || connect_from_top_col == Some(col))
-                    && !joins_out_of(col)
-            }),
-        |(col, _)| x_key(x_for_col(col)),
-        |(col, lane)| paints_last(col, lane.color_ix),
+    let incoming = coalesced_lanes(
+        &row.lanes_now,
+        pin_col,
+        selection_possible,
+        |col, lane| {
+            lane.is_active()
+                && (lane.incoming() || connect_from_top_col == Some(col))
+                && !joins_out_of(col)
+        },
+        |col, lane| paints_last(col, lane.color_ix),
+        (None, None),
     );
     for (col, lane_paint) in incoming {
         let x = x_for_col(col);
@@ -177,19 +308,12 @@ pub(super) fn paint_history_graph(
     }
 
     // Continuations from current row to next row.
-    let continuing = coalesced(
-        row.lanes_next
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|(_, lane)| lane.is_active()),
-        |(col, lane)| {
-            (
-                x_key(x_for_col(col)),
-                lane.starts_at_node() && !same_x(node_x, x_for_col(col)),
-            )
-        },
-        |(col, lane)| paints_last(col, lane.color_ix),
+    let continuing = continuing_winners(
+        row,
+        pin_col,
+        same_x(node_x, edge_x),
+        selection_possible,
+        |col, lane| paints_last(col, lane.color_ix),
     );
     for (out_col, lane_paint) in continuing {
         let x_out = x_for_col(out_col);
@@ -405,6 +529,15 @@ impl SelectedLane {
             last_row,
         }
     }
+    /// Whether visible row `row_ix` lies in the lane's span at all. False means
+    /// no colour on the row can be the selected lane.
+    pub(in crate::view) fn covers_row(self, row_ix: usize) -> bool {
+        // `row_ix + 1 >= first_row` rather than `row_ix >= first_row - 1`, which
+        // underflows at the top of the page. The slack row is the lane's birth
+        // row: it draws the lane's lower half out of `lanes_next` one row above
+        // the first row that carries it in `lanes_now`.
+        row_ix + 1 >= self.first_row && row_ix <= self.last_row
+    }
     /// Whether the lane drawn in `color_ix` on visible row `row_ix` is this one.
     pub(in crate::view) fn covers(
         self,
@@ -422,11 +555,7 @@ impl SelectedLane {
         {
             return false;
         }
-        // `row_ix + 1 >= first_row` rather than `row_ix >= first_row - 1`, which
-        // underflows at the top of the page. The slack row is the lane's birth
-        // row: it draws the lane's lower half out of `lanes_next` one row above
-        // the first row that carries it in `lanes_now`.
-        row_ix + 1 >= self.first_row && row_ix <= self.last_row
+        self.covers_row(row_ix)
     }
 }
 
@@ -598,7 +727,9 @@ pub(in crate::view) fn band_node_for(row: &history_graph::GraphRow, on_branch: b
     }
 }
 
-/// Which halves of a band row a lane occupies.
+/// Which halves of a band row a lane occupies. The painter resolves the same
+/// halves lane by lane; this stays as the reference for its tests.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct BandLaneSegment {
     pub(super) col: usize,
@@ -620,6 +751,7 @@ pub(super) struct BandLaneSegment {
 ///
 /// The one exception is the band's own column: our node connects down into the
 /// commit's node, so it always gets a bottom half even when the lane starts there.
+#[cfg(test)]
 pub(super) fn band_lane_segments(
     lanes: &[history_graph::LanePaint],
     node_col: usize,
@@ -710,25 +842,32 @@ pub(super) fn paint_history_graph_band(
     // column is the edge x.
     let node_x_offset = x_for_col(usize::from(node.col));
 
-    let segments = band_lane_segments(lanes, usize::from(node.col), connect_from_top_col);
+    // The same halves `band_lane_segments` describes, resolved lane by lane so
+    // a wide frontier costs the band only its displayed columns.
+    let pin_col = pinned_from_col(margin_x, col_gap, edge_x);
+    let selection_possible = selected_lane.is_some_and(|lane| lane.covers_row(row_ix));
+    let node_col = usize::from(node.col);
+    let passes_through = |col: usize, lane: history_graph::LanePaint| {
+        lane.incoming() || connect_from_top_col == Some(col)
+    };
     for top in [true, false] {
-        let winners = coalesced(
-            segments.iter().copied().filter(|segment| {
-                if top {
-                    segment.has_top
-                } else {
-                    segment.has_bottom
-                }
-            }),
-            |segment| x_key(x_for_col(segment.col)),
-            |segment| {
-                edge_paint_last(same_x(x_for_col(segment.col), edge_x), || {
-                    selected_lane.is_some_and(|lane| lane.covers(theme, row_ix, segment.color_ix))
+        let winners = coalesced_lanes(
+            lanes,
+            pin_col,
+            selection_possible,
+            |col, lane| {
+                lane.is_active() && (passes_through(col, lane) || (!top && col == node_col))
+            },
+            |col, lane| {
+                edge_paint_last(same_x(x_for_col(col), edge_x), || {
+                    selected_lane
+                        .is_some_and(|lane_sel| lane_sel.covers(theme, row_ix, lane.color_ix))
                 })
             },
+            (None, None),
         );
-        for segment in winners {
-            let x = x_for_col(segment.col);
+        for (col, lane) in winners {
+            let x = x_for_col(col);
             let from_y = if top { y_top } else { y_center };
             let to_y = if !top { y_bottom } else { y_center };
             let mut path = PathBuilder::stroke(stroke_width);
@@ -743,7 +882,7 @@ pub(super) fn paint_history_graph_band(
                 let color = if edge_takes_node_colour(node_x_offset, x, edge_x) {
                     node.color
                 } else {
-                    lane_wash_color(theme, segment.color_ix, row_ix, selected_lane)
+                    lane_wash_color(theme, lane.color_ix, row_ix, selected_lane)
                 };
                 gitcomet_core::history_perf::record(gitcomet_core::history_perf::Work::PaintPath);
                 window.paint_path(p, color);
@@ -1027,6 +1166,7 @@ mod band_tests {
             node_col,
             node_color_ix: 0,
             is_merge: false,
+            from_node_cols: history_graph::from_node_cols_of(lanes),
         }
     }
 
@@ -1102,6 +1242,7 @@ mod band_tests {
             node_col: 0,
             node_color_ix: 7,
             is_merge: false,
+            from_node_cols: [0].into_iter().collect(),
         };
         let below = || GraphRow {
             lanes_now: [incoming(7)].into_iter().collect(),
@@ -1111,6 +1252,7 @@ mod band_tests {
             node_col: 0,
             node_color_ix: 7,
             is_merge: false,
+            from_node_cols: Default::default(),
         };
         let rows = [anchor, below(), below()];
 
@@ -1773,6 +1915,7 @@ mod coalescing_regressions {
                         node_col: (width - 1) as u16,
                         node_color_ix: 0,
                         is_merge: false,
+                        from_node_cols: Default::default(),
                     };
                     let _capture = history_perf::capture();
                     cx.draw(
@@ -1854,6 +1997,235 @@ mod coalescing_regressions {
                     assert_eq!(Some(&item), expected.get(&geometry(item)));
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod lane_coalescing_regressions {
+    use super::*;
+    use history_graph::LanePaint;
+
+    fn xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    /// Every lane winner the generic hash-based coalescing produces, in the same
+    /// order, from the displayed-column scan: incoming and continuing passes of a
+    /// commit row and both halves of a band row, over random frontiers, widths
+    /// with sub-pixel edges, joins, connectors, node positions and selections.
+    #[test]
+    fn displayed_column_coalescing_matches_generic_coalescing() {
+        let margin_x = px(HISTORY_GRAPH_MARGIN_X_PX);
+        let col_gap = px(HISTORY_GRAPH_COL_GAP_PX);
+        let margin_right = px(HISTORY_GRAPH_MARGIN_RIGHT_PX);
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for case in 0..4000usize {
+            let len = (xorshift(&mut state) % 48) as usize + if case % 9 == 0 { 400 } else { 0 };
+            let lanes: Vec<LanePaint> = (0..len)
+                .map(|_| {
+                    let r = xorshift(&mut state);
+                    if r % 5 == 0 {
+                        LanePaint::HOLE
+                    } else {
+                        LanePaint::lane((r % 6) as u8, r % 3 != 0, r % 4 == 0)
+                    }
+                })
+                .collect();
+            let width = px((xorshift(&mut state) % 8000) as f32 / 10.0 + 4.0);
+            let edge_x = graph_edge_x(margin_x, margin_right, width);
+            let x_for_col = |col: usize| graph_col_x(col, margin_x, col_gap, edge_x);
+            let pin_col = pinned_from_col(margin_x, col_gap, edge_x);
+            for col in 0..len.max(pin_col.saturating_add(2).min(len + 2)) {
+                assert_eq!(
+                    x_for_col(col) == edge_x,
+                    col >= pin_col,
+                    "case {case}: column {col} pin {pin_col} width {width:?}"
+                );
+            }
+            let node_col = if len == 0 {
+                0
+            } else {
+                (xorshift(&mut state) % len as u64) as usize
+            };
+            let node_x = x_for_col(node_col);
+            let joins_out: Vec<usize> = (0..xorshift(&mut state) % 3)
+                .map(|_| (xorshift(&mut state) % len.max(1) as u64) as usize)
+                .collect();
+            let joins_out_of = |col: usize| joins_out.contains(&col);
+            let connect = (xorshift(&mut state) % 2 == 0)
+                .then(|| (xorshift(&mut state) % len.max(1) as u64) as usize);
+            let selection: Option<u8> = match xorshift(&mut state) % 3 {
+                0 => None,
+                1 => Some((xorshift(&mut state) % 6) as u8),
+                // A colour absent from the frontier: the scan must run out cleanly.
+                _ => Some(9),
+            };
+            let paints_last = |col: usize, color_ix: u8| {
+                edge_paint_last(same_x(x_for_col(col), edge_x), || {
+                    selection == Some(color_ix)
+                })
+            };
+            let selection_possible = selection.is_some();
+
+            let include = |col: usize, lane: LanePaint| {
+                lane.is_active() && (lane.incoming() || connect == Some(col)) && !joins_out_of(col)
+            };
+            let expected = coalesced(
+                lanes
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter(|&(col, lane)| include(col, lane)),
+                |(col, _)| x_key(x_for_col(col)),
+                |(col, lane)| paints_last(col, lane.color_ix),
+            );
+            let actual = coalesced_lanes(
+                &lanes,
+                pin_col,
+                selection_possible,
+                include,
+                |col, lane| paints_last(col, lane.color_ix),
+                (None, None),
+            );
+            assert_eq!(
+                actual.as_slice(),
+                expected.as_slice(),
+                "incoming case {case}"
+            );
+
+            let row = history_graph::GraphRow {
+                lanes_now: lanes.iter().copied().collect(),
+                lanes_next: lanes.iter().copied().collect(),
+                joins_in: Default::default(),
+                edges_out: Default::default(),
+                node_col: node_col as u16,
+                node_color_ix: 0,
+                is_merge: false,
+                from_node_cols: history_graph::from_node_cols_of(&lanes),
+            };
+            let expected = coalesced(
+                lanes
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter(|(_, lane)| lane.is_active()),
+                |(col, lane)| {
+                    (
+                        x_key(x_for_col(col)),
+                        lane.starts_at_node() && !same_x(node_x, x_for_col(col)),
+                    )
+                },
+                |(col, lane)| paints_last(col, lane.color_ix),
+            );
+            let actual = continuing_winners(
+                &row,
+                pin_col,
+                same_x(node_x, edge_x),
+                selection_possible,
+                |col, lane| paints_last(col, lane.color_ix),
+            );
+            assert_eq!(
+                actual.as_slice(),
+                expected.as_slice(),
+                "continuing case {case}"
+            );
+
+            let segments = band_lane_segments(&lanes, node_col, connect);
+            for top in [true, false] {
+                let expected: Vec<(usize, u8)> = coalesced(
+                    segments.iter().copied().filter(|segment| {
+                        if top {
+                            segment.has_top
+                        } else {
+                            segment.has_bottom
+                        }
+                    }),
+                    |segment| x_key(x_for_col(segment.col)),
+                    |segment| paints_last(segment.col, segment.color_ix),
+                )
+                .into_iter()
+                .map(|segment| (segment.col, segment.color_ix))
+                .collect();
+                let actual: Vec<(usize, u8)> = coalesced_lanes(
+                    &lanes,
+                    pin_col,
+                    selection_possible,
+                    |col, lane| {
+                        lane.is_active()
+                            && (lane.incoming()
+                                || connect == Some(col)
+                                || (!top && col == node_col))
+                    },
+                    |col, lane| paints_last(col, lane.color_ix),
+                    (None, None),
+                )
+                .into_iter()
+                .map(|(col, lane)| (col, lane.color_ix))
+                .collect();
+                assert_eq!(actual, expected, "band top={top} case {case}");
+            }
+        }
+    }
+
+    /// The scan stops at the displayed columns plus the edge winner: a wide
+    /// frontier no longer costs every lane, in either pass, selected or not.
+    #[test]
+    fn displayed_column_coalescing_visits_only_displayed_columns_and_the_edge_winner() {
+        let margin_x = px(HISTORY_GRAPH_MARGIN_X_PX);
+        let col_gap = px(HISTORY_GRAPH_COL_GAP_PX);
+        let edge_x = graph_edge_x(
+            margin_x,
+            px(HISTORY_GRAPH_MARGIN_RIGHT_PX),
+            px(crate::view::HISTORY_COL_GRAPH_PX),
+        );
+        let pin_col = pinned_from_col(margin_x, col_gap, edge_x);
+        assert!(
+            pin_col < 8,
+            "default width shows a handful of columns: {pin_col}"
+        );
+        let lanes: Vec<LanePaint> = (0..5261)
+            .map(|col| LanePaint::lane((col % 64) as u8, true, false))
+            .collect();
+        let last_color = lanes.last().unwrap().color_ix;
+        for selection in [None, Some(last_color)] {
+            let visited = std::cell::Cell::new(0usize);
+            let winners = coalesced_lanes(
+                &lanes,
+                pin_col,
+                selection.is_some(),
+                |_, lane| {
+                    visited.set(visited.get() + 1);
+                    lane.is_active() && lane.incoming()
+                },
+                |col, lane| col >= pin_col && selection == Some(lane.color_ix),
+                (None, None),
+            );
+            assert_eq!(winners.len(), pin_col + 1, "{selection:?}");
+            assert_eq!(winners.last().map(|(col, _)| *col), Some(5260));
+            assert!(
+                visited.get() <= pin_col + 1,
+                "{selection:?}: visited {} lanes",
+                visited.get()
+            );
+            let row = history_graph::GraphRow {
+                lanes_now: lanes.iter().copied().collect(),
+                lanes_next: lanes.iter().copied().collect(),
+                joins_in: Default::default(),
+                edges_out: Default::default(),
+                node_col: 0,
+                node_color_ix: 0,
+                is_merge: false,
+                from_node_cols: Default::default(),
+            };
+            let continuing =
+                continuing_winners(&row, pin_col, false, selection.is_some(), |col, lane| {
+                    col >= pin_col && selection == Some(lane.color_ix)
+                });
+            assert_eq!(continuing.len(), pin_col + 1, "{selection:?}");
         }
     }
 }

@@ -164,6 +164,29 @@ impl Drop for IndexedViewState {
     }
 }
 
+/// Raw blocks the visible rows in `range` map into, in row order. Steps from
+/// block boundary to block boundary through the projection instead of mapping
+/// every row, so a frame's bookkeeping costs one lookup per block.
+fn push_blocks_for_visible_range(
+    projection: &gitcomet_core::history_index::HistoryProjection,
+    range: std::ops::Range<usize>,
+    blocks: &mut Vec<usize>,
+) {
+    let mut row = range.start;
+    while row < range.end {
+        let Some(raw) = projection.raw_position(row) else {
+            break;
+        };
+        let block = raw / HISTORY_BLOCK_SIZE * HISTORY_BLOCK_SIZE;
+        if !blocks.contains(&block) {
+            blocks.push(block);
+        }
+        row = projection
+            .visible_position_at_or_after(block + HISTORY_BLOCK_SIZE)
+            .max(row + 1);
+    }
+}
+
 fn window_commit_range(
     shown: &Presentation,
     plan: &HistoryListPlan,
@@ -729,14 +752,7 @@ impl HistoryView {
             [first..last, newer, older]
         };
         for range in ranges {
-            for row in range {
-                if let Some(raw) = shown.graph.projection.raw_position(row) {
-                    let block = raw / HISTORY_BLOCK_SIZE * HISTORY_BLOCK_SIZE;
-                    if !blocks.contains(&block) {
-                        blocks.push(block);
-                    }
-                }
-            }
+            push_blocks_for_visible_range(&shown.graph.projection, range, &mut blocks);
         }
         let snapshot = shown.graph.projection.index.snapshot.clone();
         if self
@@ -797,21 +813,20 @@ impl HistoryView {
             end,
             blocks: {
                 let indexed = &repo.history_state.indexed;
-                let mut blocks = Vec::new();
-                for row in start..end {
-                    let raw = shown.graph.projection.raw_position(row).unwrap();
-                    let block = raw / HISTORY_BLOCK_SIZE * HISTORY_BLOCK_SIZE;
-                    if blocks.last().is_some_and(|(old, _)| *old == block) {
-                        continue;
-                    }
-                    let identity = (indexed.range_index.as_ref().map(|index| &index.snapshot)
-                        == Some(&snapshot))
-                    .then(|| indexed.ranges.get(&block))
-                    .flatten()
-                    .map_or(0, |range| Arc::as_ptr(range) as usize);
-                    blocks.push((block, identity));
-                }
-                blocks
+                let mut raw_blocks = Vec::new();
+                push_blocks_for_visible_range(&shown.graph.projection, start..end, &mut raw_blocks);
+                let current =
+                    indexed.range_index.as_ref().map(|index| &index.snapshot) == Some(&snapshot);
+                raw_blocks
+                    .into_iter()
+                    .map(|block| {
+                        let identity = current
+                            .then(|| indexed.ranges.get(&block))
+                            .flatten()
+                            .map_or(0, |range| Arc::as_ptr(range) as usize);
+                        (block, identity)
+                    })
+                    .collect()
             },
             selection,
             tags_visible: self.history_show_tags,
@@ -1378,6 +1393,53 @@ mod cache_regressions {
     use gitcomet_core::history_index::HistoryIndexBuilder;
     use gitcomet_core::history_perf::{self, Work};
     use gitcomet_core::services::HistorySnapshot;
+
+    #[test]
+    fn block_stepping_matches_a_row_by_row_scan_across_hidden_rows() {
+        let count = 5_000usize;
+        let mut builder =
+            HistoryIndexBuilder::new(HistorySnapshot("blocks".into()), LogScope::AllBranches, 20)
+                .unwrap();
+        for row in 0..count {
+            let mut id = [0u8; 20];
+            id[..8].copy_from_slice(&(row as u64 + 1).to_be_bytes());
+            builder.push(&id, std::iter::empty(), false).unwrap();
+        }
+        let index = builder.finish(&CancellationToken::new()).unwrap();
+        let mut random = 0x1234_5678_9abc_def1u64;
+        let mut next = move || {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            random
+        };
+        for hidden_count in [0usize, 1, 37, 900] {
+            let hidden: Vec<u32> = (0..hidden_count)
+                .map(|_| (next() % count as u64) as u32)
+                .collect();
+            let projection =
+                gitcomet_core::history_index::HistoryProjection::new(index.clone(), hidden);
+            for _ in 0..200 {
+                let start = (next() % projection.len() as u64) as usize;
+                let end = (start + (next() % 700) as usize).min(projection.len() + 3);
+                let mut expected = Vec::new();
+                for row in start..end {
+                    if let Some(raw) = projection.raw_position(row) {
+                        let block = raw / HISTORY_BLOCK_SIZE * HISTORY_BLOCK_SIZE;
+                        if !expected.contains(&block) {
+                            expected.push(block);
+                        }
+                    }
+                }
+                let mut actual = Vec::new();
+                push_blocks_for_visible_range(&projection, start..end, &mut actual);
+                assert_eq!(
+                    actual, expected,
+                    "hidden={hidden_count} range={start}..{end}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn indexed_history_warm_decorations_do_not_rebuild_ref_maps() {

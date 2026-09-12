@@ -162,6 +162,51 @@ use strict mode.
 Work counters require tests/the benchmark feature and an opt-in capture. They
 compile away in shipping builds and never read environment variables per row.
 
+## Follow-up: bounded painting, exact checkpoints, cached parent resolution
+
+Changes on 2026-09-12, each with a deterministic test:
+
+- The painter coalesces lanes by displayed column: columns before the edge each
+  win outright, the pinned tail is resolved by a backward scan that stops at its
+  winner, and rows carry `from_node_cols` so lanes born at the node that land on
+  the edge line need no scan. `displayed_column_coalescing_matches_generic_coalescing`
+  checks every winner and its order against the hash-based coalescing over random
+  frontiers, widths, joins, connectors and selections.
+- Checkpoints are collected at exact capacity and restores are pre-sized
+  (`checkpoints_carry_no_capacity_slack`, in both the walk and the graph).
+- Index construction keeps its sorted prefix cache through parent resolution, so
+  a bucket is a few contiguous cache lines and only the final full-ID check reads
+  the ID table (`large_index_resolves_external_and_colliding_parents_through_the_prefix_cache`).
+- `HistoryProjection::raw_position` is one partition point instead of a binary
+  search over partition points, `IndexedGraph::step` maps each row once, and
+  per-frame block bookkeeping steps by block
+  (`sparse_projection_maps_thousands_of_hidden_rows_both_ways`,
+  `block_stepping_matches_a_row_by_row_scan_across_hidden_rows`).
+- Integration-branch containment bitsets and checkpoint labels are reused across
+  rebuilds while their inputs hold still, so a divergence-only ref change no
+  longer replays the graph
+  (`integration_containment_and_labels_are_reused_when_their_inputs_hold_still`).
+- The stored index shares the log snapshot's allocation, so snapshot equality is
+  a pointer comparison (`built_index_shares_the_log_snapshot_allocation`).
+
+Same workstation and harnesses as above; "before" is commit 9b217890.
+
+| Case | Before | After |
+| --- | ---: | ---: |
+| Release draw p50, 64 / 512 / 5,261 lanes, 80 px | 1.75 / 1.94 / 4.30 ms | 1.69 / 1.68 / 1.73 ms |
+| Release draw p95, same | 1.90 / 2.35 / 4.65 ms | 1.72 / 1.72 / 1.85 ms |
+| Test-profile draw p50, same | 5.48 / 4.18 / 16.43 ms | 2.78 / 2.67 / 2.67 ms |
+| Allocations per release draw | 9,051 | 8,896 |
+| Checkpoint payload, 2M rows × 5,261 lanes | 191,526,448 B | 123,042,752 B |
+| Index + graph construction, 2M rows, width 1 / 5,261 | 1.33 / 1.45 s | 0.68 / 0.75 s |
+| First-touch 40-row window p95, 2M rows × 5,261 lanes | 1.21 ms | 1.12 ms |
+| `finish()` at 1,922,916 rows, release scratch harness | 0.823 s | 0.175 s |
+| Sequential row mapping, 2M rows, 200 / 2,000 hidden rows | 0.39 / 0.87 s | 0.05 / 0.07 s |
+| Graph rebuild after a divergence-only ref change, 2M rows | full replay | 0.001 s, zero walks |
+
+The ignored `history_index_finish_phase_timing` and
+`integration_containment_walk_timing` tests reproduce the last two rows in-tree.
+
 ## Verification
 
 The full core, state, backend log-integration and GPUI library suites passed:

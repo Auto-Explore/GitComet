@@ -166,6 +166,9 @@ impl HistoryView {
                         }
                     })
                 });
+                if loaded {
+                    continue;
+                }
                 let failed = shown
                     .graph
                     .projection
@@ -177,7 +180,7 @@ impl HistoryView {
                             repo.history_state.indexed.range_errors.contains_key(&block)
                         })
                     });
-                if !loaded && !failed {
+                if !failed {
                     let identity = match worktree_ix {
                         Some(ix) => {
                             let Some(worktree) = self.indexed.worktrees.get(ix) else {

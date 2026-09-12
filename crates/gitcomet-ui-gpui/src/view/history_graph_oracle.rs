@@ -403,6 +403,7 @@ impl OracleGraphWalk {
             }
         }
 
+        let from_node_cols = super::from_node_cols_of(&lanes_next);
         let row = GraphRow {
             lanes_now,
             lanes_next,
@@ -411,6 +412,7 @@ impl OracleGraphWalk {
             node_col: lane_col(node_col),
             node_color_ix,
             is_merge,
+            from_node_cols,
         };
 
         self.next_id = next_id;

@@ -103,6 +103,24 @@ pub struct GraphRow {
     /// the head's new colour.
     pub node_color_ix: LaneColorIx,
     pub is_merge: bool,
+    /// Columns of `lanes_next` whose lane starts at this row's node, ascending.
+    /// A row births at most a few lanes, so the painter resolves them without
+    /// scanning every column pinned past the graph's edge.
+    pub from_node_cols: FromNodeCols,
+}
+
+pub(in crate::view) type FromNodeCols = SmallVec<[u16; 2]>;
+
+/// [`GraphRow::from_node_cols`] read back from a dense `lanes_next`, for rows
+/// the tests build outside the frontier walk.
+#[cfg(test)]
+pub(in crate::view) fn from_node_cols_of(lanes_next: &[LanePaint]) -> FromNodeCols {
+    lanes_next
+        .iter()
+        .enumerate()
+        .filter(|(_, lane)| lane.is_active() && lane.starts_at_node())
+        .map(|(col, _)| lane_col(col))
+        .collect()
 }
 
 trait GraphCommitLike {
@@ -185,6 +203,7 @@ fn compute_linear_visible_history_fast_path<C: GraphCommitLike>(
                 node_col: 0,
                 node_color_ix: 0,
                 is_merge: false,
+                from_node_cols: FromNodeCols::new(),
             }]
         });
     }
@@ -210,6 +229,7 @@ fn compute_linear_visible_history_fast_path<C: GraphCommitLike>(
             node_col: 0,
             node_color_ix: 0,
             is_merge: false,
+            from_node_cols: FromNodeCols::new(),
         });
     }
 
@@ -225,6 +245,7 @@ fn compute_linear_visible_history_fast_path<C: GraphCommitLike>(
         node_col: 0,
         node_color_ix: 0,
         is_merge: false,
+        from_node_cols: FromNodeCols::new(),
     });
     Some(rows)
 }

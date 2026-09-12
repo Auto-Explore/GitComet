@@ -140,6 +140,16 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                     if Some(&index.snapshot) == history.requested.as_ref()
                         && Some(&index.snapshot) == repo.history_state.log_snapshot.as_ref() =>
                 {
+                    let mut index = index;
+                    // The backend formats its own snapshot text. Sharing the
+                    // log's allocation turns every later equality check into a
+                    // pointer comparison instead of a memcmp of every tip.
+                    if let (Some(unique), Some(snapshot)) = (
+                        Arc::get_mut(&mut index),
+                        repo.history_state.log_snapshot.as_ref(),
+                    ) {
+                        unique.snapshot = snapshot.clone();
+                    }
                     history.index = Some(index.clone());
                     history.rev = history.rev.wrapping_add(1);
                     history.status_rev = history.status_rev.wrapping_add(1);
@@ -445,6 +455,42 @@ mod tests {
                     .collect(),
             }),
         }
+    }
+
+    #[test]
+    fn built_index_shares_the_log_snapshot_allocation() {
+        let (mut state, _) = fixture();
+        let repo = &mut state.repos[0];
+        repo.history_state.indexed = Default::default();
+        let log_snapshot = repo.history_state.log_snapshot.clone().unwrap();
+        let work = reduce(&mut state, Event::Ensure { repo_id: RepoId(1) });
+        let Some(Effect::IndexedHistory(Work::Build { seq, .. })) = work.first() else {
+            panic!("expected a build");
+        };
+        // Equal text in a separately allocated snapshot, as the backend produces.
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot(Arc::from(log_snapshot.0.as_ref())),
+            LogScope::AllBranches,
+            20,
+        )
+        .unwrap();
+        builder.push(&[7; 20], std::iter::empty(), false).unwrap();
+        let built = builder.finish(&CancellationToken::new()).unwrap();
+        assert!(!Arc::ptr_eq(&built.snapshot.0, &log_snapshot.0));
+        reduce(
+            &mut state,
+            Event::Built {
+                repo_id: RepoId(1),
+                seq: *seq,
+                result: Ok(Some(built)),
+            },
+        );
+        let stored = state.repos[0].history_state.indexed.index.clone().unwrap();
+        assert!(
+            Arc::ptr_eq(&stored.snapshot.0, &log_snapshot.0),
+            "the stored index must share the log snapshot's allocation"
+        );
+        assert_eq!(stored.len(), 1);
     }
 
     #[test]

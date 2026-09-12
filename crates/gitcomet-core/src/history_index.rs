@@ -109,6 +109,23 @@ impl HistoryIndex {
             .ok()
             .map(|ix| rows[ix] as usize)
     }
+    /// `position_bytes` over the builder's sorted `(prefix, row)` cache, which is
+    /// parallel to `sorted_rows`. Equal prefixes form a run sorted by full ID.
+    fn position_in_keyed(&self, keyed: &[(u64, u32)], id: &[u8]) -> Option<usize> {
+        let prefix = u64::from_be_bytes(id[..8].try_into().ok()?);
+        let bucket = (prefix >> 48) as usize;
+        let bucket = &keyed[self.fanout[bucket] as usize..self.fanout[bucket + 1] as usize];
+        let first = bucket.partition_point(|entry| entry.0 < prefix);
+        let run = &bucket[first..];
+        let run = &run[..run.partition_point(|entry| entry.0 == prefix)];
+        run.binary_search_by(|entry| {
+            self.id_bytes(entry.1 as usize)
+                .expect("indexed row")
+                .cmp(id)
+        })
+        .ok()
+        .map(|ix| run[ix].1 as usize)
+    }
     pub fn parents(&self, row: usize) -> &[u32] {
         match (
             self.parent_offsets.get(row),
@@ -207,17 +224,30 @@ impl HistoryProjection {
         if visible >= self.len() {
             return None;
         }
-        let (mut lo, mut hi) = (visible, visible + self.hidden.len());
+        // `hidden[k] - k` is the visible index the k-th hidden row displaced, and it
+        // never decreases, so the hidden rows at or before the answer are one
+        // partition point rather than a binary search over partition points.
+        let (mut lo, mut hi) = (0, self.hidden.len());
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let hidden = self.hidden.partition_point(|&row| row as usize <= mid);
-            if mid + 1 - hidden <= visible {
+            if self.hidden[mid] as usize - mid <= visible {
                 lo = mid + 1;
             } else {
                 hi = mid;
             }
         }
-        Some(lo)
+        Some(visible + lo)
+    }
+    /// The visible index of the first shown row at or after `raw`, or the
+    /// visible length when none remains. Lets block scans step by block instead
+    /// of by row.
+    pub fn visible_position_at_or_after(&self, raw: usize) -> usize {
+        if raw >= self.index.len() {
+            return self.len();
+        }
+        raw - self
+            .hidden
+            .partition_point(|&hidden| (hidden as usize) < raw)
     }
     pub fn position(&self, id: &str) -> Option<usize> {
         self.visible_position(self.index.position(id)?)
@@ -373,9 +403,10 @@ impl HistoryIndexBuilder {
         }
         Ok(())
     }
-    /// Estimated peak construction storage, including cached-prefix sorting,
-    /// unresolved parents, and capacity growth if every parent is external.
-    /// Retained index bytes are reported separately.
+    /// Estimated peak construction storage, including the cached-prefix sort
+    /// (retained through parent resolution), unresolved parents, and capacity
+    /// growth if every parent is external. Retained index bytes are reported
+    /// separately.
     pub fn estimated_peak_bytes(&self) -> usize {
         let rows = self.len();
         let (sort, fanout) = if rows >= 65_536 {
@@ -389,7 +420,8 @@ impl HistoryIndexBuilder {
             + self.parent_ids.capacity()
             + rows * 4
             + fanout
-            + sort.max(resolved)
+            + sort
+            + resolved
     }
 
     pub fn finish(mut self, cancellation: &CancellationToken) -> Result<HistoryIndexHandle> {
@@ -397,7 +429,7 @@ impl HistoryIndexBuilder {
         self.index.sorted_rows = (0..self.index.len() as u32).collect();
         let hash_len = self.index.hash_len;
         let ids = &self.index.ids;
-        if self.index.len() >= 65_536 {
+        let keyed = if self.index.len() >= 65_536 {
             // Cache prefixes contiguously: comparisons usually avoid random reads
             // into the much larger ID table. Full IDs resolve prefix collisions.
             let mut keyed: Vec<_> = self
@@ -429,24 +461,29 @@ impl HistoryIndexBuilder {
             for prefix in 1..self.index.fanout.len() {
                 self.index.fanout[prefix] += self.index.fanout[prefix - 1];
             }
-            drop(keyed);
+            Some(keyed)
         } else {
             self.index.sorted_rows.sort_unstable_by(|&a, &b| {
                 let a = a as usize * hash_len;
                 let b = b as usize * hash_len;
                 ids[a..a + hash_len].cmp(&ids[b..b + hash_len])
             });
-        }
+            None
+        };
         cancellation.check_cancelled()?;
         self.index.parents.reserve(self.parent_ids.len() / hash_len);
         for (ix, parent) in self.parent_ids.chunks_exact(hash_len).enumerate() {
             if ix.is_multiple_of(1024) {
                 cancellation.check_cancelled()?;
             }
-            let rank = self
-                .index
-                .position_bytes(parent)
-                .map_or(MISSING_PARENT, |row| row as u32);
+            // The cached prefixes stay alive for this pass: a bucket is a few
+            // contiguous cache lines, and only the final full-ID check touches
+            // the ID table, instead of one random read per probe.
+            let rank = match &keyed {
+                Some(keyed) => self.index.position_in_keyed(keyed, parent),
+                None => self.index.position_bytes(parent),
+            }
+            .map_or(MISSING_PARENT, |row| row as u32);
             if rank == MISSING_PARENT {
                 self.index.external_edges.push(ix as u32);
                 self.index.external_ids.extend_from_slice(parent);
@@ -454,6 +491,7 @@ impl HistoryIndexBuilder {
             self.index.parents.push(rank);
         }
         cancellation.check_cancelled()?;
+        drop(keyed);
         drop(self.parent_ids);
         Ok(Arc::new(self.index))
     }
@@ -663,6 +701,185 @@ mod lookup_regressions {
                 assert_eq!(index.parent_id_bytes(usize::MAX, usize::MAX), None);
             }
         }
+    }
+
+    #[test]
+    fn large_index_resolves_external_and_colliding_parents_through_the_prefix_cache() {
+        let count = 70_000usize;
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot("external".into()),
+            HistoryMode::FullReachable,
+            20,
+        )
+        .unwrap();
+        let mut random = 0x2545f4914f6cdd1du64;
+        let mut next = move || {
+            random ^= random << 13;
+            random ^= random >> 7;
+            random ^= random << 17;
+            random
+        };
+        let mut id_for = |row: usize, external: bool| {
+            let mut id = [0u8; 20];
+            for chunk in id.chunks_mut(8) {
+                chunk.copy_from_slice(&next().to_be_bytes()[..chunk.len()]);
+            }
+            // Every fourth ID shares one prefix; externals borrow a prefix that is
+            // in the index so a miss must survive the equal-prefix run search.
+            if row % 4 == 0 || (external && row % 2 == 0) {
+                id[..8].fill(0xab);
+            }
+            id[16..].copy_from_slice(&(row as u32).to_be_bytes());
+            if external {
+                id[15] ^= 0x80;
+            }
+            id
+        };
+        let ids: Vec<[u8; 20]> = (0..count).map(|row| id_for(row, false)).collect();
+        let externals: Vec<Option<[u8; 20]>> = (0..count)
+            .map(|row| (row % 7 == 3).then(|| id_for(row, true)))
+            .collect();
+        for row in 0..count {
+            let mut parents: Vec<&[u8]> = Vec::new();
+            if row > 0 {
+                parents.push(&ids[row - 1]);
+            }
+            if let Some(external) = &externals[row] {
+                parents.push(external);
+            }
+            builder.push(&ids[row], parents, false).unwrap();
+        }
+        let index = builder.finish(&CancellationToken::new()).unwrap();
+        assert!(
+            !index.fanout.is_empty(),
+            "must exercise the prefix cache path"
+        );
+        for row in 0..count {
+            assert_eq!(index.position_bytes(&ids[row]), Some(row));
+            let parents = index.parents(row);
+            if row > 0 {
+                assert_eq!(parents[0], (row - 1) as u32, "row {row}");
+                assert_eq!(index.parent_id_bytes(row, 0), Some(ids[row - 1].as_slice()));
+            }
+            if let Some(external) = &externals[row] {
+                let slot = usize::from(row > 0);
+                assert_eq!(parents[slot], MISSING_PARENT, "row {row}");
+                assert_eq!(index.parent_id_bytes(row, slot), Some(external.as_slice()));
+                assert_eq!(index.position_bytes(external), None);
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_projection_maps_thousands_of_hidden_rows_both_ways() {
+        let count = 200_000usize;
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot("sparse".into()),
+            HistoryMode::FullReachable,
+            20,
+        )
+        .unwrap();
+        for row in 0..count {
+            let mut id = [0u8; 20];
+            id[..8].copy_from_slice(&(row as u64 + 1).to_be_bytes());
+            builder.push(&id, std::iter::empty(), false).unwrap();
+        }
+        let index = builder.finish(&CancellationToken::new()).unwrap();
+        let mut hidden: Vec<u32> = (0..3_000u32)
+            .map(|ix| (ix * 66_601 + 7) % count as u32)
+            .collect();
+        hidden.push(0);
+        hidden.push(count as u32 - 1);
+        let projection = HistoryProjection::new(index, hidden.clone());
+        hidden.sort_unstable();
+        hidden.dedup();
+        assert_eq!(projection.len(), count - hidden.len());
+        let mut hidden_before = vec![0usize; count + 1];
+        for raw in 0..count {
+            hidden_before[raw + 1] =
+                hidden_before[raw] + usize::from(hidden.binary_search(&(raw as u32)).is_ok());
+        }
+        let mut visible_rows = Vec::with_capacity(projection.len());
+        for raw in 0..count {
+            let is_hidden = hidden.binary_search(&(raw as u32)).is_ok();
+            let expected_visible = (!is_hidden).then_some(raw - hidden_before[raw]);
+            assert_eq!(
+                projection.visible_position(raw),
+                expected_visible,
+                "raw {raw}"
+            );
+            assert_eq!(
+                projection.visible_position_at_or_after(raw),
+                raw - hidden_before[raw],
+                "raw {raw}"
+            );
+            if !is_hidden {
+                visible_rows.push(raw);
+            }
+        }
+        for (visible, &raw) in visible_rows.iter().enumerate() {
+            assert_eq!(
+                projection.raw_position(visible),
+                Some(raw),
+                "visible {visible}"
+            );
+        }
+        assert_eq!(projection.raw_position(projection.len()), None);
+        assert_eq!(
+            projection.visible_position_at_or_after(count),
+            projection.len()
+        );
+        assert_eq!(
+            projection.visible_position_at_or_after(usize::MAX),
+            projection.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "index construction phase timing at chromium scale"]
+    fn history_index_finish_phase_timing() {
+        use std::time::Instant;
+        let count = 1_922_916usize;
+        let id = |row: usize| {
+            let mut id = [0u8; 20];
+            let mut seed = row as u64;
+            for chunk in id.chunks_mut(8) {
+                seed = seed.wrapping_add(0x9e3779b97f4a7c15);
+                let mut value = seed;
+                value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+                chunk.copy_from_slice(&(value ^ (value >> 31)).to_be_bytes()[..chunk.len()]);
+            }
+            id
+        };
+        let mut builder = HistoryIndexBuilder::new(
+            HistorySnapshot("timing".into()),
+            HistoryMode::FullReachable,
+            20,
+        )
+        .unwrap();
+        let started = Instant::now();
+        for row in 0..count {
+            let mut parents = Vec::new();
+            if row + 1 < count {
+                parents.push(id(row + 1));
+            }
+            if row % 40 == 0 && row + 97 < count {
+                parents.push(id(row + 97));
+            }
+            builder
+                .push(&id(row), parents.iter().map(|id| id.as_slice()), false)
+                .unwrap();
+        }
+        let pushed = started.elapsed();
+        let started = Instant::now();
+        let index = builder.finish(&CancellationToken::new()).unwrap();
+        eprintln!(
+            "history_index rows={count} push_s={:.3} finish_s={:.3} estimated_mib={:.1}",
+            pushed.as_secs_f64(),
+            started.elapsed().as_secs_f64(),
+            index.estimated_bytes() as f64 / 1048576.0
+        );
     }
 
     #[test]
