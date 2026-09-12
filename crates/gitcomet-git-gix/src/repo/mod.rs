@@ -988,8 +988,8 @@ impl GitRepository for GixRepo {
         self.cherry_pick_with_output_impl(id, commit, mainline)
     }
 
-    fn revert(&self, id: &CommitId) -> Result<()> {
-        self.revert_impl(id)
+    fn commit_message_template(&self) -> Result<Option<String>> {
+        self.commit_message_template_impl()
     }
 
     fn revert_with_output(

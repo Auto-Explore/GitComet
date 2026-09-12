@@ -401,7 +401,11 @@ fn revert_commit_creates_new_commit_and_reverts_content() {
     let opened = backend.open(repo).unwrap();
 
     opened
-        .revert(&gitcomet_core::domain::CommitId(c2.clone().into()))
+        .revert_with_output(
+            &gitcomet_core::domain::CommitId(c2.clone().into()),
+            true,
+            None,
+        )
         .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\n");

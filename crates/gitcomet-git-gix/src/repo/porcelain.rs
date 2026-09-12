@@ -805,17 +805,6 @@ impl GixRepo {
         run_git_simple(cmd, "git cherry-pick")
     }
 
-    pub(super) fn revert_impl(&self, id: &CommitId) -> Result<()> {
-        validate_hex_commit_id(id)?;
-
-        let mut cmd = self.git_workdir_cmd();
-        cmd.arg("revert")
-            .arg("--no-edit")
-            .arg("--")
-            .arg(id.as_ref());
-        run_git_simple(cmd, "git revert")
-    }
-
     pub(super) fn stash_create_impl(&self, message: &str, include_untracked: bool) -> Result<()> {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("stash").arg("push");
@@ -1056,7 +1045,9 @@ impl GixRepo {
 
         if paths.is_empty() {
             if has_commits {
-                if conflicted.is_empty() {
+                // A bare `git reset` would also end a conflict-free operation
+                // in progress (a resolved merge, a stopped revert).
+                if conflicted.is_empty() && !self.operation_state_on_disk() {
                     let mut cmd = self.git_workdir_cmd();
                     cmd.arg("reset");
                     return run_git_simple(cmd, "git reset");

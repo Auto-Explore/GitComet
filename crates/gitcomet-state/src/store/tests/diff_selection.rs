@@ -547,6 +547,70 @@ fn failed_head_change_rebuilds_selected_deleted_gitlink_before_reloading_diff() 
 }
 
 #[test]
+fn failed_revert_rebuilds_selected_deleted_gitlink() {
+    let (_dir, mut repos, mut state, target) = staged_deleted_gitlink_fixture();
+    let id_alloc = AtomicU64::new(2);
+    let submodule_path = PathBuf::from("vendor/submodule");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: target.clone(),
+        },
+    );
+    let commit_id =
+        gitcomet_core::domain::CommitId("2222222222222222222222222222222222222222".into());
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RevertCommit {
+            repo_id: RepoId(1),
+            commit_id: commit_id.clone(),
+            commit: true,
+            mainline: None,
+            summary: "revert me".to_string(),
+        },
+    );
+    assert!(!state.repos[0].head_gitlink_paths.contains(&submodule_path));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id: RepoId(1),
+            command: RepoCommandKind::Revert {
+                commit_id,
+                commit: true,
+                mainline: None,
+                summary: "revert me".to_string(),
+            },
+            result: Err(Error::new(ErrorKind::Backend(
+                "revert: the index has staged changes".to_string(),
+            ))),
+        }),
+    );
+
+    assert!(
+        state.repos[0].head_gitlink_paths.contains(&submodule_path),
+        "a refused revert must restore the retained selection's classification"
+    );
+    assert!(
+        !effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadDiff {
+                repo_id: RepoId(1),
+                target: reloaded,
+            } if reloaded == &target
+        )),
+        "the deleted gitlink must not fall back to an ordinary patch diff: {effects:?}"
+    );
+}
+
+#[test]
 fn successful_head_change_rebuilds_selected_deleted_gitlink_before_reloading_diff() {
     let (_dir, mut repos, mut state, target) = staged_deleted_gitlink_fixture();
     let id_alloc = AtomicU64::new(2);

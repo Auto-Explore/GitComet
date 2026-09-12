@@ -280,6 +280,10 @@ impl PopoverHost {
             // clobbers text the user typed while it was loading.
             this.sync_squash_prompt_prefill(cx);
 
+            // Any repo load can cancel the parent lookup an open confirmation
+            // waits on; re-issue it instead of leaving the dialog disabled.
+            this.request_confirm_dialog_parents();
+
             let Some(popover) = this.popover.as_ref() else {
                 return;
             };
@@ -1116,6 +1120,38 @@ impl PopoverHost {
             }
             _ => false,
         }
+    }
+
+    /// Asks for the open cherry-pick/revert confirmation's parent list when no
+    /// answer is loaded and none is on its way.
+    fn request_confirm_dialog_parents(&mut self) {
+        let (repo_id, commit_id) = match self.popover.as_ref() {
+            Some(
+                PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }
+                | PopoverKind::RevertCommitConfirm { repo_id, commit_id },
+            ) => (*repo_id, commit_id.clone()),
+            _ => return,
+        };
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return;
+        };
+        if matches!(
+            &repo.history_state.commit_details,
+            Loadable::Ready(details) if details.id == commit_id
+        ) {
+            return;
+        }
+        let lookup = &repo.history_state.mainline_lookup;
+        if lookup.reference.as_ref() == Some(&commit_id)
+            && !matches!(lookup.result, Loadable::NotLoaded)
+        {
+            return;
+        }
+        self.store.dispatch(Msg::ResolveCommitLookup {
+            repo_id,
+            reference: commit_id,
+            purpose: gitcomet_state::model::CommitLookupPurpose::MainlineParents,
+        });
     }
 
     #[cfg(test)]
@@ -2410,11 +2446,17 @@ impl PopoverHost {
         // tooltip from re-showing on top of the popover.
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(true, cx);
         self.request_lazy_popover_repo_data(&kind);
-        if matches!(
-            &kind,
-            PopoverKind::CherryPickCommitConfirm { .. } | PopoverKind::RevertCommitConfirm { .. }
-        ) {
+        if let PopoverKind::CherryPickCommitConfirm { repo_id, commit_id }
+        | PopoverKind::RevertCommitConfirm { repo_id, commit_id } = &kind
+        {
             self.commit_mainline = None;
+            // History rows can omit a merge's parents; the dialogs wait for
+            // the commit object's own list.
+            self.store.dispatch(Msg::ResolveCommitLookup {
+                repo_id: *repo_id,
+                reference: commit_id.clone(),
+                purpose: gitcomet_state::model::CommitLookupPurpose::MainlineParents,
+            });
         }
         self.menu_invoker_focus = if matches!(
             &kind,
@@ -2422,6 +2464,8 @@ impl PopoverHost {
                 | PopoverKind::AddRepoMenu
                 | PopoverKind::StageConflictMarkersConfirm { .. }
                 | PopoverKind::CommitMenu { .. }
+                | PopoverKind::CherryPickCommitConfirm { .. }
+                | PopoverKind::RevertCommitConfirm { .. }
                 | PopoverKind::PushPicker
                 | PopoverKind::Repo {
                     kind: RepoPopoverKind::Remote(RemotePopoverKind::OpenInBrowserMenu),

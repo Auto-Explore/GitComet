@@ -1143,36 +1143,29 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         }] if path == &PathBuf::from("vendor/lib")
     ));
 
-    // A committing revert that failed to sign left REVERT_HEAD: continue it.
-    let revert_effects = replay_case(RepoCommandKind::Revert {
-        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-        commit: true,
-        mainline: Some(1),
-        summary: "revert me".to_string(),
-    });
-    assert!(matches!(
-        revert_effects.as_slice(),
-        [Effect::RebaseContinue {
-            repo_id: RepoId(1),
-            auth: Some(_),
-        }]
-    ));
-
-    let revert_no_commit_effects = replay_case(RepoCommandKind::Revert {
-        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
-        commit: false,
-        mainline: Some(1),
-        summary: "revert me".to_string(),
-    });
-    assert!(matches!(
-        revert_no_commit_effects.as_slice(),
-        [Effect::RevertCommit {
-            repo_id: RepoId(1),
-            commit: false,
+    // A revert is replayed whole with the staged auth: the backend resumes one
+    // stopped at its commit step, and a `--no-commit` fetch failure reruns.
+    for commit in [true, false] {
+        let revert_effects = replay_case(RepoCommandKind::Revert {
+            commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+            commit,
             mainline: Some(1),
-            ..
-        }]
-    ));
+            summary: "revert me".to_string(),
+        });
+        assert!(
+            matches!(
+                revert_effects.as_slice(),
+                [Effect::RevertCommit {
+                    repo_id: RepoId(1),
+                    commit: replayed,
+                    mainline: Some(1),
+                    auth: Some(_),
+                    ..
+                }] if *replayed == commit
+            ),
+            "commit={commit}: {revert_effects:?}"
+        );
+    }
 
     let non_replayable_effects = replay_case(RepoCommandKind::StageHunk);
     assert!(non_replayable_effects.is_empty());
@@ -1198,7 +1191,7 @@ fn revert_signing_passphrase_failure_sets_passphrase_prompt() {
             repo_id,
             command: command.clone(),
             result: Err(auth_error(
-                "git commit --no-verify --no-edit failed: Enter passphrase for key '/home/user/.ssh/id_ed25519': terminal prompts disabled",
+                "git commit --no-verify -F MERGE_MSG failed: Enter passphrase for key '/home/user/.ssh/id_ed25519': terminal prompts disabled",
             )),
         }),
     );

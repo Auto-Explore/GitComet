@@ -300,13 +300,21 @@ pub enum SequencerState {
     None,
     RebaseOrApply,
     CherryPick,
-    /// A revert paused on `REVERT_HEAD` (conflict, `--no-commit`, or failed commit step).
+    /// A revert stopped at a conflict or a failed commit step, or a revert
+    /// sequence still pending.
     Revert,
 }
 
 /// Marker a revert puts in its command output when git applied nothing because
 /// the branch no longer has the reverted changes, so no commit was created.
 pub const REVERT_NOTHING_TO_REVERT_SENTINEL: &str = "GITCOMET_REVERT_NOTHING_TO_REVERT";
+
+/// Command label of a Continue that skipped a revert its resolution left empty.
+pub const REVERT_SKIP_COMMAND: &str = "git revert --skip";
+
+/// Marker an abort puts in its output when git cleared a leftover sequence but
+/// refused to rewind HEAD, so the summary cannot claim the previous state back.
+pub const REVERT_ABORT_KEPT_HEAD_SENTINEL: &str = "GITCOMET_REVERT_ABORT_KEPT_HEAD";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveRebaseEntry {
@@ -1023,9 +1031,13 @@ pub trait GitRepository: Send + Sync {
             "git cherry-pick is not implemented for this backend",
         )))
     }
-    fn revert(&self, id: &CommitId) -> Result<()>;
-    /// Reverts a single commit. `commit: false` leaves the inverse staged with
-    /// the revert paused; `mainline` follows [`Self::cherry_pick_with_output`].
+    /// The message git left for the next commit (MERGE_MSG), if any. Unlike
+    /// [`Self::merge_commit_message`] this does not require a merge.
+    fn commit_message_template(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+    /// Reverts a single commit. `commit: false` only stages the inverse;
+    /// `mainline` follows [`Self::cherry_pick_with_output`].
     fn revert_with_output(
         &self,
         _id: &CommitId,
@@ -2127,10 +2139,6 @@ mod tests {
         }
 
         fn cherry_pick(&self, _id: &CommitId) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn revert(&self, _id: &CommitId) -> super::Result<()> {
             unsupported()
         }
 

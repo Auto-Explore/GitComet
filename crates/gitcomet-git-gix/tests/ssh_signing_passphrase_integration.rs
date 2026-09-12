@@ -161,7 +161,7 @@ fn successful_ssh_signing_passphrase_is_reused_for_the_session() {
 }
 
 #[test]
-fn revert_needing_a_signing_passphrase_resumes_with_continue() {
+fn revert_needing_a_signing_passphrase_resumes_when_replayed() {
     if !ssh_signing_available() {
         eprintln!("skipping: ssh-keygen with `-Y sign` is unavailable");
         return;
@@ -200,12 +200,13 @@ fn revert_needing_a_signing_passphrase_resumes_with_continue() {
         username: None,
         secret: PASSPHRASE.to_string(),
     });
+    // The auth retry replays the revert, which resumes at its commit step.
     let output = open(&repo)
-        .rebase_continue_with_output()
-        .expect("continue should sign with the staged passphrase");
+        .revert_with_output(&CommitId(change.clone().into()), true, None)
+        .expect("the replay should sign with the staged passphrase");
     clear_staged_git_auth();
 
-    assert_eq!(output.command, "git revert --continue");
+    assert_eq!(output.command, format!("git revert {change}"));
     assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD~1"]), change);
     assert!(git_stdout(&repo, &["cat-file", "-p", "HEAD"]).contains("gpgsig"));
     assert_eq!(open(&repo).sequencer_state().unwrap(), SequencerState::None);

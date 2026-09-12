@@ -998,6 +998,62 @@ fn intentionally_empty_cherry_pick_signing_failure_is_not_auto_skipped() {
 }
 
 #[test]
+fn gitlink_pick_signing_failure_is_not_mistaken_for_already_applied() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    // A gitlink with no checkout, as for an uninitialized submodule.
+    fs::create_dir_all(repo.join("sub")).expect("create submodule dir");
+    run_git(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{base},sub"),
+        ],
+    );
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "add gitlink"],
+    );
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let bumped = commit_file(&repo, "other.txt", "other\n", "other");
+    run_git(
+        &repo,
+        &[
+            "update-index",
+            "--cacheinfo",
+            &format!("160000,{bumped},sub"),
+        ],
+    );
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "bump gitlink"],
+    );
+    let picked = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    run_git(&repo, &["checkout", "main"]);
+    run_git(&repo, &["config", "diff.ignoreSubmodules", "all"]);
+    run_git(&repo, &["config", "commit.gpgsign", "true"]);
+    run_git(&repo, &["config", "gpg.program", "false"]);
+
+    let error = open_backend(&repo)
+        .cherry_pick_with_output(&commit_id(&picked), true, None)
+        .expect_err("a signing failure must not be reported as already applied");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("sign") || message.contains("gpg"),
+        "unexpected signing error: {message}"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["rev-parse", "CHERRY_PICK_HEAD"]),
+        picked
+    );
+}
+
+#[test]
 fn intentionally_empty_merge_signing_failure_is_not_auto_skipped() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");
@@ -1436,4 +1492,59 @@ fn multi_cherry_pick_applies_picks_around_a_dropped_commit() {
         "feature three\nfeature one"
     );
     assert!(!repo.join("two.txt").exists(), "dropped commit was applied");
+}
+
+#[test]
+fn cherry_pick_is_refused_while_another_operation_is_in_progress() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "side"]);
+    commit_file(&repo, "side.txt", "side\n", "side change");
+    run_git(&repo, &["checkout", "-b", "source", &base]);
+    let picked = commit_file(&repo, "o.txt", "o\n", "pick me");
+    run_git(&repo, &["checkout", "main"]);
+    run_git(&repo, &["merge", "--no-ff", "--no-commit", "side"]);
+    assert!(repo.join(".git/MERGE_HEAD").exists());
+
+    let err = open_backend(&repo)
+        .cherry_pick_with_output(&commit_id(&picked), false, None)
+        .expect_err("a pick must not be folded into the open merge");
+
+    assert!(
+        err.to_string().contains("a merge is in progress"),
+        "unexpected error: {err}"
+    );
+    assert!(repo.join(".git/MERGE_HEAD").exists(), "the merge survives");
+    assert!(
+        !git_stdout(&repo, &["status", "--porcelain"]).contains("o.txt"),
+        "the pick must not be staged into the merge"
+    );
+}
+
+#[test]
+fn cherry_pick_without_commit_refuses_staged_changes() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "source"]);
+    let picked = commit_file(&repo, "o.txt", "o\n", "pick me");
+    run_git(&repo, &["checkout", "-b", "target", &base]);
+    fs::write(repo.join("staged.txt"), "staged\n").expect("write staged file");
+    run_git(&repo, &["add", "staged.txt"]);
+
+    let err = open_backend(&repo)
+        .cherry_pick_with_output(&commit_id(&picked), false, None)
+        .expect_err("staged work must not be folded into the pick");
+
+    assert!(
+        err.to_string().contains("staged changes"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["status", "--porcelain"]),
+        "A  staged.txt"
+    );
 }

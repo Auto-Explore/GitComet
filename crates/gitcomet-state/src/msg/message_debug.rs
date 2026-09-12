@@ -225,6 +225,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("requested_count", &requested_ids.len())
                 .field("ok", &result.is_ok())
                 .finish(),
+            InternalMsg::CommitMessageSuggested { repo_id, message } => f
+                .debug_struct("CommitMessageSuggested")
+                .field("repo_id", repo_id)
+                .field("message_len", &message.len())
+                .finish(),
             InternalMsg::MergeCommitMessageLoaded { repo_id, result } => f
                 .debug_struct("MergeCommitMessageLoaded")
                 .field("repo_id", repo_id)
@@ -373,12 +378,14 @@ impl std::fmt::Debug for InternalMsg {
                 repo_id,
                 reference,
                 request,
+                purpose,
                 result,
             } => f
                 .debug_struct("CommitLookupResolved")
                 .field("repo_id", repo_id)
                 .field("reference", reference)
                 .field("request", request)
+                .field("purpose", purpose)
                 .field("result", result)
                 .finish(),
             InternalMsg::RangeFilesLoaded {

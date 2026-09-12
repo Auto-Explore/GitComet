@@ -1688,6 +1688,7 @@ pub(super) fn schedule_resolve_commit_lookup(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: gitcomet_core::domain::CommitId,
+    purpose: crate::model::CommitLookupPurpose,
     request: u64,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
@@ -1697,6 +1698,7 @@ pub(super) fn schedule_resolve_commit_lookup(
                 repo_id,
                 reference: reference.clone(),
                 request,
+                purpose,
                 result: repo.resolve_commit(&reference),
             }),
         );

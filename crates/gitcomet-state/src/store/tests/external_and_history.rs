@@ -2300,6 +2300,7 @@ fn commit_lookup_resolves_without_selecting_anything() {
         Msg::ResolveCommitLookup {
             repo_id: RepoId(1),
             reference: reference.clone(),
+            purpose: crate::model::CommitLookupPurpose::RevealDialog,
         },
     );
     let request = match effects.as_slice() {
@@ -2324,6 +2325,7 @@ fn commit_lookup_resolves_without_selecting_anything() {
             repo_id: RepoId(1),
             reference,
             request,
+            purpose: crate::model::CommitLookupPurpose::RevealDialog,
             result: Ok(lookup_commit(&full, "the reland")),
         }),
     );
@@ -2356,6 +2358,7 @@ fn commit_lookup_drops_a_reply_a_newer_lookup_overtook() {
         Msg::ResolveCommitLookup {
             repo_id: RepoId(1),
             reference: first.clone(),
+            purpose: crate::model::CommitLookupPurpose::RevealDialog,
         },
     );
     let first_request = match first_effects.as_slice() {
@@ -2369,6 +2372,7 @@ fn commit_lookup_drops_a_reply_a_newer_lookup_overtook() {
         Msg::ResolveCommitLookup {
             repo_id: RepoId(1),
             reference: second.clone(),
+            purpose: crate::model::CommitLookupPurpose::RevealDialog,
         },
     );
 
@@ -2381,6 +2385,7 @@ fn commit_lookup_drops_a_reply_a_newer_lookup_overtook() {
             repo_id: RepoId(1),
             reference: first,
             request: first_request,
+            purpose: crate::model::CommitLookupPurpose::RevealDialog,
             result: Ok(lookup_commit(&CommitId("stale".into()), "stale")),
         }),
     );
@@ -2408,6 +2413,7 @@ fn commit_lookup_failure_stays_inline_without_a_notification() {
         Msg::ResolveCommitLookup {
             repo_id: RepoId(1),
             reference: reference.clone(),
+            purpose: crate::model::CommitLookupPurpose::RevealDialog,
         },
     );
     let request = match effects.as_slice() {
@@ -2423,6 +2429,7 @@ fn commit_lookup_failure_stays_inline_without_a_notification() {
             repo_id: RepoId(1),
             reference,
             request,
+            purpose: crate::model::CommitLookupPurpose::RevealDialog,
             result: Err(gitcomet_core::error::Error::new(
                 gitcomet_core::error::ErrorKind::Backend("gix rev-parse nosuchref".into()),
             )),

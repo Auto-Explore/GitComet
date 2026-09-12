@@ -387,6 +387,7 @@ fn unavailable_git_revert_emits_synthetic_revert_command_error() {
             commit: false,
             mainline: Some(1),
             summary: "revert me".into(),
+            auth: None,
         },
     );
 
@@ -750,9 +751,6 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -940,9 +938,6 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -1158,9 +1153,6 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -1390,9 +1382,6 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -1612,9 +1601,6 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -1880,9 +1866,6 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -2123,9 +2106,6 @@ fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -2324,9 +2304,6 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -2488,9 +2465,6 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -2657,9 +2631,6 @@ fn load_stashes_effect_truncates_results_to_limit() {
             unimplemented!()
         }
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -2829,10 +2800,6 @@ fn stash_effect_requests_stash_reload_on_success() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-
         fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
             self.calls.lock().unwrap().push(format!(
                 "stash {message} include_untracked={include_untracked}"
@@ -3003,10 +2970,6 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -3175,10 +3138,6 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -3346,10 +3305,6 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -3514,10 +3469,6 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
         fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
-        fn revert(&self, _id: &CommitId) -> Result<()> {
-            unimplemented!()
-        }
-
         fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
             unimplemented!()
         }
@@ -3707,10 +3658,6 @@ impl GitRepository for UnsupportedRepo {
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
-
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -3994,9 +3941,6 @@ impl GitRepository for MetadataSchedulingRepo {
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -4147,9 +4091,6 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         unsupported_repo_result()
     }
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -4311,9 +4252,6 @@ impl GitRepository for RecordingLogRepo {
         unsupported_repo_result()
     }
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
@@ -4499,10 +4437,6 @@ impl GitRepository for RecordingCheckoutRepo {
     fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
         unsupported_repo_result()
     }
-    fn revert(&self, _id: &CommitId) -> Result<()> {
-        unsupported_repo_result()
-    }
-
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         unsupported_repo_result()
     }
@@ -6019,6 +5953,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 commit: true,
                 mainline: None,
                 summary: "revert me".into(),
+                auth: None,
             },
             1,
         ),

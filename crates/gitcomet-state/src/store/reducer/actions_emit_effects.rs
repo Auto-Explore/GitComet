@@ -78,6 +78,7 @@ pub(super) fn revert_commit(
         commit,
         mainline,
         summary,
+        auth: None,
     }]
 }
 
@@ -1042,6 +1043,26 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
     )
 }
 
+/// Mirror of `sequencer_effect_repo`: the commands whose effects are counted
+/// while they run. `sequencer_commands_release_their_count` pairs the two.
+pub(super) fn command_touches_sequencer_state(command: &RepoCommandKind) -> bool {
+    matches!(
+        command,
+        RepoCommandKind::MergeRef { .. }
+            | RepoCommandKind::SquashRef { .. }
+            | RepoCommandKind::SquashCommits { .. }
+            | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::Rebase { .. }
+            | RepoCommandKind::RebaseContinue
+            | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::InteractiveRebase { .. }
+            | RepoCommandKind::InteractiveCherryPick { .. }
+            | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::Revert { .. }
+            | RepoCommandKind::MergeAbort
+    )
+}
+
 fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
     matches!(
         command,
@@ -1191,6 +1212,11 @@ pub(super) fn repo_command_finished(
             repo_state.bump_ops_rev();
         }
         _ => {}
+    }
+    if command_touches_sequencer_state(&command) {
+        repo_state.sequencer_actions_in_flight =
+            repo_state.sequencer_actions_in_flight.saturating_sub(1);
+        repo_state.bump_ops_rev();
     }
 
     if matches!(&command, RepoCommandKind::AddSubmodule { .. }) {
