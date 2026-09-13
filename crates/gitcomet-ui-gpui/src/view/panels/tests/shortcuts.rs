@@ -429,6 +429,9 @@ fn set_diff_text_selection_on_row(
                 });
                 pane.diff_selection_anchor = Some(visible_ix);
                 pane.diff_selection_range = None;
+                // Match production: a real selection owns the window's, so a
+                // seeded one must too or the next press collapses it.
+                pane.diff_text_selection_owner.adopt(window, cx);
                 cx.notify();
             });
         });
@@ -2082,7 +2085,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
 
     // Each in-flight operation must disable every history-rewriting entry:
     // they all contend for git's single sequencer slot.
-    let busy_states: [(&str, fn(&mut RepoState)); 3] = [
+    let busy_states: [(&str, fn(&mut RepoState)); 4] = [
         ("pending merge", |repo| {
             repo.merge_commit_message = Loadable::Ready(Some("merge message".to_string()));
         }),
@@ -2093,7 +2096,31 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
             repo.sequencer_state =
                 Loadable::Ready(gitcomet_core::services::SequencerState::CherryPick);
         }),
+        ("revert sequencer", |repo| {
+            repo.sequencer_state = Loadable::Ready(gitcomet_core::services::SequencerState::Revert);
+        }),
     ];
+    let idle_model = {
+        apply_state(
+            cx,
+            &view,
+            app_state_with_active_repo(shortcut_fixture_repo(repo_id, &workdir, &commit_id)),
+        );
+        cx.update(|_window, app| {
+            context_menu_model_for(
+                &view,
+                app,
+                PopoverKind::CommitMenu {
+                    repo_id,
+                    commit_id: commit_id.clone(),
+                },
+            )
+        })
+    };
+    assert!(
+        !context_menu_entry_disabled_by_label(&idle_model, "Revert cafebabe…"),
+        "Revert names the clicked commit and is enabled when idle"
+    );
     for (state_name, make_busy) in busy_states {
         let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
         make_busy(&mut repo);
@@ -2113,7 +2140,7 @@ fn commit_context_menu_disables_history_rewrites_during_active_operations(
             "Cherry-pick enabled during {state_name}"
         );
         assert!(
-            context_menu_entry_disabled_by_label(&model, "Revert"),
+            context_menu_entry_disabled_by_label_prefix(&model, "Revert "),
             "Revert enabled during {state_name}"
         );
         assert!(
@@ -2344,6 +2371,54 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
     );
 }
 
+/// The diff pane is a selection owner like any other: once another surface
+/// takes the window's selection, its highlight must go too.
+#[gpui::test]
+fn another_surface_taking_the_selection_clears_the_diff_text_selection(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70512);
+    let commit_id = CommitId("fedcba0987654323".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_selection_ownership",
+        std::process::id()
+    ));
+    let target = DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(std::path::PathBuf::from("src/only.rs")),
+    };
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
+    repo.diff_state.diff_rev = 1;
+    repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_diff_panel(cx, &view);
+    set_diff_text_selection_on_row(cx, &view, 4);
+    assert!(
+        diff_text_has_selection(cx, &view),
+        "precondition: the diff pane holds a text selection"
+    );
+
+    cx.update(|window, app| {
+        let mut elsewhere = crate::text_selection_owner::SelectionOwnerToken::default();
+        elsewhere.adopt(window, app);
+    });
+    cx.run_until_parked();
+
+    assert!(
+        !diff_text_has_selection(cx, &view),
+        "the diff pane must drop its highlight once another surface owns the selection"
+    );
+}
+
 #[gpui::test]
 fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selection(
     cx: &mut gpui::TestAppContext,
@@ -2440,7 +2515,7 @@ fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selecti
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.select_all_diff_text();
+                pane.select_all_diff_text(window, cx);
                 cx.notify();
             });
         });
@@ -2867,8 +2942,8 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
     );
     assert_eq!(
         diff_selection_range(cx, &view),
-        Some((third_change, third_change)),
-        "expected F3 to replace the selected diff area with the target change"
+        None,
+        "expected F3 to replace the selected diff area with an anchor on the target change"
     );
 
     set_diff_selection_area(
@@ -2886,8 +2961,8 @@ fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_steal
     );
     assert_eq!(
         diff_selection_range(cx, &view),
-        Some((first_change, first_change)),
-        "expected F2 to replace the selected diff area with the target change"
+        None,
+        "expected F2 to replace the selected diff area with an anchor on the target change"
     );
 
     set_diff_text_selection_on_row(cx, &view, second_change);
@@ -5883,17 +5958,27 @@ fn switching_diff_content_mode_restores_diff_panel_focus_for_change_navigation(
         "expected selecting the collapsed entry to update the global diff content mode"
     );
 
+    // Nothing is focused after the mode switch, so the first F3 lands on the
+    // first change and the second on the next one.
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    let first_change = diff_selection_anchor(cx, &view)
+        .expect("expected F3 after closing diff mode settings to navigate to a change");
     cx.simulate_keystrokes("f3");
     draw_and_drain_test_window(cx);
     let next_change = diff_selection_anchor(cx, &view)
-        .expect("expected F3 after closing diff mode settings to navigate to a change");
+        .expect("expected a second F3 to navigate to the next change");
+    assert!(
+        next_change > first_change,
+        "expected each F3 to move one change forward"
+    );
 
     cx.simulate_keystrokes("f2");
     draw_and_drain_test_window(cx);
     let previous_change = diff_selection_anchor(cx, &view)
         .expect("expected F2 after closing diff mode settings to navigate to a change");
-    assert!(
-        previous_change < next_change,
+    assert_eq!(
+        previous_change, first_change,
         "expected F2 after closing diff mode settings to refresh and move to the previous change"
     );
 }
@@ -6060,4 +6145,5 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
 }
 
 mod hook_activity;
+mod status_selection;
 mod window_and_file_actions;

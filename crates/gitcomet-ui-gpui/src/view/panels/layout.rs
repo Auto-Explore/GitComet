@@ -1,7 +1,12 @@
 use super::*;
+use crate::view::panes::{ComparisonCardCache, ComparisonOrderCache};
 use crate::view::rows::CommitCard;
 use gpui::{AnyElement, Div, Stateful};
 use rustc_hash::FxHashSet;
+
+#[cfg(test)]
+#[path = "layout_indexed_tests.rs"]
+mod indexed_tests;
 
 const STATUS_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
 
@@ -25,6 +30,7 @@ fn commit_details_author_row(
     theme: AppTheme,
     ui_scale: crate::ui_scale::UiScale,
     details: &gitcomet_core::domain::CommitDetails,
+    signature: Option<&gitcomet_core::domain::CommitSignature>,
 ) -> Option<Div> {
     if details.author_name.is_empty() && details.author_email.is_empty() {
         return None;
@@ -57,7 +63,7 @@ fn commit_details_author_row(
                     .flex_col()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(display_name),
@@ -65,7 +71,7 @@ fn commit_details_author_row(
                     .when(!details.author_email.is_empty(), |column| {
                         column.child(
                             div()
-                                .text_xs()
+                                .text_size(theme.ui_text(12.0))
                                 .text_color(theme.colors.foreground.secondary)
                                 .line_clamp(1)
                                 .whitespace_nowrap()
@@ -73,11 +79,14 @@ fn commit_details_author_row(
                         )
                     }),
             )
+            .when_some(signature, |row, signature| {
+                row.child(commit_details_signature_badge(theme, signature))
+            })
             .when_some(authored_relative, |row, relative| {
                 row.child(
                     div()
                         .flex_none()
-                        .text_xs()
+                        .text_size(theme.ui_text(12.0))
                         .text_color(theme.colors.foreground.secondary)
                         .child(relative),
                 )
@@ -96,10 +105,10 @@ const MULTI_COMMIT_ROW_HEIGHT_PX: f32 = 44.0;
 /// need it, whatever height the pane happens to have.
 const COMPARISON_CARDS_MAX_BODY_FRACTION: f32 = 0.5;
 
-/// Floor for the comparison's changed-file section — a label plus a row or two
-/// of list. Keeps the capped card block above it from claiming the whole pane
-/// when the pane is shorter than the card cap allows for.
-const RANGE_FILES_SECTION_MIN_HEIGHT_PX: f32 = 44.0;
+/// Floor for the comparison's changed-file section — a label row, the filter
+/// tabs, and a row or two of list. Keeps the capped card block above it from
+/// claiming the whole pane when the pane is shorter than the card cap allows.
+const RANGE_FILES_SECTION_MIN_HEIGHT_PX: f32 = 70.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CommitFileFilterLabels {
@@ -110,15 +119,29 @@ enum CommitFileFilterLabels {
 const COMMIT_FILE_FILTER_TEXT_WIDTH_PX: f32 = 5.2;
 const COMMIT_FILE_FILTER_ICON_WIDTH_PX: f32 = 12.0;
 const COMMIT_FILE_FILTER_ICON_GAP_PX: f32 = 3.0;
+/// Side padding inside a committed-files filter chip. Compact keeps all five
+/// in a narrow details pane; Comfortable can afford room.
 const COMMIT_FILE_FILTER_TAB_PAD_X_PX: f32 = 2.0;
+const COMMIT_FILE_FILTER_TAB_COMFORTABLE_PAD_X_PX: f32 = 8.0;
+
+fn commit_file_filter_tab_pad_x(metrics: crate::appearance::Appearance) -> f32 {
+    metrics.ramp(
+        COMMIT_FILE_FILTER_TAB_PAD_X_PX,
+        COMMIT_FILE_FILTER_TAB_COMFORTABLE_PAD_X_PX,
+    )
+}
 const COMMIT_FILE_FILTER_TAB_COMPACT_GAP_PX: f32 = 4.0;
 const COMMIT_FILE_FILTER_TAB_FULL_GAP_PX: f32 = 6.0;
-const COMMIT_FILE_FILTER_HEIGHT_PX: f32 = 22.0;
+/// The "Unstaged" / "Untracked" chip: the section's click target, so its hit
+/// area follows the header bar's density ramp.
+const CHANGE_TRACKING_HEADER_CHIP_HEIGHT_PX: f32 = 18.0;
+const CHANGE_TRACKING_HEADER_CHIP_COMFORTABLE_HEIGHT_PX: f32 = 28.0;
 
 fn commit_file_filter_labels_for_width(
     available_width: Pixels,
     counts: crate::view::rows::CommitFileKindCounts,
     ui_scale_percent: u32,
+    metrics: crate::appearance::Appearance,
 ) -> CommitFileFilterLabels {
     if available_width <= px(0.0) {
         return CommitFileFilterLabels::Full;
@@ -134,11 +157,11 @@ fn commit_file_filter_labels_for_width(
         })
         .sum::<usize>();
     let count = filters.len() as f32;
-    let needed = text_chars as f32 * COMMIT_FILE_FILTER_TEXT_WIDTH_PX
+    let needed = text_chars as f32 * metrics.ui_text(COMMIT_FILE_FILTER_TEXT_WIDTH_PX)
         + count
             * (COMMIT_FILE_FILTER_ICON_WIDTH_PX
                 + COMMIT_FILE_FILTER_ICON_GAP_PX
-                + 2.0 * COMMIT_FILE_FILTER_TAB_PAD_X_PX)
+                + 2.0 * commit_file_filter_tab_pad_x(metrics))
         + (count - 1.0) * COMMIT_FILE_FILTER_TAB_FULL_GAP_PX;
 
     if crate::ui_scale::design_px_from_percent(needed, ui_scale_percent) <= available_width {
@@ -169,6 +192,42 @@ fn commit_file_filter_color(
     }
 }
 
+/// The signature chip shown beside the commit author.
+///
+/// Needs its own `.id()`: a stateless div computes the hover style and throws
+/// it away, and the tooltip would never attach.
+fn commit_details_signature_badge(
+    theme: AppTheme,
+    signature: &gitcomet_core::domain::CommitSignature,
+) -> gpui::Stateful<Div> {
+    let badge = crate::view::commit_signature::signature_badge(theme, signature);
+    div()
+        .id("commit_details_signature_badge")
+        .debug_selector(|| "commit_details_signature_badge".to_string())
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .rounded(px(theme.radii.control))
+        .border_1()
+        .border_color(badge.palette.border)
+        .bg(badge.palette.background)
+        .child(
+            svg_icon(badge.icon, badge.palette.foreground, px(12.0))
+                .size(theme.ui_text(12.0))
+                .debug_selector(|| "commit_details_signature_icon".to_string()),
+        )
+        .child(
+            div()
+                .text_size(theme.ui_text(12.0))
+                .text_color(badge.palette.foreground)
+                .whitespace_nowrap()
+                .child(badge.label),
+        )
+        .gitcomet_tooltip(theme, badge.tooltip)
+}
+
 fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyElement) -> Div {
     div()
         .flex()
@@ -176,11 +235,17 @@ fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyE
         .gap_1()
         .child(
             div()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(key),
         )
-        .child(div().w_full().min_w(px(0.0)).text_sm().child(value))
+        .child(
+            div()
+                .w_full()
+                .min_w(px(0.0))
+                .text_size(theme.ui_text(14.0))
+                .child(value),
+        )
 }
 
 fn commit_details_monospace_value(input: Entity<components::TextInput>) -> AnyElement {
@@ -316,13 +381,11 @@ enum StatusActionLabels {
 /// Budgeted rather than measured, the same way the history columns decide what
 /// to drop (`view/panes/history.rs`).
 ///
-/// Calibrated against the shipped UI font rather than guessed: at 100% zoom
-/// `Stage all changes` renders 108px of ink over 17 characters (6.35/char) and
-/// the bold `Unstaged` renders 59px over 8 (7.4/char). Guessed values that ran
-/// a little high kept the header on the short labels while ~20px of room was
-/// still going spare, so keep these honest — the header truncates its title
-/// gracefully if a budget ever falls slightly short, but a budget that runs
-/// long silently withholds the full wording.
+/// Per character at the default 14px UI font, measured not guessed: at 100%
+/// zoom `Stage all changes` renders 108px of ink over 17 characters (6.35/char)
+/// and the bold `Unstaged` renders 59px over 8 (7.4/char). Both go through
+/// `ui_text`, so a larger UI font widens the budget with the ink. Keep them
+/// honest: a budget that runs long silently withholds the full wording.
 const STATUS_ACTION_CHAR_WIDTH_PX: f32 = 6.4;
 const STATUS_HEADER_TITLE_CHAR_WIDTH_PX: f32 = 7.4;
 /// The header's own `px_2`, and the `gap_2` between the title and the action
@@ -333,10 +396,20 @@ const STATUS_HEADER_GAP_PX: f32 = 8.0;
 /// 12px chevron.
 const STATUS_HEADER_DROPDOWN_EXTRA_PX: f32 = 24.0;
 const STATUS_HEADER_SPINNER_PX: f32 = 14.0;
+/// The layout toggle and sort menu: two icon-only buttons (`control_pad_x` each
+/// side plus a 1px border and a 14px icon), their `gap_1`, and the `gap_2` to
+/// the action buttons beside them.
+const STATUS_HEADER_CONTROLS_PX: f32 =
+    2.0 * (2.0 * components::CONTROL_PAD_X_PX + 2.0 + 14.0) + 4.0 + STATUS_HEADER_GAP_PX;
 
-fn status_action_button_width_px(label_chars: usize) -> f32 {
+fn status_action_button_width_px(
+    label_chars: usize,
+    metrics: crate::appearance::Appearance,
+) -> f32 {
     // `control_pad_x` each side, plus the 1px border every style reserves.
-    2.0 * components::CONTROL_PAD_X_PX + 2.0 + label_chars as f32 * STATUS_ACTION_CHAR_WIDTH_PX
+    2.0 * components::CONTROL_PAD_X_PX
+        + 2.0
+        + label_chars as f32 * metrics.ui_text(STATUS_ACTION_CHAR_WIDTH_PX)
 }
 
 fn status_action_labels_for_width(
@@ -346,20 +419,22 @@ fn status_action_labels_for_width(
     action_label_chars: &[usize],
     has_spinner: bool,
     ui_scale_percent: u32,
+    metrics: crate::appearance::Appearance,
 ) -> StatusActionLabels {
     if available_width <= px(0.0) || action_label_chars.is_empty() {
         return StatusActionLabels::Full;
     }
 
     let mut needed = 2.0 * STATUS_HEADER_PAD_X_PX
-        + title_chars as f32 * STATUS_HEADER_TITLE_CHAR_WIDTH_PX
+        + title_chars as f32 * metrics.ui_text(STATUS_HEADER_TITLE_CHAR_WIDTH_PX)
         + if title_is_dropdown {
             STATUS_HEADER_DROPDOWN_EXTRA_PX
         } else {
             0.0
         }
         // Between the title and the action group.
-        + STATUS_HEADER_GAP_PX;
+        + STATUS_HEADER_GAP_PX
+        + STATUS_HEADER_CONTROLS_PX;
     if has_spinner {
         needed += STATUS_HEADER_SPINNER_PX + STATUS_HEADER_GAP_PX;
     }
@@ -367,7 +442,7 @@ fn status_action_labels_for_width(
         if ix > 0 {
             needed += STATUS_HEADER_GAP_PX;
         }
-        needed += status_action_button_width_px(*chars);
+        needed += status_action_button_width_px(*chars, metrics);
     }
 
     if crate::ui_scale::design_px_from_percent(needed, ui_scale_percent) <= available_width {
@@ -469,7 +544,7 @@ fn status_section_action_selection(
 ) -> StatusSectionActionSelection {
     if let Some(selection) = selection {
         let paths = explicit_status_section_action_paths(selection, section);
-        if !paths.is_empty() {
+        if selection.explicit_section == Some(section) || !paths.is_empty() {
             return StatusSectionActionSelection {
                 paths,
                 from_explicit_selection: true,
@@ -486,6 +561,68 @@ fn status_section_action_selection(
 }
 
 impl DetailsPaneView {
+    pub(in crate::view) fn handle_status_section_shortcut(
+        &mut self,
+        section: StatusSection,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if !is_status_section_shortcut(keystroke)
+            || !self.status_section_focus_handle(section).is_focused(window)
+        {
+            return false;
+        }
+        let Some(repo) = self.active_repo() else {
+            return true;
+        };
+        let repo_id = repo.id;
+        let area = section.diff_area();
+        let loading = match area {
+            DiffArea::Unstaged => repo.worktree_status_is_loading(),
+            DiffArea::Staged => repo.staged_status_is_loading(),
+        };
+        if loading || StatusSectionEntries::from_repo(repo, section).is_none() {
+            return true;
+        }
+        if keystroke.key == "a" {
+            let paths = self.status_display_order_paths(repo_id, section);
+            let order_rev = self.status_anchor_order_rev(repo, section);
+            self.status_multi_selection
+                .entry(repo_id)
+                .or_default()
+                .select_all(section, paths, order_rev);
+            cx.notify();
+            return true;
+        }
+        if repo.local_actions_in_flight > 0
+            || (keystroke.key == "s" && area != DiffArea::Unstaged)
+            || (keystroke.key == "u" && area != DiffArea::Staged)
+        {
+            return true;
+        }
+        let paths = self.status_section_action_selection(repo_id, section).paths;
+        // Empty path lists mean "all" to the backend, never "none".
+        if paths.is_empty() {
+            return true;
+        }
+        match area {
+            DiffArea::Unstaged => {
+                self.stage_all_with_conflict_confirmation(repo_id, paths, window, cx)
+            }
+            DiffArea::Staged => {
+                self.clear_status_multi_selection(repo_id);
+                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                self.store.dispatch(Msg::UnstagePaths {
+                    repo_id,
+                    paths: paths.into(),
+                });
+                cx.notify();
+            }
+        }
+        true
+    }
+
     fn status_section_action_selection(
         &self,
         repo_id: RepoId,
@@ -892,7 +1029,7 @@ impl DetailsPaneView {
         self.commit_details_sha_input.update(cx, |input, cx| {
             input.set_highlights(commit_sha_field_highlights(sha, theme), cx);
         });
-        // A commit's own SHA has nowhere to navigate to.
+        // A commit's own SHA has nothing to reveal.
         let sha_links = commit_sha_field_links(sha, interactive, false);
         self.commit_details_sha_link_menu.update(cx, |menu, cx| {
             menu.sync(
@@ -929,10 +1066,16 @@ impl DetailsPaneView {
             });
     }
 
-    /// Selected commits resolved against the loaded log page, in log order
-    /// (youngest first). Ids missing from the page are skipped.
-    fn multi_selected_commits_in_log_order(repo: &RepoState) -> Vec<Commit> {
+    /// Selected IDs in displayed history order, independent of the bounded
+    /// metadata cache. Missing metadata must not shrink the selection's cards.
+    fn multi_selected_commit_ids_in_log_order(repo: &RepoState) -> Vec<CommitId> {
         let selection = &repo.history_state.multi_selection;
+        let indexed = &repo.history_state.indexed;
+        if let Some(index) = indexed.displayed_index.as_ref().or(indexed.index.as_ref()) {
+            let mut selected = selection.commits.as_ref().clone();
+            selected.sort_by_cached_key(|id| index.position(id.as_ref()).unwrap_or(usize::MAX));
+            return selected;
+        }
         let Loadable::Ready(page) = &repo.log else {
             return Vec::new();
         };
@@ -944,7 +1087,7 @@ impl DetailsPaneView {
         page.commits
             .iter()
             .filter(|commit| selected.contains(&commit.id))
-            .cloned()
+            .map(|commit| commit.id.clone())
             .collect()
     }
 
@@ -954,65 +1097,216 @@ impl DetailsPaneView {
     /// diff). A single leftover selection — every plain history click leaves one
     /// — describes an unrelated commit, so the mark + compare, branch/tag and
     /// working-tree flows derive their endpoints from the range itself, looking
-    /// each SHA up in the loaded log so its summary/author/time can be shown.
+    /// each SHA up in indexed ranges or the bootstrap page for its metadata.
     /// Ordered newest first (tip before base) to match the log. The working tree
     /// has no commit of its own, so a compare-against-working-tree range yields
     /// a single card.
-    fn range_comparison_commits(repo: &RepoState) -> Vec<Commit> {
+    fn range_comparison_commit_ids(repo: &RepoState) -> Vec<CommitId> {
         if repo.history_state.multi_selection.is_multi() {
-            let multi = Self::multi_selected_commits_in_log_order(repo);
-            if !multi.is_empty() {
-                return multi;
-            }
+            return Self::multi_selected_commit_ids_in_log_order(repo);
         }
         let Some(range) = repo.history_state.range_selection.as_ref() else {
             return Vec::new();
         };
-        let Loadable::Ready(page) = &repo.log else {
-            return Vec::new();
-        };
-        let find = |id: &CommitId| page.commits.iter().find(|c| &c.id == id).cloned();
-        let mut commits = Vec::new();
-        if let Some(to) = range.to.as_ref().and_then(&find) {
-            commits.push(to);
-        }
-        if let Some(from) = find(&range.from) {
-            commits.push(from);
-        }
-        commits
+        range
+            .to
+            .iter()
+            .chain(std::iter::once(&range.from))
+            .filter(|id| id.as_ref() != gitcomet_core::domain::EMPTY_TREE_ID)
+            .cloned()
+            .collect()
     }
 
-    /// [`Self::range_comparison_commits`] memoized on everything it reads:
-    /// the log page, the selection and the range, with each card's static
-    /// strings prepared once (they were re-formatted per card per frame).
-    fn range_comparison_commits_shared(&self, repo: &RepoState) -> std::rc::Rc<[CommitCard]> {
-        use std::hash::{Hash as _, Hasher as _};
-        let key = {
-            let mut hasher = rustc_hash::FxHasher::default();
-            repo.id.hash(&mut hasher);
-            repo.log_rev.hash(&mut hasher);
-            repo.history_state.selected_commit_rev.hash(&mut hasher);
-            match repo.history_state.range_selection.as_ref() {
-                Some(range) => {
-                    range.from.as_ref().hash(&mut hasher);
-                    range.to.as_ref().map(|id| id.as_ref()).hash(&mut hasher);
-                }
-                None => 0u8.hash(&mut hasher),
-            }
-            hasher.finish()
+    fn comparison_commits<'a>(repo: &'a RepoState, ids: &[CommitId]) -> Vec<Option<&'a Commit>> {
+        let indexed = &repo.history_state.indexed;
+        let page = match &repo.log {
+            Loadable::Ready(page) => Some(page),
+            _ => repo.history_state.retained_log_while_loading.as_ref(),
         };
-        if let Some((cached_key, commits)) = self.range_comparison_commits_cache.borrow().as_ref()
-            && *cached_key == key
-        {
-            return std::rc::Rc::clone(commits);
-        }
-        let commits: std::rc::Rc<[CommitCard]> = Self::range_comparison_commits(repo)
+        // Hash the fallback page once, including for legacy histories where it
+        // may contain thousands of commits. Never scan it per selected ID.
+        let bootstrap: FxHashMap<_, _> = page
             .into_iter()
-            .map(CommitCard::new)
+            .flat_map(|page| &page.commits)
+            .map(|commit| (&commit.id, commit))
             .collect();
-        *self.range_comparison_commits_cache.borrow_mut() =
-            Some((key, std::rc::Rc::clone(&commits)));
-        commits
+        // Resolve by immutable ID against the cache's own index: during handoff
+        // its row numbers can differ from those of the displayed presentation.
+        ids.iter()
+            .map(|id| {
+                indexed
+                    .range_index
+                    .as_ref()
+                    .and_then(|index| indexed.commit(&index.snapshot, index.position(id.as_ref())?))
+                    .or_else(|| bootstrap.get(id).copied())
+            })
+            .collect()
+    }
+
+    fn comparison_order_key(repo: &RepoState) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut key = rustc_hash::FxHasher::default();
+        repo.id.hash(&mut key);
+        repo.log_rev.hash(&mut key);
+        if !repo.history_state.multi_selection.is_multi()
+            && let Some(range) = &repo.history_state.range_selection
+        {
+            range.from.hash(&mut key);
+            range.to.hash(&mut key);
+        }
+        (Arc::as_ptr(&repo.history_state.multi_selection.commits) as usize).hash(&mut key);
+        repo.history_state
+            .indexed
+            .displayed_index
+            .as_ref()
+            .or(repo.history_state.indexed.index.as_ref())
+            .map(|index| Arc::as_ptr(index) as usize)
+            .hash(&mut key);
+        key.finish()
+    }
+
+    fn ensure_comparison_order(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let key = Self::comparison_order_key(repo);
+        if self
+            .comparison_order
+            .as_ref()
+            .is_some_and(|cache| cache.key == key)
+            || self.comparison_order_pending == Some(key)
+        {
+            return;
+        }
+        // Small endpoint comparisons are ready in their first frame. Large
+        // selections are sorted on the executor and published by generation.
+        if Self::comparison_count(repo) <= 256 {
+            let ordered = Arc::new(Self::range_comparison_commit_ids(repo));
+            self.comparison_order = Some(Self::comparison_order_cache(repo, key, ordered));
+            self.comparison_order_pending = None;
+            return;
+        }
+        let source = Self::comparison_order_cache(repo, key, Arc::new(Vec::new()));
+        let repo = repo.clone();
+        self.comparison_order_pending = Some(key);
+        cx.spawn(async move |view, cx| {
+            let ordered = cx
+                .background_executor()
+                .spawn(async move { Arc::new(Self::range_comparison_commit_ids(&repo)) })
+                .await;
+            let _ = view.update(cx, |this, cx| {
+                if this.comparison_order_pending != Some(key) {
+                    return;
+                }
+                this.comparison_order_pending = None;
+                if this
+                    .active_repo()
+                    .is_some_and(|repo| Self::comparison_order_key(repo) == key)
+                {
+                    this.comparison_order = Some(ComparisonOrderCache {
+                        ids: ordered,
+                        ..source
+                    });
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn comparison_order_cache(
+        repo: &RepoState,
+        key: u64,
+        ids: Arc<Vec<CommitId>>,
+    ) -> ComparisonOrderCache {
+        ComparisonOrderCache {
+            key,
+            ids,
+            _selection: repo.history_state.multi_selection.commits.clone(),
+            _index: repo
+                .history_state
+                .indexed
+                .displayed_index
+                .as_ref()
+                .or(repo.history_state.indexed.index.as_ref())
+                .cloned(),
+        }
+    }
+
+    fn comparison_count(repo: &RepoState) -> usize {
+        if repo.history_state.multi_selection.is_multi() {
+            repo.history_state.multi_selection.commits.len()
+        } else {
+            Self::range_comparison_commit_ids(repo).len()
+        }
+    }
+
+    #[cfg(test)]
+    fn range_comparison_commits_shared(&self, repo: &RepoState) -> std::rc::Rc<[CommitCard]> {
+        let ids = Self::range_comparison_commit_ids(repo);
+        self.comparison_cards(repo, &ids, 0)
+    }
+
+    /// Only the visible IDs and the blocks supplying their metadata invalidate cards.
+    fn comparison_cards(
+        &self,
+        repo: &RepoState,
+        ids: &[CommitId],
+        start: usize,
+    ) -> std::rc::Rc<[CommitCard]> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = rustc_hash::FxHasher::default();
+        repo.id.hash(&mut hasher);
+        repo.log_rev.hash(&mut hasher);
+        start.hash(&mut hasher);
+        ids.hash(&mut hasher);
+        let indexed = &repo.history_state.indexed;
+        let mut blocks =
+            smallvec::SmallVec::<[Arc<gitcomet_core::history_index::HistoryRange>; 4]>::new();
+        for id in ids {
+            let block = indexed
+                .range_index
+                .as_ref()
+                .and_then(|index| index.position(id.as_ref()))
+                .map(|raw| {
+                    raw / gitcomet_core::history_index::HISTORY_BLOCK_SIZE
+                        * gitcomet_core::history_index::HISTORY_BLOCK_SIZE
+                });
+            let block = block.and_then(|block| indexed.ranges.get(&block));
+            block
+                .map(|range| Arc::as_ptr(range) as usize)
+                .hash(&mut hasher);
+            if let Some(block) = block
+                && !blocks.iter().any(|old| Arc::ptr_eq(old, block))
+            {
+                blocks.push(block.clone());
+            }
+        }
+        let key = hasher.finish();
+        if let Some(cache) = &*self.range_comparison_commits_cache.borrow()
+            && cache.key == key
+        {
+            return cache.cards.clone();
+        }
+        let cards: std::rc::Rc<[CommitCard]> = ids
+            .iter()
+            .zip(Self::comparison_commits(repo, ids))
+            .map(|(id, commit)| {
+                gitcomet_core::history_perf::record(
+                    gitcomet_core::history_perf::Work::ComparisonCard,
+                );
+                commit.map_or_else(
+                    || CommitCard::unloaded(id),
+                    |commit| CommitCard::new(commit.clone()),
+                )
+            })
+            .collect();
+        *self.range_comparison_commits_cache.borrow_mut() = Some(ComparisonCardCache {
+            key,
+            cards: cards.clone(),
+            _blocks: blocks.into_vec(),
+        });
+        cards
     }
 
     /// One selected/compared-commit preview card: avatar, summary, an author +
@@ -1027,18 +1321,22 @@ impl DetailsPaneView {
     ) -> AnyElement {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, self.ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(self.ui_scale_percent);
 
         let short_sha = card.short_sha.clone();
         let summary = card.summary.clone();
         let author = card.author.clone();
-        let when: SharedString = format!(
-            "{} · {}",
-            author,
-            crate::view::date_time::format_relative_time(card.unix_secs, now)
-        )
-        .into();
+        let when: SharedString = card
+            .unix_secs
+            .map(|unix_secs| {
+                format!(
+                    "{} · {}",
+                    author,
+                    crate::view::date_time::format_relative_time(unix_secs, now)
+                )
+            })
+            .unwrap_or_default()
+            .into();
 
         div()
             .id(("commit_multi_row", ix))
@@ -1054,7 +1352,9 @@ impl DetailsPaneView {
             .when(show_border, |row| {
                 row.border_b_1().border_color(theme.colors.stroke.default)
             })
-            .child(components::author_avatar(theme, ui_scale, author.as_ref()))
+            .when(card.unix_secs.is_some(), |row| {
+                row.child(components::author_avatar(theme, ui_scale, author.as_ref()))
+            })
             .child(
                 div()
                     .flex_1()
@@ -1062,10 +1362,15 @@ impl DetailsPaneView {
                     .flex()
                     .flex_col()
                     .gap(scaled_px(2.0))
-                    .child(div().text_sm().line_clamp(1).child(summary))
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(theme.ui_text(14.0))
+                            .line_clamp(1)
+                            .child(summary),
+                    )
+                    .child(
+                        div()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .child(when),
@@ -1074,7 +1379,7 @@ impl DetailsPaneView {
             .child(
                 div()
                     .flex_none()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
                     .text_color(theme.colors.foreground.secondary)
                     .child(short_sha),
@@ -1083,7 +1388,7 @@ impl DetailsPaneView {
     }
 
     /// Rows for both the comparison view's endpoint cards and the plain
-    /// multi-selection list. `range_comparison_commits` already resolves to the
+    /// multi-selection list. `range_comparison_commit_ids` already resolves to the
     /// multi-selection when that is what is being compared, so one renderer
     /// serves both and the two views cannot drift apart.
     pub(in super::super) fn render_multi_commit_rows(
@@ -1092,15 +1397,26 @@ impl DetailsPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let _ = cx;
+        this.ensure_comparison_order(cx);
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
-        let cards = this.range_comparison_commits_shared(repo);
-        let last_ix = cards.len().saturating_sub(1);
+        let key = Self::comparison_order_key(repo);
+        let Some(order) = this
+            .comparison_order
+            .as_ref()
+            .filter(|cache| cache.key == key)
+        else {
+            return Vec::new();
+        };
+        let ordered = &order.ids;
+        let start = range.start.min(ordered.len());
+        let end = range.end.min(ordered.len());
+        let cards = this.comparison_cards(repo, &ordered[start..end], start);
+        let last_ix = ordered.len().saturating_sub(1);
         let now = std::time::SystemTime::now();
         range
-            .filter_map(|ix| cards.get(ix).map(|card| (ix, card)))
+            .filter_map(|ix| cards.get(ix - start).map(|card| (ix, card)))
             .map(|(ix, card)| this.commit_card_element(ix, card, now, ix != last_ix))
             .collect()
     }
@@ -1176,20 +1492,13 @@ impl DetailsPaneView {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
 
-        let header = div()
-            .flex()
-            .items_center()
+        let header = components::content_header_bar(theme, ui_scale)
             .justify_between()
-            .h(components::control_height_md(ui_scale))
-            .px_2()
-            .bg(theme.colors.surface.raised)
-            .border_b_1()
-            .border_color(theme.colors.stroke.default)
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .font_weight(FontWeight::BOLD)
                     .line_clamp(1)
                     .child(SharedString::from(format!("{count} commits selected"))),
@@ -1274,19 +1583,12 @@ impl DetailsPaneView {
             return div().into_any_element();
         };
 
-        let header = div()
-            .flex()
-            .items_center()
+        let header = components::content_header_bar(theme, ui_scale)
             .gap_2()
-            .h(components::control_height_md(ui_scale))
-            .px_2()
-            .bg(theme.colors.surface.raised)
-            .border_b_1()
-            .border_color(theme.colors.stroke.default)
             .child(
                 div()
                     .flex_none()
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .font_weight(FontWeight::BOLD)
                     // Not "Uncommitted changes": that is the current repo's
                     // own row, and these are somebody else's.
@@ -1300,7 +1602,7 @@ impl DetailsPaneView {
                     theme,
                     chip_label,
                     ui_scale.px(10.0),
-                    ui_scale.px(18.0),
+                    crate::view::rows::sidebar::worktree_badge_height(ui_scale),
                     ui_scale.px(220.0),
                     ui_scale.px(6.0),
                 )
@@ -1346,13 +1648,52 @@ impl DetailsPaneView {
         // those same three counts -- is always positive here. A change that
         // started reporting clean worktrees would need a branch of its own; it
         // would otherwise sit on "Loading files…" forever.
+        let worktree_inputs = self.selected_worktree_summary().map(|summary| {
+            let rev = self
+                .active_repo()
+                .map(|repo| repo.worktree_dirty_rev)
+                .unwrap_or_default();
+            (summary.path.clone(), rev)
+        });
+        let (worktree_row_count, worktree_counts) = worktree_inputs
+            .as_ref()
+            .and_then(|(path, rev)| {
+                let summary = self.selected_worktree_summary()?;
+                let inputs = self.cached_worktree_file_inputs(repo_id, *rev, summary);
+                let projection =
+                    self.cached_worktree_file_projection(repo_id, *rev, path, &inputs.files);
+                let plan = self.cached_worktree_file_plan(repo_id, *rev, path, &inputs.files);
+                Some((plan.row_len(), projection.counts))
+            })
+            .unwrap_or((loaded_file_count, Default::default()));
+        let worktree_controls = self.file_list_controls(
+            crate::view::rows::FileListId::WorktreeFiles,
+            repo_id,
+            "worktree_file",
+            loaded_file_count == 0,
+            cx,
+        );
+        let worktree_filters_width = self
+            .worktree_filter_bounds_ref
+            .borrow()
+            .as_ref()
+            .map(|b| b.size.width)
+            .unwrap_or(Pixels::MAX);
+        let worktree_filters = self.commit_file_filter_tabs(
+            crate::view::rows::FileListId::WorktreeFiles,
+            "worktree_file",
+            worktree_filters_width,
+            worktree_counts,
+            cx,
+        );
+
         let files_body: AnyElement = if loaded_file_count == 0 {
             // Counts without files means the scan carrying them is still running.
             // Saying so beats an empty list that reads as "nothing changed" while
             // the header above it counts the changes.
             div()
                 .debug_selector(|| "worktree_files_loading".to_string())
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Loading files…")
                 .into_any_element()
@@ -1364,7 +1705,7 @@ impl DetailsPaneView {
                 &self.worktree_files_scroll,
                 uniform_list(
                     ("worktree_files_list", repo_id.0),
-                    loaded_file_count,
+                    worktree_row_count,
                     cx.processor(Self::render_worktree_file_rows),
                 ),
             )
@@ -1394,11 +1735,44 @@ impl DetailsPaneView {
                     .p_2()
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(theme.colors.foreground.secondary)
-                            .line_clamp(1)
-                            .child(SharedString::from(format!("{file_count} changed"))),
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .w_full()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_size(theme.ui_text(14.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .line_clamp(1)
+                                    .child(SharedString::from(format!("{file_count} changed"))),
+                            )
+                            .child(worktree_controls),
                     )
+                    .child({
+                        let bounds = std::rc::Rc::clone(&self.worktree_filter_bounds_ref);
+                        let pane = cx.weak_entity();
+                        div()
+                            .relative()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .on_children_prepainted(move |children, _window, app| {
+                                let next = children.first().copied();
+                                let mut measured = bounds.borrow_mut();
+                                if *measured != next {
+                                    *measured = next;
+                                    // Cached panes must be notified after prepaint.
+                                    let pane = pane.clone();
+                                    app.defer(move |app| {
+                                        let _ = pane.update(app, |_pane, cx| cx.notify());
+                                    });
+                                }
+                            })
+                            .child(visible_bounds_probe())
+                            .child(worktree_filters)
+                    })
                     .child(
                         div()
                             .flex()
@@ -1443,7 +1817,7 @@ impl DetailsPaneView {
             let Some(range) = repo.history_state.range_selection.clone() else {
                 return div().into_any_element();
             };
-            let card_count = self.range_comparison_commits_shared(repo).len();
+            let card_count = Self::comparison_count(repo);
             // Only a genuine multi-selection is a "merged diff of N commits";
             // every other flow compares two named points, however many of them
             // happen to resolve to a card.
@@ -1467,20 +1841,13 @@ impl DetailsPaneView {
             format!("Viewing diff: {} → {}", range.from_label, range.to_label).into()
         };
 
-        let header = div()
-            .flex()
-            .items_center()
+        let header = components::content_header_bar(theme, ui_scale)
             .justify_between()
-            .h(components::control_height_md(ui_scale))
-            .px_2()
-            .bg(theme.colors.surface.raised)
-            .border_b_1()
-            .border_color(theme.colors.stroke.default)
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .font_weight(FontWeight::BOLD)
                     .line_clamp(1)
                     .child(header_title),
@@ -1538,10 +1905,43 @@ impl DetailsPaneView {
                 (format!("{count} changed").into(), "range_files_label_count")
             }
         };
+        let (range_row_count, range_counts) = self
+            .active_repo()
+            .and_then(|repo| {
+                let Loadable::Ready(files) = &repo.history_state.range_files else {
+                    return None;
+                };
+                let rev = repo.history_state.range_files_rev;
+                let projection = self.cached_range_file_projection(repo_id, rev, files);
+                let plan = self.cached_range_file_plan(repo_id, rev, files);
+                Some((plan.row_len(), projection.counts))
+            })
+            .unwrap_or((0, Default::default()));
+        let range_controls = self.file_list_controls(
+            crate::view::rows::FileListId::RangeFiles,
+            repo_id,
+            "range_file",
+            range_counts.all == 0,
+            cx,
+        );
+        let range_filters_width = self
+            .range_filter_bounds_ref
+            .borrow()
+            .as_ref()
+            .map(|b| b.size.width)
+            .unwrap_or(Pixels::MAX);
+        let range_filters = self.commit_file_filter_tabs(
+            crate::view::rows::FileListId::RangeFiles,
+            "range_file",
+            range_filters_width,
+            range_counts,
+            cx,
+        );
+
         let files_body: AnyElement = match &files_state {
             RangeFilesState::Loading => div()
                 .debug_selector(|| "range_files_loading".to_string())
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("Loading")
                 .into_any_element(),
@@ -1550,24 +1950,24 @@ impl DetailsPaneView {
             // failed comparison as a successful, empty one.
             RangeFilesState::Failed(message) => div()
                 .debug_selector(|| "range_files_error".to_string())
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.status.danger.foreground)
                 .child(SharedString::from(message.clone()))
                 .into_any_element(),
             RangeFilesState::Loaded(0) => div()
                 .debug_selector(|| "range_files_empty".to_string())
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("No files.")
                 .into_any_element(),
-            RangeFilesState::Loaded(count) => Self::vertical_scroll_frame(
+            RangeFilesState::Loaded(_) => Self::vertical_scroll_frame(
                 theme,
                 ("range_files_container", repo_id.0),
                 ("range_files_scrollbar", repo_id.0),
                 &self.range_files_scroll,
                 uniform_list(
                     ("range_files_list", repo_id.0),
-                    *count,
+                    range_row_count,
                     cx.processor(Self::render_range_file_rows),
                 ),
             )
@@ -1597,7 +1997,7 @@ impl DetailsPaneView {
                     .p_2()
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .child(subheader),
@@ -1621,11 +2021,46 @@ impl DetailsPaneView {
                             .pt_2()
                             .child(
                                 div()
-                                    .debug_selector(move || files_label_selector.to_string())
-                                    .text_sm()
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child(files_label),
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .w_full()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .debug_selector(move || {
+                                                files_label_selector.to_string()
+                                            })
+                                            .text_size(theme.ui_text(14.0))
+                                            .text_color(theme.colors.foreground.secondary)
+                                            .child(files_label),
+                                    )
+                                    .child(range_controls),
                             )
+                            .child({
+                                let bounds = std::rc::Rc::clone(&self.range_filter_bounds_ref);
+                                let pane = cx.weak_entity();
+                                div()
+                                    .relative()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .on_children_prepainted(move |children, _window, app| {
+                                        let next = children.first().copied();
+                                        let mut measured = bounds.borrow_mut();
+                                        if *measured != next {
+                                            *measured = next;
+                                            // Cached panes must be notified after prepaint.
+                                            let pane = pane.clone();
+                                            app.defer(move |app| {
+                                                let _ = pane.update(app, |_pane, cx| cx.notify());
+                                            });
+                                        }
+                                    })
+                                    .child(visible_bounds_probe())
+                                    .child(range_filters)
+                            })
                             .child(files_body),
                     ),
             )
@@ -1648,34 +2083,37 @@ impl DetailsPaneView {
 
     fn commit_file_filter_tabs(
         &mut self,
+        list: crate::view::rows::FileListId,
+        id_prefix: &'static str,
+        available_width: Pixels,
         counts: crate::view::rows::CommitFileKindCounts,
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<Div> {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
-        let available_width = self
-            .commit_files_section_bounds_ref
-            .borrow()
-            .as_ref()
-            .map(|bounds| bounds.size.width)
-            .unwrap_or(Pixels::MAX);
-        let labels =
-            commit_file_filter_labels_for_width(available_width, counts, self.ui_scale_percent);
+        // Each caller supplies its measured filter width. Keep it explicit so
+        // worktree and range controls do not read the commit list's bounds.
+        let labels = commit_file_filter_labels_for_width(
+            available_width,
+            counts,
+            self.ui_scale_percent,
+            theme.metrics,
+        );
         let tab_gap = match labels {
             CommitFileFilterLabels::Full => COMMIT_FILE_FILTER_TAB_FULL_GAP_PX,
             CommitFileFilterLabels::Compact => COMMIT_FILE_FILTER_TAB_COMPACT_GAP_PX,
         };
-        let current = self.commit_file_filter;
+        let current = self.file_list_filter_for(list);
 
         let mut tabs = div()
-            .id("commit_file_filter_tabs")
-            .debug_selector(|| "commit_file_filter_tabs".to_string())
+            .id(SharedString::from(format!("{id_prefix}_filter_tabs")))
+            .debug_selector(move || format!("{id_prefix}_filter_tabs"))
             .flex()
             .items_center()
             .gap(ui_scale.px(tab_gap))
             .w_full()
             .min_w(px(0.0))
-            .h(ui_scale.px(COMMIT_FILE_FILTER_HEIGHT_PX))
+            .h(components::control_height(ui_scale))
             .overflow_hidden();
 
         for (ix, filter) in crate::view::rows::CommitFileFilter::ALL
@@ -1686,7 +2124,7 @@ impl DetailsPaneView {
             let selected = current == filter;
             let disabled = count == 0;
             let full_label = format!("{} ({count})", filter.label());
-            let tooltip = filter.tooltip(count);
+            let tooltip = filter.tooltip_in(list.filter_scope(), count);
             let display_label = match labels {
                 CommitFileFilterLabels::Full => full_label.clone(),
                 CommitFileFilterLabels::Compact => count.to_string(),
@@ -1698,15 +2136,15 @@ impl DetailsPaneView {
                 theme.colors.interaction.selected_indicator
             };
             let mut tab = div()
-                .id(("commit_file_filter_tab", ix))
-                .debug_selector(move || format!("commit_file_filter_tab_{ix}"))
+                .id((SharedString::from(format!("{id_prefix}_filter_tab")), ix))
+                .debug_selector(move || format!("{id_prefix}_filter_tab_{ix}"))
                 .flex()
                 .flex_none()
                 .items_center()
                 .justify_center()
                 .gap(ui_scale.px(COMMIT_FILE_FILTER_ICON_GAP_PX))
-                .h(ui_scale.px(COMMIT_FILE_FILTER_HEIGHT_PX))
-                .px(ui_scale.px(COMMIT_FILE_FILTER_TAB_PAD_X_PX))
+                .h(components::control_height(ui_scale))
+                .px(ui_scale.px(commit_file_filter_tab_pad_x(theme.metrics)))
                 .rounded(px(theme.radii.control))
                 .border_1()
                 .border_color(if selected {
@@ -1714,7 +2152,7 @@ impl DetailsPaneView {
                 } else {
                     gpui::rgba(0x00000000)
                 })
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .whitespace_nowrap()
                 .text_color(if selected {
                     theme.colors.interaction.selected_foreground
@@ -1746,14 +2184,14 @@ impl DetailsPaneView {
                     })
                     .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
                         if event.standard_click() {
-                            this.set_commit_file_filter(filter, cx);
+                            this.set_file_list_filter(list, filter, cx);
                         }
                     }))
                     .on_key_down(cx.listener(
                         move |this, event: &gpui::KeyDownEvent, _window, cx| {
                             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                                 cx.stop_propagation();
-                                this.set_commit_file_filter(filter, cx);
+                                this.set_file_list_filter(list, filter, cx);
                             }
                         },
                     ));
@@ -1762,6 +2200,65 @@ impl DetailsPaneView {
             tabs = tabs.child(tab);
         }
         tabs
+    }
+
+    /// Layout toggle + sort menu, the pair every changed-file list carries.
+    fn file_list_controls(
+        &mut self,
+        list: crate::view::rows::FileListId,
+        repo_id: RepoId,
+        id_prefix: &'static str,
+        disabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+        let sort = self.file_list_sort_for(list);
+        let layout = self.file_list_layout_for(repo_id, list);
+        let icon_color = theme.colors.foreground.secondary;
+
+        let layout_button = components::Button::new(format!("{id_prefix}_layout_button"), "")
+            .style(components::ButtonStyle::Transparent)
+            .disabled(disabled)
+            .start_slot(svg_icon(layout.icon(), icon_color, ui_scale.px(14.0)))
+            .on_click(theme, cx, move |this, event, _window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.toggle_file_list_layout(repo_id, list, cx);
+            })
+            .debug_selector(move || format!("{id_prefix}_layout_button"))
+            .gitcomet_tooltip(
+                theme,
+                format!("Layout: {} — click to switch", layout.label()).into(),
+            );
+
+        let sort_button = components::Button::new(format!("{id_prefix}_sort_button"), "")
+            .style(components::ButtonStyle::Transparent)
+            .disabled(disabled)
+            .start_slot(svg_icon("icons/sort.svg", icon_color, ui_scale.px(14.0)))
+            .on_click_with_bounds(theme, cx, move |this, event, bounds, window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.open_popover_for_bounds(
+                    PopoverKind::CommitFileSortMenu { list },
+                    bounds,
+                    window,
+                    cx,
+                );
+            })
+            .debug_selector(move || format!("{id_prefix}_sort_button"))
+            .gitcomet_tooltip(theme, format!("Sort: {}", sort.label()).into());
+
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_1()
+            .child(layout_button)
+            .child(sort_button)
+            .into_any_element()
     }
 
     fn commit_files_section(
@@ -1775,16 +2272,18 @@ impl DetailsPaneView {
         let ui_scale = self.ui_scale();
         let projection =
             self.cached_commit_file_projection(repo_id, commit_details_rev, &details.files);
+        let plan = self.cached_commit_file_plan(repo_id, commit_details_rev, &details.files);
         let visible_count = projection.source_indices.len();
+        let row_count = plan.row_len();
         let files = if details.files.is_empty() {
             div()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("No files.")
                 .into_any_element()
         } else if visible_count == 0 {
             div()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child("No files match this filter.")
                 .into_any_element()
@@ -1796,34 +2295,24 @@ impl DetailsPaneView {
                 &self.commit_files_scroll,
                 uniform_list(
                     ("commit_details_files_list", repo_id.0),
-                    visible_count,
+                    row_count,
                     cx.processor(Self::render_commit_file_rows),
                 ),
             )
-            .min_h(ui_scale.px(24.0))
+            .min_h(crate::view::rows::sidebar::sidebar_list_row_height(
+                theme,
+                ui_scale.percent(),
+            ))
             .into_any_element()
         };
 
-        let sort = self.commit_file_sort;
-        let sort_button = components::Button::new("commit_file_sort_button", sort.control_label())
-            .style(components::ButtonStyle::Transparent)
-            .disabled(details.files.is_empty())
-            .end_slot(svg_icon(
-                "icons/chevron_down.svg",
-                theme.colors.foreground.secondary,
-                ui_scale.px(12.0),
-            ))
-            .on_click_with_bounds(theme, cx, |this, event, bounds, window, cx| {
-                if !event.standard_click() {
-                    return;
-                }
-                this.open_popover_for_bounds(PopoverKind::CommitFileSortMenu, bounds, window, cx);
-            })
-            .debug_selector(|| "commit_file_sort_button".to_string())
-            .gitcomet_tooltip(
-                theme,
-                format!("Sort committed files: {}", sort.label()).into(),
-            );
+        let controls = self.file_list_controls(
+            crate::view::rows::FileListId::CommitFiles,
+            repo_id,
+            "commit_file",
+            details.files.is_empty(),
+            cx,
+        );
 
         let heading = div()
             .flex()
@@ -1836,13 +2325,25 @@ impl DetailsPaneView {
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_sm()
+                    .text_size(theme.ui_text(14.0))
                     .text_color(theme.colors.foreground.secondary)
                     .line_clamp(1)
                     .child(format!("Committed files ({})", projection.counts.all)),
             )
-            .child(sort_button);
-        let filters = self.commit_file_filter_tabs(projection.counts, cx);
+            .child(controls);
+        let filters_width = self
+            .commit_files_section_bounds_ref
+            .borrow()
+            .as_ref()
+            .map(|bounds| bounds.size.width)
+            .unwrap_or(Pixels::MAX);
+        let filters = self.commit_file_filter_tabs(
+            crate::view::rows::FileListId::CommitFiles,
+            "commit_file",
+            filters_width,
+            projection.counts,
+            cx,
+        );
 
         let section_bounds = std::rc::Rc::clone(&self.commit_files_section_bounds_ref);
         div()
@@ -1906,9 +2407,7 @@ impl DetailsPaneView {
         let multi_count = self
             .active_repo()
             .filter(|repo| repo.history_state.multi_selection.is_multi())
-            .map(Self::multi_selected_commits_in_log_order)
-            .filter(|commits| commits.len() > 1)
-            .map(|commits| commits.len());
+            .map(|repo| repo.history_state.multi_selection.commits.len());
         if let (Some(repo_id), Some(count)) = (active_repo_id, multi_count) {
             return self.multi_commit_details_view(repo_id, count, cx);
         }
@@ -1924,13 +2423,13 @@ impl DetailsPaneView {
                 .flex()
                 .items_center()
                 .justify_between()
-                .h(components::control_height_md(ui_scale))
+                .h(components::content_header_height(ui_scale))
                 .px_2()
                 .child(
                     div()
                         .flex_1()
                         .min_w(px(0.0))
-                        .text_sm()
+                        .text_size(theme.ui_text(14.0))
                         .font_weight(FontWeight::BOLD)
                         .line_clamp(1)
                         .child(header_title),
@@ -1960,6 +2459,10 @@ impl DetailsPaneView {
                     repo.history_state.commit_details_rev,
                 )
             });
+            let commit_signatures = self
+                .active_repo()
+                .map(|repo| repo.history_state.commit_signatures.clone())
+                .unwrap_or_default();
             let commit_details_rev = active_commit_details
                 .as_ref()
                 .map(|(_, revision)| *revision)
@@ -2037,14 +2540,20 @@ impl DetailsPaneView {
                                         .pb_2()
                                         .child(message),
                                 )
-                                .children(commit_details_author_row(theme, ui_scale, details).map(
-                                    |row| {
+                                .children(
+                                    commit_details_author_row(
+                                        theme,
+                                        ui_scale,
+                                        details,
+                                        commit_signatures.get(&details.id),
+                                    )
+                                    .map(|row| {
                                         row.border_t_1()
                                             .border_color(theme.colors.stroke.default)
                                             .pt_2()
                                             .pb_2()
-                                    },
-                                ))
+                                    }),
+                                )
                                 .child(
                                     div()
                                         .flex()
@@ -2142,14 +2651,20 @@ impl DetailsPaneView {
                                     .pb_2()
                                     .child(message),
                             )
-                            .children(commit_details_author_row(theme, ui_scale, details).map(
-                                |row| {
+                            .children(
+                                commit_details_author_row(
+                                    theme,
+                                    ui_scale,
+                                    details,
+                                    commit_signatures.get(&details.id),
+                                )
+                                .map(|row| {
                                     row.border_t_1()
                                         .border_color(theme.colors.stroke.default)
                                         .pt_2()
                                         .pb_2()
-                                },
-                            ))
+                                }),
+                            )
                             .child(
                                 div()
                                     .flex()
@@ -2230,13 +2745,13 @@ impl DetailsPaneView {
             .active_repo()
             .map(|repo| {
                 (
-                    StatusSectionEntries::from_repo(repo, StatusSection::Staged)
+                    self.status_section_entries(repo, StatusSection::Staged)
                         .map_or(0, |entries| entries.len()),
-                    StatusSectionEntries::from_repo(repo, StatusSection::CombinedUnstaged)
+                    self.status_section_entries(repo, StatusSection::CombinedUnstaged)
                         .map_or(0, |entries| entries.len()),
-                    StatusSectionEntries::from_repo(repo, StatusSection::Untracked)
+                    self.status_section_entries(repo, StatusSection::Untracked)
                         .map_or(0, |entries| entries.len()),
-                    StatusSectionEntries::from_repo(repo, StatusSection::Unstaged)
+                    self.status_section_entries(repo, StatusSection::Unstaged)
                         .map_or(0, |entries| entries.len()),
                 )
             })
@@ -2245,9 +2760,9 @@ impl DetailsPaneView {
             .active_repo()
             .map(|repo| {
                 (
-                    StatusSectionEntries::from_repo(repo, StatusSection::Untracked)
+                    self.status_section_entries(repo, StatusSection::Untracked)
                         .map_or_else(Vec::new, |entries| entries.path_vec()),
-                    StatusSectionEntries::from_repo(repo, StatusSection::Unstaged)
+                    self.status_section_entries(repo, StatusSection::Unstaged)
                         .map_or_else(Vec::new, |entries| entries.path_vec()),
                 )
             })
@@ -2316,6 +2831,7 @@ impl DetailsPaneView {
                     action_label_chars,
                     local_actions_in_flight,
                     ui_scale_percent,
+                    theme.metrics,
                 )
             };
         let count_chars =
@@ -2385,6 +2901,7 @@ impl DetailsPaneView {
             // Empty paths: this button stages every change there is.
             this.stage_all_with_conflict_confirmation(repo_id, Vec::new(), _w, cx);
         })
+        .debug_selector(|| "stage_all_button".to_string())
         .gitcomet_tooltip(theme, "Stage all changes".into());
 
         let stage_selected = components::Button::new(
@@ -2739,6 +3256,28 @@ impl DetailsPaneView {
             .into(),
         );
 
+        let section_controls = |pane: &mut Self,
+                                section: StatusSection,
+                                id_prefix: &'static str,
+                                cx: &mut gpui::Context<Self>|
+         -> Option<gpui::AnyElement> {
+            let repo_id = repo_id?;
+            Some(pane.file_list_controls(
+                crate::view::rows::FileListId::Status(section),
+                repo_id,
+                id_prefix,
+                false,
+                cx,
+            ))
+        };
+        let unstaged_controls =
+            section_controls(self, StatusSection::CombinedUnstaged, "status_unstaged", cx);
+        let untracked_controls =
+            section_controls(self, StatusSection::Untracked, "status_untracked", cx);
+        let split_unstaged_controls =
+            section_controls(self, StatusSection::Unstaged, "status_split_unstaged", cx);
+        let staged_controls = section_controls(self, StatusSection::Staged, "status_staged", cx);
+
         let section_header = |id: &'static str,
                               title: gpui::AnyElement,
                               show_action: bool,
@@ -2751,7 +3290,10 @@ impl DetailsPaneView {
                 .items_center()
                 .justify_between()
                 .gap_2()
-                .h(components::control_height_md(ui_scale_percent))
+                .h(components::content_header_height(
+                    ui_scale::UiScale::from_percent(ui_scale_percent)
+                        .with_appearance(theme.metrics),
+                ))
                 .px_2()
                 .overflow_hidden()
                 // The labels shrink before this matters, but a UI zoom or a font
@@ -2771,7 +3313,7 @@ impl DetailsPaneView {
 
         let normal_header_title = |label: &'static str| {
             div()
-                .text_sm()
+                .text_size(theme.ui_text(14.0))
                 .font_weight(FontWeight::BOLD)
                 .line_clamp(1)
                 .whitespace_nowrap()
@@ -2784,6 +3326,9 @@ impl DetailsPaneView {
 
         let unstaged_actions = {
             let mut actions = div().flex().items_center().gap_2();
+            if let Some(controls) = unstaged_controls {
+                actions = actions.child(controls);
+            }
             if local_actions_in_flight {
                 actions = actions.child(
                     spinner(
@@ -2804,6 +3349,9 @@ impl DetailsPaneView {
 
         let untracked_actions = {
             let mut actions = div().flex().items_center().gap_2();
+            if let Some(controls) = untracked_controls {
+                actions = actions.child(controls);
+            }
             if local_actions_in_flight {
                 actions = actions.child(
                     spinner(
@@ -2826,6 +3374,9 @@ impl DetailsPaneView {
 
         let split_unstaged_actions = {
             let mut actions = div().flex().items_center().gap_2();
+            if let Some(controls) = split_unstaged_controls {
+                actions = actions.child(controls);
+            }
             if local_actions_in_flight {
                 actions = actions.child(
                     spinner(
@@ -2848,6 +3399,9 @@ impl DetailsPaneView {
 
         let staged_actions = {
             let mut actions = div().flex().items_center().gap_2();
+            if let Some(controls) = staged_controls {
+                actions = actions.child(controls);
+            }
             if local_actions_in_flight {
                 actions = actions.child(
                     spinner(
@@ -2906,11 +3460,15 @@ impl DetailsPaneView {
                 let change_tracking_invoker = change_tracking_invoker.clone();
                 div()
                     .id(id)
+                    .debug_selector(move || id.to_string())
                     .flex()
                     .items_center()
                     .gap_1()
                     .px_1()
-                    .h(px(18.0))
+                    .h(ui_scale.row_height(
+                        CHANGE_TRACKING_HEADER_CHIP_HEIGHT_PX,
+                        CHANGE_TRACKING_HEADER_CHIP_COMFORTABLE_HEIGHT_PX,
+                    ))
                     .rounded(px(theme.radii.row))
                     .when(change_tracking_active, |d| {
                         d.bg(theme.colors.interaction.pressed_background)
@@ -2926,7 +3484,7 @@ impl DetailsPaneView {
                     .cursor(CursorStyle::PointingHand)
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .font_weight(FontWeight::BOLD)
                             .line_clamp(1)
                             .whitespace_nowrap()
@@ -2986,6 +3544,7 @@ impl DetailsPaneView {
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         crate::press_gesture::claim_press(cx);
+                        crate::text_selection_owner::preserve(cx);
                         this.start_status_section_resize(handle, e.position.y, cx);
                         window.refresh();
                     }),
@@ -3062,7 +3621,8 @@ impl DetailsPaneView {
             );
             (top_height, (total_height - top_height).max(section_min_h))
         });
-        let unstaged_section = div()
+        let unstaged_section = self
+            .status_section_container(StatusSection::CombinedUnstaged, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3083,7 +3643,8 @@ impl DetailsPaneView {
                     .child(unstaged_body),
             );
 
-        let untracked_section = div()
+        let untracked_section = self
+            .status_section_container(StatusSection::Untracked, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3104,7 +3665,8 @@ impl DetailsPaneView {
                     .child(untracked_body),
             );
 
-        let split_unstaged_section = div()
+        let split_unstaged_section = self
+            .status_section_container(StatusSection::Unstaged, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3125,7 +3687,8 @@ impl DetailsPaneView {
                     .child(split_unstaged_body),
             );
 
-        let staged_section = div()
+        let staged_section = self
+            .status_section_container(StatusSection::Staged, cx)
             .flex()
             .flex_col()
             .min_h(section_min_h)
@@ -3291,6 +3854,12 @@ impl DetailsPaneView {
             return components::empty_state_message(theme, "Working tree clean.")
                 .into_any_element();
         }
+        // `count` is the file count the header shows; the list is indexed in
+        // display rows, which a tree pads with directories.
+        let count = self
+            .active_repo()
+            .map(|repo| self.status_file_plan(repo, section).row_len())
+            .unwrap_or(count);
         match section {
             StatusSection::CombinedUnstaged => {
                 let list =
@@ -3616,6 +4185,64 @@ mod tests {
         }
     }
 
+    /// The chips get real side padding under Comfortable, and the width budget
+    /// that decides between full and count-only labels has to use the same
+    /// value or the labels overflow the pane they were measured for.
+    #[test]
+    fn comfortable_filter_chips_get_padding_the_width_budget_accounts_for() {
+        let comfortable = crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Comfortable,
+            ..crate::appearance::Appearance::default()
+        };
+        let compact = crate::appearance::Appearance::default();
+
+        assert!(commit_file_filter_tab_pad_x(comfortable) > commit_file_filter_tab_pad_x(compact));
+
+        let counts = commit_file_filter_test_counts();
+        let labels = |width: f32, metrics| {
+            commit_file_filter_labels_for_width(
+                px(width),
+                counts,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                metrics,
+            )
+        };
+        let mut widths_where_padding_decides = 0;
+        for width in 200..600 {
+            let width = width as f32;
+            if labels(width, compact) != labels(width, comfortable) {
+                assert_eq!(labels(width, compact), CommitFileFilterLabels::Full);
+                assert_eq!(labels(width, comfortable), CommitFileFilterLabels::Compact);
+                widths_where_padding_decides += 1;
+            }
+        }
+        assert!(
+            widths_where_padding_decides > 0,
+            "the extra padding must reach the budget that picks the labels"
+        );
+    }
+
+    #[test]
+    fn commit_file_filter_tabs_compact_for_larger_ui_fonts() {
+        let counts = commit_file_filter_test_counts();
+        let default = crate::appearance::Appearance::default();
+        let larger_font = crate::appearance::Appearance {
+            ui_font_size_px: 20,
+            ..default
+        };
+        for scale in [100, 150, 200] {
+            let width = crate::ui_scale::design_px_from_percent(500.0, scale);
+            assert_eq!(
+                commit_file_filter_labels_for_width(width, counts, scale, default),
+                CommitFileFilterLabels::Full,
+            );
+            assert_eq!(
+                commit_file_filter_labels_for_width(width, counts, scale, larger_font),
+                CommitFileFilterLabels::Compact,
+            );
+        }
+    }
+
     #[test]
     fn commit_file_filter_tabs_use_full_labels_when_they_fit() {
         assert_eq!(
@@ -3623,6 +4250,7 @@ mod tests {
                 px(500.0),
                 commit_file_filter_test_counts(),
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             CommitFileFilterLabels::Full
         );
@@ -3636,12 +4264,53 @@ mod tests {
                 px(300.0),
                 counts,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             CommitFileFilterLabels::Compact
         );
         assert_eq!(
-            commit_file_filter_labels_for_width(px(600.0), counts, 200),
+            commit_file_filter_labels_for_width(
+                px(600.0),
+                counts,
+                200,
+                crate::appearance::Appearance::default(),
+            ),
             CommitFileFilterLabels::Compact
+        );
+    }
+
+    /// The budget is per-character ink, so a larger UI font has to widen it or
+    /// the header keeps full labels that no longer fit.
+    #[test]
+    fn the_header_budget_follows_the_ui_font() {
+        let labels = |width: f32, ui_font_size_px| {
+            status_action_labels_for_width(
+                px(width),
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                false,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance {
+                    ui_font_size_px,
+                    ..crate::appearance::Appearance::default()
+                },
+            )
+        };
+
+        let mut widths_where_the_font_decides = 0;
+        for width in 200..900 {
+            let width = width as f32;
+            if labels(width, 14) != labels(width, 24) {
+                assert_eq!(labels(width, 14), StatusActionLabels::Full);
+                assert_eq!(labels(width, 24), StatusActionLabels::Compact);
+                widths_where_the_font_decides += 1;
+            }
+        }
+
+        assert!(
+            widths_where_the_font_decides > 0,
+            "a larger UI font must reach the label budget"
         );
     }
 
@@ -3655,6 +4324,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Full
         );
@@ -3664,17 +4334,19 @@ mod tests {
     /// withholds the full wording while there is visibly room for it, which is
     /// the failure this pins. The number comes from measuring the shipped font
     /// — `Stage (3)`, `Discard (3)` and `Stage all changes` plus their padding,
-    /// gaps and the `Unstaged` dropdown title need ~424px of real ink and box.
+    /// gaps, the `Unstaged` dropdown title and the layout/sort controls need
+    /// ~510px of real ink and box.
     #[test]
     fn status_action_labels_expand_as_soon_as_the_row_really_fits() {
         assert_eq!(
             status_action_labels_for_width(
-                px(430.0),
+                px(515.0),
                 "Unstaged".len(),
                 true,
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Full,
             "the full labels fit at this width in the real app, so the header must show them"
@@ -3691,6 +4363,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Compact
         );
@@ -3700,7 +4373,7 @@ mod tests {
     fn status_action_labels_survive_narrower_without_a_selection() {
         // With nothing selected the header carries one button, so the width that
         // forces the three-button header to shrink is still comfortable here.
-        let width = px(260.0);
+        let width = px(340.0);
         assert_eq!(
             status_action_labels_for_width(
                 width,
@@ -3709,6 +4382,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Compact
         );
@@ -3720,6 +4394,7 @@ mod tests {
                 &["Stage all changes".len()],
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Full
         );
@@ -3739,6 +4414,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ) == StatusActionLabels::Full
             {
                 break;
@@ -3752,6 +4428,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 true,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Compact,
             "the spinner's own width has to count against the budget"
@@ -3760,7 +4437,7 @@ mod tests {
 
     #[test]
     fn status_action_labels_shrink_earlier_when_zoomed_in() {
-        let width = px(500.0);
+        let width = px(580.0);
         assert_eq!(
             status_action_labels_for_width(
                 width,
@@ -3769,6 +4446,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Full
         );
@@ -3780,6 +4458,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 200,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Compact
         );
@@ -3795,6 +4474,7 @@ mod tests {
                 &unstaged_header_with_selection(),
                 false,
                 crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                crate::appearance::Appearance::default(),
             ),
             StatusActionLabels::Full
         );
@@ -4014,6 +4694,33 @@ mod tests {
     }
 
     #[test]
+    fn another_sections_selection_does_not_suppress_active_row_fallback() {
+        let repo = repo_with_status(RepoStatus {
+            unstaged: std::sync::Arc::new(vec![file_status("a.txt", FileStatusKind::Modified)]),
+            staged: std::sync::Arc::new(vec![file_status("b.txt", FileStatusKind::Modified)]),
+        });
+        let target = DiffTarget::WorkingTree {
+            path: "a.txt".into(),
+            area: DiffArea::Unstaged,
+        };
+        for staged in [vec!["b.txt".into()], Vec::new()] {
+            let selected = StatusMultiSelection {
+                explicit_section: Some(StatusSection::Staged),
+                staged,
+                ..Default::default()
+            };
+            let result = status_section_action_selection(
+                &repo,
+                Some(&target),
+                Some(&selected),
+                StatusSection::CombinedUnstaged,
+            );
+            assert_eq!(result.paths, vec![PathBuf::from("a.txt")]);
+            assert!(!result.from_explicit_selection);
+        }
+    }
+
+    #[test]
     fn status_section_action_selection_limits_active_row_to_matching_split_section() {
         let repo = repo_with_status(RepoStatus {
             unstaged: std::sync::Arc::new(vec![
@@ -4048,6 +4755,28 @@ mod tests {
             }
         );
         assert!(unstaged.paths.is_empty());
+    }
+
+    #[test]
+    fn status_explicit_empty_selection_does_not_fall_back_to_the_preview() {
+        let repo = repo_with_status(RepoStatus {
+            staged: Arc::new(vec![file_status("a.rs", FileStatusKind::Modified)]),
+            unstaged: Arc::new(vec![file_status("a.rs", FileStatusKind::Modified)]),
+        });
+        for section in [StatusSection::CombinedUnstaged, StatusSection::Staged] {
+            let selection = StatusMultiSelection {
+                explicit_section: Some(section),
+                ..Default::default()
+            };
+            let target = DiffTarget::WorkingTree {
+                path: "a.rs".into(),
+                area: section.diff_area(),
+            };
+            let action =
+                status_section_action_selection(&repo, Some(&target), Some(&selection), section);
+            assert!(action.paths.is_empty());
+            assert!(action.from_explicit_selection);
+        }
     }
 
     #[test]

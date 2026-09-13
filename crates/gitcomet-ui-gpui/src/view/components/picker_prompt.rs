@@ -13,6 +13,11 @@ use palette::IntoColor;
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::rc::Rc;
+
+/// The "Enter" hint pill on a picker's selected row: follows the row's density
+/// ramp without filling it.
+const PICKER_HINT_PILL_HEIGHT_PX: f32 = 22.0;
+const PICKER_HINT_PILL_COMFORTABLE_HEIGHT_PX: f32 = 26.0;
 use std::sync::Arc;
 
 use super::{TextTruncationProfile, TruncatedText, TruncatedTextFlex};
@@ -25,6 +30,7 @@ pub struct PickerPrompt {
     /// their rows pass it so `render` does not filter and sort them a second
     /// time on every frame; the rest let `render` resolve it.
     layout: Option<Rc<PickerPromptLayout>>,
+    geometry: Option<Rc<PickerPromptGeometry>>,
     /// Renders only the rows the viewport can show once the list is long enough.
     /// Opt-in, because a picker whose rows can be left unbuilt must scroll its
     /// keyboard selection into view through [`PickerPromptGeometry`] rather than
@@ -183,7 +189,23 @@ pub fn picker_prompt_layout_with_collapsed(
     query: &str,
     collapsed: &BTreeSet<SharedString>,
 ) -> PickerPromptLayout {
-    let matches = match_items(items, &section_groups(items), query);
+    picker_prompt_layout_ordered(items, query, collapsed, PickerPromptOrder::Relevance)
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PickerPromptOrder {
+    #[default]
+    Relevance,
+    Source,
+}
+
+pub fn picker_prompt_layout_ordered(
+    items: &[PickerPromptItem],
+    query: &str,
+    collapsed: &BTreeSet<SharedString>,
+    order: PickerPromptOrder,
+) -> PickerPromptLayout {
+    let matches = match_items(items, &section_groups(items), query, order);
     let mut layout = PickerPromptLayout {
         item_indices: Vec::with_capacity(matches.len()),
         child_indices: Vec::with_capacity(matches.len()),
@@ -233,6 +255,11 @@ pub fn picker_prompt_layout_with_collapsed(
 /// `ScrollHandle::scroll_to_item` to find.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PickerPromptGeometry {
+    /// The scale the heights below were measured at, split so the struct stays
+    /// `Eq`. Both halves matter: the density changes row heights, and callers
+    /// compare this against the live scale to decide whether to rebuild.
+    ui_scale_percent: u32,
+    appearance: crate::appearance::Appearance,
     /// Top edge of each displayed row, measured from the first row rather than
     /// from the scroll container: the list's own padding is a property of the
     /// container, which the spacers must not repeat. `pad` converts to scroll
@@ -261,6 +288,8 @@ impl PickerPromptGeometry {
         let ui_scale = ui_scale.into();
         let row_count = layout.item_indices.len();
         let mut geometry = Self {
+            ui_scale_percent: ui_scale.percent(),
+            appearance: ui_scale.appearance,
             tops: Vec::with_capacity(row_count),
             heights: Vec::with_capacity(row_count),
             header_heights: Vec::with_capacity(row_count),
@@ -304,6 +333,10 @@ impl PickerPromptGeometry {
 
     /// The scrollable height of the list: every row and header, plus the list's
     /// padding above and below them.
+    pub fn ui_scale(&self) -> UiScale {
+        UiScale::from_percent(self.ui_scale_percent).with_appearance(self.appearance)
+    }
+
     pub fn total_height(&self) -> Pixels {
         self.rows_height + self.pad * 2.0
     }
@@ -333,13 +366,18 @@ impl PickerPromptGeometry {
         // top padding, which sits before the first row.
         let top = (offset - self.pad).max(px(0.0));
         let bottom = top + viewport;
-        let first_visible = (0..row_count)
-            .find(|ix| self.tops[*ix] + self.heights[*ix] > top)
-            .unwrap_or(0);
-        let last_visible = (first_visible..row_count)
-            .take_while(|ix| self.tops[*ix] < bottom)
-            .last()
-            .unwrap_or(first_visible);
+        let first_visible = self.tops.partition_point(|row_top| *row_top <= top);
+        let first_visible = first_visible.saturating_sub(1).min(row_count - 1);
+        let first_visible = if self.tops[first_visible] + self.heights[first_visible] <= top {
+            (first_visible + 1).min(row_count - 1)
+        } else {
+            first_visible
+        };
+        let last_visible = self
+            .tops
+            .partition_point(|row_top| *row_top < bottom)
+            .saturating_sub(1)
+            .max(first_visible);
 
         let first = first_visible.saturating_sub(WINDOW_OVERDRAW_ROWS);
         let last = (last_visible + WINDOW_OVERDRAW_ROWS).min(row_count - 1);
@@ -427,7 +465,7 @@ fn text_line_height(ui_scale: UiScale, size_rems: f32) -> Pixels {
 
 /// Height of a picker row, which is its own text plus the air around it — or the
 /// standard control height, whichever is larger (`min_h`).
-fn row_height(ui_scale: UiScale, has_secondary: bool) -> Pixels {
+pub fn row_height(ui_scale: UiScale, has_secondary: bool) -> Pixels {
     let mut content =
         ui_scale.px(ROW_PAD_Y_PX) * 2.0 + text_line_height(ui_scale, PRIMARY_TEXT_REMS);
     if has_secondary {
@@ -464,6 +502,7 @@ pub struct PickerPromptItemPart {
     /// date — have nothing to reveal, so they opt out.
     tooltip: bool,
     match_range: Option<Range<usize>>,
+    font_family: Option<SharedString>,
 }
 
 type OnSelectFn<V> =
@@ -483,6 +522,7 @@ impl PickerPrompt {
             scroll_handle,
             items: Rc::from(Vec::new()),
             layout: None,
+            geometry: None,
             empty_text: "No matches".into(),
             max_height: px(360.0),
             tooltip_host: None,
@@ -515,6 +555,12 @@ impl PickerPrompt {
     ) -> Self {
         self.items = items;
         self.layout = Some(layout);
+        self
+    }
+
+    /// Geometry for the same items and layout passed to `prebuilt_items`.
+    pub fn prebuilt_geometry(mut self, geometry: Rc<PickerPromptGeometry>) -> Self {
+        self.geometry = Some(geometry);
         self
     }
 
@@ -650,7 +696,7 @@ impl PickerPrompt {
         let padded_query_row = self.padded_query_row;
         let select_on_mouse_down = self.select_on_mouse_down;
         let ui_scale = ui_scale.into();
-        let scaled_px = |value| ui_scale.px(value);
+        let scaled_px = crate::ui_scale::scaler(ui_scale);
 
         // Reuse the caller's layout when it supplied one; otherwise filter here.
         // A picker that folds sections away resolves its own layout with
@@ -745,8 +791,8 @@ impl PickerPrompt {
                     .flex()
                     .items_center()
                     .px(scaled_px(ROW_PAD_X_PX))
-                    .text_sm()
-                    .line_height(scaled_px(18.0))
+                    .text_size(theme.ui_text(14.0))
+                    .line_height(scaled_px(theme.metrics.ui_text(18.0)))
                     .text_color(theme.colors.foreground.secondary)
                     .child(self.empty_text),
             );
@@ -759,7 +805,12 @@ impl PickerPrompt {
             // to be worth it — `PickerPromptGeometry::window` hands back every
             // row for a short one, so a small picker keeps exactly the geometry
             // it had before any of this existed.
-            let geometry = PickerPromptGeometry::new(&self.items, &layout, ui_scale);
+            let geometry = self
+                .geometry
+                .filter(|geometry| geometry.ui_scale() == ui_scale)
+                .unwrap_or_else(|| {
+                    Rc::new(PickerPromptGeometry::new(&self.items, &layout, ui_scale))
+                });
             let window = geometry.window(-scroll_handle.offset().y, self.max_height);
             if window.space_before > px(0.0) {
                 list = list.child(div().flex_shrink_0().w_full().h(window.space_before));
@@ -884,7 +935,10 @@ impl PickerPrompt {
                                 div()
                                     .flex_shrink_0()
                                     .min_w(scaled_px(34.0))
-                                    .h(scaled_px(22.0))
+                                    .h(ui_scale.row_height(
+                                        PICKER_HINT_PILL_HEIGHT_PX,
+                                        PICKER_HINT_PILL_COMFORTABLE_HEIGHT_PX,
+                                    ))
                                     .px(scaled_px(6.0))
                                     .flex()
                                     .items_center()
@@ -897,7 +951,7 @@ impl PickerPrompt {
                                     .font_family(
                                         crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
                                     )
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child(hint),
                             )
@@ -1113,6 +1167,14 @@ impl PickerPromptItem {
         self.display_text.as_ref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn debug_secondary_part_font_families(&self) -> Vec<Option<&str>> {
+        self.secondary
+            .iter()
+            .map(|part| part.font_family.as_deref())
+            .collect()
+    }
+
     /// Text parts across both of the row's lines — one element each.
     #[cfg(feature = "benchmarks")]
     pub fn debug_part_count(&self) -> usize {
@@ -1163,6 +1225,15 @@ where
 }
 
 impl PickerPromptItemPart {
+    pub fn font_family(mut self, family: impl Into<SharedString>) -> Self {
+        self.font_family = Some(family.into());
+        self
+    }
+
+    pub fn mono(self) -> Self {
+        self.font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
+    }
+
     pub fn new(text: impl Into<SharedString>) -> Self {
         Self {
             text: text.into(),
@@ -1172,6 +1243,7 @@ impl PickerPromptItemPart {
             dim: false,
             tooltip: true,
             match_range: None,
+            font_family: None,
         }
     }
 
@@ -1287,7 +1359,12 @@ fn section_groups(items: &[PickerPromptItem]) -> Vec<usize> {
     groups
 }
 
-fn match_items(items: &[PickerPromptItem], groups: &[usize], query: &str) -> Vec<Match> {
+fn match_items(
+    items: &[PickerPromptItem],
+    groups: &[usize],
+    query: &str,
+    order: PickerPromptOrder,
+) -> Vec<Match> {
     let group_of = |index: usize| groups.get(index).copied().unwrap_or(0);
 
     if query.is_empty() {
@@ -1339,7 +1416,9 @@ fn match_items(items: &[PickerPromptItem], groups: &[usize], query: &str) -> Vec
         });
     }
 
-    out.sort_by(|a, b| a.sort_key.cmp(&b.sort_key));
+    if order == PickerPromptOrder::Relevance {
+        out.sort_by(|a, b| a.sort_key.cmp(&b.sort_key));
+    }
     out
 }
 
@@ -1371,7 +1450,7 @@ fn section_header_row(
     header: &PickerPromptHeader,
     on_toggle: Option<Rc<OnToggleSectionFn>>,
 ) -> Div {
-    let scaled_px = |value| ui_scale.px(value);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let label = header.label.clone();
     let collapsed = header.collapsed;
 
@@ -1382,7 +1461,7 @@ fn section_header_row(
         .items_center()
         .gap(scaled_px(4.0))
         .px(scaled_px(ROW_PAD_X_PX))
-        .text_xs()
+        .text_size(theme.ui_text(12.0))
         .text_color(theme.colors.foreground.secondary)
         .whitespace_nowrap()
         .overflow_hidden();
@@ -1563,15 +1642,17 @@ fn picker_item_line<V: 'static>(
             TruncatedTextFlex::Fixed
         };
 
-        let mut text = TruncatedText::new(part.text.clone())
+        let mut text = TruncatedText::new(part.text.clone(), role.text_size)
             .profile(part.profile)
             .flex(flex)
-            .text_size(role.text_size)
             .text_color(if part.dim {
                 role.dim_color
             } else {
                 role.base_color
             });
+        if let Some(family) = part.font_family.as_ref() {
+            text = text.font_family(family.clone());
+        }
         if let Some(highlight_range) = highlight_range.clone() {
             text = text
                 .focus_range(Some(highlight_range.clone()))
@@ -1605,7 +1686,7 @@ fn remove_row_button<V: 'static>(
     on_remove: Arc<OnRemoveFn<V>>,
     cx: &gpui::Context<V>,
 ) -> impl IntoElement {
-    let scaled_px = |value| ui_scale.px(value);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let tooltip_for_move = tooltip.clone();
     let host_for_move = tooltip_host.clone();
     let host_for_hover = tooltip_host;
@@ -1617,7 +1698,11 @@ fn remove_row_button<V: 'static>(
         .flex()
         .items_center()
         .justify_center()
-        .size(scaled_px(super::REMOVE_BUTTON_SIZE_PX))
+        .size(
+            ui_scale
+                .with_appearance(theme.metrics)
+                .row_height(super::REMOVE_BUTTON_SIZE_PX, 32.0),
+        )
         .rounded(px(theme.radii.row))
         .cursor(CursorStyle::PointingHand)
         .when(!always_visible, |button| {
@@ -1840,7 +1925,12 @@ mod tests {
             PickerPromptItem::plain("alphabet"),
         ];
 
-        let matches = match_items(&items, &section_groups(&items), "alphabet soup");
+        let matches = match_items(
+            &items,
+            &section_groups(&items),
+            "alphabet soup",
+            PickerPromptOrder::Relevance,
+        );
 
         assert!(matches.is_empty());
     }
@@ -1867,7 +1957,12 @@ mod tests {
             PickerPromptItemPart::path("/tmp/repo/src/main.rs"),
         ]);
 
-        let matches = match_items(std::slice::from_ref(&item), &[0], "main");
+        let matches = match_items(
+            std::slice::from_ref(&item),
+            &[0],
+            "main",
+            PickerPromptOrder::Relevance,
+        );
         let range = matches
             .first()
             .and_then(|m| m.range.clone())
@@ -1915,7 +2010,12 @@ mod tests {
             PickerPromptItem::from_parts([PickerPromptItemPart::new("feature").flexible(false)])
                 .secondary_parts([PickerPromptItemPart::path("/tmp/ws/feature/src/main.rs")]);
 
-        let matches = match_items(std::slice::from_ref(&item), &[0], "src");
+        let matches = match_items(
+            std::slice::from_ref(&item),
+            &[0],
+            "src",
+            PickerPromptOrder::Relevance,
+        );
         let range = matches
             .first()
             .and_then(|m| m.range.clone())
@@ -1940,7 +2040,12 @@ mod tests {
             PickerPromptItem::from_parts([PickerPromptItemPart::new("maintenance")]),
         ];
 
-        let matches = match_items(&items, &section_groups(&items), "main");
+        let matches = match_items(
+            &items,
+            &section_groups(&items),
+            "main",
+            PickerPromptOrder::Relevance,
+        );
 
         assert_eq!(
             matches.iter().map(|m| m.index).collect::<Vec<_>>(),
@@ -2163,6 +2268,44 @@ mod tests {
         );
     }
 
+    /// The geometry caches are keyed on this, so a scale it cannot round-trip
+    /// means every render rebuilds the whole table.
+    #[test]
+    fn geometry_reports_the_scale_it_was_built_at() {
+        let items = [PickerPromptItem::plain("only")];
+        let layout = picker_prompt_layout(&items, "");
+
+        for density in crate::appearance::UiDensity::ALL {
+            for percent in [100, 150] {
+                let scale =
+                    UiScale::from_percent(percent).with_appearance(crate::appearance::Appearance {
+                        density,
+                        ..crate::appearance::Appearance::default()
+                    });
+
+                let geometry = PickerPromptGeometry::new(&items, &layout, scale);
+
+                assert_eq!(
+                    geometry.ui_scale(),
+                    scale,
+                    "geometry built at {percent}% {density:?} must compare equal to it"
+                );
+            }
+        }
+    }
+
+    /// Why the round-trip matters: Comfortable changes the heights.
+    #[test]
+    fn comfortable_density_makes_picker_rows_taller() {
+        let compact = UiScale::from_percent(100);
+        let comfortable = compact.with_appearance(crate::appearance::Appearance {
+            density: crate::appearance::UiDensity::Comfortable,
+            ..crate::appearance::Appearance::default()
+        });
+
+        assert!(row_height(comfortable, false) > row_height(compact, false));
+    }
+
     #[test]
     fn a_detail_line_makes_a_row_one_line_box_taller() {
         let ui_scale = UiScale::from_percent(100);
@@ -2189,8 +2332,72 @@ mod tests {
             PickerPromptItemPart::path("/tmp/workspace"),
         ]);
 
-        let matches = match_items(&[item], &[0], " - ");
+        let matches = match_items(&[item], &[0], " - ", PickerPromptOrder::Relevance);
 
         assert!(matches.is_empty());
+    }
+    #[test]
+    fn source_order_keeps_matches_in_declaration_order() {
+        let items = vec![
+            PickerPromptItem::plain("long matching summary"),
+            PickerPromptItem::plain("summary"),
+        ];
+        assert_eq!(
+            picker_prompt_layout(&items, "summary").item_indices,
+            vec![1, 0]
+        );
+        assert_eq!(
+            picker_prompt_layout_ordered(
+                &items,
+                "summary",
+                &BTreeSet::new(),
+                PickerPromptOrder::Source
+            )
+            .item_indices,
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn window_agrees_with_a_linear_scan_at_every_offset() {
+        let items: Vec<_> = two_line_items(1200)
+            .into_iter()
+            .enumerate()
+            .map(|(ix, item)| {
+                if ix < 500 {
+                    item.section("Recent")
+                } else {
+                    item.section("Older")
+                }
+            })
+            .collect();
+        for scale in [100u32, 125, 175] {
+            let geometry =
+                PickerPromptGeometry::new(&items, &picker_prompt_layout(&items, ""), scale);
+            let viewport = UiScale::from_percent(scale).px(340.0);
+            let max_offset = f32::from(geometry.total_height() - viewport) as usize;
+            for offset in 0..=max_offset {
+                let top = (px(offset as f32) - geometry.pad).max(px(0.0));
+                let bottom = top + viewport;
+                let first = (0..items.len())
+                    .find(|ix| geometry.tops[*ix] + geometry.heights[*ix] > top)
+                    .unwrap();
+                let last = (first..items.len())
+                    .take_while(|ix| geometry.tops[*ix] < bottom)
+                    .last()
+                    .unwrap_or(first);
+                let expected = first.saturating_sub(WINDOW_OVERDRAW_ROWS)
+                    ..(last + WINDOW_OVERDRAW_ROWS + 1).min(items.len());
+                let actual = geometry.window(px(offset as f32), viewport);
+                assert_eq!(actual.rows, expected, "scale={scale} offset={offset}");
+            }
+            assert_eq!(
+                geometry
+                    .window(geometry.total_height() + px(100.0), viewport)
+                    .rows
+                    .end,
+                items.len()
+            );
+        }
     }
 }

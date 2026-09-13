@@ -49,6 +49,13 @@ fn browse_history_menu_exposes_full_commit_message_tooltip(cx: &mut gpui::TestAp
             })
             .expect("expected browse-history context menu model");
 
+        assert!(model.items.iter().any(|item| matches!(
+            item,
+            ContextMenuItem::Entry { label, action, .. }
+                if label.as_ref() == "Exit file browsing"
+                    && matches!(action.as_ref(), ContextMenuAction::ResetBrowseToLive { .. })
+        )));
+
         let entry_ix = model
             .items
             .iter()

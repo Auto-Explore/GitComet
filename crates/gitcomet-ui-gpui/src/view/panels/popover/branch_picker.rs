@@ -438,7 +438,8 @@ pub(super) fn cached(
         super::rows_cache::RowsCacheOwner::BranchCheckout,
         rows_signature(repo),
         query,
-    );
+    )
+    .with_query_dependent_model();
     super::rows_cache::get_or_build(&this.branch_picker_rows_cache, key, |now| {
         let built = rows(repo, query, now);
         (built.items, built.rows, built.marked_index)
@@ -499,7 +500,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let theme = this.theme;
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
     let is_checkout = is_checkout_picker(this);
     let width = if is_checkout {
         super::LARGE_PICKER_WIDTH
@@ -531,8 +532,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .flex_col()
         .min_w(width.min_px(ui_scale))
         .max_w(width.max_px(ui_scale))
-        .child(popover_title(title))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default));
+        .child(popover_title(theme, title))
+        .child(super::popover_rule(theme));
 
     // The checkout picker renders sectioned, metadata-bearing rows and a create
     // row, so it drives PickerPrompt directly rather than through
@@ -700,7 +701,7 @@ fn branch_picker_status_panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
     if let Some(search) = this.branch_picker_search_input.clone() {
         // No rows at all — this panel exists to say why, in the picker's own

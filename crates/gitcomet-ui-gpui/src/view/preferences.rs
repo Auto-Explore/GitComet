@@ -14,6 +14,7 @@ pub(super) struct WindowPreferences {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct AppearancePreferences {
+    pub(super) metrics: crate::appearance::Appearance,
     pub(super) theme_mode: ThemeMode,
     pub(super) ui_scale_percent: u32,
     pub(super) date_time_format: DateTimeFormat,
@@ -24,6 +25,7 @@ pub(super) struct AppearancePreferences {
 impl Default for AppearancePreferences {
     fn default() -> Self {
         Self {
+            metrics: crate::appearance::Appearance::default(),
             theme_mode: ThemeMode::default(),
             ui_scale_percent: 100,
             date_time_format: DateTimeFormat::YmdHm,
@@ -38,6 +40,13 @@ pub(super) struct ChangeTrackingPreferences {
     pub(super) view: ChangeTrackingView,
     pub(super) height: Option<u32>,
     pub(super) untracked_height: Option<u32>,
+}
+
+/// Defaults for every changed-file list. Kept out of
+/// [`ChangeTrackingPreferences`], which is about untracked grouping alone.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct FileListPreferences {
+    pub(super) layout: FileListLayout,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -147,15 +156,50 @@ impl Default for MergeToolPreferences {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum HistoryBranchNamesMode {
+    #[default]
+    SeparateColumn,
+    Inline,
+}
+
+impl HistoryBranchNamesMode {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::SeparateColumn => "separate_column",
+            Self::Inline => "inline",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "separate_column" => Some(Self::SeparateColumn),
+            "inline" => Some(Self::Inline),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn settings_label(self) -> &'static str {
+        match self {
+            Self::SeparateColumn => "Separate column",
+            Self::Inline => "Inline with commit message",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct HistoryPreferences {
+    pub(super) branch_names: HistoryBranchNamesMode,
     pub(super) show_graph: bool,
     pub(super) show_author: bool,
     pub(super) show_date: bool,
     pub(super) show_sha: bool,
     pub(super) relative_dates: bool,
     pub(super) highlight_commit_chain: bool,
+    /// The Files tab browses whichever history row is selected.
+    pub(super) files_follow_selected_commit: bool,
     pub(super) show_tags: bool,
+    pub(super) verify_commit_signatures: bool,
     pub(super) tag_fetch_mode: GitLogTagFetchMode,
     pub(super) default_mode: HistoryMode,
 }
@@ -163,13 +207,16 @@ pub(super) struct HistoryPreferences {
 impl Default for HistoryPreferences {
     fn default() -> Self {
         Self {
+            branch_names: HistoryBranchNamesMode::default(),
             show_graph: true,
             show_author: true,
             show_date: true,
             show_sha: false,
             relative_dates: true,
             highlight_commit_chain: true,
+            files_follow_selected_commit: true,
             show_tags: true,
+            verify_commit_signatures: true,
             tag_fetch_mode: GitLogTagFetchMode::default(),
             default_mode: HistoryMode::default(),
         }
@@ -210,6 +257,7 @@ pub(super) struct UiPreferences {
     pub(super) window: WindowPreferences,
     pub(super) appearance: AppearancePreferences,
     pub(super) change_tracking: ChangeTrackingPreferences,
+    pub(super) file_lists: FileListPreferences,
     pub(super) diff: DiffPreferences,
     pub(super) security: SecurityPreferences,
     pub(super) merge_tool: MergeToolPreferences,
@@ -231,6 +279,7 @@ impl UiPreferences {
                 sidebar_collapsed: session.sidebar_collapsed.unwrap_or(false),
             },
             appearance: AppearancePreferences {
+                metrics: crate::appearance::Appearance::from_session(session),
                 theme_mode: session
                     .theme_mode
                     .as_deref()
@@ -257,6 +306,13 @@ impl UiPreferences {
                     .unwrap_or_default(),
                 height: session.change_tracking_height,
                 untracked_height: session.untracked_height,
+            },
+            file_lists: FileListPreferences {
+                layout: session
+                    .file_list_layout
+                    .as_deref()
+                    .and_then(FileListLayout::from_key)
+                    .unwrap_or_default(),
             },
             diff: DiffPreferences {
                 scroll_sync: session
@@ -307,13 +363,22 @@ impl UiPreferences {
                 view_three_way: session.mergetool_view_three_way.unwrap_or(true),
             },
             history: HistoryPreferences {
+                branch_names: session
+                    .history_branch_names
+                    .as_deref()
+                    .and_then(HistoryBranchNamesMode::from_key)
+                    .unwrap_or_default(),
                 show_graph: session.history_show_graph.unwrap_or(true),
                 show_author: session.history_show_author.unwrap_or(true),
                 show_date: session.history_show_date.unwrap_or(true),
                 show_sha: session.history_show_sha.unwrap_or(false),
                 relative_dates: session.history_relative_dates.unwrap_or(true),
                 highlight_commit_chain: session.history_highlight_commit_chain.unwrap_or(true),
+                files_follow_selected_commit: session
+                    .file_browser_follow_selected_commit
+                    .unwrap_or(true),
                 show_tags: session.history_show_tags.unwrap_or(true),
+                verify_commit_signatures: session.history_verify_commit_signatures.unwrap_or(true),
                 tag_fetch_mode: session.history_tag_fetch_mode.unwrap_or_default(),
                 default_mode: session.default_history_mode.unwrap_or_default(),
             },
@@ -339,12 +404,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn history_branch_names_restores_modes_and_defaults_unknown_values() {
+        for (raw, expected) in [
+            (None, HistoryBranchNamesMode::SeparateColumn),
+            (
+                Some("separate_column"),
+                HistoryBranchNamesMode::SeparateColumn,
+            ),
+            (Some("inline"), HistoryBranchNamesMode::Inline),
+            (Some("future_mode"), HistoryBranchNamesMode::SeparateColumn),
+        ] {
+            let preferences = UiPreferences::from_session(&session::UiSession {
+                history_branch_names: raw.map(str::to_owned),
+                ..Default::default()
+            });
+            assert_eq!(preferences.history.branch_names, expected);
+        }
+    }
+
+    #[test]
     fn session_defaults_are_resolved_once() {
         let preferences = UiPreferences::from_session(&session::UiSession::default());
         assert_eq!(preferences, UiPreferences::default());
         assert_eq!(preferences.diff.view_mode, DiffViewMode::Split);
         assert!(preferences.diff.show_line_numbers);
         assert!(preferences.history.show_graph);
+        // The store carries its own default for the reducer; the two must agree
+        // or the Files tab would follow the selection until the first sync.
+        assert_eq!(
+            preferences.history.files_follow_selected_commit,
+            gitcomet_state::model::FileBrowserSettings::default().follow_selected_commit
+        );
         assert!(preferences.merge_tool.view_three_way);
         assert!(preferences.remotes.prune_deleted_remote_branches_on_fetch);
         assert_eq!(

@@ -74,6 +74,26 @@ pub(crate) fn commit_from_walk_parts(
         .find_commit(id, &mut decode_state.decode_buf)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object: {e}"))))?;
 
+    commit_from_decoded(
+        &commit,
+        id,
+        parent_ids.iter().map(|id| id.as_ref()),
+        commit_time,
+        &mut decode_state.author_cache,
+        &mut decode_state.next_commit_id_cache,
+        author_filter,
+    )
+}
+
+pub(crate) fn commit_from_decoded<'a>(
+    commit: &gix::objs::CommitRef<'_>,
+    id: &gix::oid,
+    parent_ids: impl ExactSizeIterator<Item = &'a gix::oid>,
+    commit_time: Option<gix::date::SecondsSinceUnixEpoch>,
+    author_cache: &mut RepeatedAuthorCache,
+    next_commit_id_cache: &mut NextCommitIdCache,
+    author_filter: Option<&AuthorFilter>,
+) -> Result<Option<Commit>> {
     let author_name = commit.author().map(|author| author.name).ok();
     if let Some(filter) = author_filter
         && !author_name.is_some_and(|name| filter.matches(name.as_ref()))
@@ -85,7 +105,7 @@ pub(crate) fn commit_from_walk_parts(
     let summary = bstr_to_arc_str(summary_bytes);
 
     let author = match author_name {
-        Some(name) => decode_state.author_cache.intern(name.as_ref()),
+        Some(name) => author_cache.intern(name.as_ref()),
         None => Arc::from("unknown"),
     };
 
@@ -93,21 +113,17 @@ pub(crate) fn commit_from_walk_parts(
         commit_time.unwrap_or_else(|| commit.committer().map(|t| t.seconds()).unwrap_or(0));
     let time = unix_seconds_to_system_time_or_epoch(seconds);
 
-    let commit_id = decode_state
-        .next_commit_id_cache
-        .reuse_or_new(id, || CommitId(oid_to_arc_str(id)));
+    let commit_id = next_commit_id_cache.reuse_or_new(id, || CommitId(oid_to_arc_str(id)));
 
     let mut ids = CommitParentIds::new();
     ids.reserve(parent_ids.len());
-    if parent_ids.is_empty() {
-        decode_state.next_commit_id_cache.clear();
+    if parent_ids.len() == 0 {
+        next_commit_id_cache.clear();
     }
-    for (index, parent_id) in parent_ids.iter().enumerate() {
+    for (index, parent_id) in parent_ids.enumerate() {
         let parent_commit_id = CommitId(oid_to_arc_str(parent_id));
         if index == 0 {
-            decode_state
-                .next_commit_id_cache
-                .remember(parent_id, &parent_commit_id);
+            next_commit_id_cache.remember(parent_id, &parent_commit_id);
         }
         ids.push(parent_commit_id);
     }
@@ -124,8 +140,8 @@ pub(crate) fn commit_from_walk_parts(
 #[derive(Default)]
 pub(crate) struct CommitDecodeState {
     decode_buf: Vec<u8>,
-    author_cache: RepeatedAuthorCache,
-    next_commit_id_cache: NextCommitIdCache,
+    pub(crate) author_cache: RepeatedAuthorCache,
+    pub(crate) next_commit_id_cache: NextCommitIdCache,
 }
 
 #[derive(Default)]

@@ -209,6 +209,12 @@ impl MainPaneView {
                 0
             };
             status_rev.hash(&mut hasher);
+            // Edit-size sorting can change file neighbors without a status change.
+            let line_stats_rev = match repo.diff_state.diff_target.as_ref() {
+                Some(DiffTarget::WorkingTree { area, .. }) => repo.line_stats_rev(*area),
+                _ => 0,
+            };
+            line_stats_rev.hash(&mut hasher);
             let commit_details_rev = if matches!(
                 repo.diff_state.diff_target,
                 Some(DiffTarget::Commit { path: Some(_), .. })
@@ -560,19 +566,13 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_line_height(
-                Some(ui_scale::design_px_from_percent(20.0, next_percent)),
-                cx,
-            );
+            input.set_line_height(Some(self.theme.editor_row_height(next_percent)), cx);
         });
         // The editor's gutter sizes its rows from the same scale, so leaving
         // the buffer at the old line height would put the numbers out of step
         // with the code they label.
         self.file_editor_input.update(cx, |input, cx| {
-            input.set_line_height(
-                Some(ui_scale::design_px_from_percent(20.0, next_percent)),
-                cx,
-            );
+            input.set_line_height(Some(self.theme.editor_row_height(next_percent)), cx);
         });
         self.history_view.update(cx, |view, cx| {
             view.apply_ui_scale_percent(previous_percent, next_percent, cx);
@@ -581,6 +581,17 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
+        let row_height = self.theme.editor_row_height(ui_scale::current(cx).percent);
+        self.file_editor_gutter_row_height = row_height;
+        self.conflict_resolved_gutter_row_height = row_height;
+        self.file_editor_wrap_row_starts.clear();
+        self.diff_raw_input
+            .update(cx, |input, cx| input.set_line_height(Some(row_height), cx));
+        self.conflict_resolver_input
+            .update(cx, |input, cx| input.set_line_height(Some(row_height), cx));
+        self.file_editor_input
+            .update(cx, |input, cx| input.set_line_height(Some(row_height), cx));
+        self.clear_worktree_preview_segments_cache();
         self.diff_text_hitboxes.clear();
         self.diff_text_motion_targets.clear();
         self.diff_stage_gutter_cells.clear();
@@ -830,7 +841,7 @@ impl MainPaneView {
             input.set_theme(theme, cx);
             input.set_line_ending(line_ending);
             input.set_text(text, cx);
-            input.set_selected_range(0..0, false, cx);
+            input.set_caret(0, cx);
         });
     }
 
@@ -1209,6 +1220,7 @@ impl MainPaneView {
         self.diff_whitespace_mode = next;
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
+        self.diff_focused_change_block = None;
         self.rebuild_patch_visual_line_kinds_from_current_diff();
         self.diff_word_highlights.clear();
         self.diff_word_highlights_inflight = None;
@@ -1474,6 +1486,16 @@ impl MainPaneView {
 
     pub(in crate::view) fn history_tag_preferences(&self, cx: &gpui::App) -> (bool, bool) {
         self.history_view.read(cx).history_tag_preferences()
+    }
+
+    pub(in crate::view) fn set_history_branch_names(
+        &mut self,
+        next: HistoryBranchNamesMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view
+            .update(cx, |view, cx| view.set_history_branch_names(next, cx));
+        cx.notify();
     }
 
     pub(in crate::view) fn set_history_column_preferences(
@@ -1970,6 +1992,25 @@ impl MainPaneView {
             .flatten()
     }
 
+    /// Whether acting on this file will consume the singleton row selection.
+    /// Empty or unrelated selections must survive a shortcut in the diff pane.
+    pub(in crate::view) fn status_single_selection_for_shortcut(
+        &self,
+        repo_id: RepoId,
+        area: DiffArea,
+        path: &std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.root_view
+            .update(cx, |root, cx| {
+                root.details_pane
+                    .read(cx)
+                    .status_selected_paths_for_area(repo_id, area)
+                    == std::slice::from_ref(path)
+            })
+            .unwrap_or(false)
+    }
+
     /// Drop the row selection a shortcut has just acted on.
     pub(in crate::view) fn clear_status_selection_for_shortcut(
         &mut self,
@@ -2068,15 +2109,23 @@ impl MainPaneView {
             .unwrap_or(ChangeTrackingView::Combined)
     }
 
-    pub(in crate::view) fn scroll_status_section_to_ix(
+    /// Resolve the path against the pane's current order, including when
+    /// navigation fell back to source order while its projection was unavailable.
+    pub(in crate::view) fn scroll_status_section_to_path(
         &mut self,
         section: StatusSection,
-        ix: usize,
+        path: &std::path::Path,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    let Some(position) = pane.status_path_display_position(section, path) else {
+                        return;
+                    };
+                    let ix = pane
+                        .reveal_status_row(section, position, cx)
+                        .unwrap_or(position);
                     match section {
                         StatusSection::CombinedUnstaged | StatusSection::Unstaged => pane
                             .unstaged_scroll
@@ -2095,16 +2144,22 @@ impl MainPaneView {
 }
 
 impl MainPaneView {
+    /// `position` is an index into the tree-ordered file list, not a display
+    /// row: a tree pads the list with directory rows and may be hiding the
+    /// target entirely, so it is revealed and resolved first.
     pub(in crate::view) fn scroll_commit_details_file_to_ix(
         &mut self,
-        ix: usize,
+        position: usize,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    let row = pane
+                        .reveal_commit_file_row(position, cx)
+                        .unwrap_or(position);
                     pane.commit_files_scroll
-                        .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center);
+                        .scroll_to_item_strict(row, gpui::ScrollStrategy::Center);
                     cx.notify();
                 });
         });
@@ -2510,7 +2565,11 @@ impl MainPaneView {
 }
 
 impl MainPaneView {
-    pub(in crate::view) fn select_all_diff_text(&mut self) {
+    pub(in crate::view) fn select_all_diff_text(
+        &mut self,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         // Markdown preview (both file preview and diff preview) uses
         // markdown preview row counts instead of source-text line counts.
         if self.is_markdown_preview_active() {
@@ -2549,6 +2608,9 @@ impl MainPaneView {
                 region,
                 offset: end_offset,
             });
+            if self.diff_text_has_selection() {
+                self.diff_text_selection_owner.adopt(window, cx);
+            }
             self.sync_diff_focus_to_text_selection();
             return;
         }
@@ -2575,6 +2637,9 @@ impl MainPaneView {
                 region: DiffTextRegion::Inline,
                 offset: end_offset,
             });
+            if self.diff_text_has_selection() {
+                self.diff_text_selection_owner.adopt(window, cx);
+            }
             self.sync_diff_focus_to_text_selection();
             return;
         }
@@ -2610,6 +2675,9 @@ impl MainPaneView {
             region: end_region,
             offset: end_offset,
         });
+        if self.diff_text_has_selection() {
+            self.diff_text_selection_owner.adopt(window, cx);
+        }
         self.sync_diff_focus_to_text_selection();
     }
 

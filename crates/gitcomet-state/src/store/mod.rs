@@ -160,6 +160,7 @@ struct WorkerLoopContext<'a> {
     executor: &'a TaskExecutor,
     repo_load_executor: &'a TaskExecutor,
     metadata_executor: &'a TaskExecutor,
+    signature_executor: &'a TaskExecutor,
     session_persist_executor: &'a TaskExecutor,
     backend: &'a Arc<dyn GitBackend>,
 }
@@ -279,6 +280,7 @@ impl WorkerLoopContext<'_> {
                     repo_load_executor: self.repo_load_executor,
                     session_persist_executor: self.session_persist_executor,
                     metadata_executor: self.metadata_executor,
+                    signature_executor: self.signature_executor,
                 },
                 self.thread_state,
                 self.backend,
@@ -364,6 +366,12 @@ impl AppStore {
             );
             #[cfg(not(any(test, feature = "test-support")))]
             let metadata_executor = TaskExecutor::new(metadata_worker_threads());
+
+            #[cfg(any(test, feature = "test-support"))]
+            let signature_executor =
+                TaskExecutor::shared_for_store(StoreExecutorPool::Signatures, 1);
+            #[cfg(not(any(test, feature = "test-support")))]
+            let signature_executor = TaskExecutor::new(1);
 
             #[cfg(any(test, feature = "test-support"))]
             let session_persist_executor =
@@ -487,6 +495,7 @@ impl AppStore {
                     executor: &executor,
                     repo_load_executor: &repo_load_executor,
                     metadata_executor: &metadata_executor,
+                    signature_executor: &signature_executor,
                     session_persist_executor: &session_persist_executor,
                     backend: &backend,
                 };
@@ -611,6 +620,9 @@ impl AppStore {
 
             for token in repo_task_tokens.values() {
                 token.cancel();
+            }
+            for repo in &thread_state.read().unwrap_or_else(|e| e.into_inner()).repos {
+                repo.history_state.commit_signatures_cancellation.cancel();
             }
             repo_monitors.stop_all();
         });

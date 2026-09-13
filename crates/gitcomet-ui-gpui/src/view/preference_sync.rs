@@ -51,7 +51,7 @@ impl GitCometView {
     }
 
     pub(super) fn ui_scale(&self) -> ui_scale::UiScale {
-        ui_scale::UiScale::from_percent(self.ui_scale_percent)
+        ui_scale::UiScale::from_percent(self.ui_scale_percent).with_appearance(self.theme.metrics)
     }
 
     pub(in crate::view) fn update_ui_preferences(
@@ -260,6 +260,24 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_change_tracking_view(next, cx));
         self.popover_host
             .update(cx, |host, cx| host.sync_change_tracking_view(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_file_list_layout(
+        &mut self,
+        next: FileListLayout,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.file_list_layout == next {
+            return;
+        }
+
+        self.file_list_layout = next;
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.file_lists.layout = next;
+        });
+        self.details_pane
+            .update(cx, |pane, cx| pane.set_file_list_layout(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -591,6 +609,28 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_auto_save_file_edits(next, cx));
     }
 
+    fn dismiss_history_layout_popovers(&mut self, cx: &mut gpui::Context<Self>) {
+        self.dismiss_history_refs_menus(cx);
+        self.dismiss_commit_message_hover(cx);
+        if self.active_context_menu_invoker.as_deref() == Some("history_mode_header") {
+            self.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+        }
+    }
+
+    pub(in crate::view) fn set_history_branch_names(
+        &mut self,
+        next: HistoryBranchNamesMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.dismiss_history_layout_popovers(cx);
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.branch_names = next;
+        });
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_history_branch_names(next, cx));
+    }
+
     pub(in crate::view) fn set_history_column_preferences(
         &mut self,
         show_graph: bool,
@@ -599,6 +639,7 @@ impl GitCometView {
         show_sha: bool,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.dismiss_history_layout_popovers(cx);
         self.update_ui_preferences(cx, move |preferences| {
             preferences.history.show_graph = show_graph;
             preferences.history.show_author = show_author;
@@ -612,6 +653,7 @@ impl GitCometView {
     }
 
     pub(in crate::view) fn reset_history_column_widths(&mut self, cx: &mut gpui::Context<Self>) {
+        self.dismiss_history_layout_popovers(cx);
         self.main_pane
             .update(cx, |pane, cx| pane.reset_history_column_widths(cx));
         self.schedule_ui_settings_persist(cx);
@@ -642,6 +684,8 @@ impl GitCometView {
         self.main_pane.update(cx, |pane, cx| {
             pane.set_history_relative_dates(enabled, cx);
         });
+        self.popover_host
+            .update(cx, |host, cx| host.set_history_relative_dates(enabled, cx));
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -662,9 +706,16 @@ impl GitCometView {
         self.main_pane.update(cx, |pane, cx| {
             pane.set_history_tag_preferences(show_tags, auto_fetch_tags_on_repo_activation, cx);
         });
+        let verify_commit_signatures = self
+            .ui_model
+            .read(cx)
+            .preferences
+            .history
+            .verify_commit_signatures;
         self.store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: show_tags,
             tag_fetch_mode,
+            verify_commit_signatures,
         });
         if show_tags
             && auto_fetch_tags_on_repo_activation
@@ -678,6 +729,26 @@ impl GitCometView {
                     .dispatch(Msg::LoadRemoteTags { repo_id: repo.id });
             }
         }
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_verify_commit_signatures_preference(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.verify_commit_signatures = enabled;
+        });
+        let (show_history_tags, tag_fetch_mode) = {
+            let history = &self.ui_model.read(cx).preferences.history;
+            (history.show_tags, history.tag_fetch_mode)
+        };
+        self.store.dispatch(Msg::SetGitLogSettings {
+            show_history_tags,
+            tag_fetch_mode,
+            verify_commit_signatures: enabled,
+        });
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -703,6 +774,20 @@ impl GitCometView {
         self.store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
             prune_deleted_remote_branches_on_fetch: enabled,
         }));
+    }
+
+    pub(in crate::view) fn set_files_follow_selected_commit_preference(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_ui_preferences(cx, move |preferences| {
+            preferences.history.files_follow_selected_commit = enabled;
+        });
+        self.store
+            .dispatch(Msg::SetFileBrowserSettings(FileBrowserSettings {
+                follow_selected_commit: enabled,
+            }));
     }
 
     pub(in crate::view) fn set_default_history_mode_preference(

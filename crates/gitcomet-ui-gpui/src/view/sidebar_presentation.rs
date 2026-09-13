@@ -6,8 +6,9 @@ use super::caches::{
 };
 use super::*;
 use gitcomet_state::model::SidebarDataRequest;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -16,17 +17,27 @@ use std::sync::Arc;
 pub(in crate::view) struct WorkspaceBadgeIndex {
     listed_paths_by_branch: Arc<FxHashMap<String, PathBuf>>,
     active_paths_by_branch: Arc<FxHashMap<String, PathBuf>>,
+    active_fingerprint: (usize, u64),
 }
 
 impl WorkspaceBadgeIndex {
     fn for_state(repo: &RepoState, open_repos: &[RepoState]) -> Self {
+        let active_paths = crate::view::rows::active_workspace_paths_by_branch(repo, open_repos);
+        let mut badges = active_paths.iter().collect::<Vec<_>>();
+        badges.sort_unstable();
+        let mut hasher = FxHasher::default();
+        badges.len().hash(&mut hasher);
+        for (branch, path) in &badges {
+            branch.hash(&mut hasher);
+            path.hash(&mut hasher);
+        }
+        let active_fingerprint = (badges.len(), hasher.finish());
         Self {
             listed_paths_by_branch: Arc::new(crate::view::rows::listed_workspace_paths_by_branch(
                 repo,
             )),
-            active_paths_by_branch: Arc::new(crate::view::rows::active_workspace_paths_by_branch(
-                repo, open_repos,
-            )),
+            active_paths_by_branch: Arc::new(active_paths),
+            active_fingerprint,
         }
     }
 
@@ -48,6 +59,99 @@ pub(in crate::view) struct SidebarPresentation {
 #[derive(Default)]
 pub(in crate::view) struct SidebarPresentationCache {
     branch_rows: Option<BranchSidebarCache>,
+    filtered_rows: Option<FilteredSidebarRows>,
+    workspace_badges: Option<WorkspaceBadgeCache>,
+}
+
+impl SidebarPresentationCache {
+    pub(in crate::view) fn active_workspace_badges_fingerprint(
+        &mut self,
+        state: &AppState,
+    ) -> (usize, u64) {
+        let Some(repo) = state
+            .repos
+            .iter()
+            .find(|repo| Some(repo.id) == state.active_repo)
+        else {
+            return (0, 0);
+        };
+        workspace_badges_cached(&mut self.workspace_badges, repo, &state.repos).active_fingerprint
+    }
+}
+
+struct FilteredSidebarRows {
+    repo_id: RepoId,
+    fingerprint: BranchSidebarFingerprint,
+    collapsed: BTreeSet<String>,
+    pinned: BTreeSet<String>,
+    query: String,
+    rows: Rc<[BranchSidebarRow]>,
+}
+
+struct OpenWorkspaceSource {
+    path: PathBuf,
+    head: Loadable<String>,
+    detached: Option<CommitId>,
+}
+
+struct WorkspaceBadgeCache {
+    repo_id: RepoId,
+    worktrees: Option<Arc<Vec<gitcomet_core::domain::Worktree>>>,
+    open_repos: Vec<OpenWorkspaceSource>,
+    index: WorkspaceBadgeIndex,
+}
+
+impl WorkspaceBadgeCache {
+    fn matches(&self, repo: &RepoState, open_repos: &[RepoState]) -> bool {
+        let same_worktrees = match (&self.worktrees, &repo.worktrees) {
+            (Some(cached), Loadable::Ready(current)) => Arc::ptr_eq(cached, current),
+            (None, Loadable::NotLoaded | Loadable::Loading | Loadable::Error(_)) => true,
+            _ => false,
+        };
+        self.repo_id == repo.id
+            && same_worktrees
+            && self.open_repos.len() == open_repos.len()
+            && self
+                .open_repos
+                .iter()
+                .zip(open_repos)
+                .all(|(cached, current)| {
+                    cached.path == current.spec.workdir
+                        && cached.head == current.head_branch
+                        && cached.detached == current.detached_head_commit
+                })
+    }
+}
+
+fn workspace_badges_cached(
+    cache: &mut Option<WorkspaceBadgeCache>,
+    repo: &RepoState,
+    open_repos: &[RepoState],
+) -> WorkspaceBadgeIndex {
+    if let Some(cached) = cache
+        .as_ref()
+        .filter(|cached| cached.matches(repo, open_repos))
+    {
+        return cached.index.clone();
+    }
+    let index = WorkspaceBadgeIndex::for_state(repo, open_repos);
+    *cache = Some(WorkspaceBadgeCache {
+        repo_id: repo.id,
+        worktrees: match &repo.worktrees {
+            Loadable::Ready(worktrees) => Some(Arc::clone(worktrees)),
+            _ => None,
+        },
+        open_repos: open_repos
+            .iter()
+            .map(|repo| OpenWorkspaceSource {
+                path: repo.spec.workdir.clone(),
+                head: repo.head_branch.clone(),
+                detached: repo.detached_head_commit.clone(),
+            })
+            .collect(),
+        index: index.clone(),
+    });
+    index
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -116,36 +220,53 @@ pub(in crate::view) fn build_sidebar_presentation(
     Some(SidebarPresentation {
         rows: branch_sidebar_rows_cached(
             &mut cache.branch_rows,
+            &mut cache.filtered_rows,
             repo,
             collapsed_items,
             pinned_branches,
             branch_filter,
         ),
-        workspace_badges: WorkspaceBadgeIndex::for_state(repo, state.repos.as_slice()),
+        workspace_badges: workspace_badges_cached(
+            &mut cache.workspace_badges,
+            repo,
+            state.repos.as_slice(),
+        ),
     })
 }
 
 fn branch_sidebar_rows_cached(
     cache: &mut Option<BranchSidebarCache>,
+    filtered_cache: &mut Option<FilteredSidebarRows>,
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
     pinned_branches: &BTreeSet<String>,
     branch_filter: &str,
 ) -> Rc<[BranchSidebarRow]> {
-    // A live filter query changes rows independently of the cached repo/source
-    // fingerprints, so bypass the cache entirely while filtering (and don't
-    // pollute it with filtered results).
-    if !branch_filter.trim().is_empty() {
-        return branch_sidebar::branch_sidebar_rows(
-            repo,
-            collapsed_items,
-            pinned_branches,
-            branch_filter,
-        )
-        .into();
-    }
-
     let fingerprint = BranchSidebarFingerprint::from_repo(repo);
+    let query = branch_filter.trim();
+    if !query.is_empty() {
+        if let Some(cached) = filtered_cache.as_ref().filter(|cached| {
+            cached.repo_id == repo.id
+                && cached.fingerprint == fingerprint
+                && cached.query == query
+                && &cached.collapsed == collapsed_items
+                && &cached.pinned == pinned_branches
+        }) {
+            return Rc::clone(&cached.rows);
+        }
+        let rows: Rc<[BranchSidebarRow]> =
+            branch_sidebar::branch_sidebar_rows(repo, collapsed_items, pinned_branches, query)
+                .into();
+        *filtered_cache = Some(FilteredSidebarRows {
+            repo_id: repo.id,
+            fingerprint,
+            collapsed: collapsed_items.clone(),
+            pinned: pinned_branches.clone(),
+            query: query.to_owned(),
+            rows: Rc::clone(&rows),
+        });
+        return rows;
+    }
 
     if let Some(rows) = branch_sidebar_cache_lookup(cache, repo.id, fingerprint) {
         return rows;
@@ -209,6 +330,83 @@ mod tests {
             } if row_path == &PathBuf::from(path) => Some(branch.to_string()),
             _ => None,
         })
+    }
+
+    #[test]
+    fn filtered_rows_and_workspace_badges_reuse_data_until_their_sources_change() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/feature"),
+            head: None,
+            branch: Some("feature/old".into()),
+            detached: false,
+        }]));
+        let mut open = repo_state(RepoId(2), "/tmp/feature");
+        open.head_branch = Loadable::Ready("feature/old".into());
+        let mut state = AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo, open],
+            ..Default::default()
+        };
+        let empty = BTreeMap::new();
+        let mut cache = SidebarPresentationCache::default();
+        let initial =
+            build_sidebar_presentation(&mut cache, &state, &empty, &empty, "feature").unwrap();
+        // Diff and diagnostic updates must not rebuild long sidebar lists or
+        // re-index all worktrees, including when a filter is active.
+        state.repos[0].diff_state.diff_state_rev += 1;
+        let unchanged =
+            build_sidebar_presentation(&mut cache, &state, &empty, &empty, "feature").unwrap();
+        assert!(Rc::ptr_eq(&initial.rows, &unchanged.rows));
+        assert!(Arc::ptr_eq(
+            &initial.workspace_badges.active_paths_by_branch,
+            &unchanged.workspace_badges.active_paths_by_branch,
+        ));
+        assert!(Arc::ptr_eq(
+            &initial.workspace_badges.listed_paths_by_branch,
+            &unchanged.workspace_badges.listed_paths_by_branch,
+        ));
+
+        state.repos[1].head_branch = Loadable::Ready("feature/new".into());
+        let changed_head =
+            build_sidebar_presentation(&mut cache, &state, &empty, &empty, "feature").unwrap();
+        assert!(Rc::ptr_eq(&initial.rows, &changed_head.rows));
+        assert!(
+            changed_head
+                .workspace_badges
+                .active_path("feature/old")
+                .is_none()
+        );
+        assert_eq!(
+            changed_head.workspace_badges.active_path("feature/new"),
+            Some(&PathBuf::from("/tmp/feature"))
+        );
+
+        state.repos[0].worktrees = Loadable::Ready(Arc::new(Vec::new()));
+        state.repos[0].worktrees_rev += 1;
+        let refreshed =
+            build_sidebar_presentation(&mut cache, &state, &empty, &empty, "feature").unwrap();
+        assert!(!Rc::ptr_eq(&initial.rows, &refreshed.rows));
+        assert!(
+            refreshed
+                .workspace_badges
+                .listed_path("feature/old")
+                .is_none()
+        );
+        assert!(
+            refreshed
+                .workspace_badges
+                .active_path("feature/new")
+                .is_none()
+        );
+
+        let different_query =
+            build_sidebar_presentation(&mut cache, &state, &empty, &empty, "another").unwrap();
+        assert!(!Rc::ptr_eq(&refreshed.rows, &different_query.rows));
+        state.active_repo = Some(RepoId(2));
+        let different_repo =
+            build_sidebar_presentation(&mut cache, &state, &empty, &empty, "another").unwrap();
+        assert!(!Rc::ptr_eq(&different_query.rows, &different_repo.rows));
     }
 
     #[test]
@@ -306,6 +504,75 @@ mod tests {
         assert_eq!(
             worktree_branch_for_path(refreshed.rows.as_ref(), "/tmp/repo-feature"),
             Some("feature/new".to_string())
+        );
+    }
+
+    /// A repository's own worktree is the one row the badge index leaves out, so
+    /// the index changes meaning when `set_spec` moves `spec.workdir` under it.
+    #[test]
+    fn workspace_badge_cache_follows_a_repositorys_workdir_moving() {
+        let worktrees = Arc::new(vec![
+            gitcomet_core::domain::Worktree {
+                path: PathBuf::from("/tmp/repo"),
+                head: None,
+                branch: Some("main".to_string()),
+                detached: false,
+            },
+            gitcomet_core::domain::Worktree {
+                path: PathBuf::from("/tmp/repo-feature"),
+                head: None,
+                branch: Some("feature".to_string()),
+                detached: false,
+            },
+        ]);
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::clone(&worktrees));
+        repo.worktrees_rev = 1;
+        let mut state = AppState {
+            active_repo: Some(RepoId(1)),
+            repos: vec![repo],
+            ..Default::default()
+        };
+        let mut cache = SidebarPresentationCache::default();
+
+        let badges = workspace_badges_cached(
+            &mut cache.workspace_badges,
+            &state.repos[0],
+            state.repos.as_slice(),
+        );
+        assert!(badges.listed_path("main").is_none(), "the repo's own row");
+        assert_eq!(
+            badges.listed_path("feature"),
+            Some(&PathBuf::from("/tmp/repo-feature"))
+        );
+        let fingerprint = cache.active_workspace_badges_fingerprint(&state);
+
+        // The same worktree list, the same open repositories -- only the
+        // repository's own path moved.
+        state.repos[0].spec.workdir = PathBuf::from("/tmp/repo-feature");
+        assert!(matches!(
+            &state.repos[0].worktrees,
+            Loadable::Ready(current) if Arc::ptr_eq(current, &worktrees)
+        ));
+
+        let badges = workspace_badges_cached(
+            &mut cache.workspace_badges,
+            &state.repos[0],
+            state.repos.as_slice(),
+        );
+        assert_eq!(
+            badges.listed_path("main"),
+            Some(&PathBuf::from("/tmp/repo")),
+            "the old workdir's row is a listed workspace now"
+        );
+        assert!(
+            badges.listed_path("feature").is_none(),
+            "and the new one is the repository itself"
+        );
+        assert_ne!(
+            fingerprint,
+            cache.active_workspace_badges_fingerprint(&state),
+            "the sidebar has to repaint for it"
         );
     }
 

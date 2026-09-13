@@ -770,6 +770,37 @@ fn branch_sidebar_fixture_scales_with_more_entries() {
     assert!(large.row_count() > small.row_count());
 }
 
+/// The row hash is what a benchmark compares presentations with, so a status
+/// change must not be invisible to the measurement that exists to see it.
+#[test]
+fn branch_sidebar_row_hash_separates_submodule_rows_by_what_they_draw() {
+    use gitcomet_core::domain::{CommitId, SubmoduleStatus};
+
+    let row = |status, checked_out: Option<&str>| BranchSidebarRow::SubmoduleItem {
+        path: std::path::PathBuf::from("vendor/lib"),
+        status,
+        recorded_head: CommitId("aaaa".into()),
+        checked_out_head: checked_out.map(|id| CommitId(id.into())),
+    };
+    let base = hash_branch_sidebar_rows(&[row(SubmoduleStatus::UpToDate, Some("aaaa"))]);
+
+    assert_ne!(
+        base,
+        hash_branch_sidebar_rows(&[row(SubmoduleStatus::MergeConflict, Some("aaaa"))]),
+        "the status drives the badge, the icon colour and the tooltip"
+    );
+    assert_ne!(
+        base,
+        hash_branch_sidebar_rows(&[row(SubmoduleStatus::UpToDate, Some("bbbb"))]),
+        "the checked-out head drives the mismatch tooltip"
+    );
+    assert_ne!(
+        base,
+        hash_branch_sidebar_rows(&[row(SubmoduleStatus::UpToDate, None)]),
+        "and so does having no checked-out head at all"
+    );
+}
+
 #[test]
 fn branch_sidebar_extreme_fixture_reports_expected_structural_metrics() {
     let fixture = BranchSidebarFixture::twenty_thousand_branches_hundred_remotes();

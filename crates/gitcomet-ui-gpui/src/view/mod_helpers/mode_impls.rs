@@ -175,6 +175,10 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    RevertCommitConfirm {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     MergeCommitConfirm {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -237,7 +241,9 @@ pub(crate) enum PopoverKind {
     CommitOptionsMenu {
         repo_id: RepoId,
     },
-    CommitFileSortMenu,
+    CommitFileSortMenu {
+        list: crate::view::rows::FileListId,
+    },
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
     },
@@ -339,13 +345,6 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         target: BranchMenuTarget,
     },
-    /// Disambiguates a compact history chip that represents more than one
-    /// exact branch ref before handing off to the ordinary branch menu.
-    BranchRefsMenu {
-        repo_id: RepoId,
-        display_name: String,
-        targets: Vec<BranchMenuTarget>,
-    },
     BranchSectionMenu {
         repo_id: RepoId,
         section: BranchSection,
@@ -400,11 +399,6 @@ pub(crate) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
-    TagRefMenu {
-        repo_id: RepoId,
-        commit_id: CommitId,
-        name: String,
-    },
     HistoryBranchFilter {
         repo_id: RepoId,
     },
@@ -431,15 +425,6 @@ pub(crate) enum PopoverKind {
     InteractiveRebaseAutosquashMenu,
 }
 
-impl BranchMenuTarget {
-    pub(in crate::view) fn popover_kind(&self, repo_id: RepoId) -> PopoverKind {
-        PopoverKind::BranchMenu {
-            repo_id,
-            target: self.clone(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RepoPopoverKind {
     Remote(RemotePopoverKind),
@@ -447,6 +432,8 @@ pub(crate) enum RepoPopoverKind {
     Submodule(SubmodulePopoverKind),
 }
 
+/// `OpenInBrowserMenu` picks which remote's web page to open when several
+/// remotes have one; its rows are rebuilt from the remotes on every render.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RemotePopoverKind {
     AddPrompt,
@@ -454,6 +441,7 @@ pub(crate) enum RemotePopoverKind {
     RemoveConfirm { name: String },
     Menu { name: String },
     DeleteBranchConfirm { remote: String, branch: String },
+    OpenInBrowserMenu,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -850,6 +838,10 @@ pub(crate) struct TerminalViewportView {
     pub(crate) selection_drag_moved: bool,
     /// Bumped whenever a drag starts or ends so a stale autoscroll ticker exits.
     pub(crate) selection_autoscroll_seq: u64,
+    /// Which window's text selection this viewport owns, if any.
+    /// See [`crate::text_selection_owner`].
+    pub(crate) selection_owner: crate::text_selection_owner::SelectionOwnerToken,
+    pub(crate) _selection_owner_observer: gpui::Subscription,
     pub(crate) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
 }
 
@@ -1156,6 +1148,57 @@ impl ThemeMode {
 
     pub(crate) const fn is_automatic(&self) -> bool {
         matches!(self, Self::Automatic)
+    }
+}
+
+/// Whether a changed-file list groups by directory. The global default is a
+/// persisted preference; each list may override it transiently.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum FileListLayout {
+    #[default]
+    Flat,
+    Tree,
+}
+
+impl FileListLayout {
+    pub(crate) const fn key(self) -> &'static str {
+        match self {
+            Self::Flat => "flat",
+            Self::Tree => "tree",
+        }
+    }
+
+    pub(crate) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "flat" => Some(Self::Flat),
+            "tree" => Some(Self::Tree),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Flat => "Flat list",
+            Self::Tree => "Tree",
+        }
+    }
+
+    pub(crate) const fn settings_label(self) -> &'static str {
+        self.label()
+    }
+
+    pub(crate) const fn icon(self) -> &'static str {
+        match self {
+            Self::Flat => "icons/menu.svg",
+            Self::Tree => "icons/list_tree.svg",
+        }
+    }
+
+    pub(crate) const fn toggled(self) -> Self {
+        match self {
+            Self::Flat => Self::Tree,
+            Self::Tree => Self::Flat,
+        }
     }
 }
 

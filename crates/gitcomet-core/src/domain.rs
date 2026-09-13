@@ -121,6 +121,119 @@ pub struct CommitDetails {
     pub files: Vec<CommitFileChange>,
 }
 
+/// Verification outcome for a commit signature, from `git log %G?`.
+///
+/// `E` (key missing) and `N` (unsigned) have no variant: both mean "no badge",
+/// and are represented by the absence of a [`CommitSignature`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignatureStatus {
+    /// `G` — good signature from a certified key.
+    Good,
+    /// `U` — good signature, key not certified in the local web of trust.
+    GoodUncertified,
+    /// `X` — good signature that has expired.
+    Expired,
+    /// `Y` — good signature made by a key that has expired.
+    ExpiredKey,
+    /// `B` — signature does not match the commit.
+    Bad,
+    /// `R` — good signature made by a revoked key.
+    Revoked,
+}
+
+impl SignatureStatus {
+    /// `None` for the codes that carry no badge (`E`, `N`) and anything unknown.
+    pub fn from_git_code(code: u8) -> Option<Self> {
+        match code {
+            b'G' => Some(Self::Good),
+            b'U' => Some(Self::GoodUncertified),
+            b'X' => Some(Self::Expired),
+            b'Y' => Some(Self::ExpiredKey),
+            b'B' => Some(Self::Bad),
+            b'R' => Some(Self::Revoked),
+            _ => None,
+        }
+    }
+
+    /// Whether the signature checked out with a trusted signing identity.
+    pub fn is_verified(self) -> bool {
+        matches!(self, Self::Good)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignatureFormat {
+    OpenPgp,
+    Ssh,
+    X509,
+}
+
+impl SignatureFormat {
+    /// Reads the format off the armor header of a `gpgsig` payload.
+    pub fn from_armor(signature: &[u8]) -> Option<Self> {
+        // Git matches raw prefixes, including PGP MESSAGE armor. Leading
+        // whitespace is invalid and must not be sent to `git log` as signed.
+        [
+            (b"-----BEGIN PGP SIGNATURE-----".as_slice(), Self::OpenPgp),
+            (b"-----BEGIN PGP MESSAGE-----".as_slice(), Self::OpenPgp),
+            (b"-----BEGIN SSH SIGNATURE-----".as_slice(), Self::Ssh),
+            (b"-----BEGIN SIGNED MESSAGE-----".as_slice(), Self::X509),
+        ]
+        .into_iter()
+        .find_map(|(prefix, format)| signature.starts_with(prefix).then_some(format))
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OpenPgp => "GPG",
+            Self::Ssh => "SSH",
+            Self::X509 => "X.509",
+        }
+    }
+}
+
+/// A set of [`SignatureFormat`]s, such as the formats whose verifier is installed.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SignatureFormats(u8);
+
+impl SignatureFormats {
+    pub const NONE: Self = Self(0);
+    pub const ALL: Self = Self(0b111);
+
+    const fn bit(format: SignatureFormat) -> u8 {
+        match format {
+            SignatureFormat::OpenPgp => 0b001,
+            SignatureFormat::Ssh => 0b010,
+            SignatureFormat::X509 => 0b100,
+        }
+    }
+
+    #[must_use]
+    pub const fn with(self, format: SignatureFormat) -> Self {
+        Self(self.0 | Self::bit(format))
+    }
+
+    pub const fn contains(self, format: SignatureFormat) -> bool {
+        self.0 & Self::bit(format) != 0
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// A verified commit signature. Only built for commits that earn a badge, so
+/// "absent from the signature map" and "no badge" are the same thing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitSignature {
+    pub status: SignatureStatus,
+    pub format: SignatureFormat,
+    /// Signer identity (`%GS`); `None` when git could not name one.
+    pub signer: Option<Arc<str>>,
+    /// Key id or fingerprint (`%GK`).
+    pub key_id: Option<Arc<str>>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitFileChange {
     pub path: PathBuf,
@@ -218,7 +331,7 @@ pub struct Worktree {
 /// throwaway handle at its path. Counts follow the same rules as the history
 /// pane's working-tree row: staged and unstaged are summed, so a file that is
 /// both staged and dirty counts twice.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WorktreeDirtySummary {
     pub path: PathBuf,
     /// Commit this worktree has checked out. Carried here rather than looked up
@@ -243,6 +356,9 @@ pub struct WorktreeDirtySummary {
     /// selected.
     pub staged: Vec<FileStatus>,
     pub unstaged: Vec<FileStatus>,
+    /// Filled only for the selected worktree, like the lists above. Empty means
+    /// "not loaded", not "no counts".
+    pub line_stats: UncommittedLineStats,
 }
 
 impl WorktreeDirtySummary {
@@ -251,7 +367,7 @@ impl WorktreeDirtySummary {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SubmoduleStatus {
     UpToDate,
     NotInitialized,
@@ -320,6 +436,47 @@ pub struct FileStatus {
     pub conflict: Option<FileConflictKind>,
 }
 
+/// `None` means unknown: binary, over the size cap, or not reported by git at
+/// all — an untracked file is in neither index lane.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LineStats {
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+impl LineStats {
+    pub const UNKNOWN: Self = Self {
+        additions: None,
+        deletions: None,
+    };
+}
+
+impl From<(Option<u32>, Option<u32>)> for LineStats {
+    fn from((additions, deletions): (Option<u32>, Option<u32>)) -> Self {
+        Self {
+            additions,
+            deletions,
+        }
+    }
+}
+
+/// Keyed the way `FileStatus` reports paths, so the join is a map lookup. An
+/// absent key means git has no counts for that file.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct UncommittedLineStats {
+    pub staged: rustc_hash::FxHashMap<PathBuf, LineStats>,
+    pub unstaged: rustc_hash::FxHashMap<PathBuf, LineStats>,
+}
+
+impl UncommittedLineStats {
+    pub fn for_area(&self, area: DiffArea) -> &rustc_hash::FxHashMap<PathBuf, LineStats> {
+        match area {
+            DiffArea::Staged => &self.staged,
+            DiffArea::Unstaged => &self.unstaged,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubmoduleInnerChange {
     pub path: PathBuf,
@@ -355,6 +512,7 @@ pub struct SubmoduleDiffSummary {
     pub path: PathBuf,
     pub mode: SubmoduleDiffSummaryMode,
     pub status: Option<SubmoduleStatus>,
+    pub checkout_available: bool,
     pub commit_id: Option<CommitId>,
     pub parent_commit_id: Option<CommitId>,
     pub checked_out_head: Option<CommitId>,
@@ -1493,6 +1651,7 @@ mod file_status_count_tests {
             deleted: 0,
             staged: Vec::new(),
             unstaged: Vec::new(),
+            line_stats: UncommittedLineStats::default(),
         };
         assert!(!clean.is_dirty());
         assert!(

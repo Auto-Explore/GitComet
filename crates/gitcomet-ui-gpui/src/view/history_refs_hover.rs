@@ -2,6 +2,10 @@ use super::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// Rows in the refs hover card share the sidebar tree's row rhythm.
+const HISTORY_REFS_HOVER_ROW_HEIGHT_PX: f32 = 24.0;
+const HISTORY_REFS_HOVER_ROW_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
+
 const HISTORY_REFS_HOVER_CLOSE_GRACE_MS: u64 = 120;
 const HISTORY_REFS_HOVER_OPEN_DELAY_MS: u64 = 160;
 const HISTORY_REFS_HOVER_WIDTH_PX: f32 = 240.0;
@@ -327,28 +331,11 @@ impl HistoryRefsHoverHost {
         commit_id: &CommitId,
         item: &HistoryRefListItem,
     ) -> Option<PopoverKind> {
-        match &item.kind {
-            HistoryRefListItemKind::Tag { name } => Some(PopoverKind::TagRefMenu {
-                repo_id,
-                commit_id: commit_id.clone(),
-                name: name.clone(),
-            }),
-            HistoryRefListItemKind::LocalBranch { name } => Some(PopoverKind::BranchMenu {
-                repo_id,
-                target: BranchMenuTarget::local(name),
-            }),
-            HistoryRefListItemKind::RemoteBranch { remote, branch, .. } => {
-                Some(PopoverKind::BranchMenu {
-                    repo_id,
-                    target: BranchMenuTarget::remote(remote, branch),
-                })
-            }
-            HistoryRefListItemKind::AttachedHead { branch } => Some(PopoverKind::BranchMenu {
-                repo_id,
-                target: BranchMenuTarget::local(branch),
-            }),
-            HistoryRefListItemKind::DetachedHead => None,
-        }
+        let _ = item;
+        Some(PopoverKind::CommitMenu {
+            repo_id,
+            commit_id: commit_id.clone(),
+        })
     }
 
     fn item_debug_selector(item: &HistoryRefListItem) -> String {
@@ -516,14 +503,17 @@ impl Render for HistoryRefsHoverHost {
             div()
                 .id(("history_refs_hover_item", ix))
                 .debug_selector(|| Self::item_debug_selector(item))
-                .h(ui_scale.px(24.0))
+                .h(ui_scale.row_height(
+                    HISTORY_REFS_HOVER_ROW_HEIGHT_PX,
+                    HISTORY_REFS_HOVER_ROW_COMFORTABLE_HEIGHT_PX,
+                ))
                 .w_full()
                 .min_w(px(0.0))
                 .px_2()
                 .flex()
                 .items_center()
                 .gap_1()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .line_height(ui_scale.px(16.0))
                 .rounded(px(theme.radii.row))
                 .text_color(if actionable {

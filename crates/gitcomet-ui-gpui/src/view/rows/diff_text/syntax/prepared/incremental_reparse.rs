@@ -435,7 +435,7 @@ pub(crate) struct TreesitterHighlightSpec {
     pub(crate) injection_combined_patterns: Vec<bool>,
     /// `injection_combined_patterns.iter().any(|&c| c)`, hoisted so the whole
     /// combined path can be skipped with one branch. This is the gate that keeps
-    /// the feature a no-op for every grammar that does not declare it -- today
-    /// that is all of them except F#, whose `xml_doc` rule is combined upstream.
+    /// the feature a no-op for every grammar that does not declare it; the ones
+    /// that do are listed in `combined_injection_declarations_are_exactly_the_known_set`.
     pub(crate) has_combined_injections: bool,
 }

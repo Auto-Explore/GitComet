@@ -9,8 +9,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .flex()
         .flex_col()
         .w(scaled_px(420.0))
-        .child(popover_title("Clone repository"))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(popover_title(theme, "Clone repository"))
+        .child(super::popover_rule(theme))
         .child(input_label(theme, "Repository URL / Path"))
         .child(
             div()
@@ -72,14 +72,9 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                         }),
                 ),
         )
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(
                     cancel_button("clone_repo_cancel", "clone_repo_cancel_hint", theme)
                         .focus_handle(this.clone_repo_focus.cancel.clone())

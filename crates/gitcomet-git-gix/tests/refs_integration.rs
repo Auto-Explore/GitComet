@@ -1160,3 +1160,130 @@ fn list_branches_uses_first_merge_entry() {
         );
     }
 }
+
+#[test]
+fn changing_upstream_replaces_repeated_merge_entries() {
+    for separate_sections in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        initialize_repo_with_commit(repo);
+        run_git(repo, &["remote", "add", "origin", "."]);
+        for name in ["old", "other", "new"] {
+            run_git(
+                repo,
+                &["update-ref", &format!("refs/remotes/origin/{name}"), "HEAD"],
+            );
+        }
+        run_git(repo, &["config", "branch.main.remote", "origin"]);
+        run_git(
+            repo,
+            &["config", "--add", "branch.main.merge", "refs/heads/old"],
+        );
+        if separate_sections {
+            use std::io::Write;
+            let mut config = fs::OpenOptions::new()
+                .append(true)
+                .open(repo.join(".git/config"))
+                .unwrap();
+            writeln!(
+                config,
+                "\n[branch \"main\"]\n merge = refs/heads/other\n description = keep-me"
+            )
+            .unwrap();
+        } else {
+            run_git(
+                repo,
+                &["config", "--add", "branch.main.merge", "refs/heads/other"],
+            );
+            run_git(repo, &["config", "branch.main.description", "keep-me"]);
+        }
+        let opened = GixBackend.open(repo).unwrap();
+        opened
+            .set_upstream_branch_with_output("main", &upstream("origin", "new"))
+            .unwrap();
+        assert_eq!(
+            run_git_capture(repo, &["rev-parse", "--abbrev-ref", "main@{upstream}"]).trim(),
+            "origin/new",
+            "separate sections: {separate_sections}"
+        );
+        assert_eq!(
+            run_git_capture(repo, &["config", "--get-all", "branch.main.merge"]).trim(),
+            "refs/heads/new"
+        );
+        assert_eq!(
+            run_git_capture(repo, &["config", "branch.main.description"]).trim(),
+            "keep-me"
+        );
+        let branches = opened.list_branches().unwrap();
+        assert_eq!(
+            branches.iter().find(|b| b.name == "main").unwrap().upstream,
+            Some(upstream("origin", "new"))
+        );
+    }
+}
+
+// Timing assertions are opt-in so shared CI load cannot make the suite flaky.
+#[test]
+#[ignore = "manual branch-listing scaling regression check"]
+fn tracked_branch_listing_scales_with_branch_count() {
+    use std::io::Write;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let mut durations = Vec::new();
+    for count in [200, 1000] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        initialize_repo_with_commit(repo);
+        run_git(repo, &["remote", "add", "origin", "."]);
+        run_git(repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        let oid = run_git_capture(repo, &["rev-parse", "HEAD"]);
+        let mut refs = String::new();
+        let mut config = fs::OpenOptions::new()
+            .append(true)
+            .open(repo.join(".git/config"))
+            .unwrap();
+        for index in 0..count {
+            refs.push_str(&format!(
+                "create refs/heads/branch-{index} {}\n",
+                oid.trim()
+            ));
+            writeln!(config, "\n[branch \"branch-{index}\"]\n remote = origin\n merge = refs/heads/main\n gitcometPendingUpstream = false").unwrap();
+        }
+        drop(config);
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["update-ref", "--stdin"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(refs.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        let opened = GixBackend.open(repo).unwrap();
+        let mut best = Duration::MAX;
+        for _ in 0..3 {
+            let start = Instant::now();
+            let branches = opened.list_branches().unwrap();
+            best = best.min(start.elapsed());
+            assert_eq!(branches.len(), count + 1);
+            assert_eq!(
+                branches
+                    .iter()
+                    .filter(|b| b.upstream == Some(upstream("origin", "main")))
+                    .count(),
+                count
+            );
+        }
+        eprintln!("{count} tracked branches: {best:?}");
+        durations.push(best);
+    }
+    assert!(
+        durations[1] < durations[0] * 12,
+        "5x branches should not take 12x as long: {durations:?}"
+    );
+}

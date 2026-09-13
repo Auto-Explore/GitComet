@@ -24,6 +24,9 @@ pub enum RepoCommandKind {
         reference: String,
     },
     Push,
+    PushWithTags {
+        request: gitcomet_core::tag_push::TagPushRequest,
+    },
     PushAfterCommit {
         target: SafePushAfterCommitTarget,
         set_upstream: bool,
@@ -80,6 +83,13 @@ pub enum RepoCommandKind {
         commit_id: CommitId,
         commit: bool,
         /// Git's 1-based mainline parent for a single merge commit.
+        mainline: Option<usize>,
+        summary: String,
+    },
+    Revert {
+        commit_id: CommitId,
+        commit: bool,
+        /// Git's 1-based mainline parent for a merge commit.
         mainline: Option<usize>,
         summary: String,
     },
@@ -189,6 +199,7 @@ impl RepoCommandKind {
             Self::MergeRef { .. } => "Merge",
             Self::SquashRef { .. } | Self::SquashCommits { .. } => "Squash",
             Self::Push | Self::PushAfterCommit { .. } => "Push",
+            Self::PushWithTags { request } => request.mode.label(),
             Self::ForcePush | Self::ForcePushWithLease { .. } => "Force push",
             Self::PushSetUpstream { .. } => "Push and set upstream",
             Self::SetUpstreamBranch { .. } => "Set upstream",
@@ -202,6 +213,7 @@ impl RepoCommandKind {
             | Self::RebaseAbort
             | Self::InteractiveRebase { .. } => "Rebase",
             Self::InteractiveCherryPick { .. } | Self::CherryPick { .. } => "Cherry-pick",
+            Self::Revert { .. } => "Revert",
             Self::MergeAbort => "Abort merge",
             Self::CreateTag { .. } => "Create tag",
             Self::DeleteTag { .. } => "Delete tag",

@@ -112,6 +112,40 @@ impl MainPaneView {
         self.diff_syntax_budget_override = Some(budget);
     }
 
+    /// Turns the eager source-backed prepare off so a test can drive the
+    /// click-triggered path it would otherwise pre-empt.
+    #[cfg(test)]
+    pub(in crate::view) fn set_eager_source_backed_syntax_prepare_for_tests(
+        &mut self,
+        enabled: bool,
+    ) {
+        self.eager_source_backed_syntax_prepare = enabled;
+    }
+
+    /// The bytes a side's prepared document was built from.
+    ///
+    /// A source-backed side keeps no resident text, so the body retained
+    /// alongside its prepared document is the only copy. Streamed long-line rows
+    /// measure their slice against this; handed the empty resident text they
+    /// compute a zero-length document and paint no syntax at all, silently.
+    pub(in crate::view) fn file_diff_side_document_text(
+        &self,
+        region: DiffTextRegion,
+    ) -> SharedString {
+        let side = Self::split_side_for_region(region);
+        let resident = match side {
+            DiffTextRegion::SplitLeft => &self.file_diff_old_text,
+            _ => &self.file_diff_new_text,
+        };
+        if !resident.is_empty() {
+            return resident.clone();
+        }
+        self.file_diff_pair_syntax_text
+            .get(&side)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub(in crate::view) fn file_diff_prepared_syntax_key(
         &self,
         view_mode: PreparedSyntaxViewMode,
@@ -313,6 +347,53 @@ impl MainPaneView {
         }
     }
 
+    /// Prepares a whole-document tree for every side whose content is a file.
+    ///
+    /// [`Self::refresh_file_diff_syntax_documents`] can only work from resident
+    /// text, and a worktree diff has none on either side. Rows then fall back to
+    /// the single-line tokenizer, which cannot see anything spanning lines: a
+    /// `<script>` body renders bare, `</div>` loses its tag name, and a block
+    /// comment loses every line after its first.
+    ///
+    /// Deliberately not solved by materializing text during the rebuild. That is
+    /// what keeps a multi-megabyte diff streaming per-line instead of resident,
+    /// and the worker reads the file once, off-thread, under the same 8 MiB
+    /// ceiling the read-only preview already uses.
+    fn refresh_source_backed_file_diff_syntax_documents(&mut self, cx: &mut gpui::Context<Self>) {
+        #[cfg(test)]
+        if !self.eager_source_backed_syntax_prepare {
+            return;
+        }
+        if self.file_diff_cache_language.is_none() {
+            return;
+        }
+        for side in [DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight] {
+            let (resident_text, source_path) = match side {
+                DiffTextRegion::SplitLeft => (
+                    &self.file_diff_old_text,
+                    self.file_diff_old_source_path.as_ref(),
+                ),
+                _ => (
+                    &self.file_diff_new_text,
+                    self.file_diff_new_source_path.as_ref(),
+                ),
+            };
+            // `source_path` is `Some` only for a side backed by a file, so a
+            // genuinely empty side -- the old half of an added file -- never
+            // enters the in-flight map.
+            if !resident_text.is_empty() || source_path.is_none() {
+                continue;
+            }
+            if self
+                .file_diff_split_prepared_syntax_document(side)
+                .is_some()
+            {
+                continue;
+            }
+            self.request_file_diff_side_syntax_document(side, cx);
+        }
+    }
+
     /// Completes a cold click's full-document syntax work away from the UI
     /// thread. This is what lets interaction share the 8 MiB syntax ceiling:
     /// the click remains responsive, and its exact row/offset is replayed once
@@ -322,7 +403,22 @@ impl MainPaneView {
         region: DiffTextRegion,
         cx: &mut gpui::Context<Self>,
     ) {
-        let side = Self::split_side_for_region(region);
+        self.request_file_diff_side_syntax_document(Self::split_side_for_region(region), cx);
+    }
+
+    /// Prepares one side's whole-document tree off the UI thread.
+    ///
+    /// Reached from a click that found no document, and from
+    /// [`Self::refresh_source_backed_file_diff_syntax_documents`] before any
+    /// click. Every guard below applies to both callers, which is the reason the
+    /// eager path reuses this rather than growing a second worker: the staleness
+    /// rules for reading a worktree file that the rows were indexed from are
+    /// subtle enough that one copy of them is the only maintainable number.
+    pub(in crate::view) fn request_file_diff_side_syntax_document(
+        &mut self,
+        side: DiffTextRegion,
+        cx: &mut gpui::Context<Self>,
+    ) {
         // As in the synchronous path, a cache hit is not proof that a
         // source-backed file still matches the indexed generation: a file that
         // has moved on since this generation indexed it describes different
@@ -415,6 +511,27 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                // Before the read, not only at completion. The completion guard
+                // stops a superseded worker *installing*; it does not stop it
+                // reading and parsing up to 8 MiB first. That was free when only
+                // a click could get here, but the eager caller fires on every
+                // file the selection lands on, so arrowing down a list would
+                // otherwise queue one whole parse per file passed over.
+                let still_current = view
+                    .read_with(cx, |this, _| {
+                        this.file_diff_syntax_generation == syntax_generation
+                    })
+                    .unwrap_or(false);
+                if !still_current {
+                    let _ = view.update(cx, |this, _| {
+                        if this.file_diff_click_syntax_inflight.get(&side)
+                            == Some(&syntax_generation)
+                        {
+                            this.file_diff_click_syntax_inflight.remove(&side);
+                        }
+                    });
+                    return;
+                }
                 let prepare_document = move || {
                     let text = match text {
                         Some(text) => text,
@@ -1037,13 +1154,20 @@ impl MainPaneView {
         split_left_edit_hint: Option<rows::DiffSyntaxEdit>,
         split_right_edit_hint: Option<rows::DiffSyntaxEdit>,
     ) {
-        if self.file_diff_old_text.is_empty() && self.file_diff_new_text.is_empty() {
-            return;
-        }
-
         let Some(language) = self.file_diff_cache_language else {
             return;
         };
+
+        // A side whose content is a file on disk has no resident text by
+        // construction (`file_diff_source_text`), which is what lets a huge diff
+        // render from per-line slices. Nothing below can parse it, so it goes to
+        // the worker instead -- and for an ordinary worktree diff that is *both*
+        // sides, which is why skipping it left every cross-line construct (a
+        // `<script>` body, front matter, a block comment) uncoloured.
+        self.refresh_source_backed_file_diff_syntax_documents(cx);
+        if self.file_diff_old_text.is_empty() && self.file_diff_new_text.is_empty() {
+            return;
+        }
 
         // Split and inline syntax both project from the real old/new documents.
         // Only those real side documents are parsed here; inline rows later map

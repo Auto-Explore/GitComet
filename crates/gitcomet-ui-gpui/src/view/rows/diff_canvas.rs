@@ -13,8 +13,8 @@ use super::diff_text::{
     whitespace_visible_styled_text,
 };
 use super::*;
-use crate::view::panes::main::DiffHorizontalScrollColumn;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::main::{DiffChangeSide, DiffHorizontalScrollColumn, FocusedChangeBlockRow};
 use gitcomet_core::domain::{DiffArea, DiffLineKind};
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
@@ -33,7 +33,6 @@ const STREAMED_DIFF_TEXT_MIN_BYTES: usize = LARGE_DIFF_TEXT_MIN_BYTES;
 const STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS: usize = 64;
 const STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE: &str = "0000000000";
 const DIFF_TEXT_WRAP_WIDTH_SAMPLE: &str = "WWWWWWWWWW";
-const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
 /// Width of a line-number cell (excluding the shared horizontal padding).
 /// Sized to fit six digits of the diff monospace font; numbers right-align
 /// toward the content so any slack sits before the digits, not between the
@@ -42,6 +41,8 @@ const DIFF_GUTTER_BASE_WIDTH_PX: f32 = 38.0;
 const DIFF_ROW_HORIZONTAL_PADDING_PX: f32 = 8.0;
 const DIFF_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 const DIFF_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
+/// Outline around the change block F2/F3 landed on.
+const FOCUSED_CHANGE_BLOCK_OUTLINE_WIDTH_PX: f32 = 1.0;
 const DIFF_ROW_BACKGROUND_OVERDRAW_PX: f32 = 1.0;
 
 /// Default width of the blame/annotate column shown to the left of the diff
@@ -1198,6 +1199,121 @@ fn focused_row_outline_color(theme: AppTheme, bg: gpui::Rgba) -> gpui::Rgba {
     with_alpha(bg, if theme.is_dark { 0.72 } else { 0.56 })
 }
 
+/// Marks a row of the change block F2/F3 landed on: the accent bar the
+/// conflict resolver puts on its active conflict, plus an outline in the
+/// change's colour that the block's first and last rows close. `left..right`
+/// is the column; both edges are pinned to the visible area so horizontal
+/// scrolling keeps the marks in view.
+#[allow(clippy::too_many_arguments)]
+fn paint_focused_change_block_marks(
+    window: &mut Window,
+    row_bounds: Bounds<Pixels>,
+    left: Pixels,
+    right: Pixels,
+    row: FocusedChangeBlockRow,
+    outline: Option<DiffChangeSide>,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) {
+    let clip = window.content_mask().bounds;
+    let left = left.max(clip.left());
+    let right = right.min(clip.right());
+    if right <= left {
+        return;
+    }
+    let top = row_bounds.top();
+    let height = row_bounds.size.height;
+    // Overdrawn like the row fill so stacked rows join, but not past the block.
+    let run_height = if row.bottom {
+        height
+    } else {
+        height + px(DIFF_ROW_BACKGROUND_OVERDRAW_PX)
+    };
+
+    if let Some(side) = outline {
+        let color = match side {
+            DiffChangeSide::Removed => theme.colors.diff.removed.foreground,
+            DiffChangeSide::Added => theme.colors.diff.added.foreground,
+        };
+        let line_w = diff_scaled_px(FOCUSED_CHANGE_BLOCK_OUTLINE_WIDTH_PX, ui_scale_percent);
+        let width = right - left;
+        window.paint_quad(fill(
+            Bounds::new(point(right - line_w, top), size(line_w, run_height)),
+            color,
+        ));
+        if row.top {
+            window.paint_quad(fill(
+                Bounds::new(point(left, top), size(width, line_w)),
+                color,
+            ));
+        }
+        if row.bottom {
+            window.paint_quad(fill(
+                Bounds::new(point(left, top + height - line_w), size(width, line_w)),
+                color,
+            ));
+        }
+    }
+
+    // The bar is the outline's left edge, painted last so it caps the corners.
+    window.paint_quad(fill(
+        Bounds::new(
+            point(left, top),
+            size(
+                diff_scaled_px(DIFF_CHANGE_BAR_WIDTH_PX, ui_scale_percent),
+                run_height,
+            ),
+        ),
+        theme.colors.accent.foreground,
+    ));
+}
+
+/// One column of one row painting the focused change block's marks.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct FocusedChangeBlockPaint {
+    pub(in crate::view) visible_ix: usize,
+    pub(in crate::view) region: DiffTextRegion,
+    pub(in crate::view) outline: Option<DiffChangeSide>,
+    pub(in crate::view) top: bool,
+    pub(in crate::view) bottom: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FOCUSED_CHANGE_BLOCK_PAINT_LOG: RefCell<Vec<FocusedChangeBlockPaint>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn record_focused_change_block_for_tests(
+    visible_ix: usize,
+    region: DiffTextRegion,
+    row: FocusedChangeBlockRow,
+    outline: Option<DiffChangeSide>,
+) {
+    FOCUSED_CHANGE_BLOCK_PAINT_LOG.with(|log| {
+        log.borrow_mut().push(FocusedChangeBlockPaint {
+            visible_ix,
+            region,
+            outline,
+            top: row.top,
+            bottom: row.bottom,
+        })
+    });
+}
+
+#[cfg(test)]
+pub(in crate::view) fn clear_focused_change_block_paint_log_for_tests() {
+    FOCUSED_CHANGE_BLOCK_PAINT_LOG.with(|log| log.borrow_mut().clear());
+}
+
+/// Focused change block marks painted since the last clear.
+#[cfg(test)]
+pub(in crate::view) fn focused_change_block_paint_log_for_tests() -> Vec<FocusedChangeBlockPaint> {
+    FOCUSED_CHANGE_BLOCK_PAINT_LOG.with(|log| log.borrow().clone())
+}
+
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::view) struct DiffPaintRecord {
@@ -2171,7 +2287,11 @@ pub(super) fn inline_diff_line_row_canvas(
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = if show_line_numbers {
-                gutter_cell_total_width(pad, ui_scale_percent)
+                gutter_cell_total_width(
+                    pad,
+                    ui_scale::UiScale::from_percent(ui_scale_percent)
+                        .with_appearance(theme.metrics),
+                )
             } else {
                 px(0.0)
             };
@@ -2204,8 +2324,8 @@ pub(super) fn inline_diff_line_row_canvas(
         },
         move |bounds, prepaint, window, cx| {
             let gutter_style = diff_text_style(window);
-            let line_metrics = line_metrics(window);
-            let when_metrics = line_metrics_annot_when(window);
+            let line_metrics = line_metrics(window, theme);
+            let when_metrics = line_metrics_annot_when(window, theme);
             let y = center_text_y(bounds, line_metrics.line_height);
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.text_hitbox);
@@ -2236,6 +2356,27 @@ pub(super) fn inline_diff_line_row_canvas(
                     &gutter_style,
                     window,
                     cx,
+                );
+            }
+
+            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+                let outline = Some(row.inline_outline());
+                paint_focused_change_block_marks(
+                    window,
+                    prepaint.bounds,
+                    prepaint.bounds.left() + prepaint.annot_w,
+                    prepaint.bounds.right(),
+                    row,
+                    outline,
+                    theme,
+                    ui_scale_percent,
+                );
+                #[cfg(test)]
+                record_focused_change_block_for_tests(
+                    visible_ix,
+                    DiffTextRegion::Inline,
+                    row,
+                    outline,
                 );
             }
 
@@ -2333,11 +2474,11 @@ pub(super) fn inline_diff_line_row_canvas(
             }
         },
     )
-    .h(diff_row_height(ui_scale_percent))
+    .h(theme.editor_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
     .bg(bg)
-    .text_xs()
+    .text_size(theme.editor_font_size(ui_scale_percent))
     .whitespace_nowrap()
     .into_any_element()
 }
@@ -2431,7 +2572,11 @@ pub(super) fn split_diff_line_row_canvas(
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = if show_line_numbers {
-                gutter_cell_total_width(pad, ui_scale_percent)
+                gutter_cell_total_width(
+                    pad,
+                    ui_scale::UiScale::from_percent(ui_scale_percent)
+                        .with_appearance(theme.metrics),
+                )
             } else {
                 px(0.0)
             };
@@ -2480,8 +2625,8 @@ pub(super) fn split_diff_line_row_canvas(
         },
         move |bounds, prepaint, window, cx| {
             let gutter_style = diff_text_style(window);
-            let line_metrics = line_metrics(window);
-            let when_metrics = line_metrics_annot_when(window);
+            let line_metrics = line_metrics(window, theme);
+            let when_metrics = line_metrics_annot_when(window, theme);
             let y = center_text_y(bounds, line_metrics.line_height);
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.left_hitbox);
@@ -2523,8 +2668,39 @@ pub(super) fn split_diff_line_row_canvas(
                 );
             }
 
+            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+                for (column, old_side) in [(prepaint.left_col, true), (prepaint.right_col, false)] {
+                    let outline = row.column_outline(old_side);
+                    paint_focused_change_block_marks(
+                        window,
+                        prepaint.bounds,
+                        column.left(),
+                        column.right(),
+                        row,
+                        outline,
+                        theme,
+                        ui_scale_percent,
+                    );
+                    #[cfg(test)]
+                    record_focused_change_block_for_tests(
+                        visible_ix,
+                        if old_side {
+                            DiffTextRegion::SplitLeft
+                        } else {
+                            DiffTextRegion::SplitRight
+                        },
+                        row,
+                        outline,
+                    );
+                }
+            }
+
             if show_line_numbers {
-                let gutter_total = gutter_cell_total_width(prepaint.pad, ui_scale_percent);
+                let gutter_total = gutter_cell_total_width(
+                    prepaint.pad,
+                    ui_scale::UiScale::from_percent(ui_scale_percent)
+                        .with_appearance(theme.metrics),
+                );
                 paint_gutter_text_right_aligned(
                     &old,
                     prepaint.left_col.left() + gutter_total - prepaint.pad,
@@ -2656,10 +2832,10 @@ pub(super) fn split_diff_line_row_canvas(
             }
         },
     )
-    .h(diff_row_height(ui_scale_percent))
+    .h(theme.editor_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
-    .text_xs()
+    .text_size(theme.editor_font_size(ui_scale_percent))
     .whitespace_nowrap()
     .into_any_element()
 }
@@ -2732,7 +2908,11 @@ pub(super) fn patch_split_column_row_canvas(
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = if show_line_numbers {
-                gutter_cell_total_width(pad, ui_scale_percent)
+                gutter_cell_total_width(
+                    pad,
+                    ui_scale::UiScale::from_percent(ui_scale_percent)
+                        .with_appearance(theme.metrics),
+                )
             } else {
                 px(0.0)
             };
@@ -2763,8 +2943,8 @@ pub(super) fn patch_split_column_row_canvas(
         },
         move |bounds, prepaint, window, cx| {
             let gutter_style = diff_text_style(window);
-            let line_metrics = line_metrics(window);
-            let when_metrics = line_metrics_annot_when(window);
+            let line_metrics = line_metrics(window, theme);
+            let when_metrics = line_metrics_annot_when(window, theme);
             let y = center_text_y(bounds, line_metrics.line_height);
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.text_hitbox);
@@ -2798,8 +2978,28 @@ pub(super) fn patch_split_column_row_canvas(
                 );
             }
 
+            if let Some(row) = view.read(cx).diff_focused_change_block_row(visible_ix) {
+                let outline = row.column_outline(region == DiffTextRegion::SplitLeft);
+                paint_focused_change_block_marks(
+                    window,
+                    prepaint.bounds,
+                    prepaint.bounds.left() + prepaint.annot_w,
+                    prepaint.bounds.right(),
+                    row,
+                    outline,
+                    theme,
+                    ui_scale_percent,
+                );
+                #[cfg(test)]
+                record_focused_change_block_for_tests(visible_ix, region, row, outline);
+            }
+
             if show_line_numbers {
-                let gutter_total = gutter_cell_total_width(prepaint.pad, ui_scale_percent);
+                let gutter_total = gutter_cell_total_width(
+                    prepaint.pad,
+                    ui_scale::UiScale::from_percent(ui_scale_percent)
+                        .with_appearance(theme.metrics),
+                );
                 paint_gutter_text_right_aligned(
                     &line_no,
                     prepaint.bounds.left() + prepaint.annot_w + gutter_total - prepaint.pad,
@@ -2878,10 +3078,10 @@ pub(super) fn patch_split_column_row_canvas(
             }
         },
     )
-    .h(diff_row_height(ui_scale_percent))
+    .h(theme.editor_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
-    .text_xs()
+    .text_size(theme.editor_font_size(ui_scale_percent))
     .whitespace_nowrap()
     .into_any_element()
 }
@@ -2921,7 +3121,7 @@ pub(in crate::view) fn blame_gutter_row_canvas(
         },
         move |bounds, annot_hitboxes, window, cx| {
             let gutter_style = diff_text_style(window);
-            let line_metrics = line_metrics(window);
+            let line_metrics = line_metrics(window, theme);
             let y = center_text_y(bounds, line_metrics.line_height);
 
             // The whole canvas *is* the annotation column, so it takes the
@@ -2930,7 +3130,7 @@ pub(in crate::view) fn blame_gutter_row_canvas(
             window.paint_quad(fill(bounds, theme.colors.surface.panel));
 
             if let Some(blame) = &blame {
-                let when_metrics = line_metrics_annot_when(window);
+                let when_metrics = line_metrics_annot_when(window, theme);
                 render_blame_column(
                     blame,
                     bounds,
@@ -2990,7 +3190,10 @@ pub(super) fn worktree_preview_row_canvas(
         ("worktree_preview_row_canvas", ix),
         move |bounds, window, _cx| {
             let pad = px_2(window);
-            let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
+            let gutter_total = gutter_cell_total_width(
+                pad,
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            );
             let bar_w = if bar_color.is_some() {
                 diff_scaled_px(DIFF_CHANGE_BAR_WIDTH_PX, ui_scale_percent)
             } else {
@@ -3022,7 +3225,7 @@ pub(super) fn worktree_preview_row_canvas(
         },
         move |bounds, prepaint, window, cx| {
             let gutter_style = diff_text_style(window);
-            let line_metrics = line_metrics(window);
+            let line_metrics = line_metrics(window, theme);
             let y = center_text_y(bounds, line_metrics.line_height);
 
             // Reserve the annotation sidebar with the neutral panel color (matching
@@ -3048,7 +3251,7 @@ pub(super) fn worktree_preview_row_canvas(
             }
 
             if let Some(blame) = &blame {
-                let when_metrics = line_metrics_annot_when(window);
+                let when_metrics = line_metrics_annot_when(window, theme);
                 render_blame_column(
                     blame,
                     bounds,
@@ -3071,7 +3274,12 @@ pub(super) fn worktree_preview_row_canvas(
 
             paint_gutter_text_right_aligned(
                 &line_no,
-                prepaint.inner.left() + gutter_cell_total_width(prepaint.pad, ui_scale_percent)
+                prepaint.inner.left()
+                    + gutter_cell_total_width(
+                        prepaint.pad,
+                        ui_scale::UiScale::from_percent(ui_scale_percent)
+                            .with_appearance(theme.metrics),
+                    )
                     - prepaint.pad,
                 y,
                 theme.colors.foreground.secondary,
@@ -3129,6 +3337,7 @@ pub(super) fn worktree_preview_row_canvas(
                                 DiffTextRegion::Inline,
                                 position,
                                 click_count,
+                                window,
                                 cx,
                             );
                             cx.notify();
@@ -3149,10 +3358,10 @@ pub(super) fn worktree_preview_row_canvas(
             });
         },
     )
-    .h(diff_row_height(ui_scale_percent))
+    .h(theme.editor_row_height(ui_scale_percent))
     .min_w(min_width + annotation_width)
     .w_full()
-    .text_xs()
+    .text_size(theme.editor_font_size(ui_scale_percent))
     .whitespace_nowrap()
     .into_any_element()
 }
@@ -3390,6 +3599,7 @@ fn install_diff_row_mouse_handlers(
                             region,
                             position,
                             click_count,
+                            window,
                             cx,
                         );
                         cx.notify();
@@ -3455,8 +3665,8 @@ fn install_diff_row_mouse_handlers(
 }
 
 /// Smaller font metrics for the "X ago" sub-column in the annotation panel.
-fn line_metrics_annot_when(window: &Window) -> LineMetrics {
-    line_metrics_scaled(window, 0.85)
+fn line_metrics_annot_when(window: &Window, theme: AppTheme) -> LineMetrics {
+    line_metrics_scaled(window, theme, 0.85)
 }
 
 /// Width of one wrapped diff-text column, measured in `editor_font_family`.
@@ -3472,10 +3682,11 @@ fn line_metrics_annot_when(window: &Window) -> LineMetrics {
 pub(in crate::view) fn diff_text_wrap_char_width(
     window: &mut Window,
     editor_font_family: impl Into<gpui::SharedString>,
+    editor_font_size_px: u32,
 ) -> Pixels {
     let mut style = diff_text_style(window);
     style.font_family = editor_font_family.into();
-    let font_size = style.font_size.to_pixels(window.rem_size()) * canvas_text::DIFF_FONT_SCALE;
+    let font_size = crate::ui_scale::design_px_from_window(editor_font_size_px as f32, window);
     let run = style.to_run(DIFF_TEXT_WRAP_WIDTH_SAMPLE.len());
     let layout = window.text_system().shape_line(
         DIFF_TEXT_WRAP_WIDTH_SAMPLE.into(),
@@ -3498,19 +3709,14 @@ pub(in crate::view) fn diff_scaled_px(value: f32, ui_scale_percent: u32) -> Pixe
     crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
 }
 
-pub(in crate::view) fn diff_row_height(ui_scale_percent: u32) -> Pixels {
-    diff_scaled_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
-}
-
 pub(in crate::view) fn diff_row_horizontal_padding(ui_scale_percent: u32) -> Pixels {
     diff_scaled_px(DIFF_ROW_HORIZONTAL_PADDING_PX, ui_scale_percent)
 }
 
-pub(super) fn diff_gutter_total_width(ui_scale_percent: u32) -> Pixels {
-    gutter_cell_total_width(
-        diff_row_horizontal_padding(ui_scale_percent),
-        ui_scale_percent,
-    )
+pub(super) fn diff_gutter_total_width(scale: impl Into<ui_scale::UiScale>) -> Pixels {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
+    gutter_cell_total_width(diff_row_horizontal_padding(ui_scale_percent), scale)
 }
 
 /// Width of the bar marking a wholly added or removed file, which the row's
@@ -3519,16 +3725,27 @@ pub(in crate::view) fn diff_change_bar_width(ui_scale_percent: u32) -> Pixels {
     diff_scaled_px(DIFF_CHANGE_BAR_WIDTH_PX, ui_scale_percent)
 }
 
-pub(in crate::view) fn diff_single_column_text_start(ui_scale_percent: u32) -> Pixels {
-    diff_gutter_total_width(ui_scale_percent) + diff_row_horizontal_padding(ui_scale_percent)
+pub(in crate::view) fn diff_single_column_text_start(
+    scale: impl Into<ui_scale::UiScale>,
+) -> Pixels {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
+    diff_gutter_total_width(scale) + diff_row_horizontal_padding(ui_scale_percent)
 }
 
-pub(in crate::view) fn diff_inline_text_start(ui_scale_percent: u32) -> Pixels {
-    diff_gutter_total_width(ui_scale_percent) * 2.0 + diff_row_horizontal_padding(ui_scale_percent)
+pub(in crate::view) fn diff_inline_text_start(scale: impl Into<ui_scale::UiScale>) -> Pixels {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
+    diff_gutter_total_width(scale) * 2.0 + diff_row_horizontal_padding(ui_scale_percent)
 }
 
-fn gutter_cell_total_width(pad: Pixels, ui_scale_percent: u32) -> Pixels {
-    diff_scaled_px(DIFF_GUTTER_BASE_WIDTH_PX, ui_scale_percent) + pad * 2.0
+fn gutter_cell_total_width(pad: Pixels, scale: impl Into<ui_scale::UiScale>) -> Pixels {
+    let scale = scale.into();
+    let ui_scale_percent = scale.percent();
+    diff_scaled_px(
+        DIFF_GUTTER_BASE_WIDTH_PX * scale.appearance.editor_font_size_px as f32 / 13.0,
+        ui_scale_percent,
+    ) + pad * 2.0
 }
 
 fn inline_text_bounds(bounds: Bounds<Pixels>, gutter_total: Pixels, pad: Pixels) -> Bounds<Pixels> {
@@ -3670,7 +3887,10 @@ fn paint_selectable_diff_text(
     base_style.text_overflow = None;
 
     let pad = px_2(window);
-    let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
+    let gutter_total = gutter_cell_total_width(
+        pad,
+        ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+    );
     let row_extra = match region {
         DiffTextRegion::Inline if show_line_numbers => gutter_total * 2.0 + pad * 2.0,
         DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight if show_line_numbers => {

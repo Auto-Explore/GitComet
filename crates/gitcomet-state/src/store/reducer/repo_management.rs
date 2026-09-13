@@ -145,6 +145,15 @@ fn clear_loading<T>(loadable: &mut Loadable<T>) -> bool {
 
 fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
     repo_state.loads_in_flight.clear();
+    // A dropped reply would otherwise leave a dialog waiting on it forever.
+    for lookup in [
+        &mut repo_state.history_state.commit_lookup,
+        &mut repo_state.history_state.mainline_lookup,
+    ] {
+        if lookup.result.is_loading() {
+            lookup.result = Loadable::NotLoaded;
+        }
+    }
     // The cancelled walk's reply is dropped by the repo-load guard, so nothing
     // downstream will ever clear the count it left on screen.
     repo_state.set_log_scan_progress(None);
@@ -332,6 +341,7 @@ pub(in crate::store::reducer) fn append_selected_history_reload_effects(
                     repo_id,
                     path,
                     limit: REACTIVATED_FILE_HISTORY_LIMIT,
+                    cursor: None,
                 });
             }
             SelectedHistoryReload::Blame { path, source } => {
@@ -589,6 +599,10 @@ pub(super) fn close_repo(
     // matter which of them (tab `x`, tab menu, picker row menu, close-others)
     // the user reached for.
     let closed_repo = &state.repos[removed_repo_ix];
+    closed_repo
+        .history_state
+        .commit_signatures_cancellation
+        .cancel();
     let closed_workdir = closed_repo.spec.workdir.clone();
     let persist_closed_recent = !closed_repo.is_provisional_external_drop_open();
     state.repos.remove(removed_repo_ix);
@@ -685,7 +699,14 @@ pub(super) fn close_repos(
         crate::store::effects::release_worktree_scan_handles(repo_id);
     }
 
-    state.repos.retain(|repo| !close_ids.contains(&repo.id));
+    state.repos.retain(|repo| {
+        let keep = !close_ids.contains(&repo.id);
+        if !keep {
+            repo.history_state.commit_signatures_cancellation.cancel();
+            repo.history_state.authors.cancellation.cancel();
+        }
+        keep
+    });
 
     let repo_still_open =
         |repo_id: RepoId, state: &AppState| state.repos.iter().any(|repo| repo.id == repo_id);
@@ -760,14 +781,12 @@ pub(super) fn set_active_repo(
 /// toggles the sidebar tabs.
 fn file_browser_load_for_active_files_mode(
     sidebar_mode: SidebarMode,
-    repo_state: &RepoState,
+    repo_state: &mut RepoState,
 ) -> Option<Effect> {
-    (sidebar_mode == SidebarMode::Files && repo_state.file_browser.needs_load()).then(|| {
-        Effect::LoadFileBrowser {
-            repo_id: repo_state.id,
-            source: repo_state.file_browser.source.clone(),
-        }
-    })
+    if sidebar_mode != SidebarMode::Files || !repo_state.file_browser.needs_load() {
+        return None;
+    }
+    super::effects::request_file_browser_load(repo_state)
 }
 
 pub(super) fn fill_set_active_repo_inline(
@@ -815,6 +834,7 @@ fn fill_set_active_repo_inline_impl(
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
     let git_log_settings = state.git_log_settings;
     let sidebar_mode = state.sidebar_mode;
+    let follow_selection = state.file_browser_settings.follow_selected_commit;
 
     let repo_state = &mut state.repos[repo_ix];
 
@@ -847,6 +867,9 @@ fn fill_set_active_repo_inline_impl(
         // retires multi/range and linked-worktree selections.
         repo_state.set_selected_commit(None);
         repo_state.set_commit_details(Loadable::NotLoaded);
+        // Before `file_browser_load_for_active_files_mode` below reads the
+        // source, so the one load it emits already carries the live tree.
+        super::effects::sync_file_browser_to_selection(repo_state, follow_selection, sidebar_mode);
 
         // Activation is not a user navigation step, so replace the snapshot at
         // the cursor rather than pushing one. This explicit replacement is
@@ -1256,6 +1279,7 @@ pub(super) fn repo_opened_ok(
         return effects;
     }
     let sidebar_mode = state.sidebar_mode;
+    let follow_selection = state.file_browser_settings.follow_selected_commit;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         effects.extend(refresh_full_effects(repo_state, git_log_settings));
         if should_refresh_worktrees
@@ -1274,6 +1298,11 @@ pub(super) fn repo_opened_ok(
         }
         if should_refresh_worktrees {
             append_ensure_sidebar_data_effects(repo_state, &mut effects);
+            super::effects::sync_file_browser_to_selection(
+                repo_state,
+                follow_selection,
+                sidebar_mode,
+            );
             if let Some(effect) = file_browser_load_for_active_files_mode(sidebar_mode, repo_state)
             {
                 effects.push(effect);
@@ -1312,6 +1341,10 @@ fn discard_failed_repo_open(
     repos.remove(&repo_id);
     if let Some(ix) = state.repos.iter().position(|r| r.id == repo_id) {
         let was_active = state.active_repo == Some(repo_id);
+        state.repos[ix]
+            .history_state
+            .commit_signatures_cancellation
+            .cancel();
         state.repos.remove(ix);
         if was_active {
             let adjacent_repo = if ix > 0 {

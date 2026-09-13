@@ -685,3 +685,45 @@ fn legacy_history_scope_current_branch_maps_to_first_parent_mode() {
         Some(&HistoryMode::AllBranches)
     );
 }
+
+/// `UiSettings` is a struct literal, so a missing field is a compile error —
+/// but the `apply_setting!` line that actually writes it is not. Without this
+/// the layout preference would work all session and silently never persist.
+#[test]
+fn file_list_layout_round_trips_through_persist_and_load() {
+    let dir = unique_temp_dir("file-list-layout");
+    let session_file = dir.join("session.json");
+
+    write_session_json(
+        &session_file,
+        json!({ "version": 3, "open_repos": [], "active_repo": null }),
+    );
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            file_list_layout: Some("tree".to_string()),
+            ..Default::default()
+        },
+        &session_file,
+    )
+    .expect("persist file_list_layout");
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(loaded.file_list_layout.as_deref(), Some("tree"));
+
+    // A `None` field leaves the stored value alone.
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            theme_mode: Some("light".to_string()),
+            ..Default::default()
+        },
+        &session_file,
+    )
+    .expect("persist an unrelated field");
+    assert_eq!(
+        session::load_from_path(&session_file)
+            .file_list_layout
+            .as_deref(),
+        Some("tree")
+    );
+}

@@ -12,6 +12,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
+    parent: Option<Arc<CancellationToken>>,
 }
 
 impl CancellationToken {
@@ -25,6 +26,17 @@ impl CancellationToken {
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|parent| parent.is_cancelled())
+    }
+
+    /// Also stop when the repository closes without cancelling other requests
+    /// when this request is superseded.
+    pub fn with_parent(mut self, parent: CancellationToken) -> Self {
+        self.parent = Some(Arc::new(parent));
+        self
     }
 
     pub fn check_cancelled(&self) -> Result<()> {
@@ -45,6 +57,94 @@ impl CancellationToken {
 pub struct LogChunk {
     pub commits: Vec<crate::domain::Commit>,
     pub scanned: u64,
+}
+
+/// Opaque identity of the exact inputs used to traverse history. It is scoped to
+/// a repository and query, shared by all its pages, and never persisted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistorySnapshot(pub Arc<str>);
+
+#[derive(Clone, Debug)]
+pub enum HistoryReadRequest {
+    Page {
+        limit: usize,
+        cursor: Option<LogCursor>,
+        snapshot: Option<HistorySnapshot>,
+    },
+    Refresh {
+        previous: Arc<LogPage>,
+        snapshot: Option<HistorySnapshot>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HistoryReadResult {
+    Page {
+        page: Arc<LogPage>,
+        snapshot: Option<HistorySnapshot>,
+    },
+    Unchanged,
+    /// The continuation belongs to a different history. Refresh the retained
+    /// page before allowing another append.
+    Invalidated,
+}
+
+impl From<LogPage> for HistoryReadResult {
+    fn from(page: LogPage) -> Self {
+        Arc::new(page).into()
+    }
+}
+
+impl From<Arc<LogPage>> for HistoryReadResult {
+    fn from(page: Arc<LogPage>) -> Self {
+        Self::Page {
+            page,
+            snapshot: None,
+        }
+    }
+}
+
+/// Rebuild a loaded extent without losing commits merely because new commits
+/// pushed them beyond a numeric page limit. A removed commit requires walking
+/// to EOF to establish its absence. Partial results stay private to the caller.
+pub fn refresh_history_page(
+    previous: &LogPage,
+    cancellation: &CancellationToken,
+    mut read: impl FnMut(usize, Option<&LogCursor>) -> Result<Arc<LogPage>>,
+) -> Result<Arc<LogPage>> {
+    let complete = previous.next_cursor.is_none();
+    let mut remaining: rustc_hash::FxHashSet<_> =
+        previous.commits.iter().map(|commit| &commit.id).collect();
+    cancellation.check_cancelled()?;
+    let mut page = read(previous.commits.len().max(200), None)?;
+    for commit in &page.commits {
+        remaining.remove(&commit.id);
+    }
+    loop {
+        cancellation.check_cancelled()?;
+        if page.next_cursor.is_none() || (!complete && remaining.is_empty()) {
+            return Ok(page);
+        }
+        let cursor = page.next_cursor.as_ref().expect("checked continuation");
+        let next = read(200, Some(cursor))?;
+        if next
+            .next_cursor
+            .as_ref()
+            .is_some_and(|next| next.last_seen == cursor.last_seen)
+        {
+            return Err(Error::new(ErrorKind::Backend(
+                "history cursor did not advance".into(),
+            )));
+        }
+        // Only inspect the newly read commits on subsequent iterations.
+        for commit in &next.commits {
+            remaining.remove(&commit.id);
+        }
+        let mut next = Arc::unwrap_or_clone(next);
+        let page = Arc::make_mut(&mut page);
+        page.commits.append(&mut next.commits);
+        page.next_cursor = next.next_cursor;
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -200,7 +300,21 @@ pub enum SequencerState {
     None,
     RebaseOrApply,
     CherryPick,
+    /// A revert stopped at a conflict or a failed commit step, or a revert
+    /// sequence still pending.
+    Revert,
 }
+
+/// Marker a revert puts in its command output when git applied nothing because
+/// the branch no longer has the reverted changes, so no commit was created.
+pub const REVERT_NOTHING_TO_REVERT_SENTINEL: &str = "GITCOMET_REVERT_NOTHING_TO_REVERT";
+
+/// Command label of a Continue that skipped a revert its resolution left empty.
+pub const REVERT_SKIP_COMMAND: &str = "git revert --skip";
+
+/// Marker an abort puts in its output when git cleared a leftover sequence but
+/// refused to rewind HEAD, so the summary cannot claim the previous state back.
+pub const REVERT_ABORT_KEPT_HEAD_SENTINEL: &str = "GITCOMET_REVERT_ABORT_KEPT_HEAD";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveRebaseEntry {
@@ -307,6 +421,110 @@ pub enum SafePushAfterCommitDecision {
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
+    /// Distinct author names across the complete, unfiltered history scope.
+    /// Called on demand, independently of the visible commit metadata cache.
+    fn history_authors(
+        &self,
+        mode: HistoryMode,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<[Arc<str>]>> {
+        let mut authors = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut cursor = None;
+        loop {
+            cancellation.check_cancelled()?;
+            let page =
+                self.log_history_mode_page_cancellable(mode, 256, cursor.as_ref(), cancellation)?;
+            for commit in &page.commits {
+                if seen.insert(commit.author.clone()) {
+                    authors.push(commit.author.clone());
+                }
+            }
+            cursor = page.next_cursor.clone();
+            if cursor.is_none() {
+                break;
+            }
+        }
+        cancellation.check_cancelled()?;
+        Ok(authors.into())
+    }
+
+    /// Optional indexed access to history. `None` keeps older backends on the
+    /// paged reader. Construction is background work; range reads never walk
+    /// from the branch tip to the requested offset.
+    fn build_history_index(
+        &self,
+        _mode: HistoryMode,
+        _author: Option<&str>,
+        cancellation: &CancellationToken,
+        _on_progress: &mut dyn FnMut(crate::history_index::HistoryIndexProgress),
+    ) -> Result<Option<crate::history_index::HistoryIndexHandle>> {
+        cancellation.check_cancelled()?;
+        Ok(None)
+    }
+
+    fn read_history_range(
+        &self,
+        _index: &crate::history_index::HistoryIndexHandle,
+        _range: std::ops::Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<crate::history_index::HistoryRange> {
+        cancellation.check_cancelled()?;
+        Err(Error::new(ErrorKind::Backend(
+            "indexed history is unavailable".into(),
+        )))
+    }
+
+    /// Read or refresh a history snapshot. Backends without snapshot support
+    /// conservatively rebuild and never claim an unchanged result.
+    fn read_history(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        request: &HistoryReadRequest,
+        cancellation: &CancellationToken,
+        on_chunk: &mut dyn FnMut(LogChunk),
+    ) -> Result<HistoryReadResult> {
+        let page = match request {
+            HistoryReadRequest::Page {
+                limit,
+                cursor: None,
+                ..
+            } => self.log_history_mode_page_streaming(
+                mode,
+                author,
+                *limit,
+                None,
+                cancellation,
+                on_chunk,
+            )?,
+            HistoryReadRequest::Page { limit, cursor, .. } => self
+                .log_history_mode_page_filtered_cancellable(
+                    mode,
+                    author,
+                    *limit,
+                    cursor.as_ref(),
+                    cancellation,
+                )?,
+            HistoryReadRequest::Refresh { previous, .. } => {
+                refresh_history_page(previous, cancellation, |limit, cursor| {
+                    self.log_history_mode_page_filtered_cancellable(
+                        mode,
+                        author,
+                        limit,
+                        cursor,
+                        cancellation,
+                    )
+                })?
+            }
+        };
+        cancellation.check_cancelled()?;
+        Ok(HistoryReadResult::Page {
+            page,
+            snapshot: None,
+        })
+    }
+
     fn log_history_mode_page(
         &self,
         mode: HistoryMode,
@@ -366,6 +584,19 @@ pub trait GitRepository: Send + Sync {
         Ok(page)
     }
 
+    /// A filtered, cancellable page without progress snapshots. Backends can
+    /// override this to avoid constructing chunks that the caller will discard.
+    fn log_history_mode_page_filtered_cancellable(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        self.log_history_mode_page_streaming(mode, author, limit, cursor, cancellation, &mut |_| {})
+    }
+
     /// [`Self::log_history_mode_page_streaming`] for callers with nothing to
     /// cancel and no use for the intermediate pages.
     fn log_history_mode_page_filtered(
@@ -375,13 +606,12 @@ pub trait GitRepository: Send + Sync {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<std::sync::Arc<LogPage>> {
-        self.log_history_mode_page_streaming(
+        self.log_history_mode_page_filtered_cancellable(
             mode,
             author,
             limit,
             cursor,
             &CancellationToken::new(),
-            &mut |_| {},
         )
     }
 
@@ -432,6 +662,50 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    /// Verifies the signatures of `ids`, returning an entry only for commits
+    /// that earn a badge. Unsigned commits, and signatures that cannot be
+    /// checked because the key is missing, are simply omitted.
+    ///
+    /// Batched on purpose: verification shells out to `git`, and one process per
+    /// commit costs roughly ten times a single batched call.
+    fn verify_commit_signatures(
+        &self,
+        _ids: &[CommitId],
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "signature verification is not implemented for this backend",
+        )))
+    }
+    /// Like [`Self::verify_commit_signatures`], restricted to signatures in
+    /// `formats`: other formats get no badge and should cost no verifier run.
+    fn verify_commit_signatures_cancellable(
+        &self,
+        ids: &[CommitId],
+        formats: crate::domain::SignatureFormats,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        cancellation.check_cancelled()?;
+        if formats.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut result = self.verify_commit_signatures(ids)?;
+        result.retain(|(_, signature)| formats.contains(signature.format));
+        cancellation.check_cancelled()?;
+        Ok(result)
+    }
+    /// Resolve a possibly abbreviated reference — or any revspec git accepts,
+    /// such as a branch, tag, or `HEAD~3` — to the commit it names.
+    ///
+    /// Deliberately lighter than [`GitRepository::commit_details`], which also
+    /// diffs the commit against its parent: this is meant to run per keystroke
+    /// behind the Reveal Commit dialog. The returned [`Commit::id`] is the full
+    /// oid, *not* the spec that was passed in, so callers can hand it straight
+    /// to code that compares against loaded log rows.
+    fn resolve_commit(&self, _reference: &CommitId) -> Result<Commit> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "commit reference resolution is not implemented for this backend",
+        )))
+    }
     /// Files that differ between two points (`from` → `to`), for the
     /// compare-selected-commits feature. `from` is the base/older side, so the
     /// result reads as "what `to` adds/removes relative to `from`". `to = None`
@@ -446,6 +720,37 @@ pub trait GitRepository: Send + Sync {
             "range file listing is not implemented for this backend",
         )))
     }
+    /// Added/removed line counts for every uncommitted change, both lanes.
+    ///
+    /// Separate from `status`, which decides most entries from stat data alone
+    /// and never reads content. Counting reads both sides of every changed
+    /// file, so keeping them apart leaves status latency untouched.
+    fn uncommitted_line_stats(&self) -> Result<UncommittedLineStats> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "uncommitted line stats are not implemented for this backend",
+        )))
+    }
+    /// Cancellable [`Self::uncommitted_line_stats`]. It reads every changed
+    /// file, so on a large dirty tree it is the load most worth interrupting.
+    fn uncommitted_line_stats_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<UncommittedLineStats> {
+        cancellation.check_cancelled()?;
+        let stats = self.uncommitted_line_stats()?;
+        cancellation.check_cancelled()?;
+        Ok(stats)
+    }
+    /// Count the files from a status snapshot the caller just collected, avoiding
+    /// another worktree traversal. Contents are read at call time, as with status.
+    fn uncommitted_line_stats_for_status_cancellable(
+        &self,
+        _status: &RepoStatus,
+        cancellation: &CancellationToken,
+    ) -> Result<UncommittedLineStats> {
+        self.uncommitted_line_stats_cancellable(cancellation)
+    }
+
     /// Full `%B` messages of the given commits, in input order. Message-only
     /// on purpose: callers like the cherry-pick editor need nothing else, and
     /// implementations should skip the per-commit tree diff `commit_details`
@@ -733,7 +1038,23 @@ pub trait GitRepository: Send + Sync {
             "git cherry-pick is not implemented for this backend",
         )))
     }
-    fn revert(&self, id: &CommitId) -> Result<()>;
+    /// The message git left for the next commit (MERGE_MSG), if any. Unlike
+    /// [`Self::merge_commit_message`] this does not require a merge.
+    fn commit_message_template(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+    /// Reverts a single commit. `commit: false` only stages the inverse;
+    /// `mainline` follows [`Self::cherry_pick_with_output`].
+    fn revert_with_output(
+        &self,
+        _id: &CommitId,
+        _commit: bool,
+        _mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git revert is not implemented for this backend",
+        )))
+    }
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashEntry>>;
@@ -925,6 +1246,23 @@ pub trait GitRepository: Send + Sync {
     fn fetch_all(&self) -> Result<()>;
     fn pull(&self, mode: PullMode) -> Result<()>;
     fn push(&self) -> Result<()>;
+
+    fn push_with_tags(&self, _request: &crate::tag_push::TagPushRequest) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pushing with tags is not implemented for this backend",
+        )))
+    }
+
+    fn preview_tag_push(
+        &self,
+        _request: &crate::tag_push::TagPushRequest,
+        _cancellation: &CancellationToken,
+    ) -> Result<crate::tag_push::TagPushPreview> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "tag push preview is not implemented for this backend",
+        )))
+    }
+
     fn push_force(&self) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "force push is not implemented for this backend",
@@ -1617,6 +1955,7 @@ mod tests {
         assert_unsupported(repo.commit_amend("message"));
         assert_unsupported(repo.topologically_order_commits(std::slice::from_ref(&commit)));
         assert_unsupported(repo.cherry_pick_with_output(&commit, true, None));
+        assert_unsupported(repo.revert_with_output(&commit, true, None));
         assert_unsupported(repo.rebase_with_output("main"));
         assert_unsupported(repo.rebase_continue_with_output());
         assert_unsupported(repo.rebase_abort_with_output());
@@ -1807,10 +2146,6 @@ mod tests {
         }
 
         fn cherry_pick(&self, _id: &CommitId) -> super::Result<()> {
-            unsupported()
-        }
-
-        fn revert(&self, _id: &CommitId) -> super::Result<()> {
             unsupported()
         }
 

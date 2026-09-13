@@ -1,7 +1,7 @@
 use super::*;
 
 /// Dropdown opened from the purple historical-browse badge: every commit the user
-/// has browsed this session (current marked with `●`), plus "Go live".
+/// has browsed this session (current marked with `●`), plus "Exit file browsing".
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
     let repo = this.state.repos.iter().find(|r| r.id == repo_id);
     let current = repo.and_then(|r| r.browsing_commit().cloned());
@@ -52,7 +52,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
 
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
-        label: "Go live".into(),
+        label: "Exit file browsing".into(),
         icon: Some("icons/undo.svg".into()),
         shortcut: None,
         disabled: false,

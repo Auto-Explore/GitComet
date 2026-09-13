@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::panes::HistoryRowHoverArea;
 use gitcomet_state::msg::CommitSelectMode;
 use gpui::{
     Bounds, ContentMask, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, TruncateFrom,
@@ -11,6 +12,10 @@ use std::cell::RefCell;
 
 const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
 const HISTORY_TAG_CHIP_PADDING_X_PX: f32 = 6.0;
+/// Comfortable raises the history row; the ref chip and its padding follow so
+/// the badge keeps its proportion.
+const HISTORY_TAG_CHIP_COMFORTABLE_HEIGHT_PX: f32 = 24.0;
+const HISTORY_TAG_CHIP_COMFORTABLE_PADDING_X_PX: f32 = 8.0;
 const HISTORY_TAG_CHIP_GAP_PX: f32 = 4.0;
 const HISTORY_BRANCH_CHIP_ICON_PX: f32 = 11.0;
 const HISTORY_BRANCH_CHIP_COMBINED_ICON_PX: f32 = 16.0;
@@ -756,19 +761,6 @@ fn fx_hash_str(text: &str) -> u64 {
     hasher.finish()
 }
 
-fn hit_test_index(bounds: &[Bounds<Pixels>], p: gpui::Point<Pixels>) -> Option<usize> {
-    bounds.iter().position(|b| b.contains(&p))
-}
-
-fn hit_test_branch_chip(
-    chips: &[(Bounds<Pixels>, HistoryBranchChipVm)],
-    p: gpui::Point<Pixels>,
-) -> Option<&HistoryBranchChipVm> {
-    chips
-        .iter()
-        .find_map(|(bounds, chip)| bounds.contains(&p).then_some(chip))
-}
-
 fn history_tag_chip_menu_invoker(
     repo_id: RepoId,
     commit_id: &CommitId,
@@ -797,28 +789,312 @@ fn history_branch_chip_menu_invoker(
     .into()
 }
 
-fn history_branch_chip_popover_kind(
-    repo_id: RepoId,
-    chip: &HistoryBranchChipVm,
-) -> Option<PopoverKind> {
-    let HistoryBranchChipKind::Branch { targets, .. } = &chip.kind else {
-        return None;
+#[derive(Clone, Copy, Debug)]
+struct HistoryRefsPaintLayout {
+    bounds: Bounds<Pixels>,
+    #[cfg(test)]
+    shown: usize,
+    #[cfg(test)]
+    hidden: usize,
+}
+
+// Includes every chip and overflow badge; the caller reserves the final gap.
+fn history_inline_refs_max_width(message_width: Pixels, gap: Pixels) -> Pixels {
+    (message_width / 3.0 - gap).max(px(0.0))
+}
+
+fn history_message_after_inline_refs(
+    content: Bounds<Pixels>,
+    refs_width: Pixels,
+    gap: Pixels,
+) -> Bounds<Pixels> {
+    let prefix = if refs_width > px(0.0) {
+        (refs_width + gap).min(content.size.width / 3.0)
+    } else {
+        px(0.0)
     };
-    match targets.as_ref() {
-        [] => None,
-        [target] => Some(target.popover_kind(repo_id)),
-        _ => Some(PopoverKind::BranchRefsMenu {
-            repo_id,
-            display_name: chip.text.as_ref().to_string(),
-            targets: targets.to_vec(),
-        }),
+    Bounds::new(
+        point(content.left() + prefix, content.top()),
+        size(
+            (content.size.width - prefix).max(px(0.0)),
+            content.size.height,
+        ),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_history_ref_chips(
+    theme: AppTheme,
+    content_bounds: Bounds<Pixels>,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+    tag_names: &[HistoryTextVm],
+    branch_chips: &[HistoryBranchChipVm],
+    selected_branch: Option<&SelectedHistoryBranch>,
+    active_context_menu_invoker: Option<&SharedString>,
+    base_style: &gpui::TextStyle,
+    xxs_font: Pixels,
+    xxs_line_height: Pixels,
+    window: &mut Window,
+    cx: &mut App,
+) -> HistoryRefsPaintLayout {
+    if tag_names.is_empty() && branch_chips.is_empty() {
+        return HistoryRefsPaintLayout {
+            bounds: Bounds::new(
+                content_bounds.origin,
+                size(px(0.0), content_bounds.size.height),
+            ),
+            #[cfg(test)]
+            shown: 0,
+            #[cfg(test)]
+            hidden: 0,
+        };
     }
+    let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
+    let chip_height = scaled_px(theme.metrics.row_height(
+        HISTORY_TAG_CHIP_HEIGHT_PX,
+        HISTORY_TAG_CHIP_COMFORTABLE_HEIGHT_PX,
+    ));
+    let chip_pad_x = scaled_px(theme.metrics.ramp(
+        HISTORY_TAG_CHIP_PADDING_X_PX,
+        HISTORY_TAG_CHIP_COMFORTABLE_PADDING_X_PX,
+    ));
+    let chip_gap = scaled_px(HISTORY_TAG_CHIP_GAP_PX);
+    window.with_content_mask(
+        Some(ContentMask {
+            bounds: content_bounds,
+        }),
+        |window| {
+            // paint_quad has no layout-level radius clamping, so a
+            // pill radius (999) must be capped to half the height.
+            let chip_radius = px(theme.radii.pill).min(chip_height * 0.5);
+            let chip_border_w = scaled_px(1.0);
+            let branch_icon_size = scaled_px(HISTORY_BRANCH_CHIP_ICON_PX);
+            let branch_combined_icon_size = scaled_px(HISTORY_BRANCH_CHIP_COMBINED_ICON_PX);
+            let branch_text_icon_gap = scaled_px(HISTORY_BRANCH_CHIP_TEXT_ICON_GAP_PX);
+            let branch_icon_gap = scaled_px(HISTORY_BRANCH_CHIP_ICON_GAP_PX);
+            let chip_y = content_bounds.top()
+                + (content_bounds.size.height - chip_height).max(px(0.0)) * 0.5;
+            let min_text_w = scaled_px(12.0);
+            let total_chips = tag_names.len() + branch_chips.len();
+
+            // Reserved width for a trailing "+N" chip; sized for the
+            // worst-case count so mid-loop reservations never come up short.
+            let overflow_reserve = if total_chips > 1 {
+                let probe: SharedString = format!("+{}", total_chips - 1).into();
+                let shaped = shape_truncated_line_cached(
+                    window,
+                    base_style,
+                    xxs_font,
+                    &probe,
+                    fx_hash_str(probe.as_ref()),
+                    content_bounds.size.width,
+                    theme.colors.foreground.secondary,
+                    None,
+                );
+                shaped.width + chip_pad_x * 2.0 + chip_gap
+            } else {
+                px(0.0)
+            };
+
+            let mut x = content_bounds.left();
+            let mut shown = 0usize;
+
+            enum ChipEntry<'a> {
+                Tag(&'a HistoryTextVm),
+                Branch(&'a HistoryBranchChipVm),
+            }
+            // HEAD first (the strongest signal), then tags, then
+            // plain branches; overflow beyond the column collapses
+            // into a "+N" chip resolved by the refs hover menu.
+            let head_entries = branch_chips
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item.kind,
+                        HistoryBranchChipKind::Branch { is_head: true, .. }
+                            | HistoryBranchChipKind::DetachedHead
+                    )
+                })
+                .map(ChipEntry::Branch);
+            let branch_entries = branch_chips
+                .iter()
+                .filter(|item| {
+                    matches!(
+                        item.kind,
+                        HistoryBranchChipKind::Branch { is_head: false, .. }
+                    )
+                })
+                .map(ChipEntry::Branch);
+            let entries = head_entries
+                .chain(tag_names.iter().map(ChipEntry::Tag))
+                .chain(branch_entries);
+
+            for entry in entries {
+                let pending_after = total_chips - shown - 1;
+                let reserve = if pending_after > 0 {
+                    overflow_reserve
+                } else {
+                    px(0.0)
+                };
+                let icons = match &entry {
+                    ChipEntry::Tag(_) => SmallVec::new(),
+                    ChipEntry::Branch(chip) => history_branch_chip_icons(chip),
+                };
+                let icons_width = history_branch_chip_icon_width(
+                    icons.as_slice(),
+                    branch_icon_size,
+                    branch_combined_icon_size,
+                    branch_text_icon_gap,
+                    branch_icon_gap,
+                );
+                let max_text_w =
+                    content_bounds.right() - x - reserve - chip_pad_x * 2.0 - icons_width;
+                // Later chips need enough room to be legible;
+                // otherwise fold the remainder into the "+N" chip
+                // instead of painting an "…x" stub.
+                let needed_text_w = if shown == 0 {
+                    min_text_w
+                } else {
+                    scaled_px(28.0)
+                };
+                if max_text_w < needed_text_w {
+                    break;
+                }
+
+                let style_kind = match &entry {
+                    ChipEntry::Tag(_) => HistoryChipStyleKind::Tag,
+                    ChipEntry::Branch(chip) => {
+                        history_branch_chip_style_kind(chip, selected_branch)
+                    }
+                };
+                let context_menu_open =
+                    active_context_menu_invoker.is_some_and(|active| match &entry {
+                        ChipEntry::Tag(name) => {
+                            active
+                                == &history_tag_chip_menu_invoker(repo_id, commit_id, name.as_ref())
+                        }
+                        ChipEntry::Branch(chip) => {
+                            active == &history_branch_chip_menu_invoker(repo_id, commit_id, chip)
+                        }
+                    });
+                let visual = history_chip_visual(theme, style_kind, context_menu_open);
+                let shaped = match &entry {
+                    ChipEntry::Tag(name) => shape_clipped_chip_line_cached_from(
+                        window,
+                        base_style,
+                        xxs_font,
+                        name.shared(),
+                        name.text_hash(),
+                        max_text_w,
+                        visual.text,
+                        None,
+                        TruncateFrom::End,
+                    ),
+                    ChipEntry::Branch(chip) => {
+                        // Clip from the start so the leaf segment
+                        // ("feature_name") stays visible without
+                        // spending chip width on an ellipsis.
+                        shape_clipped_chip_line_cached_from(
+                            window,
+                            base_style,
+                            xxs_font,
+                            chip.text.shared(),
+                            chip.text.text_hash(),
+                            max_text_w,
+                            visual.text,
+                            None,
+                            TruncateFrom::Start,
+                        )
+                    }
+                };
+
+                let chip_w = shaped.width + icons_width + chip_pad_x * 2.0;
+                let chip_bounds = Bounds::new(point(x, chip_y), size(chip_w, chip_height));
+                paint_history_chip(
+                    window,
+                    cx,
+                    chip_bounds,
+                    &visual,
+                    &shaped,
+                    chip_radius,
+                    chip_border_w,
+                    chip_pad_x,
+                    xxs_line_height,
+                    icons.as_slice(),
+                    branch_icon_size,
+                    branch_combined_icon_size,
+                    branch_text_icon_gap,
+                    branch_icon_gap,
+                );
+                shown += 1;
+                x += chip_w + chip_gap;
+            }
+
+            let hidden = total_chips - shown;
+            let mut occupied_right = (x - chip_gap).max(content_bounds.left());
+            if hidden > 0 {
+                let label: SharedString = format!("+{hidden}").into();
+                let shaped = shape_truncated_line_cached(
+                    window,
+                    base_style,
+                    xxs_font,
+                    &label,
+                    fx_hash_str(label.as_ref()),
+                    (content_bounds.right() - x - chip_pad_x * 2.0).max(px(0.0)),
+                    theme.colors.foreground.secondary,
+                    None,
+                );
+                let chip_bounds = Bounds::new(
+                    point(x, chip_y),
+                    size(shaped.width + chip_pad_x * 2.0, chip_height),
+                );
+                occupied_right = chip_bounds.right();
+                let visual = history_chip_visual(
+                    theme,
+                    HistoryChipStyleKind::Branch { selected: false },
+                    false,
+                );
+                paint_history_chip(
+                    window,
+                    cx,
+                    chip_bounds,
+                    &visual,
+                    &shaped,
+                    chip_radius,
+                    chip_border_w,
+                    chip_pad_x,
+                    xxs_line_height,
+                    &[],
+                    branch_icon_size,
+                    branch_combined_icon_size,
+                    branch_text_icon_gap,
+                    branch_icon_gap,
+                );
+            }
+            HistoryRefsPaintLayout {
+                bounds: Bounds::new(
+                    content_bounds.origin,
+                    size(
+                        (occupied_right.min(content_bounds.right()) - content_bounds.left())
+                            .max(px(0.0)),
+                        content_bounds.size.height,
+                    ),
+                ),
+                #[cfg(test)]
+                shown,
+                #[cfg(test)]
+                hidden,
+            }
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn history_commit_row_canvas(
     theme: AppTheme,
     view: Entity<HistoryView>,
+    branch_names: HistoryBranchNamesMode,
     row_id: usize,
     repo_id: RepoId,
     commit_id: CommitId,
@@ -845,6 +1121,9 @@ pub(super) fn history_commit_row_canvas(
     author: HistoryTextVm,
     summary: HistoryTextVm,
     when: HistoryTextVm,
+    // Raw commit time, so the date cell's tooltip can be rendered in full
+    // only when someone actually hovers it.
+    commit_time: std::time::SystemTime,
     short_sha: HistoryTextVm,
     active_context_menu_invoker: Option<SharedString>,
     // The background the row's own `div` carries (selection, HEAD, open context
@@ -874,12 +1153,12 @@ pub(super) fn history_commit_row_canvas(
             } {
                 row_background = crate::theme::composite_over(row_background, overlay);
             }
-            // Purple highlight on the commit currently being browsed historically.
-            if view
-                .read(cx)
-                .active_repo()
-                .is_some_and(|repo| repo.browsing_commit() == Some(&commit_id))
-            {
+            // Purple highlight on the commit being browsed historically, unless
+            // it is the selected row: its selection highlight already says so.
+            if view.read(cx).active_repo().is_some_and(|repo| {
+                repo.browsing_commit() == Some(&commit_id)
+                    && repo.history_state.selected_commit.as_ref() != Some(&commit_id)
+            }) {
                 let tint =
                     crate::theme::with_alpha(crate::theme::historical_outline(theme.is_dark), 0.22);
                 window.paint_quad(fill(bounds, tint));
@@ -890,8 +1169,7 @@ pub(super) fn history_commit_row_canvas(
             let is_selected_branch_tip =
                 history_row_is_selected_branch_tip(&ref_items, selected_branch.as_ref());
 
-            let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
-            let scaled_px = |value| px(value * design_scale_factor);
+            let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
             let base_style = window.text_style();
             // Avatar initials are semibold, matching `components::author_avatar`.
             let initials_style = {
@@ -996,29 +1274,59 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            let chip_height = scaled_px(HISTORY_TAG_CHIP_HEIGHT_PX);
-            let chip_pad_x = scaled_px(HISTORY_TAG_CHIP_PADDING_X_PX);
-            let chip_gap = scaled_px(HISTORY_TAG_CHIP_GAP_PX);
+            let mut summary_text_left =
+                summary_bounds.left() + scaled_px(history_message_text_left_px(false));
+            if show_graph_color_marker {
+                // A lane-coloured border down the left edge of the message cell,
+                // where the graph column's fade lands. Full row height, so it
+                // changes colour row by row like the graph line beside it.
+                let border_w = scaled_px(HISTORY_MESSAGE_BORDER_W_PX);
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(summary_bounds.left(), bounds.top()),
+                        size(border_w, bounds.size.height),
+                    ),
+                    node_color,
+                ));
+                summary_text_left =
+                    summary_bounds.left() + scaled_px(history_message_text_left_px(true));
+            }
 
-            let branch_content_bounds = Bounds::new(
-                point(branch_bounds.left() + cell_pad_x, branch_bounds.top()),
+            let summary_content_bounds = Bounds::new(
+                point(summary_text_left, bounds.top()),
                 size(
-                    (branch_bounds.size.width - cell_pad_x * 2.0).max(px(0.0)),
-                    branch_bounds.size.height,
+                    (summary_bounds.right() - cell_pad_x - summary_text_left).max(px(0.0)),
+                    bounds.size.height,
                 ),
             );
+            let chip_gap = scaled_px(HISTORY_TAG_CHIP_GAP_PX);
 
-            let mut tag_chip_bounds: SmallVec<[Bounds<Pixels>; 4]> =
-                SmallVec::with_capacity(tag_names.len());
-            let mut branch_chip_hits: SmallVec<[(Bounds<Pixels>, HistoryBranchChipVm); 4]> =
-                SmallVec::with_capacity(branch_chips.len());
+            let branch_content_bounds = if branch_names == HistoryBranchNamesMode::Inline {
+                Bounds::new(
+                    summary_content_bounds.origin,
+                    size(
+                        history_inline_refs_max_width(summary_content_bounds.size.width, chip_gap),
+                        summary_content_bounds.size.height,
+                    ),
+                )
+            } else {
+                Bounds::new(
+                    point(branch_bounds.left() + cell_pad_x, branch_bounds.top()),
+                    size(
+                        (branch_bounds.size.width - cell_pad_x * 2.0).max(px(0.0)),
+                        branch_bounds.size.height,
+                    ),
+                )
+            };
+
             let branch_ref_count = branch_chips.len();
             // While the row is hovered, name the branch it belongs to in the ref
             // column. Only for rows that carry no ref of their own: those
             // already say which branch they are, and a badge would collide with
             // their chips. This is the gap the feature fills -- the ref column
             // is empty on the great majority of rows.
-            if tag_names.is_empty()
+            if branch_names == HistoryBranchNamesMode::SeparateColumn
+                && tag_names.is_empty()
                 && branch_ref_count == 0
                 && hitbox.is_hovered(window)
                 && let Some(name) = lane_branch_name.as_ref()
@@ -1055,272 +1363,41 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            if !tag_names.is_empty() || branch_ref_count > 0 {
-                window.with_content_mask(
-                    Some(ContentMask {
-                        bounds: branch_content_bounds,
-                    }),
-                    |window| {
-                        // paint_quad has no layout-level radius clamping, so a
-                        // pill radius (999) must be capped to half the height.
-                        let chip_radius = px(theme.radii.pill).min(chip_height * 0.5);
-                        let chip_border_w = scaled_px(1.0);
-                        let branch_icon_size = scaled_px(HISTORY_BRANCH_CHIP_ICON_PX);
-                        let branch_combined_icon_size =
-                            scaled_px(HISTORY_BRANCH_CHIP_COMBINED_ICON_PX);
-                        let branch_text_icon_gap = scaled_px(HISTORY_BRANCH_CHIP_TEXT_ICON_GAP_PX);
-                        let branch_icon_gap = scaled_px(HISTORY_BRANCH_CHIP_ICON_GAP_PX);
-                        let chip_y =
-                            bounds.top() + (bounds.size.height - chip_height).max(px(0.0)) * 0.5;
-                        let min_text_w = scaled_px(12.0);
-                        let total_chips = tag_names.len() + branch_ref_count;
-
-                        // Reserved width for a trailing "+N" chip; sized for the
-                        // worst-case count so mid-loop reservations never come up short.
-                        let overflow_reserve = if total_chips > 1 {
-                            let probe: SharedString = format!("+{}", total_chips - 1).into();
-                            let shaped = shape_truncated_line_cached(
-                                window,
-                                &base_style,
-                                xxs_font,
-                                &probe,
-                                fx_hash_str(probe.as_ref()),
-                                branch_content_bounds.size.width,
-                                theme.colors.foreground.secondary,
-                                None,
-                            );
-                            shaped.width + chip_pad_x * 2.0 + chip_gap
-                        } else {
-                            px(0.0)
-                        };
-
-                        let mut x = branch_content_bounds.left();
-                        let mut shown = 0usize;
-
-                        enum ChipEntry<'a> {
-                            Tag(&'a HistoryTextVm),
-                            Branch(&'a HistoryBranchChipVm),
-                        }
-                        // HEAD first (the strongest signal), then tags, then
-                        // plain branches; overflow beyond the column collapses
-                        // into a "+N" chip resolved by the refs hover menu.
-                        let head_entries = branch_chips
-                            .iter()
-                            .filter(|item| {
-                                matches!(
-                                    item.kind,
-                                    HistoryBranchChipKind::Branch { is_head: true, .. }
-                                        | HistoryBranchChipKind::DetachedHead
-                                )
-                            })
-                            .map(ChipEntry::Branch);
-                        let branch_entries = branch_chips
-                            .iter()
-                            .filter(|item| {
-                                matches!(
-                                    item.kind,
-                                    HistoryBranchChipKind::Branch { is_head: false, .. }
-                                )
-                            })
-                            .map(ChipEntry::Branch);
-                        let entries = head_entries
-                            .chain(tag_names.iter().map(ChipEntry::Tag))
-                            .chain(branch_entries);
-
-                        for entry in entries {
-                            let pending_after = total_chips - shown - 1;
-                            let reserve = if pending_after > 0 {
-                                overflow_reserve
-                            } else {
-                                px(0.0)
-                            };
-                            let icons = match &entry {
-                                ChipEntry::Tag(_) => SmallVec::new(),
-                                ChipEntry::Branch(chip) => history_branch_chip_icons(chip),
-                            };
-                            let icons_width = history_branch_chip_icon_width(
-                                icons.as_slice(),
-                                branch_icon_size,
-                                branch_combined_icon_size,
-                                branch_text_icon_gap,
-                                branch_icon_gap,
-                            );
-                            let max_text_w = branch_content_bounds.right()
-                                - x
-                                - reserve
-                                - chip_pad_x * 2.0
-                                - icons_width;
-                            // Later chips need enough room to be legible;
-                            // otherwise fold the remainder into the "+N" chip
-                            // instead of painting an "…x" stub.
-                            let needed_text_w = if shown == 0 {
-                                min_text_w
-                            } else {
-                                scaled_px(28.0)
-                            };
-                            if max_text_w < needed_text_w {
-                                break;
-                            }
-
-                            let style_kind = match &entry {
-                                ChipEntry::Tag(_) => HistoryChipStyleKind::Tag,
-                                ChipEntry::Branch(chip) => {
-                                    history_branch_chip_style_kind(chip, selected_branch.as_ref())
-                                }
-                            };
-                            let context_menu_open = active_context_menu_invoker
-                                .as_ref()
-                                .is_some_and(|active| match &entry {
-                                    ChipEntry::Tag(name) => {
-                                        active
-                                            == &history_tag_chip_menu_invoker(
-                                                repo_id,
-                                                &commit_id,
-                                                name.as_ref(),
-                                            )
-                                    }
-                                    ChipEntry::Branch(chip) => {
-                                        active
-                                            == &history_branch_chip_menu_invoker(
-                                                repo_id, &commit_id, chip,
-                                            )
-                                    }
-                                });
-                            let visual = history_chip_visual(theme, style_kind, context_menu_open);
-                            let shaped = match &entry {
-                                ChipEntry::Tag(name) => shape_clipped_chip_line_cached_from(
-                                    window,
-                                    &base_style,
-                                    xxs_font,
-                                    name.shared(),
-                                    name.text_hash(),
-                                    max_text_w,
-                                    visual.text,
-                                    None,
-                                    TruncateFrom::End,
-                                ),
-                                ChipEntry::Branch(chip) => {
-                                    // Clip from the start so the leaf segment
-                                    // ("feature_name") stays visible without
-                                    // spending chip width on an ellipsis.
-                                    shape_clipped_chip_line_cached_from(
-                                        window,
-                                        &base_style,
-                                        xxs_font,
-                                        chip.text.shared(),
-                                        chip.text.text_hash(),
-                                        max_text_w,
-                                        visual.text,
-                                        None,
-                                        TruncateFrom::Start,
-                                    )
-                                }
-                            };
-
-                            let chip_w = shaped.width + icons_width + chip_pad_x * 2.0;
-                            let chip_bounds =
-                                Bounds::new(point(x, chip_y), size(chip_w, chip_height));
-                            paint_history_chip(
-                                window,
-                                cx,
-                                chip_bounds,
-                                &visual,
-                                &shaped,
-                                chip_radius,
-                                chip_border_w,
-                                chip_pad_x,
-                                xxs_line_height,
-                                icons.as_slice(),
-                                branch_icon_size,
-                                branch_combined_icon_size,
-                                branch_text_icon_gap,
-                                branch_icon_gap,
-                            );
-                            match entry {
-                                ChipEntry::Tag(_) => tag_chip_bounds.push(chip_bounds),
-                                ChipEntry::Branch(chip) => {
-                                    branch_chip_hits.push((chip_bounds, chip.clone()));
-                                }
-                            }
-
-                            shown += 1;
-                            x += chip_w + chip_gap;
-                        }
-
-                        let hidden = total_chips - shown;
-                        if hidden > 0 {
-                            let label: SharedString = format!("+{hidden}").into();
-                            let shaped = shape_truncated_line_cached(
-                                window,
-                                &base_style,
-                                xxs_font,
-                                &label,
-                                fx_hash_str(label.as_ref()),
-                                (branch_content_bounds.right() - x - chip_pad_x * 2.0).max(px(0.0)),
-                                theme.colors.foreground.secondary,
-                                None,
-                            );
-                            let chip_bounds = Bounds::new(
-                                point(x, chip_y),
-                                size(shaped.width + chip_pad_x * 2.0, chip_height),
-                            );
-                            let visual = history_chip_visual(
-                                theme,
-                                HistoryChipStyleKind::Branch { selected: false },
-                                false,
-                            );
-                            paint_history_chip(
-                                window,
-                                cx,
-                                chip_bounds,
-                                &visual,
-                                &shaped,
-                                chip_radius,
-                                chip_border_w,
-                                chip_pad_x,
-                                xxs_line_height,
-                                &[],
-                                branch_icon_size,
-                                branch_combined_icon_size,
-                                branch_text_icon_gap,
-                                branch_icon_gap,
-                            );
-                        }
-                    },
-                );
-            }
-
-            let mut summary_text_left =
-                summary_bounds.left() + scaled_px(history_message_text_left_px(false));
-            if show_graph_color_marker {
-                // A lane-coloured border down the left edge of the message cell,
-                // where the graph column's fade lands. Inset vertically so
-                // consecutive rows read as separate borders rather than as one
-                // continuous stripe down the list.
-                let border_w = scaled_px(HISTORY_MESSAGE_BORDER_W_PX);
-                let inset_y = scaled_px(HISTORY_MESSAGE_BORDER_INSET_Y_PX);
-                let border_h = (bounds.size.height - inset_y * 2.0).max(px(0.0));
-                window.paint_quad(
-                    fill(
-                        Bounds::new(
-                            point(summary_bounds.left(), bounds.top() + inset_y),
-                            size(border_w, border_h),
-                        ),
-                        node_color,
-                    )
-                    .corner_radii(border_w * 0.5),
-                );
-                summary_text_left =
-                    summary_bounds.left() + scaled_px(history_message_text_left_px(true));
-            }
-
-            let summary_text_bounds = Bounds::new(
-                point(summary_text_left, bounds.top()),
-                size(
-                    (summary_bounds.right() - cell_pad_x - summary_text_left).max(px(0.0)),
-                    bounds.size.height,
-                ),
+            let refs = paint_history_ref_chips(
+                theme,
+                branch_content_bounds,
+                repo_id,
+                &commit_id,
+                &tag_names,
+                &branch_chips,
+                selected_branch.as_ref(),
+                active_context_menu_invoker.as_ref(),
+                &base_style,
+                xxs_font,
+                xxs_line_height,
+                window,
+                cx,
             );
+
+            let summary_text_bounds = if branch_names == HistoryBranchNamesMode::Inline {
+                history_message_after_inline_refs(
+                    summary_content_bounds,
+                    refs.bounds.size.width,
+                    chip_gap,
+                )
+            } else {
+                summary_content_bounds
+            };
+            let refs_hover_bounds = if branch_names == HistoryBranchNamesMode::Inline {
+                refs.bounds
+            } else {
+                branch_bounds
+            };
+            let message_hover_bounds = if branch_names == HistoryBranchNamesMode::Inline {
+                summary_text_bounds
+            } else {
+                summary_bounds
+            };
             if !summary.is_empty() {
                 let shaped = shape_truncated_line_cached(
                     window,
@@ -1348,6 +1425,14 @@ pub(super) fn history_commit_row_canvas(
                     },
                 );
             }
+
+            // Hover regions resolved during paint and read by the shared move
+            // listener below.
+            let mut signature_hover: Option<(
+                Bounds<Pixels>,
+                gitcomet_core::domain::CommitSignature,
+            )> = None;
+            let mut date_hover_bounds: Option<Bounds<Pixels>> = None;
 
             if show_author && !author.is_empty() {
                 let avatar_d = scaled_px(components::AVATAR_DIAMETER_PX);
@@ -1408,13 +1493,61 @@ pub(super) fn history_commit_row_canvas(
                     );
                 }
 
+                // Signature badge, parked at the trailing edge of the author
+                // cell. Keeping it off the avatar-to-name run leaves the names
+                // flush against their avatars, and the badges line up in their
+                // own column. Icon only: the details pane carries the signer,
+                // key and format.
+                //
+                // The width is reserved for every row as soon as the repository
+                // has any verdict at all, so a name truncates at the same place
+                // whether or not its own commit is signed. A repository that
+                // signs nothing gives up no width.
+                let (signature, reserve_signature_gutter) = view
+                    .read(cx)
+                    .active_repo()
+                    .map(|repo| {
+                        let signatures = &repo.history_state.commit_signatures;
+                        // Cloned, not rendered: building the badge's tooltip here
+                        // would allocate a multi-line string per signed row per
+                        // frame, for text only the hovered row ever reads.
+                        (signatures.get(&commit_id).cloned(), !signatures.is_empty())
+                    })
+                    .unwrap_or((None, false));
+                let signature_glyph = scaled_px(12.0);
+                let text_left = avatar_left + avatar_d + avatar_gap;
+                let signature_width = if reserve_signature_gutter {
+                    signature_glyph + avatar_gap
+                } else {
+                    px(0.0)
+                };
+                let author_text_right =
+                    (author_bounds.right() - cell_pad_x - signature_width).max(text_left);
+                if let Some(signature) = &signature {
+                    let badge_bounds = Bounds::new(
+                        point(
+                            author_bounds.right() - cell_pad_x - signature_glyph,
+                            author_bounds.top(),
+                        ),
+                        size(signature_glyph, author_bounds.size.height),
+                    );
+                    let (icon, palette) =
+                        crate::view::commit_signature::signature_glyph(theme, signature);
+                    super::diff_canvas::paint_centered_svg_icon(
+                        icon,
+                        badge_bounds,
+                        signature_glyph,
+                        palette.foreground,
+                        window,
+                        cx,
+                    );
+                    signature_hover = Some((badge_bounds, signature.clone()));
+                }
+
                 let author_text_bounds = Bounds::new(
-                    point(avatar_left + avatar_d + avatar_gap, author_bounds.top()),
+                    point(text_left, author_bounds.top()),
                     size(
-                        (author_bounds.right()
-                            - cell_pad_x
-                            - (avatar_left + avatar_d + avatar_gap))
-                            .max(px(0.0)),
+                        (author_text_right - text_left).max(px(0.0)),
                         author_bounds.size.height,
                     ),
                 );
@@ -1446,6 +1579,7 @@ pub(super) fn history_commit_row_canvas(
             }
 
             if show_date && !when.is_empty() {
+                date_hover_bounds = Some(date_bounds);
                 let date_text_bounds = Bounds::new(
                     point(date_bounds.left() + cell_pad_x, date_bounds.top()),
                     size(
@@ -1530,21 +1664,80 @@ pub(super) fn history_commit_row_canvas(
                 let hover_when = when.shared().clone();
                 let ref_items = Arc::clone(&ref_items);
                 let hitbox = hitbox.clone();
+                let signature_hover = signature_hover.clone();
                 move |event: &gpui::MouseMoveEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
                     // The row's hitbox — not its bounds — decides whether this
                     // row owns the pointer: window-level listeners run whatever
                     // is painted on top, so anything overlaying the history (the
                     // collapsed sidebar's popover, a panel, a menu) must win.
-                    if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
+                    let pointer_on_row = hitbox.is_hovered(window);
+
+                    // Canvas cells cannot carry `.tooltip()`, so the signature
+                    // badge and the date cell drive the shared host by hand.
+                    //
+                    // Retracting is deliberately NOT gated on the hitbox: the row
+                    // that owns the tooltip is by definition the one the pointer
+                    // just left, so gating it would strand the host's text and
+                    // make every later pointer event in the window respawn the
+                    // host's delay timer.
+                    let hovered_area = if !pointer_on_row {
+                        None
+                    } else if signature_hover
+                        .as_ref()
+                        .is_some_and(|(bounds, _)| bounds.contains(&event.position))
+                    {
+                        Some(HistoryRowHoverArea::Signature)
+                    } else if date_hover_bounds
+                        .is_some_and(|bounds| bounds.contains(&event.position))
+                    {
+                        Some(HistoryRowHoverArea::Date)
+                    } else {
+                        None
+                    };
+                    let next_hover = hovered_area.map(|area| (row_id, area));
+                    let current_hover = view.read(cx).row_hover(cx);
+                    // Gate hard: this listener runs for every visible row on
+                    // every pixel of movement. Only this row's own hover is ever
+                    // retracted, so rows never fight over the host.
+                    if current_hover != next_hover
+                        && (next_hover.is_some()
+                            || matches!(current_hover, Some((ix, _)) if ix == row_id))
+                    {
+                        let signature = match hovered_area {
+                            Some(HistoryRowHoverArea::Signature) => signature_hover
+                                .as_ref()
+                                .map(|(_, signature)| signature.clone()),
+                            _ => None,
+                        };
+                        view.update(cx, |this, cx| {
+                            // Built here, once per hover transition, rather than
+                            // once per row per frame.
+                            let tooltip = match hovered_area {
+                                Some(HistoryRowHoverArea::Signature) => signature
+                                    .as_ref()
+                                    .map(crate::view::commit_signature::signature_tooltip),
+                                Some(HistoryRowHoverArea::Date) => {
+                                    Some(this.full_commit_time_text(commit_time))
+                                }
+                                None => None,
+                            };
+                            this.update_history_row_hover(next_hover, tooltip, cx);
+                        });
+                    }
+
+                    if !pointer_on_row {
                         return;
                     }
 
-                    if !ref_items.is_empty() && branch_bounds.contains(&event.position) {
+                    if !ref_items.is_empty() && refs_hover_bounds.contains(&event.position) {
                         view.update(cx, |this, cx| {
                             this.show_history_refs_hover(
                                 repo_id,
                                 commit_id.clone(),
-                                branch_bounds,
+                                refs_hover_bounds,
                                 Arc::clone(&ref_items),
                                 event.position,
                                 window,
@@ -1559,7 +1752,7 @@ pub(super) fn history_commit_row_canvas(
                     // graph, the refs, the author or the date should not summon
                     // it. Closing is driven centrally from the window root, so
                     // rows the pointer merely passes over do no work.
-                    if !summary_bounds.contains(&event.position) {
+                    if !message_hover_bounds.contains(&event.position) {
                         return;
                     }
                     // Deliberately no "is the card already open on this commit"
@@ -1574,7 +1767,7 @@ pub(super) fn history_commit_row_canvas(
                         summary: summary.clone(),
                         author: hover_author.clone(),
                         when: hover_when.clone(),
-                        source_bounds: summary_bounds,
+                        source_bounds: message_hover_bounds,
                         source_pointer_x: event.position.x,
                     };
                     let view = view.clone();
@@ -1593,34 +1786,20 @@ pub(super) fn history_commit_row_canvas(
                 let view = view.clone();
                 let commit_id = commit_id.clone();
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+                    // The window root clears the shared host on any mouse-down,
+                    // so drop our mirror of it too; otherwise the equality gate
+                    // suppresses re-showing the tooltip the click just hid.
+                    view.update(cx, |this, _cx| this.reset_history_row_hover());
                     // Hitbox, not bounds: see the hover listener above. Without
                     // this, right-clicking an overlay that happens to sit over
                     // the history opens this commit's menu through it.
-                    if phase != DispatchPhase::Bubble
-                        || event.button != MouseButton::Right
-                        || !hitbox.is_hovered(window)
-                    {
+                    if event.button != MouseButton::Right || !hitbox.is_hovered(window) {
                         return;
                     }
 
-                    let tag_menu = hit_test_index(&tag_chip_bounds, event.position)
-                        .and_then(|ix| tag_names.get(ix))
-                        .map(|tag| {
-                            let name = tag.as_ref().to_string();
-                            let invoker =
-                                history_tag_chip_menu_invoker(repo_id, &commit_id, name.as_str());
-                            (name, invoker)
-                        });
-                    let branch_menu = if tag_menu.is_none() {
-                        hit_test_branch_chip(&branch_chip_hits, event.position).and_then(|chip| {
-                            let kind = history_branch_chip_popover_kind(repo_id, chip)?;
-                            let invoker =
-                                history_branch_chip_menu_invoker(repo_id, &commit_id, chip);
-                            Some((kind, invoker))
-                        })
-                    } else {
-                        None
-                    };
                     view.update(cx, |this, cx| {
                         // Right-clicking inside an active multi-selection must
                         // not collapse it — the menu acts on the whole set — but
@@ -1634,26 +1813,13 @@ pub(super) fn history_commit_row_canvas(
                             clicked_index: None,
                             visible_order: None,
                         });
-                        let context_menu_invoker = tag_menu
-                            .as_ref()
-                            .map(|(_, invoker)| invoker.clone())
-                            .or_else(|| branch_menu.as_ref().map(|(_, invoker)| invoker.clone()))
-                            .unwrap_or_else(|| {
-                                format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
-                                    .into()
-                            });
+                        let context_menu_invoker =
+                            format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
+                                .into();
                         this.activate_context_menu_invoker(context_menu_invoker, cx);
-                        let kind = match (tag_menu, branch_menu) {
-                            (Some((name, _)), _) => PopoverKind::TagRefMenu {
-                                repo_id,
-                                commit_id: commit_id.clone(),
-                                name,
-                            },
-                            (None, Some((kind, _))) => kind,
-                            (None, None) => PopoverKind::CommitMenu {
-                                repo_id,
-                                commit_id: commit_id.clone(),
-                            },
+                        let kind = PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
                         };
                         this.open_popover_at(kind, event.position, window, cx);
                         cx.notify();
@@ -1670,6 +1836,202 @@ pub(super) fn history_commit_row_canvas(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::rc::Rc;
+
+    struct RefChipsTestView {
+        percent: u32,
+        painted: Rc<std::cell::Cell<Option<u32>>>,
+    }
+
+    impl Render for RefChipsTestView {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+            let percent = self.percent;
+            let painted = self.painted.clone();
+            super::super::canvas::keyed_canvas(
+                "ref_budget_test",
+                |_, _, _| (),
+                move |_, _, window, cx| {
+                    assert_inline_ref_paint_budget(percent, window, cx);
+                    painted.set(Some(percent));
+                },
+            )
+            .w_full()
+            .h_full()
+        }
+    }
+
+    #[gpui::test]
+    fn inline_history_refs_fit_the_budget_and_only_use_their_actual_width(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let painted = Rc::new(std::cell::Cell::new(None));
+        let (view, cx) = cx.add_window_view(|_, _| RefChipsTestView {
+            percent: 100,
+            painted: painted.clone(),
+        });
+        for percent in [100, 125, 200] {
+            cx.update(|window, app| {
+                crate::ui_scale::apply_to_window(window, percent);
+                view.update(app, |view, cx| {
+                    view.percent = percent;
+                    cx.notify();
+                });
+                let _ = window.draw(app);
+            });
+            assert_eq!(painted.get(), Some(percent));
+        }
+    }
+
+    fn assert_inline_ref_paint_budget(percent: u32, window: &mut Window, cx: &mut App) {
+        let commit_id = CommitId("tip".into());
+        let branches = [branch_chip(
+            "main",
+            true,
+            &[
+                (BranchSection::Local, "main"),
+                (BranchSection::Remote, "origin/main"),
+            ],
+        )];
+        let tags: Vec<_> = (0..12)
+            .map(|ix| HistoryTextVm::new(format!("release-{ix}").into()))
+            .collect();
+        let scale = crate::ui_scale::UiScale::from_percent(percent);
+        let style = window.text_style();
+        let gap = scale.px(HISTORY_TAG_CHIP_GAP_PX);
+        for width in [0.0, 10.0, 90.0, 300.0, 900.0] {
+            let content = Bounds::new(point(px(25.0), px(10.0)), scale.size(width, 28.0));
+            let budget = Bounds::new(
+                content.origin,
+                size(
+                    history_inline_refs_max_width(content.size.width, gap),
+                    content.size.height,
+                ),
+            );
+            let refs = paint_history_ref_chips(
+                AppTheme::gitcomet_dark(),
+                budget,
+                RepoId(1),
+                &commit_id,
+                &tags,
+                &branches,
+                None,
+                None,
+                &style,
+                scale.px(11.0),
+                scale.px(16.0),
+                window,
+                cx,
+            );
+            assert_eq!(
+                refs.shown + refs.hidden,
+                13,
+                "grouped local/remote refs count as one chip"
+            );
+            assert!(refs.hidden > 0);
+            let message = history_message_after_inline_refs(content, refs.bounds.size.width, gap);
+            assert!(refs.bounds.right() <= budget.right());
+            assert!(message.left() >= refs.bounds.right());
+            assert!(message.left() - content.left() <= content.size.width / 3.0 + px(0.001));
+            assert!((message.right() - content.right()).abs() < px(0.001));
+            if width <= 90.0 {
+                assert_eq!(refs.shown, 0);
+            }
+        }
+        let content = Bounds::new(point(px(25.0), px(10.0)), scale.size(900.0, 28.0));
+        let budget = Bounds::new(
+            content.origin,
+            size(
+                history_inline_refs_max_width(content.size.width, gap),
+                content.size.height,
+            ),
+        );
+        for branch_list in [&branches[..], &[]] {
+            let refs = paint_history_ref_chips(
+                AppTheme::gitcomet_dark(),
+                budget,
+                RepoId(1),
+                &commit_id,
+                &[],
+                branch_list,
+                None,
+                None,
+                &style,
+                scale.px(11.0),
+                scale.px(16.0),
+                window,
+                cx,
+            );
+            assert_eq!(refs.shown, branch_list.len());
+            assert_eq!(refs.hidden, 0);
+            let message = history_message_after_inline_refs(content, refs.bounds.size.width, gap);
+            assert!(message.left() - content.left() < content.size.width / 3.0);
+            if branch_list.is_empty() {
+                assert_eq!(message, content);
+            }
+        }
+        let long = [branch_chip(
+            "origin/feature/a-very-long-name-that-needs-clipping",
+            false,
+            &[(
+                BranchSection::Remote,
+                "origin/feature/a-very-long-name-that-needs-clipping",
+            )],
+        )];
+        let refs = paint_history_ref_chips(
+            AppTheme::gitcomet_dark(),
+            Bounds::new(content.origin, scale.size(95.0, 28.0)),
+            RepoId(1),
+            &commit_id,
+            &[],
+            &long,
+            None,
+            None,
+            &style,
+            scale.px(11.0),
+            scale.px(16.0),
+            window,
+            cx,
+        );
+        assert_eq!((refs.shown, refs.hidden), (1, 0));
+        assert!(refs.bounds.size.width <= scale.px(95.0));
+    }
+
+    /// The ref chip is painted into the row, so a fixed chip in a taller row
+    /// reads as a badge that shrank.
+    #[test]
+    fn the_ref_chip_keeps_its_proportion_in_a_comfortable_row() {
+        use crate::appearance::{Appearance, UiDensity};
+        let compact = Appearance::default();
+        let comfortable = Appearance {
+            density: UiDensity::Comfortable,
+            ..Appearance::default()
+        };
+        let chip = |metrics: Appearance| {
+            metrics.row_height(
+                HISTORY_TAG_CHIP_HEIGHT_PX,
+                HISTORY_TAG_CHIP_COMFORTABLE_HEIGHT_PX,
+            )
+        };
+
+        assert!(chip(comfortable) > chip(compact));
+        assert!(
+            HISTORY_TAG_CHIP_COMFORTABLE_PADDING_X_PX > HISTORY_TAG_CHIP_PADDING_X_PX,
+            "the padding has to follow the chip or the label crowds its edges"
+        );
+
+        for metrics in UiDensity::ALL.into_iter().map(|density| Appearance {
+            density,
+            ..Appearance::default()
+        }) {
+            let row = crate::view::rows::history_row_height(
+                crate::ui_scale::UiScale::from_percent(100).with_appearance(metrics),
+            );
+            assert!(
+                px(chip(metrics)) < row,
+                "the chip must stay inside its {row:?} row"
+            );
+        }
+    }
 
     fn canvas_layout_for_branch_width(
         window: &Window,
@@ -1905,8 +2267,7 @@ mod tests {
     }
 
     #[test]
-    fn grouped_branch_chip_icons_and_context_menu_keep_exact_refs() {
-        let repo_id = RepoId(5);
+    fn grouped_branch_chip_icons_keep_exact_refs() {
         let combined = branch_chip(
             "feature/x",
             false,
@@ -1948,19 +2309,6 @@ mod tests {
             ),
             px(19.0)
         );
-        assert!(matches!(
-            history_branch_chip_popover_kind(repo_id, &combined),
-            Some(PopoverKind::BranchRefsMenu {
-                repo_id: routed_repo,
-                ref display_name,
-                ref targets,
-            }) if routed_repo == repo_id
-                && display_name == "feature/x"
-                && targets == &vec![
-                    BranchMenuTarget::local("feature/x"),
-                    BranchMenuTarget::remote("origin", "feature/x"),
-                ]
-        ));
 
         let local_only = branch_chip("feature/x", false, &[(BranchSection::Local, "feature/x")]);
         assert_eq!(
@@ -1977,20 +2325,12 @@ mod tests {
             history_branch_chip_icons(&remote_only).as_slice(),
             [HistoryBranchChipIcon::Remote]
         );
-        assert!(matches!(
-            history_branch_chip_popover_kind(repo_id, &remote_only),
-            Some(PopoverKind::BranchMenu {
-                repo_id: routed_repo,
-                target: BranchMenuTarget::Remote { ref remote, ref branch },
-            }) if routed_repo == repo_id && remote == "origin" && branch == "feature/x"
-        ));
 
         let detached = HistoryBranchChipVm {
             text: HistoryTextVm::new("HEAD".into()),
             kind: HistoryBranchChipKind::DetachedHead,
         };
         assert!(history_branch_chip_icons(&detached).is_empty());
-        assert!(history_branch_chip_popover_kind(repo_id, &detached).is_none());
     }
 
     fn ref_item(kind: HistoryRefListItemKind) -> HistoryRefListItem {
@@ -2409,16 +2749,5 @@ mod tests {
             );
             assert_foreground(&visual, custom_light.colors.foreground.emphasis);
         }
-    }
-
-    #[test]
-    fn hit_test_index_returns_clicked_chip_index() {
-        let chips = vec![
-            Bounds::new(point(px(0.0), px(0.0)), size(px(10.0), px(10.0))),
-            Bounds::new(point(px(20.0), px(0.0)), size(px(10.0), px(10.0))),
-        ];
-        assert_eq!(hit_test_index(&chips, point(px(5.0), px(5.0))), Some(0));
-        assert_eq!(hit_test_index(&chips, point(px(25.0), px(5.0))), Some(1));
-        assert_eq!(hit_test_index(&chips, point(px(15.0), px(5.0))), None);
     }
 }

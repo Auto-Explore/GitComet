@@ -12,6 +12,8 @@ pub(in crate::view) enum AppMenuAction {
     /// variant here, whether it can run is carried by the menu item's own
     /// `disabled` flag rather than duplicated in the payload.
     LocateFileInExplorer,
+    /// Open the active repository's remote in the browser, or its picker.
+    OpenRemoteInBrowser,
     Settings,
     OpenInCodeEditor {
         path: Option<std::path::PathBuf>,
@@ -37,8 +39,17 @@ pub(in crate::view) enum AddRepoMenuAction {
     Initialize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(in crate::view) enum HistoryMenuRef {
+    Branch(BranchMenuTarget),
+    Tag(String),
+}
+
 #[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    ToggleHistoryRefGroup {
+        target: HistoryMenuRef,
+    },
     AppMenu(AppMenuAction),
     AddRepoMenu(AddRepoMenuAction),
     SelectDiff {
@@ -140,6 +151,21 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    ShowFileChangesAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
+    OpenFileAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
+    OpenFileAtCommitParent {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -236,6 +262,7 @@ pub(in crate::view) enum ContextMenuAction {
         scope: gitcomet_core::domain::LogScope,
     },
     SetCommitFileSort {
+        list: crate::view::rows::FileListId,
         sort: crate::view::rows::CommitFileSort,
     },
     SetDiffContentMode {
@@ -346,6 +373,10 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         index: usize,
         message: String,
+    },
+    PushWithTags {
+        repo_id: RepoId,
+        mode: gitcomet_core::tag_push::TagPushMode,
     },
     Push {
         repo_id: RepoId,
@@ -616,7 +647,9 @@ pub(super) use action_bar::{ActionBarView, action_bar_density, action_bar_height
 pub(super) use bottom_status_bar::BottomStatusBarView;
 pub(super) use popover::{PopoverHost, PopoverHostInit};
 #[cfg(feature = "benchmarks")]
-pub(in crate::view) use popover::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
+pub(in crate::view) use popover::{
+    benchmark_branch_checkout_rows, benchmark_file_history_rows, benchmark_workspace_rows,
+};
 /// Layout guards outside this module assert against the tab padding, so they
 /// follow the constant instead of hardcoding the current value.
 #[cfg(test)]

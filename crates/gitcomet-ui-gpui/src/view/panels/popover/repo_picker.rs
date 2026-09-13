@@ -548,7 +548,7 @@ pub(super) fn apply_sort(
 fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl IntoElement {
     let theme = this.theme;
     let ui_scale = super::popover_ui_scale(cx);
-    let scaled_px = |value: f32| ui_scale.px(value);
+    let scaled_px = crate::ui_scale::scaler(ui_scale);
     let menu_open = this.repo_picker_sort_menu_open;
     let hover_overlay = theme.hover_overlay();
     let active_overlay = theme.active_overlay();
@@ -563,7 +563,7 @@ fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl 
         .px(scaled_px(8.0))
         .rounded(px(theme.radii.control))
         .cursor(CursorStyle::PointingHand)
-        .text_xs()
+        .text_size(theme.ui_text(12.0))
         .text_color(if menu_open {
             theme.colors.foreground.primary
         } else {
@@ -600,7 +600,10 @@ fn sort_menu(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl In
         .flex()
         .flex_col()
         .w_full()
-        .p(super::popover_scaled_px_from_percent(4.0, ui_scale_percent));
+        .p(crate::ui_scale::design_px_from_percent(
+            4.0,
+            ui_scale_percent,
+        ));
     for (ix, sort) in RepoPickerSort::ALL.into_iter().enumerate() {
         menu = menu.child(
             components::ContextMenuEntry::new(
@@ -667,7 +670,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let theme = this.theme;
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
     let width = super::PICKER_WIDTH;
 
     if let Some(search) = this.repo_picker_search_input.clone() {

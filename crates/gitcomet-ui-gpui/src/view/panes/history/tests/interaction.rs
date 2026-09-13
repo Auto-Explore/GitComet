@@ -1,5 +1,211 @@
 use super::*;
 
+#[gpui::test]
+fn refresh_keeps_the_top_visible_commit_at_the_same_pixel(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let commits: Vec<_> = (0..600)
+        .map(|i| commit(&format!("c{i}"), &[], "commit"))
+        .collect();
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/history-scroll-anchor"),
+        },
+    );
+    repo.history_state.history_scope = LogScope::AllBranches;
+    repo.log = Loadable::Ready(Arc::new(log_page(commits.clone(), None)));
+    repo.log_rev = 1;
+    let mut state = AppState {
+        repos: vec![repo],
+        active_repo: Some(RepoId(1)),
+        ..Default::default()
+    };
+    cx.update(|_, app| {
+        let model = view.read(app).ui_model.clone();
+        model.update(app, |model, cx| {
+            model.set_state(Arc::new(state.clone()), cx)
+        });
+    });
+    ensure_history_cache_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "initial history cache", |cx| {
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            history
+                .history_cache
+                .as_ref()
+                .is_some_and(|cache| cache.base.row_vms.len() == 600)
+                && history.history_scroll.0.borrow().last_item_size.is_some()
+        })
+    });
+    let (before, row_height) = cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        let scroll = history.history_scroll.0.borrow();
+        let row_height = scroll.last_item_size.unwrap().contents.height / 600.0;
+        let y = -(row_height * 450.0 + px(7.0));
+        scroll.base_handle.set_offset(point(px(0.0), y));
+        (y, row_height)
+    });
+    let updated: Vec<_> = vec![commit("new", &[], "new")]
+        .into_iter()
+        .chain(commits.clone())
+        .collect();
+    state.repos[0].log = Loadable::Ready(Arc::new(log_page(updated, None)));
+    state.repos[0].log_rev += 1;
+    ensure_history_cache_for_tests(cx, &view, Arc::new(state.clone()));
+    wait_until(cx, "refreshed history cache", |cx| {
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            history
+                .history_cache
+                .as_ref()
+                .is_some_and(|cache| cache.base.row_vms.len() == 601)
+        })
+    });
+    cx.update(|_, app| {
+        let history = view.read(app).main_pane.read(app).history_view.read(app);
+        let after = history.history_scroll.0.borrow().base_handle.offset().y;
+        assert_eq!(
+            after,
+            before - row_height,
+            "the viewport must follow the commit, including its partial-row offset"
+        );
+    });
+
+    // Removing a row above the viewport moves the offset back; a user at the
+    // top stays there when another commit is added.
+    for (at_top, rows) in [
+        (false, commits.clone()),
+        (
+            true,
+            vec![commit("another", &[], "another")]
+                .into_iter()
+                .chain(commits)
+                .collect(),
+        ),
+    ] {
+        if at_top {
+            cx.update(|_, app| {
+                let history = view.read(app).main_pane.read(app).history_view.read(app);
+                history
+                    .history_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .set_offset(point(px(0.0), px(0.0)));
+            });
+        }
+        let count = rows.len();
+        state.repos[0].log = Loadable::Ready(Arc::new(log_page(rows, None)));
+        state.repos[0].log_rev += 1;
+        ensure_history_cache_for_tests(cx, &view, Arc::new(state.clone()));
+        wait_until(cx, "next refreshed history cache", |cx| {
+            cx.update(|_, app| {
+                let history = view.read(app).main_pane.read(app).history_view.read(app);
+                history
+                    .history_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.base.row_vms.len() == count)
+            })
+        });
+        cx.update(|_, app| {
+            let history = view.read(app).main_pane.read(app).history_view.read(app);
+            assert_eq!(
+                history.history_scroll.0.borrow().base_handle.offset().y,
+                if at_top { px(0.0) } else { before }
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn selecting_the_working_tree_preserves_a_file_preview_when_following(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::domain::{DiffTarget, FileSource};
+    use gitcomet_state::model::{FileBrowserSettings, RemoteSettings, SidebarMode};
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    cx.run_until_parked();
+    // Drain the startup settings on the store's own worker before seeding it.
+    store.dispatch(Msg::SetFileBrowserSettings(FileBrowserSettings {
+        follow_selected_commit: false,
+    }));
+    wait_until(cx, "startup settings", |_| {
+        !store
+            .snapshot()
+            .file_browser_settings
+            .follow_selected_commit
+    });
+
+    for (active, follow, sidebar_mode, keep_preview) in [
+        (true, true, SidebarMode::Files, true),
+        (true, false, SidebarMode::Files, false),
+        (true, true, SidebarMode::Branches, false),
+        (false, true, SidebarMode::Files, false),
+    ] {
+        let repo_id = RepoId(1);
+        let commit_id = CommitId("tip".into());
+        let target = DiffTarget::Commit {
+            commit_id: commit_id.clone(),
+            path: Some(PathBuf::from("src/lib.rs")),
+        };
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-follow-preview"),
+            },
+        );
+        repo.open = Loadable::Ready(());
+        repo.history_state.selected_commit = Some(commit_id.clone());
+        repo.file_browser.active = active;
+        repo.file_browser.source = FileSource::Commit(commit_id);
+        repo.diff_state.content_preview = true;
+        repo.diff_state.diff_target = Some(target.clone());
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            sidebar_mode,
+            file_browser_settings: FileBrowserSettings {
+                follow_selected_commit: follow,
+            },
+            ..Default::default()
+        });
+        cx.update(|_window, app| {
+            store.replace_snapshot_for_test(Arc::clone(&state));
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| {
+                history.state = state;
+                history.select_working_tree_summary_row(repo_id, cx);
+            });
+        });
+        // This message is processed after both selection messages, including
+        // any ClearDiffSelection, so observing it makes the assertion stable.
+        store.dispatch(Msg::SetRemoteSettings(RemoteSettings {
+            prune_deleted_remote_branches_on_fetch: false,
+        }));
+        wait_until(cx, "working-tree selection", |_| {
+            !store
+                .snapshot()
+                .remote_settings
+                .prune_deleted_remote_branches_on_fetch
+        });
+        let snapshot = store.snapshot();
+        let repo = &snapshot.repos[0];
+        assert!(repo.history_state.selected_commit.is_none());
+        assert_eq!(repo.diff_state.content_preview, keep_preview);
+        assert_eq!(repo.diff_state.diff_target, keep_preview.then_some(target));
+        if keep_preview {
+            assert_eq!(repo.file_browser.source, FileSource::WorkingDirectory);
+        }
+    }
+}
+
 /// A worktree reveal scrolls to the worktree's own row, which sits one line
 /// *above* the commit that located it. The selected-list-index cache it
 /// writes is keyed on that commit, though, so it has to remember the
@@ -42,6 +248,7 @@ fn a_worktree_reveal_caches_the_commits_row_not_the_worktree_row(cx: &mut gpui::
             deleted: 0,
             staged: Vec::new(),
             unstaged: Vec::new(),
+            line_stats: Default::default(),
         },
     ]));
     repo.worktree_dirty_rev = 1;
@@ -246,6 +453,7 @@ fn a_stash_list_arriving_replans_the_worktree_rows(cx: &mut gpui::TestAppContext
                 deleted: 0,
                 staged: Vec::new(),
                 unstaged: Vec::new(),
+                line_stats: Default::default(),
             },
         ]));
         repo.worktree_dirty_rev = 1;
@@ -617,8 +825,8 @@ fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::Te
         })
     });
 
-    let (before_graph_rows, before_base_request, before_decoration_request, before_when_text) = cx
-        .update(|window, app| {
+    let (before_graph_rows, before_base_request, before_decoration_request, before_when_text) =
+        crate::view::test_support::inspect_render(cx, |window, app| {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             let rows_len = history_view.update(app, |history, cx| {
@@ -658,7 +866,7 @@ fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::Te
         )
     );
 
-    cx.update(|window, app| {
+    crate::view::test_support::inspect_render(cx, |window, app| {
         let main_pane = view.read(app).main_pane.clone();
         let history_view = main_pane.read(app).history_view.clone();
         history_view.update(app, |history, cx| {
@@ -671,6 +879,8 @@ fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::Te
                 "history row should still render after date change"
             );
         });
+    });
+    cx.update(|window, app| {
         window.refresh();
         let _ = window.draw(app);
     });
@@ -726,10 +936,27 @@ fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::Te
 
 #[gpui::test]
 fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppContext) {
+    history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
+        cx,
+        HistoryBranchNamesMode::SeparateColumn,
+    );
+}
+
+#[gpui::test]
+fn inline_history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppContext) {
+    history_refs_hover_lists_refs_and_opens_item_menus_in_mode(cx, HistoryBranchNamesMode::Inline);
+}
+
+fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
+    cx: &mut gpui::TestAppContext,
+    mode: HistoryBranchNamesMode,
+) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|_, app| view.update(app, |view, cx| view.set_history_branch_names(mode, cx)));
 
     let repo_id = RepoId(1);
     let commit_id = CommitId("tip".into());
@@ -813,7 +1040,15 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
         let row = cx
             .debug_bounds(selector)
             .expect("history row should be rendered");
-        point(row.left() + px(24.0), row.center().y)
+        let left = if mode == HistoryBranchNamesMode::Inline {
+            cx.debug_bounds("history_message_header_cell")
+                .expect("message header")
+                .left()
+                + px(16.0)
+        } else {
+            row.left() + px(24.0)
+        };
+        point(left, row.center().y)
     };
 
     let away_from_refs_column_point = |cx: &mut gpui::VisualTestContext| {
@@ -860,18 +1095,14 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
                 .active_context_menu_invoker
                 .as_ref()
                 .map(|invoker| invoker.as_ref()),
-            Some("history_branch_chip_menu_1_tip_main"),
-            "a chip menu must pin the chip instead of the whole commit row"
+            Some("history_commit_menu_1_tip"),
+            "every chip opens the same commit-row menu"
         );
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchRefsMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                display_name: "main".to_string(),
-                targets: vec![
-                    BranchMenuTarget::local("main"),
-                    BranchMenuTarget::remote("origin", "main"),
-                ],
+                commit_id: commit_id.clone()
             })
         );
     });
@@ -967,11 +1198,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                target: BranchMenuTarget::Local {
-                    name: "feature".to_string(),
-                },
+                commit_id: commit_id.clone()
             })
         );
     });
@@ -1002,10 +1231,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::TagRefMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone(),
-                name: "release".to_string()
+                commit_id: commit_id.clone()
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -1050,11 +1278,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                target: BranchMenuTarget::Local {
-                    name: "feature".to_string(),
-                },
+                commit_id: commit_id.clone()
             })
         );
     });
@@ -1081,10 +1307,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::TagRefMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone(),
-                name: "release".to_string()
+                commit_id: commit_id.clone()
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -1129,10 +1354,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::TagRefMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                commit_id: commit_id.clone(),
-                name: "release".to_string()
+                commit_id: commit_id.clone()
             })
         );
     });
@@ -1187,11 +1411,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
         .update(|_window, app| {
             assert_eq!(
                 crate::view::test_support::popover_kind(view.read(app), app),
-                Some(PopoverKind::BranchMenu {
+                Some(PopoverKind::CommitMenu {
                     repo_id,
-                    target: BranchMenuTarget::Local {
-                        name: "feature".to_string(),
-                    },
+                    commit_id: commit_id.clone()
                 })
             );
             assert_eq!(
@@ -1214,11 +1436,9 @@ fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppCont
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                target: BranchMenuTarget::Local {
-                    name: "feature".to_string(),
-                },
+                commit_id: commit_id.clone()
             })
         );
         assert_eq!(
@@ -1951,11 +2171,9 @@ fn history_refs_hover_item_click_keeps_existing_history_selection(cx: &mut gpui:
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                target: BranchMenuTarget::Local {
-                    name: "feature".to_string(),
-                },
+                commit_id: hovered_commit.clone()
             })
         );
         assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -2063,7 +2281,7 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
         cx.run_until_parked();
     };
 
-    apply_state(cx, initial_state);
+    apply_state(cx, initial_state.clone());
 
     wait_until(cx, "history rows with displayed refs", |cx| {
         cx.debug_bounds("history_row_0").is_some() && cx.debug_bounds("history_row_1").is_some()
@@ -2110,12 +2328,41 @@ fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mous
         ));
         assert_eq!(
             crate::view::test_support::popover_kind(view.read(app), app),
-            Some(PopoverKind::BranchMenu {
+            Some(PopoverKind::CommitMenu {
                 repo_id,
-                target: BranchMenuTarget::Local {
-                    name: "feature".to_string(),
-                },
+                commit_id: CommitId("tip".into())
             })
+        );
+    });
+
+    let mut badges_state = (*initial_state).clone();
+    badges_state.repos[0].history_state.commit_signatures = Arc::new(
+        [(
+            CommitId("tip".into()),
+            gitcomet_core::domain::CommitSignature {
+                status: gitcomet_core::domain::SignatureStatus::Good,
+                format: gitcomet_core::domain::SignatureFormat::Ssh,
+                signer: None,
+                key_id: None,
+            },
+        )]
+        .into_iter()
+        .collect(),
+    );
+    badges_state.repos[0].history_state.commit_signatures_rev += 1;
+    apply_state(cx, Arc::new(badges_state));
+    cx.update(|_, app| {
+        assert!(
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app),
+            "a signature reply must not dismiss the refs card"
+        );
+        assert_eq!(
+            crate::view::test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::CommitMenu {
+                repo_id,
+                commit_id: CommitId("tip".into())
+            }),
+            "a signature reply must not dismiss the refs item menu"
         );
     });
 
@@ -2348,7 +2595,7 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
     });
 
     let (before_graph_rows, before_base_request, before_branches_text) =
-        cx.update(|window, app| {
+        crate::view::test_support::inspect_render(cx, |window, app| {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             let rows_len = history_view.update(app, |history, cx| {
@@ -2394,31 +2641,32 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
         })
     });
 
-    let (after_graph_rows, after_base_request, after_branches_text) = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let history_view = main_pane.read(app).history_view.clone();
-        let rows_len = history_view.update(app, |history, cx| {
-            HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
-        });
-        assert_eq!(
-            rows_len, 1,
-            "updated current-branch row should still render"
-        );
+    let (after_graph_rows, after_base_request, after_branches_text) =
+        crate::view::test_support::inspect_render(cx, |window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            let rows_len = history_view.update(app, |history, cx| {
+                HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
+            });
+            assert_eq!(
+                rows_len, 1,
+                "updated current-branch row should still render"
+            );
 
-        let history = history_view.read(app);
-        let cache = history
-            .history_cache
-            .as_ref()
-            .expect("history cache should be available");
-        (
-            Arc::clone(&cache.base.graph_rows),
-            cache.base.request.clone(),
-            cache.decorations.row_vms[0]
-                .branches_text
+            let history = history_view.read(app);
+            let cache = history
+                .history_cache
                 .as_ref()
-                .to_owned(),
-        )
-    });
+                .expect("history cache should be available");
+            (
+                Arc::clone(&cache.base.graph_rows),
+                cache.base.request.clone(),
+                cache.decorations.row_vms[0]
+                    .branches_text
+                    .as_ref()
+                    .to_owned(),
+            )
+        });
 
     assert!(
         Arc::ptr_eq(&before_graph_rows, &after_graph_rows),
@@ -2498,7 +2746,7 @@ fn current_branch_local_branch_changes_reuse_base_cache_and_refresh_decorations(
     });
 
     let (before_graph_rows, before_base_request, before_branches_text) =
-        cx.update(|window, app| {
+        crate::view::test_support::inspect_render(cx, |window, app| {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             let rows_len = history_view.update(app, |history, cx| {
@@ -2544,31 +2792,32 @@ fn current_branch_local_branch_changes_reuse_base_cache_and_refresh_decorations(
         })
     });
 
-    let (after_graph_rows, after_base_request, after_branches_text) = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let history_view = main_pane.read(app).history_view.clone();
-        let rows_len = history_view.update(app, |history, cx| {
-            HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
-        });
-        assert_eq!(
-            rows_len, 1,
-            "updated current-branch row should still render"
-        );
+    let (after_graph_rows, after_base_request, after_branches_text) =
+        crate::view::test_support::inspect_render(cx, |window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            let rows_len = history_view.update(app, |history, cx| {
+                HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
+            });
+            assert_eq!(
+                rows_len, 1,
+                "updated current-branch row should still render"
+            );
 
-        let history = history_view.read(app);
-        let cache = history
-            .history_cache
-            .as_ref()
-            .expect("history cache should be available");
-        (
-            Arc::clone(&cache.base.graph_rows),
-            cache.base.request.clone(),
-            cache.decorations.row_vms[0]
-                .branches_text
+            let history = history_view.read(app);
+            let cache = history
+                .history_cache
                 .as_ref()
-                .to_owned(),
-        )
-    });
+                .expect("history cache should be available");
+            (
+                Arc::clone(&cache.base.graph_rows),
+                cache.base.request.clone(),
+                cache.decorations.row_vms[0]
+                    .branches_text
+                    .as_ref()
+                    .to_owned(),
+            )
+        });
 
     assert!(
         Arc::ptr_eq(&before_graph_rows, &after_graph_rows),
@@ -2656,8 +2905,8 @@ fn current_branch_head_target_changes_rebuild_base_cache_and_move_head_marker(
         })
     });
 
-    let (before_graph_rows, before_base_request, before_head_rows, before_branches_text) = cx
-        .update(|window, app| {
+    let (before_graph_rows, before_base_request, before_head_rows, before_branches_text) =
+        crate::view::test_support::inspect_render(cx, |window, app| {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             let rows_len = history_view.update(app, |history, cx| {
@@ -2721,7 +2970,7 @@ fn current_branch_head_target_changes_rebuild_base_cache_and_move_head_marker(
     });
 
     let (after_graph_rows, after_base_request, after_head_rows, after_branches_text) =
-        cx.update(|window, app| {
+        crate::view::test_support::inspect_render(cx, |window, app| {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             let rows_len = history_view.update(app, |history, cx| {
@@ -2883,7 +3132,7 @@ fn history_scope_switch_keeps_rows_visible_and_refreshes_automatically(
         })
     });
 
-    cx.update(|window, app| {
+    crate::view::test_support::inspect_render(cx, |window, app| {
         let main_pane = view.read(app).main_pane.clone();
         let history_view = main_pane.read(app).history_view.clone();
         history_view.update(app, |history, cx| {
@@ -3065,4 +3314,116 @@ fn retained_history_rows_support_keyboard_navigation_while_loading(cx: &mut gpui
         };
         repo.history_state.selected_commit.as_ref() == Some(&second)
     });
+}
+
+/// The date cell's tooltip has to be retracted when the pointer leaves it.
+///
+/// A stranded tooltip is not just a stale bubble: while `TooltipHost` holds any
+/// text, every pointer event in the window drops and respawns its delay timer,
+/// so failing to clear turns all mouse movement into a task-spawn treadmill.
+#[gpui::test]
+fn a_date_cell_tooltip_is_retracted_when_the_pointer_leaves_the_cell(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let page = Arc::new(log_page(
+        vec![commit("tip", &["base"], "tip"), commit("base", &[], "base")],
+        None,
+    ));
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/history-date-tooltip"),
+        },
+    );
+    repo.head_branch = Loadable::Ready("main".to_string());
+    repo.head_branch_rev = 1;
+    repo.log = Loadable::Ready(Arc::clone(&page));
+    repo.log_rev = 1;
+    repo.history_state.log = Loadable::Ready(page);
+    repo.history_state.log_rev = 1;
+
+    let state = Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    });
+
+    cx.update(|_window, app| {
+        let ui_model = view.read(app).ui_model.clone();
+        ui_model.update(app, |model, cx| {
+            model.set_state(Arc::clone(&state), cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    ensure_history_cache_for_tests(cx, &view, state);
+
+    wait_until(cx, "history row", |cx| {
+        cx.debug_bounds("history_row_0").is_some()
+    });
+
+    let row = cx
+        .debug_bounds("history_row_0")
+        .expect("history row should be rendered");
+
+    // Sweep the row right-to-left rather than recomputing the column layout, so
+    // the test survives column-width changes and still pins the clear path.
+    let mut hovered_at = None;
+    let mut x = row.right() - px(4.0);
+    while x > row.left() {
+        cx.simulate_mouse_move(point(x, row.center().y), None, gpui::Modifiers::default());
+        cx.run_until_parked();
+        let text = crate::view::test_support::tooltip_text(cx, &view);
+        if text.is_some() {
+            hovered_at = Some(x);
+            break;
+        }
+        x -= px(6.0);
+    }
+
+    let hovered_at = hovered_at.expect("some x in the row should show the date tooltip");
+    assert!(
+        crate::view::test_support::tooltip_text(cx, &view).is_some(),
+        "hovering the date cell at {hovered_at:?} should set the shared tooltip"
+    );
+
+    // Leave the cell without leaving the row: the owning row's listener still
+    // runs, and must retract its own text.
+    cx.simulate_mouse_move(
+        point(row.left() + px(2.0), row.center().y),
+        None,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        None,
+        "moving off the date cell must retract the tooltip"
+    );
+
+    // And leaving the row entirely, where the owning row's hitbox no longer
+    // reports the pointer at all, must clear it too.
+    cx.simulate_mouse_move(
+        point(hovered_at, row.center().y),
+        None,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    assert!(crate::view::test_support::tooltip_text(cx, &view).is_some());
+    cx.simulate_mouse_move(point(px(1.0), px(1.0)), None, gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        None,
+        "leaving the history list must retract the tooltip, or every later \
+         pointer event respawns the tooltip delay timer"
+    );
 }

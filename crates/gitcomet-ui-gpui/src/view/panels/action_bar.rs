@@ -56,7 +56,7 @@ pub(in super::super) fn action_bar_height<C>(cx: &mut C) -> Pixels
 where
     C: gpui::BorrowAppContext,
 {
-    crate::ui_scale::design_px(ACTION_BAR_HEIGHT_PX, cx)
+    crate::ui_scale::UiScale::current(cx).row_height(ACTION_BAR_HEIGHT_PX, 44.0)
 }
 
 /// Longest badge label rendered before eliding. `components::Button` takes a
@@ -66,6 +66,46 @@ where
 const BADGE_LABEL_MAX_CHARS: usize = 28;
 const CONDENSED_BADGE_LABEL_MAX_CHARS: usize = 16;
 const COMPACT_BADGE_LABEL_MAX_CHARS: usize = 10;
+
+/// Label and control ids for a paused rebase, apply, cherry-pick, or revert.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SequencerBanner {
+    label: &'static str,
+    abort_id: &'static str,
+    continue_id: &'static str,
+    continue_tooltip: &'static str,
+}
+
+fn sequencer_banner(state: gitcomet_core::services::SequencerState) -> Option<SequencerBanner> {
+    use gitcomet_core::services::SequencerState;
+    let (label, abort_id, continue_id, continue_tooltip) = match state {
+        SequencerState::None => return None,
+        SequencerState::RebaseOrApply => (
+            "APPLY/REBASE",
+            "abort_rebase_or_apply",
+            "continue_rebase_or_apply",
+            "Continue the in-progress rebase or apply",
+        ),
+        SequencerState::CherryPick => (
+            "CHERRY-PICKING",
+            "abort_cherry_pick",
+            "continue_cherry_pick",
+            "Continue the in-progress cherry-pick",
+        ),
+        SequencerState::Revert => (
+            "REVERTING",
+            "abort_revert",
+            "continue_revert",
+            "Continue the in-progress revert",
+        ),
+    };
+    Some(SequencerBanner {
+        label,
+        abort_id,
+        continue_id,
+        continue_tooltip,
+    })
+}
 
 fn truncate_badge_label_to(label: &str, max_chars: usize) -> SharedString {
     let mut chars = label.chars();
@@ -80,6 +120,26 @@ fn truncate_badge_label_to(label: &str, max_chars: usize) -> SharedString {
 #[cfg(test)]
 fn truncate_badge_label(label: &str) -> SharedString {
     truncate_badge_label_to(label, BADGE_LABEL_MAX_CHARS)
+}
+
+fn file_browsing_badge(repo: &RepoState) -> Option<(SharedString, SharedString)> {
+    if !repo.file_browser.active {
+        return None;
+    }
+    let (label, location) = match repo.browsing_commit() {
+        Some(commit_id) => {
+            let sha = commit_id.as_ref();
+            (
+                sha.get(0..8).unwrap_or(sha).to_string(),
+                format!("commit {sha}"),
+            )
+        }
+        None => ("Working tree".to_string(), "the working tree".to_string()),
+    };
+    Some((
+        label.into(),
+        format!("Browsing {location}. Click for history or Exit file browsing.").into(),
+    ))
 }
 
 fn head_branch_tracking_upstream_name(
@@ -307,9 +367,11 @@ impl Render for ActionBarView {
         let theme = self.theme;
         let action_bar_height = action_bar_height(cx);
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
-        let density = action_bar_density(window.viewport_size().width, ui_scale_percent);
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
+        let density = action_bar_density(
+            window.viewport_size().width / (theme.metrics.ui_font_size_px as f32 / 14.0).max(1.0),
+            ui_scale_percent,
+        );
         let dense_spacing = density != ActionBarDensity::Wide;
         let badge_label_max_chars = match density {
             ActionBarDensity::Compact => COMPACT_BADGE_LABEL_MAX_CHARS,
@@ -317,16 +379,18 @@ impl Render for ActionBarView {
             ActionBarDensity::Wide => BADGE_LABEL_MAX_CHARS,
         };
         let action_label = |label: &'static str| secondary_action_label(density, label);
-        let action_group_gap = if dense_spacing {
-            scaled_px(4.0)
-        } else {
-            scaled_px(8.0)
+        // Two independent things called density: the responsive breakpoint above
+        // picks the base gap from the viewport, then the user's density setting
+        // ramps it.
+        let gap = |dense: f32, wide: f32, comfortable: f32| {
+            scaled_px(
+                theme
+                    .metrics
+                    .ramp(if dense_spacing { dense } else { wide }, comfortable),
+            )
         };
-        let tracking_action_gap = if dense_spacing {
-            scaled_px(2.0)
-        } else {
-            scaled_px(4.0)
-        };
+        let action_group_gap = gap(4.0, 8.0, 6.0);
+        let tracking_action_gap = gap(2.0, 4.0, 6.0);
         let action_bar_padding_x = if dense_spacing {
             scaled_px(4.0)
         } else {
@@ -347,7 +411,7 @@ impl Render for ActionBarView {
             |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, scaled_px(14.0));
         let count_badge = |count: usize, color: gpui::Rgba| {
             div()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .font_weight(FontWeight::BOLD)
                 .text_color(color)
                 .child(count.to_string())
@@ -362,26 +426,20 @@ impl Render for ActionBarView {
         );
         let active_invoker = self.active_context_menu_invoker.clone();
 
-        // Badge shown next to the selectors when the file directory is pinned to
-        // a historical commit (not the live state). Click → back to live. Same
-        // geometry and behaviour as the workspace/branch badges, in the fixed
-        // "off-live" purple rather than the theme accent.
+        // Keep the exit control visible throughout file browsing, including
+        // while its selection is on the working-tree row.
         let historical_badge = self
             .active_repo()
             .and_then(|repo| {
-                repo.browsing_commit().map(|commit_id| {
-                    let sha = commit_id.as_ref().to_string();
-                    let short: SharedString = sha.get(0..8).unwrap_or(&sha).to_string().into();
-                    (repo.id, sha, short)
-                })
+                file_browsing_badge(repo).map(|(label, tooltip)| (repo.id, label, tooltip))
             })
-            .map(|(repo_id, sha, short)| {
+            .map(|(repo_id, label, tooltip)| {
                 let purple = crate::theme::historical_outline(theme.is_dark);
                 let invoker: SharedString = "historical_browse_badge".into();
                 let is_active = active_invoker
                     .as_ref()
                     .is_some_and(|id| id.as_ref() == invoker.as_ref());
-                components::Button::new("historical_browse_badge", short)
+                components::Button::new("historical_browse_badge", label)
                     .start_slot(icon("icons/history.svg", purple))
                     .style(components::ButtonStyle::Subtle)
                     .text_color(purple)
@@ -399,51 +457,23 @@ impl Render for ActionBarView {
                         );
                     })
                     .debug_selector(|| "historical_browse_badge".to_string())
-                    .gitcomet_tooltip(
-                        theme,
-                        format!("Browsing commit {sha} — click for history / go live").into(),
-                    )
+                    .gitcomet_tooltip(theme, tooltip)
             });
 
-        let is_merging = self
+        let is_merging = self.active_repo().is_some_and(merge_in_progress);
+        let sequencer_banner = self
             .active_repo()
-            .is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))));
-        let sequencer_state = self
-            .active_repo()
-            .map(|repo| match repo.sequencer_state {
-                Loadable::Ready(state) => state,
-                _ if matches!(&repo.rebase_in_progress, Loadable::Ready(true)) => {
-                    gitcomet_core::services::SequencerState::RebaseOrApply
-                }
-                _ => gitcomet_core::services::SequencerState::None,
-            })
-            .unwrap_or_default();
-        let is_cherry_pick_in_progress =
-            sequencer_state == gitcomet_core::services::SequencerState::CherryPick;
-        let is_rebase_or_apply_in_progress =
-            sequencer_state == gitcomet_core::services::SequencerState::RebaseOrApply;
-        let sequencer_label = if is_cherry_pick_in_progress {
-            "CHERRY-PICKING"
-        } else {
-            "APPLY/REBASE"
-        };
-        let sequencer_abort_id = if is_cherry_pick_in_progress {
-            "abort_cherry_pick"
-        } else {
-            "abort_rebase_or_apply"
-        };
-        let sequencer_continue_id = if is_cherry_pick_in_progress {
-            "continue_cherry_pick"
-        } else {
-            "continue_rebase_or_apply"
-        };
-        let sequencer_continue_tooltip = if is_cherry_pick_in_progress {
-            "Continue the in-progress cherry-pick"
-        } else {
-            "Continue the in-progress rebase or apply"
-        };
+            .map(active_sequencer_state)
+            .and_then(sequencer_banner);
         let rebase_has_unstaged_conflicts =
             self.active_repo().is_some_and(|r| r.has_unstaged_conflicts);
+        // A revert shows REVERT_HEAD while its commit step still runs; the
+        // reducer also refuses Continue/Abort until it finishes. A merge tool
+        // or submodule clone does not count.
+        let sequencer_step_busy = self
+            .active_repo()
+            .is_some_and(|r| r.sequencer_actions_in_flight > 0);
+        const SEQUENCER_BUSY_TOOLTIP: &str = "Wait for the running Git operation to finish";
 
         let (pull_count, push_count) = self
             .active_repo()
@@ -539,7 +569,7 @@ impl Render for ActionBarView {
             .debug_selector(|| "global_nav".to_string())
             .flex()
             .items_center()
-            .gap(px(2.0))
+            .gap(scaled_px(2.0))
             .flex_none()
             .child(nav_back)
             .child(nav_forward);
@@ -1002,7 +1032,7 @@ impl Render for ActionBarView {
                                 .gap_1()
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(theme.ui_text(12.0))
                                         .text_color(theme.colors.status.warning.foreground)
                                         .font_weight(FontWeight::BOLD)
                                         .child("MERGING"),
@@ -1023,64 +1053,65 @@ impl Render for ActionBarView {
                                 ),
                         )
                     })
-                    .when(
-                        !is_merging
-                            && (is_rebase_or_apply_in_progress || is_cherry_pick_in_progress),
-                        |d| {
-                            d.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.colors.status.warning.foreground)
-                                            .font_weight(FontWeight::BOLD)
-                                            .child(sequencer_label),
-                                    )
-                                    .child(
-                                        components::Button::new(sequencer_abort_id, "Abort")
-                                            .style(components::ButtonStyle::Danger)
-                                            .on_click(
+                    .when_some(sequencer_banner.filter(|_| !is_merging), |d, banner| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_size(theme.ui_text(12.0))
+                                        .text_color(theme.colors.status.warning.foreground)
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(banner.label),
+                                )
+                                .child(
+                                    components::Button::new(banner.abort_id, "Abort")
+                                        .style(components::ButtonStyle::Danger)
+                                        .disabled(sequencer_step_busy)
+                                        .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
+                                            if let Some(repo_id) = this.active_repo_id() {
+                                                this.open_popover_at(
+                                                    PopoverKind::MergeAbortConfirm { repo_id },
+                                                    e.position(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        })
+                                        .when(sequencer_step_busy, |button| {
+                                            button.gitcomet_tooltip(
                                                 theme,
-                                                cx,
-                                                |this, e: &ClickEvent, window, cx| {
-                                                    if let Some(repo_id) = this.active_repo_id() {
-                                                        this.open_popover_at(
-                                                            PopoverKind::MergeAbortConfirm {
-                                                                repo_id,
-                                                            },
-                                                            e.position(),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }
-                                                },
-                                            ),
-                                    )
-                                    .child(
-                                        components::Button::new(sequencer_continue_id, "Continue")
-                                            .style(components::ButtonStyle::Outlined)
-                                            .disabled(rebase_has_unstaged_conflicts)
-                                            .on_click(theme, cx, |this, _e, _w, _cx| {
-                                                if let Some(repo_id) = this.active_repo_id() {
-                                                    this.store
-                                                        .dispatch(Msg::RebaseContinue { repo_id });
-                                                }
-                                            })
-                                            .gitcomet_tooltip(
-                                                theme,
-                                                if rebase_has_unstaged_conflicts {
-                                                    "Resolve all conflicts before continuing".into()
-                                                } else {
-                                                    sequencer_continue_tooltip.into()
-                                                },
-                                            ),
-                                    ),
-                            )
-                        },
-                    ),
+                                                SEQUENCER_BUSY_TOOLTIP.into(),
+                                            )
+                                        }),
+                                )
+                                .child(
+                                    components::Button::new(banner.continue_id, "Continue")
+                                        .style(components::ButtonStyle::Outlined)
+                                        .disabled(
+                                            rebase_has_unstaged_conflicts || sequencer_step_busy,
+                                        )
+                                        .on_click(theme, cx, |this, _e, _w, _cx| {
+                                            if let Some(repo_id) = this.active_repo_id() {
+                                                this.store
+                                                    .dispatch(Msg::RebaseContinue { repo_id });
+                                            }
+                                        })
+                                        .gitcomet_tooltip(
+                                            theme,
+                                            if sequencer_step_busy {
+                                                SEQUENCER_BUSY_TOOLTIP.into()
+                                            } else if rebase_has_unstaged_conflicts {
+                                                "Resolve all conflicts before continuing".into()
+                                            } else {
+                                                banner.continue_tooltip.into()
+                                            },
+                                        ),
+                                ),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -1102,6 +1133,61 @@ mod tests {
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_core::domain::Upstream;
     use std::path::PathBuf;
+
+    #[test]
+    fn sequencer_banner_names_each_paused_operation() {
+        use gitcomet_core::services::SequencerState;
+
+        assert_eq!(sequencer_banner(SequencerState::None), None);
+        for (state, label, abort_id, continue_id) in [
+            (
+                SequencerState::RebaseOrApply,
+                "APPLY/REBASE",
+                "abort_rebase_or_apply",
+                "continue_rebase_or_apply",
+            ),
+            (
+                SequencerState::CherryPick,
+                "CHERRY-PICKING",
+                "abort_cherry_pick",
+                "continue_cherry_pick",
+            ),
+            (
+                SequencerState::Revert,
+                "REVERTING",
+                "abort_revert",
+                "continue_revert",
+            ),
+        ] {
+            let banner = sequencer_banner(state).expect("paused operation has a banner");
+            assert_eq!(
+                (banner.label, banner.abort_id, banner.continue_id),
+                (label, abort_id, continue_id)
+            );
+        }
+    }
+
+    #[test]
+    fn file_browsing_badge_stays_available_on_the_working_tree_until_exit() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        assert!(file_browsing_badge(&repo).is_none());
+        repo.file_browser.active = true;
+        repo.file_browser.source =
+            gitcomet_core::domain::FileSource::Commit(CommitId("deadbeef1234".into()));
+        assert_eq!(file_browsing_badge(&repo).unwrap().0, "deadbeef");
+        repo.file_browser.source = gitcomet_core::domain::FileSource::WorkingDirectory;
+        let (label, tooltip) =
+            file_browsing_badge(&repo).expect("browsing still has an exit control");
+        assert_eq!(label, "Working tree");
+        assert!(tooltip.contains("Exit file browsing"));
+        repo.file_browser.active = false;
+        assert!(file_browsing_badge(&repo).is_none());
+    }
 
     fn test_branch(name: &str, upstream: Option<Upstream>) -> Branch {
         Branch {

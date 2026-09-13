@@ -11,7 +11,7 @@ use gitcomet_core::auth::{
 };
 #[cfg(test)]
 use gitcomet_core::domain::Upstream;
-use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
+use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind, SignatureFormats};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
@@ -23,6 +23,93 @@ use std::time::SystemTime;
 
 /// Default page size for log fetches.
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
+
+/// Queue each commit at most once per refresh, including no-badge results.
+/// One small batch per repository runs at a time; replies start the next batch.
+pub(super) fn verify_commit_signatures_effect(
+    formats: SignatureFormats,
+    repo_state: &mut RepoState,
+    repo_id: RepoId,
+    ids: impl IntoIterator<Item = CommitId>,
+) -> Option<Effect> {
+    if formats.is_empty() {
+        return None;
+    }
+    let history = &mut repo_state.history_state;
+    let mut unique = FxHashSet::default();
+    let pending: Vec<_> = ids
+        .into_iter()
+        .filter(|id| {
+            !history.commit_signatures.contains_key(id)
+                && !history.commit_signatures_requested.contains(id)
+                && unique.insert(id.clone())
+        })
+        .collect();
+    if !pending.is_empty() {
+        Arc::make_mut(&mut history.commit_signatures_requested).extend(pending.iter().cloned());
+        history
+            .commit_signatures_queue
+            .extend(pending.chunks(16).map(Arc::from));
+    }
+    if history.commit_signatures_in_flight {
+        return None;
+    }
+    let commit_ids = history.commit_signatures_queue.pop_front()?;
+    history.commit_signatures_in_flight = true;
+    Some(Effect::VerifyCommitSignatures {
+        repo_id,
+        epoch: history.commit_signatures_epoch,
+        cancellation: history.commit_signatures_cancellation.clone(),
+        commit_ids,
+        formats,
+    })
+}
+
+pub(super) fn reverify_loaded_commit_signatures_effect(
+    formats: SignatureFormats,
+    repo_state: &mut RepoState,
+) -> Option<Effect> {
+    repo_state.clear_commit_signatures();
+    if formats.is_empty() {
+        return None;
+    }
+    let mut ids: Vec<CommitId> = match &repo_state.log {
+        Loadable::Ready(page) => page
+            .commits
+            .iter()
+            .map(|commit| commit.id.clone())
+            .collect(),
+        _ => Vec::new(),
+    };
+    // Indexed scrolling keeps metadata outside the bootstrap page. Recheck
+    // those bounded, loaded blocks when verification is enabled or refreshed.
+    ids.extend(
+        repo_state
+            .history_state
+            .indexed
+            .ranges
+            .values()
+            .flat_map(|range| range.commits.iter().map(|commit| commit.id.clone())),
+    );
+    if let Some(selected) = &repo_state.history_state.selected_commit
+        && !ids.contains(selected)
+    {
+        ids.push(selected.clone());
+    }
+    verify_commit_signatures_effect(formats, repo_state, repo_state.id, ids)
+}
+
+/// Clears every repository's verdicts and re-checks what is loaded with the
+/// current formats, so badges follow the preference and installed verifiers
+/// without waiting for the next log reload.
+pub(super) fn reverify_all_commit_signatures_effects(state: &mut AppState) -> Vec<Effect> {
+    let formats = state.signature_verification_formats();
+    state
+        .repos
+        .iter_mut()
+        .filter_map(|repo_state| reverify_loaded_commit_signatures_effect(formats, repo_state))
+        .collect()
+}
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
 const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;
@@ -614,6 +701,22 @@ pub(super) fn append_requested_status_refresh_effects(
         (false, true) => effects.push_effect(Effect::LoadStagedStatus { repo_id }),
         (false, false) => {}
     }
+    append_requested_line_stats_effect(repo_state, effects);
+}
+
+/// Same triggers as the status lanes, but its own effect so the lists render at
+/// today's speed and the numbers land after.
+pub(super) fn append_requested_line_stats_effect(
+    repo_state: &mut RepoState,
+    effects: &mut impl EffectAccumulator,
+) {
+    let repo_id = repo_state.id;
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::UNCOMMITTED_LINE_STATS)
+    {
+        effects.push_effect(Effect::LoadUncommittedLineStats { repo_id });
+    }
 }
 
 fn push_rebase_and_merge_refresh_effect(effects: &mut impl EffectAccumulator, repo_id: RepoId) {
@@ -657,6 +760,23 @@ pub(super) fn first_page_log_request(repo_state: &RepoState) -> crate::model::Pe
     }
 }
 
+/// Preserve the loaded extent. The effects layer captures the Ready page and
+/// asks the backend for a snapshot refresh; this limit also describes the
+/// initial extent when a queued request is promoted.
+pub(super) fn refresh_log_request(repo_state: &RepoState) -> crate::model::PendingLogLoad {
+    crate::model::PendingLogLoad {
+        limit: refresh_log_limit(repo_state),
+        ..first_page_log_request(repo_state)
+    }
+}
+
+pub(super) fn refresh_log_limit(repo_state: &RepoState) -> usize {
+    match &repo_state.log {
+        Loadable::Ready(page) => DEFAULT_LOG_PAGE_SIZE.max(page.commits.len()),
+        _ => DEFAULT_LOG_PAGE_SIZE,
+    }
+}
+
 /// Requests `load` and returns the effect that starts it, or `None` when it was
 /// coalesced into a walk already in flight. The effect carries the sequence
 /// number the request was given, which is how its replies are recognised.
@@ -687,7 +807,7 @@ pub(super) fn append_refresh_primary_effects(
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
-    let log_request = first_page_log_request(repo_state);
+    let log_request = refresh_log_request(repo_state);
 
     if let Some(seq) = repo_state
         .loads_in_flight
@@ -698,6 +818,8 @@ pub(super) fn append_refresh_primary_effects(
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
         push_rebase_and_merge_refresh_effect(effects, repo_id);
         effects.push_effect(Effect::LoadStatus { repo_id });
+        // This batch short-circuits the status-refresh funnel.
+        append_requested_line_stats_effect(repo_state, effects);
         effects.push_effect(Effect::LoadLog {
             repo_id,
             seq,
@@ -770,7 +892,7 @@ pub(super) fn append_refresh_full_effects(
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
     }
     append_requested_status_refresh_effects(repo_state, effects);
-    let log_request = first_page_log_request(repo_state);
+    let log_request = refresh_log_request(repo_state);
     if let Some(effect) = request_log_effect(repo_state, log_request) {
         repo_state.set_log_loading_more(false);
         effects.push_effect(effect);
@@ -1082,19 +1204,26 @@ fn sequencer_paused(output: &CommandOutput) -> bool {
 }
 
 /// Continue/abort share one UI action and backend entry point for rebases,
-/// `git am`, and cherry-picks. Use the command that actually ran so native
-/// cherry-picks are not recorded as rebases in action history.
+/// `git am`, cherry-picks, and reverts. Use the command that actually ran so
+/// they are not all recorded as rebases in action history.
 fn sequencer_operation_label(output: &CommandOutput, error: Option<&Error>) -> &'static str {
-    let is_cherry_pick = |command: &str| command.trim_start().starts_with("git cherry-pick");
-    if is_cherry_pick(&output.command) {
-        return "Cherry-pick";
-    }
-    if let Some((command, _)) = error.and_then(try_format_git_backend_error)
-        && is_cherry_pick(&command)
-    {
-        return "Cherry-pick";
-    }
-    "Rebase"
+    let label_for = |command: &str| {
+        let command = command.trim_start();
+        if command.starts_with("git cherry-pick") {
+            Some("Cherry-pick")
+        } else if command.starts_with("git revert") {
+            Some("Revert")
+        } else {
+            None
+        }
+    };
+    label_for(&output.command)
+        .or_else(|| {
+            error
+                .and_then(try_format_git_backend_error)
+                .and_then(|(command, _)| label_for(&command))
+        })
+        .unwrap_or("Rebase")
 }
 
 fn summarize_command(
@@ -1114,6 +1243,7 @@ fn summarize_command(
             RepoCommandKind::PullBranch { .. } => "Pull",
             RepoCommandKind::MergeRef { .. } => "Merge",
             RepoCommandKind::SquashRef { .. } => "Squash",
+            RepoCommandKind::PushWithTags { request } => request.mode.label(),
             RepoCommandKind::Push => "Push",
             RepoCommandKind::PushAfterCommit { .. } => "Push after commit",
             RepoCommandKind::ForcePush => "Force push",
@@ -1140,6 +1270,7 @@ fn summarize_command(
             }
             RepoCommandKind::InteractiveCherryPick { .. } => "Cherry-pick",
             RepoCommandKind::CherryPick { .. } => "Cherry-pick",
+            RepoCommandKind::Revert { .. } => "Revert",
             RepoCommandKind::MergeAbort => "Merge",
             RepoCommandKind::CreateTag { .. } => "Tag",
             RepoCommandKind::DeleteTag { .. } => "Tag",
@@ -1283,6 +1414,12 @@ fn summarize_command(
                 "Force push with lease: Completed".to_string()
             }
         }
+        RepoCommandKind::PushWithTags { request } => format!(
+            "{} to {}/{}: Completed",
+            request.mode.label(),
+            request.remote,
+            request.branch
+        ),
         RepoCommandKind::PushSetUpstream { remote, branch } => {
             let base = if output.stderr.contains("Everything up-to-date") {
                 "Everything up-to-date"
@@ -1368,14 +1505,23 @@ fn summarize_command(
         RepoCommandKind::Rebase { onto } => format!("Rebase onto {onto}: Completed"),
         RepoCommandKind::RebaseContinue => {
             let operation = sequencer_operation_label(output, None);
-            if sequencer_paused(output) {
+            if output.command == gitcomet_core::services::REVERT_SKIP_COMMAND {
+                "Revert: Skipped the revert the resolution left empty".to_string()
+            } else if sequencer_paused(output) {
                 format!("{operation}: Paused at the next conflict")
             } else {
                 format!("{operation}: Continued")
             }
         }
         RepoCommandKind::RebaseAbort => {
-            format!("{}: Aborted", sequencer_operation_label(output, None))
+            if output
+                .stdout
+                .contains(gitcomet_core::services::REVERT_ABORT_KEPT_HEAD_SENTINEL)
+            {
+                "Revert: Sequence cleared; HEAD was left where it is".to_string()
+            } else {
+                format!("{}: Aborted", sequencer_operation_label(output, None))
+            }
         }
         RepoCommandKind::InteractiveRebase { base, interactive } => {
             let state = if sequencer_paused(output) {
@@ -1417,6 +1563,35 @@ fn summarize_command(
                     format!("Cherry-picked {short}: {summary}")
                 } else {
                     format!("Cherry-picked {short} without committing: {summary}")
+                }
+            }
+        }
+        RepoCommandKind::Revert {
+            commit_id,
+            commit,
+            summary,
+            ..
+        } => {
+            let sha = commit_id.as_ref();
+            let short = sha.get(0..7).unwrap_or(sha);
+            if output
+                .stdout
+                .contains(gitcomet_core::services::REVERT_NOTHING_TO_REVERT_SENTINEL)
+            {
+                format!(
+                    "Nothing to revert: the current branch no longer has the changes from {short}."
+                )
+            } else {
+                let summary = summary.lines().next().unwrap_or("").trim();
+                let subject = if summary.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {summary}")
+                };
+                if *commit {
+                    format!("Reverted {short}{subject}")
+                } else {
+                    format!("Reverted {short} without committing{subject}")
                 }
             }
         }
@@ -1885,7 +2060,7 @@ mod tests {
         let mut primary = repo_state(1);
         primary.set_log_loading_more(true);
         let primary_effects = refresh_primary_effects(&mut primary);
-        assert_eq!(primary_effects.len(), 5);
+        assert_eq!(primary_effects.len(), 6);
         assert!(!primary.log_loading_more);
         assert!(matches!(primary_effects[0], Effect::LoadHeadBranch { .. }));
         assert!(
@@ -1893,8 +2068,15 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
         );
+        // Guards that the batch path still asks for counts.
+        assert!(
+            primary_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. })),
+            "the primary-refresh batch must request line stats too"
+        );
         assert!(matches!(
-            primary_effects[4],
+            primary_effects[5],
             Effect::LoadLog {
                 limit: DEFAULT_LOG_PAGE_SIZE,
                 ..
@@ -1918,12 +2100,17 @@ mod tests {
         let mut full = repo_state(2);
         full.set_log_loading_more(true);
         let full_effects = refresh_full_effects(&mut full, GitLogSettings::default());
-        assert_eq!(full_effects.len(), 8);
+        assert_eq!(full_effects.len(), 9);
         assert!(!full.log_loading_more);
         assert!(
             full_effects
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
+        );
+        assert!(
+            full_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. }))
         );
         assert!(
             !full_effects.iter().any(|effect| {
@@ -2511,6 +2698,43 @@ mod tests {
         );
         assert_eq!(cherry_pick_abort_summary, "Cherry-pick: Aborted");
 
+        for (command, kind, expected) in [
+            (
+                "git revert --continue",
+                RepoCommandKind::RebaseContinue,
+                "Revert: Continued",
+            ),
+            (
+                gitcomet_core::services::REVERT_SKIP_COMMAND,
+                RepoCommandKind::RebaseContinue,
+                "Revert: Skipped the revert the resolution left empty",
+            ),
+            (
+                "git revert --abort",
+                RepoCommandKind::RebaseAbort,
+                "Revert: Aborted",
+            ),
+        ] {
+            let (_, summary) =
+                summarize_command(&kind, &command_output(command, "", ""), true, None);
+            assert_eq!(summary, expected, "{command}");
+        }
+
+        let (_, kept_head) = summarize_command(
+            &RepoCommandKind::RebaseAbort,
+            &command_output(
+                "git revert --abort",
+                gitcomet_core::services::REVERT_ABORT_KEPT_HEAD_SENTINEL,
+                "",
+            ),
+            true,
+            None,
+        );
+        assert_eq!(
+            kept_head,
+            "Revert: Sequence cleared; HEAD was left where it is"
+        );
+
         let mut paused_cherry_pick = command_output("git cherry-pick --continue", "", "");
         paused_cherry_pick.exit_code = Some(1);
         let (_, cherry_pick_pause_summary) = summarize_command(
@@ -2599,6 +2823,39 @@ mod tests {
             cherry_pick_already_applied_summary,
             "Current branch already has all the changes from the cherry-picked commit."
         );
+
+        let revert = |commit: bool, summary: &str| RepoCommandKind::Revert {
+            commit_id: CommitId("abcdef1234567890".into()),
+            commit,
+            mainline: None,
+            summary: summary.into(),
+        };
+        for (kind, stdout, expected) in [
+            (
+                revert(true, "fix parser\n\nbody"),
+                "",
+                "Reverted abcdef1: fix parser",
+            ),
+            (
+                revert(false, "fix parser"),
+                "",
+                "Reverted abcdef1 without committing: fix parser",
+            ),
+            (revert(true, ""), "", "Reverted abcdef1"),
+            (
+                revert(true, "fix parser"),
+                gitcomet_core::services::REVERT_NOTHING_TO_REVERT_SENTINEL,
+                "Nothing to revert: the current branch no longer has the changes from abcdef1.",
+            ),
+        ] {
+            let (_, summary) = summarize_command(
+                &kind,
+                &command_output("git revert abcdef1", stdout, ""),
+                true,
+                None,
+            );
+            assert_eq!(summary, expected);
+        }
 
         let (_, merge_abort_summary) = summarize_command(
             &RepoCommandKind::MergeAbort,

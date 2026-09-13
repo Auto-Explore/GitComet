@@ -10,7 +10,7 @@ impl PopoverHost {
         let theme = self.theme;
         let ui_scale = popover_ui_scale(cx);
         let ui_scale_percent = ui_scale.percent();
-        let scaled_px = |value: f32| popover_scaled_px(value, ui_scale);
+        let scaled_px = crate::ui_scale::scaler(ui_scale);
         let anchor_source = self
             .popover_anchor
             .clone()
@@ -125,6 +125,10 @@ impl PopoverHost {
                         PopoverKind::remote(repo_id, RemotePopoverKind::Menu { name }),
                         cx,
                     ),
+                    RemotePopoverKind::OpenInBrowserMenu => self.context_menu_view(
+                        PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
+                        cx,
+                    ),
                 },
                 RepoPopoverKind::Worktree(worktree_kind) => match worktree_kind {
                     WorktreePopoverKind::SectionMenu => self.context_menu_view(
@@ -191,6 +195,9 @@ impl PopoverHost {
             }
             PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
                 cherry_pick_commit_confirm::panel(self, repo_id, commit_id, cx)
+            }
+            PopoverKind::RevertCommitConfirm { repo_id, commit_id } => {
+                revert_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
             PopoverKind::MergeCommitConfirm { repo_id, commit_id } => {
                 merge_commit_confirm::panel(self, repo_id, commit_id, cx)
@@ -268,8 +275,8 @@ impl PopoverHost {
             PopoverKind::DiffContentModeSettings => {
                 self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
             }
-            PopoverKind::CommitFileSortMenu => {
-                self.context_menu_view(PopoverKind::CommitFileSortMenu, cx)
+            PopoverKind::CommitFileSortMenu { list } => {
+                self.context_menu_view(PopoverKind::CommitFileSortMenu { list }, cx)
             }
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
@@ -304,18 +311,6 @@ impl PopoverHost {
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
             }
-            PopoverKind::TagRefMenu {
-                repo_id,
-                commit_id,
-                name,
-            } => self.context_menu_view(
-                PopoverKind::TagRefMenu {
-                    repo_id,
-                    commit_id,
-                    name,
-                },
-                cx,
-            ),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
                 self.context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
             }
@@ -420,18 +415,6 @@ impl PopoverHost {
             PopoverKind::BranchMenu { repo_id, target } => {
                 self.context_menu_view(PopoverKind::BranchMenu { repo_id, target }, cx)
             }
-            PopoverKind::BranchRefsMenu {
-                repo_id,
-                display_name,
-                targets,
-            } => self.context_menu_view(
-                PopoverKind::BranchRefsMenu {
-                    repo_id,
-                    display_name,
-                    targets,
-                },
-                cx,
-            ),
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 self.context_menu_view(PopoverKind::BranchSectionMenu { repo_id, section }, cx)
             }
@@ -580,11 +563,11 @@ impl PopoverHost {
                         div()
                             .px_2()
                             .py_1()
-                            .text_sm()
+                            .text_size(theme.ui_text(14.0))
                             .font_weight(FontWeight::BOLD)
                             .child("Reword commit message"),
                     )
-                    .child(div().border_t_1().border_color(theme.colors.stroke.default))
+                    .child(super::popover_rule(theme))
                     .child(
                         div()
                             .px_2()
@@ -595,7 +578,7 @@ impl PopoverHost {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child("Commit message"),
                             )
@@ -611,7 +594,7 @@ impl PopoverHost {
                             .gap_1()
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(theme.ui_text(12.0))
                                     .text_color(theme.colors.foreground.secondary)
                                     .child("Description"),
                             )
@@ -630,20 +613,15 @@ impl PopoverHost {
                         div()
                             .px_2()
                             .pb_1()
-                            .text_xs()
+                            .text_size(theme.ui_text(12.0))
                             .text_color(theme.colors.foreground.secondary)
                             .child(
                                 "Clear the message and save to keep the original commit message.",
                             ),
                     )
-                    .child(div().border_t_1().border_color(theme.colors.stroke.default))
+                    .child(super::popover_rule(theme))
                     .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
+                        super::prompt_footer_row()
                             .child(
                                 components::Button::new("reword_cancel", "Cancel")
                                     .separated_end_slot(hotkey_hint(
@@ -674,7 +652,7 @@ impl PopoverHost {
         let is_right = matches!(anchor_corner, Anchor::TopRight | Anchor::BottomRight);
         let popover_border_color = theme.colors.stroke.default;
         let gap_y = if is_app_menu {
-            crate::view::chrome::title_bar_height(ui_scale_percent)
+            crate::view::chrome::TITLE_BAR_HEIGHT
         } else if anchor_is_bounds {
             px(1.0)
         } else if is_right {
@@ -727,6 +705,7 @@ impl PopoverHost {
                     .id("context_menu_scroll")
                     .min_h(px(0.0))
                     .max_h(max_panel_h)
+                    .track_scroll(&self.context_menu_scroll)
                     .overflow_y_scroll(),
             )
             .child(panel)

@@ -289,15 +289,19 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     };
     let panel_width: f32 = panel.size.width.into();
     let panel_height: f32 = panel.size.height.into();
-    let expected_width = scaled(900.0).min((window_width - scaled(32.0)).max(0.0));
-    let expected_height = scaled(680.0).min((window_height - scaled(32.0)).max(0.0));
+    // The dialog opens at its floor and grows with the window, so pin the
+    // bounds it must stay inside rather than one fixed size.
+    let available_width = (window_width - scaled(32.0)).max(0.0);
+    let available_height = (window_height - scaled(32.0)).max(0.0);
     assert!(
-        (panel_width - expected_width).abs() < 1.0,
-        "expected the dialog width to be 900px or viewport-clamped (actual={panel_width}, expected={expected_width})"
+        panel_width <= available_width + 1.0
+            && panel_width >= scaled(900.0).min(available_width) - 1.0,
+        "expected the dialog width between its floor and the viewport          (actual={panel_width}, available={available_width})"
     );
     assert!(
-        (panel_height - expected_height).abs() < 1.0,
-        "expected the dialog height to be 680px or viewport-clamped (actual={panel_height}, expected={expected_height})"
+        panel_height <= available_height + 1.0
+            && panel_height >= scaled(680.0).min(available_height) - 1.0,
+        "expected the dialog height between its floor and the viewport          (actual={panel_height}, available={available_height})"
     );
     let panel_center = panel.center();
     let panel_center_x: f32 = panel_center.x.into();

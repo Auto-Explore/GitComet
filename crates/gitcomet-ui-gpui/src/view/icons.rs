@@ -11,7 +11,7 @@ pub(in crate::view) const GIT_STASH_NODE_ICON_PATH: &str = "icons/git_stash.svg"
 /// Node-only, hence the heavier stroke than the retained-mode icons.
 pub(in crate::view) const UNCOMMITTED_NODE_ICON_PATH: &str = "icons/code.svg";
 
-pub(super) fn svg_icon(path: &'static str, color: gpui::Rgba, size: Pixels) -> gpui::Svg {
+pub(crate) fn svg_icon(path: &'static str, color: gpui::Rgba, size: Pixels) -> gpui::Svg {
     gpui::svg()
         .path(path)
         .w(size)

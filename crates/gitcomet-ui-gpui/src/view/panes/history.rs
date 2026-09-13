@@ -13,6 +13,11 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 mod history_panel;
+mod indexed;
+pub(in crate::view) mod indexed_graph;
+mod loading;
+mod scroll;
+mod viewport;
 
 pub(in super::super) fn history_scrollbar_gutter() -> Pixels {
     crate::view::components::Scrollbar::gutter(crate::view::components::ScrollbarAxis::Vertical)
@@ -223,11 +228,17 @@ fn history_column_drag_next_width(
 
 fn history_reset_widths_for_available_width(
     available_width: Pixels,
+    branch_names: HistoryBranchNamesMode,
     show_graph: bool,
     preferred: (bool, bool, bool),
     ui_scale_percent: u32,
 ) -> HistoryColumnWidths {
     let mut widths = default_history_column_widths(ui_scale_percent);
+    // The hidden ref column must not constrain the graph's reset width.
+    let branch_width = widths.branch;
+    if branch_names == HistoryBranchNamesMode::Inline {
+        widths.branch = px(0.0);
+    }
     widths.graph = history_column_drag_next_width(
         HistoryColResizeHandle::Graph,
         widths.graph,
@@ -237,6 +248,10 @@ fn history_reset_widths_for_available_width(
         widths,
         ui_scale_percent,
     );
+    if branch_names == HistoryBranchNamesMode::Inline {
+        widths.branch = branch_width;
+        return widths;
+    }
     widths.branch = history_column_drag_next_width(
         HistoryColResizeHandle::Branch,
         widths.branch,
@@ -626,7 +641,7 @@ enum HistoryLaneAnchor {
     Worktree { head: CommitId, on_branch: bool },
 }
 
-/// Keyed on the base cache's whole request rather than its `log_fingerprint`:
+/// Keyed on the base cache's whole request rather than its `log_source`:
 /// the answer is read out of `graph_rows`, which is recomputed for every field
 /// of that request. Creating, deleting or checking out a branch changes which
 /// rows `force_branch_head_lane` fires on and so which colour index each lane
@@ -1042,6 +1057,7 @@ pub(in super::super) struct HistoryView {
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) ui_scale_percent: u32,
+    pub(in crate::view) appearance_metrics: crate::appearance::Appearance,
     pub(in super::super) date_time_format: DateTimeFormat,
     pub(in super::super) timezone: Timezone,
     pub(in super::super) show_timezone: bool,
@@ -1049,6 +1065,14 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_highlight_commit_chain: bool,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
+    tooltip_host: WeakEntity<TooltipHost>,
+    /// Which row sub-area the pointer is over, so the shared tooltip is only
+    /// rewritten when the hover actually moves rather than on every pixel.
+    row_hover: Option<(usize, HistoryRowHoverArea)>,
+    row_hover_scroll_position: f64,
+    /// Exactly what we last handed the shared host, so we only ever retract
+    /// our own tooltip and never one another surface has since set.
+    row_hover_tooltip: Option<SharedString>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     pub(in super::super) last_window_size: Size<Pixels>,
@@ -1066,15 +1090,16 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_col_author: Pixels,
     pub(in super::super) history_col_date: Pixels,
     pub(in super::super) history_col_sha: Pixels,
+    pub(in super::super) history_branch_names: HistoryBranchNamesMode,
     pub(in super::super) history_show_graph: bool,
     pub(in super::super) history_show_author: bool,
     pub(in super::super) history_show_date: bool,
     pub(in super::super) history_show_sha: bool,
     pub(in super::super) history_show_tags: bool,
     pub(in super::super) history_auto_fetch_tags_on_repo_activation: bool,
-    pub(in super::super) history_col_graph_auto: bool,
     pub(in super::super) history_col_resize: Option<HistoryColResizeState>,
     pub(in super::super) history_cache: Option<HistoryCache>,
+    pending_history_cache: Option<HistoryCache>,
     history_selected_list_index_cache: Option<HistorySelectedListIndexCache>,
     selected_branch: Option<SelectedBranch>,
     pending_history_reveal: Option<PendingHistoryReveal>,
@@ -1083,6 +1108,10 @@ pub(in super::super) struct HistoryView {
     last_browse_commit: Option<CommitId>,
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     history_list_plan_cache: Option<HistoryListPlanCache>,
+    presented_history: Option<viewport::PresentedHistory>,
+    scroll_interaction: scroll::SharedScrollInteraction,
+    pub(in crate::view) indexed: indexed::IndexedViewState,
+    pub(in crate::view) loading: loading::HistoryLoading,
     history_selected_lane_color_cache: Option<HistorySelectedLaneColorCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
@@ -1092,7 +1121,116 @@ pub(in super::super) struct HistoryView {
     relative_time_tick: Option<gpui::Task<()>>,
 }
 
+/// A hoverable sub-area of a history row. Both are painted on the canvas, so
+/// neither can use `.tooltip()`; they drive the shared [`TooltipHost`] by hand.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum HistoryRowHoverArea {
+    Signature,
+    Date,
+}
+
 impl HistoryView {
+    /// Point the shared tooltip host at the row sub-area now under the pointer.
+    ///
+    /// Deliberately does not `notify`: nothing in the row's paint depends on this
+    /// hover, so repainting every row on pointer movement would be pure waste.
+    pub(in crate::view) fn update_history_row_hover(
+        &mut self,
+        next: Option<(usize, HistoryRowHoverArea)>,
+        tooltip: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.row_hover == next && (next.is_none() || self.row_hover(cx) == next) {
+            return;
+        }
+        self.row_hover = next;
+        self.row_hover_scroll_position = self.history_scroll_position();
+        let Some(host) = self.tooltip_host.upgrade() else {
+            return;
+        };
+        let previous = self.row_hover_tooltip.take();
+        self.row_hover_tooltip = tooltip.clone();
+        host.update(cx, |host, cx| match tooltip {
+            Some(text) => {
+                host.set_tooltip_text_if_changed(Some(text), cx);
+            }
+            None => {
+                // Retract only our own text. A blanket `clear_tooltip` would
+                // also cancel a pending reveal another surface just armed.
+                if let Some(previous) = previous {
+                    host.clear_tooltip_if_matches(&previous, cx);
+                }
+            }
+        });
+    }
+
+    /// Forget the hover without touching the host.
+    ///
+    /// Any mouse-down clears the host from the window root, which would leave
+    /// this mirror claiming a tooltip that is no longer shown — and then the
+    /// equality gate would suppress re-showing it until the pointer left the
+    /// cell and came back.
+    pub(in crate::view) fn reset_history_row_hover(&mut self) {
+        self.row_hover = None;
+        self.row_hover_tooltip = None;
+    }
+
+    pub(in crate::view) fn row_hover(&self, cx: &App) -> Option<(usize, HistoryRowHoverArea)> {
+        let host = self.tooltip_host.upgrade()?;
+        let tooltip = self.row_hover_tooltip.as_ref()?;
+        host.read(cx)
+            .tooltip_text_matches(tooltip)
+            .then_some(self.row_hover)
+            .flatten()
+    }
+
+    /// Virtualization can remove the owning row and its mouse listener entirely.
+    /// Check the active viewport when the list lays out, including scrollbar
+    /// drags and programmatic reveals that do not send a wheel event.
+    pub(in crate::view) fn clear_history_row_hover_if_scrolled(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.row_hover.is_some()
+            && self.history_scroll_position() != self.row_hover_scroll_position
+        {
+            self.update_history_row_hover(None, None, cx);
+        }
+    }
+
+    fn history_scroll_position(&self) -> f64 {
+        self.scroll_interaction
+            .borrow()
+            .logical
+            .as_ref()
+            .map_or_else(
+                || {
+                    f64::from(f32::from(
+                        -self.history_scroll.0.borrow().base_handle.offset().y,
+                    ))
+                },
+                |logical| logical.position(),
+            )
+    }
+
+    /// The absolute, timezone-qualified rendering of a commit time, for the date
+    /// column's tooltip. Built on demand from the pointer handler so a relative
+    /// label like "4 days ago" costs nothing until someone actually hovers it.
+    pub(in crate::view) fn full_commit_time_text(
+        &self,
+        time: std::time::SystemTime,
+    ) -> SharedString {
+        let mut text = String::with_capacity(32);
+        crate::view::date_time::format_datetime_into(
+            &mut text,
+            time,
+            self.date_time_format,
+            self.timezone,
+            true,
+        );
+        text.into()
+    }
+
     fn notify_fingerprint_for(state: &AppState, show_history_tags: bool) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
@@ -1103,9 +1241,6 @@ impl HistoryView {
             repo.log_rev.hash(&mut hasher);
             repo.history_state.log_rev.hash(&mut hasher);
             repo.history_state.history_scope.hash(&mut hasher);
-            // A running walk reports progress without changing the log, and the
-            // header prints that count — so it has to repaint on its own.
-            repo.history_state.log_scan_progress.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.detached_head_commit.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
@@ -1115,6 +1250,7 @@ impl HistoryView {
             }
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
+            repo.history_state.indexed.rev.hash(&mut hasher);
             repo.file_browser.file_browser_rev.hash(&mut hasher);
             // The linked-worktree rows live in this table: their badge counts come
             // from the dirty scan and the selected row from the worktree selection,
@@ -1146,17 +1282,31 @@ impl HistoryView {
         history_show_tags: bool,
         history_auto_fetch_tags_on_repo_activation: bool,
         root_view: WeakEntity<GitCometView>,
+        tooltip_host: WeakEntity<TooltipHost>,
         last_window_size: Size<Pixels>,
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
+        let history_branch_names = ui_model.read(cx).preferences.history.branch_names;
         let initial_fingerprint = Self::notify_fingerprint_for(&state, history_show_tags);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
             let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
             let changed = next_fingerprint != this.notify_fingerprint;
             let switched_repo = this.state.active_repo != next.active_repo;
+            // Badges repaint the rows without invalidating open refs menus.
+            let signatures_changed = this
+                .state
+                .repos
+                .iter()
+                .find(|repo| Some(repo.id) == this.state.active_repo)
+                .map(|repo| repo.history_state.commit_signatures_rev)
+                != next
+                    .repos
+                    .iter()
+                    .find(|repo| Some(repo.id) == next.active_repo)
+                    .map(|repo| repo.history_state.commit_signatures_rev);
             this.state = next;
             if selected_remote_branch_is_missing(&this.state, this.selected_branch.as_ref()) {
                 this.selected_branch = None;
@@ -1178,14 +1328,31 @@ impl HistoryView {
                 .and_then(|repo| repo.browsing_commit().cloned());
             if browse_commit != this.last_browse_commit {
                 this.last_browse_commit = browse_commit.clone();
-                if let (Some(repo_id), Some(commit_id)) = (this.active_repo_id(), browse_commit) {
+                // A browse point that follows the selection is already the
+                // visible row; revealing it would only scroll, page, or widen
+                // the scope on every arrow key.
+                let is_selected_row = this
+                    .active_repo()
+                    .is_some_and(|repo| repo.history_state.selected_commit == browse_commit);
+                if !is_selected_row
+                    && let (Some(repo_id), Some(commit_id)) = (this.active_repo_id(), browse_commit)
+                {
                     this.request_reveal_commit(repo_id, commit_id, Some(LogScope::AllBranches), cx);
                 }
             }
 
+            if signatures_changed
+                && matches!(this.row_hover, Some((_, HistoryRowHoverArea::Signature)))
+            {
+                // Verification can remove or replace a badge under a resting
+                // pointer. Its old verdict must not survive in the tooltip.
+                this.update_history_row_hover(None, None, cx);
+            }
             if changed {
                 this.notify_fingerprint = next_fingerprint;
                 this.dismiss_history_refs_hover(cx);
+                cx.notify();
+            } else if signatures_changed {
                 cx.notify();
             }
         });
@@ -1200,6 +1367,7 @@ impl HistoryView {
             state,
             theme,
             ui_scale_percent,
+            appearance_metrics: crate::appearance::current(cx),
             date_time_format,
             timezone,
             show_timezone,
@@ -1207,6 +1375,10 @@ impl HistoryView {
             history_highlight_commit_chain,
             _ui_model_subscription: subscription,
             root_view,
+            tooltip_host,
+            row_hover: None,
+            row_hover_scroll_position: 0.0,
+            row_hover_tooltip: None,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             last_window_size,
@@ -1223,21 +1395,26 @@ impl HistoryView {
             history_col_author: default_widths.author,
             history_col_date: default_widths.date,
             history_col_sha: default_widths.sha,
+            history_branch_names,
             history_show_graph,
             history_show_author,
             history_show_date,
             history_show_sha,
             history_show_tags,
             history_auto_fetch_tags_on_repo_activation,
-            history_col_graph_auto: true,
             history_col_resize: None,
             history_cache: None,
+            pending_history_cache: None,
             history_selected_list_index_cache: None,
             selected_branch: None,
             pending_history_reveal: None,
             last_browse_commit: None,
             history_worktree_summary_cache: None,
             history_list_plan_cache: None,
+            presented_history: None,
+            scroll_interaction: Default::default(),
+            indexed: Default::default(),
+            loading: Default::default(),
             history_selected_lane_color_cache: None,
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
@@ -1288,8 +1465,7 @@ impl HistoryView {
         &self,
         repo_id: RepoId,
     ) -> Option<Vec<CommitId>> {
-        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
-        let page = Self::display_log_page_for_repo(repo)?;
+        self.state.repos.iter().find(|r| r.id == repo_id)?;
         let cache = self
             .history_cache
             .as_ref()
@@ -1299,7 +1475,7 @@ impl HistoryView {
                 .base
                 .visible_indices
                 .iter()
-                .filter_map(|ix| page.commits.get(ix).map(|c| c.id.clone()))
+                .filter_map(|ix| cache.page.commits.get(ix).map(|c| c.id.clone()))
                 .collect(),
         )
     }
@@ -1381,7 +1557,10 @@ impl HistoryView {
         HistoryBaseCacheRequest {
             repo_id: repo.id,
             history_scope: repo.history_state.history_scope,
-            log_fingerprint: Self::log_fingerprint(&page.commits),
+            // The cache owns the Arc, so the source's address cannot be reused
+            // while this key is live. A mutation must copy a shared page first.
+            log_source: std::ptr::from_ref(page) as usize,
+            history_author_filter: repo.history_state.history_author_filter.clone(),
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
             head_branch_target: Self::attached_head_target_for_repo(repo),
@@ -1400,7 +1579,7 @@ impl HistoryView {
     }
 
     pub(in crate::view) fn ui_scale(&self) -> ui_scale::UiScale {
-        history_scale(self.ui_scale_percent)
+        history_scale(self.ui_scale_percent).with_appearance(self.appearance_metrics)
     }
 
     fn sync_history_column_widths_from_design(&mut self) {
@@ -1497,10 +1676,21 @@ impl HistoryView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.store.dispatch(Msg::ClearCommitSelection { repo_id });
-        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+        let keep_file_view = self.state.file_browser_settings.follow_selected_commit
+            && self.state.sidebar_mode == gitcomet_state::model::SidebarMode::Files
+            && self
+                .active_repo()
+                .is_some_and(|repo| repo.file_browser.active && repo.diff_state.content_preview);
+        if !keep_file_view {
+            self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+        }
         self.dismiss_history_refs_hover(cx);
-        self.history_scroll
-            .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
+        if let Some(logical) = &mut self.scroll_interaction.borrow_mut().logical {
+            logical.set_position(0.0);
+        } else {
+            self.history_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
+        }
         cx.notify();
     }
 
@@ -1586,7 +1776,7 @@ impl HistoryView {
             show_author: self.history_show_author,
             show_date: self.history_show_date,
             show_sha: self.history_show_sha,
-            branch_w: self.history_col_branch,
+            branch_w: self.history_ref_column_width(),
             graph_w: self.history_col_graph,
             author_w: self.history_col_author,
             date_w: self.history_col_date,
@@ -1605,6 +1795,7 @@ impl HistoryView {
     pub(in super::super) fn reset_history_column_widths(&mut self) {
         let widths = history_reset_widths_for_available_width(
             self.history_content_width,
+            self.history_branch_names,
             self.history_show_graph,
             (
                 self.history_show_author,
@@ -1619,7 +1810,6 @@ impl HistoryView {
         self.history_col_date = widths.date;
         self.history_col_sha = widths.sha;
         self.sync_history_column_design_widths_from_pixels();
-        self.history_col_graph_auto = true;
         self.history_col_resize = None;
     }
 
@@ -1735,6 +1925,27 @@ impl HistoryView {
         )
     }
 
+    pub(in super::super) fn history_ref_column_width(&self) -> Pixels {
+        match self.history_branch_names {
+            HistoryBranchNamesMode::SeparateColumn => self.history_col_branch,
+            HistoryBranchNamesMode::Inline => px(0.0),
+        }
+    }
+
+    pub(in super::super) fn set_history_branch_names(
+        &mut self,
+        next: HistoryBranchNamesMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_branch_names == next {
+            return;
+        }
+        self.history_branch_names = next;
+        self.history_col_resize = None;
+        self.update_history_row_hover(None, None, cx);
+        cx.notify();
+    }
+
     pub(in super::super) fn set_history_column_preferences(
         &mut self,
         show_graph: bool,
@@ -1836,6 +2047,9 @@ impl HistoryView {
     }
 
     pub(in crate::view) fn drive_pending_history_reveal(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.reveal_indexed(cx) {
+            return;
+        }
         let Some(pending) = self.pending_history_reveal.clone() else {
             return;
         };
@@ -1996,7 +2210,11 @@ impl HistoryView {
             self.dismiss_history_refs_hover(cx);
             self.history_scroll
                 .scroll_to_item_strict(list_ix, gpui::ScrollStrategy::Center);
-        } else if decision.load_more {
+        } else if decision.load_more
+            && self.active_repo().is_none_or(|repo| {
+                !repo.history_state.indexed.loading && repo.history_state.indexed.index.is_none()
+            })
+        {
             self.store.dispatch(Msg::LoadMoreHistory {
                 repo_id: pending.repo_id,
             });
@@ -2039,6 +2257,13 @@ impl HistoryView {
         if !self.history_highlight_commit_chain {
             return None;
         }
+        if self.indexed.presentation.is_some() {
+            return self
+                .indexed
+                .window
+                .as_ref()
+                .and_then(|window| window.selected_lane);
+        }
 
         let (repo_id, anchor) = {
             let repo = self.active_repo()?;
@@ -2069,10 +2294,12 @@ impl HistoryView {
             (repo.id, anchor)
         };
 
-        let cache = self
-            .history_cache
-            .as_ref()
-            .filter(|cache| cache.base.request.repo_id == repo_id)?;
+        let cache = if self.indexed.presentation.is_some() {
+            self.indexed.window.as_ref().map(|window| &window.cache)
+        } else {
+            self.history_cache.as_ref()
+        }
+        .filter(|cache| cache.base.request.repo_id == repo_id)?;
         let base_request = &cache.base.request;
 
         if let Some(memo) = &self.history_selected_lane_color_cache
@@ -2127,6 +2354,9 @@ impl HistoryView {
     /// of the loaded page, or that are on a branch outside the current scope,
     /// simply do not appear.
     pub(in super::super) fn ensure_history_list_plan(&mut self) -> HistoryListPlan {
+        if self.indexed.presentation.is_some() {
+            return self.indexed.plan.clone();
+        }
         let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
 
         let Some(repo) = self.active_repo() else {
@@ -2367,6 +2597,11 @@ impl HistoryView {
             decoration_request: decoration_request.clone(),
         };
 
+        if self.pending_history_cache.as_ref().is_some_and(|cache| {
+            cache.base.request == base_request && cache.decorations.request == decoration_request
+        }) {
+            return;
+        }
         let cache_ok = self.history_cache.as_ref().is_some_and(|cache| {
             cache.base.request == base_request && cache.decorations.request == decoration_request
         });
@@ -2442,7 +2677,11 @@ impl HistoryView {
                         tags.as_ref(),
                     );
 
-                    HistoryCache { base, decorations }
+                    HistoryCache {
+                        page,
+                        base,
+                        decorations,
+                    }
                 };
 
                 let rebuild: HistoryCache =
@@ -2463,43 +2702,26 @@ impl HistoryView {
                         return;
                     }
 
-                    if this.history_col_graph_auto && this.history_col_resize.is_none() {
-                        let required = history_scaled_px(
-                            HISTORY_GRAPH_MARGIN_X_PX * 2.0
-                                + HISTORY_GRAPH_COL_GAP_PX * (rebuild.base.max_lanes as f32),
-                            this.ui_scale_percent,
-                        );
-                        if this.history_show_graph {
-                            this.history_col_graph = history_column_drag_next_width(
-                                HistoryColResizeHandle::Graph,
-                                required.min(history_scaled_px(
-                                    HISTORY_COL_GRAPH_MAX_PX,
-                                    this.ui_scale_percent,
-                                )),
-                                this.history_content_width,
-                                this.history_show_graph,
-                                (
-                                    this.history_show_author,
-                                    this.history_show_date,
-                                    this.history_show_sha,
-                                ),
-                                HistoryColumnWidths {
-                                    branch: this.history_col_branch,
-                                    graph: this.history_col_graph,
-                                    author: this.history_col_author,
-                                    date: this.history_col_date,
-                                    sha: this.history_col_sha,
-                                },
-                                this.ui_scale_percent,
-                            );
-                            this.history_col_graph_design = this
-                                .ui_scale()
-                                .design_units_from_pixels(this.history_col_graph);
-                        }
+                    let current_matches = this
+                        .active_repo()
+                        .and_then(|repo| {
+                            let page = Self::display_log_page_for_repo(repo)?;
+                            Some(
+                                this.history_base_cache_request_for_repo(repo, &page)
+                                    == request_for_update.base_request
+                                    && this.history_decoration_cache_request_for_repo(repo, &page)
+                                        == request_for_update.decoration_request,
+                            )
+                        })
+                        .unwrap_or(false);
+                    if !current_matches {
+                        this.history_cache_inflight = None;
+                        cx.notify();
+                        return;
                     }
 
                     this.history_cache_inflight = None;
-                    this.history_cache = Some(rebuild);
+                    this.replace_history_cache(rebuild);
                     cx.notify();
                 });
             },
@@ -2507,16 +2729,33 @@ impl HistoryView {
         .detach();
     }
 
-    fn log_fingerprint(commits: &[Commit]) -> u64 {
-        let mut hasher = FxHasher::default();
-        commits.len().hash(&mut hasher);
-        for id in commits.iter().take(3).map(|c| c.id.as_ref()) {
-            id.hash(&mut hasher);
+    fn replace_history_cache(&mut self, rebuild: HistoryCache) {
+        // Keep input handlers on the source that was actually displayed until
+        // render can install the page, its row plan, and its viewport together.
+        self.pending_history_cache = Some(rebuild);
+    }
+
+    fn apply_pending_history_cache(&mut self) {
+        if self.scroll_interaction.borrow().dragging {
+            return;
         }
-        for id in commits.iter().rev().take(3).map(|c| c.id.as_ref()) {
-            id.hash(&mut hasher);
+        let Some(rebuild) = self.pending_history_cache.take() else {
+            return;
+        };
+        let current_matches = self
+            .active_repo()
+            .and_then(|repo| {
+                let page = Self::display_log_page_for_repo(repo)?;
+                Some(
+                    self.history_base_cache_request_for_repo(repo, &page) == rebuild.base.request
+                        && self.history_decoration_cache_request_for_repo(repo, &page)
+                            == rebuild.decorations.request,
+                )
+            })
+            .unwrap_or(false);
+        if current_matches {
+            self.history_cache = Some(rebuild);
         }
-        hasher.finish()
     }
 }
 
@@ -2597,12 +2836,6 @@ fn build_history_base_cache(
         history_graph::compute_graph_refs(&visible_commit_refs, theme, branch_heads, head_target)
             .into()
     };
-    let max_lanes = graph_rows
-        .iter()
-        .map(|row| row.lanes_now.len().max(row.lanes_next.len()))
-        .max()
-        .unwrap_or(1);
-
     let has_stash_tips = !stash_tips.is_empty();
     let mut author_cache: FxHashMap<&str, HistoryTextVm> =
         FxHashMap::with_capacity_and_hasher(64, Default::default());
@@ -2681,7 +2914,6 @@ fn build_history_base_cache(
         visible_indices,
         visible_ix_by_commit: Arc::new(visible_ix_by_commit),
         graph_rows,
-        max_lanes,
         row_vms,
     }
 }

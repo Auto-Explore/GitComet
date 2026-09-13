@@ -52,6 +52,15 @@ impl MainPaneView {
         );
         let state = Arc::clone(&ui_model.read(cx).state);
         let initial_fingerprint = Self::notify_fingerprint_for(&state);
+        let text_selection_owner_subscription =
+            crate::text_selection_owner::observe(cx, |this, cx| {
+                // Guarded on a real span: a collapsed anchor left by a plain
+                // click is not a highlight and costs nothing to keep.
+                if this.diff_text_selection_owner.is_stale(cx) && this.diff_text_has_selection() {
+                    this.clear_diff_text_selection_span();
+                    cx.notify();
+                }
+            });
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
             let next_fingerprint = Self::notify_fingerprint_for(&next);
@@ -66,7 +75,7 @@ impl MainPaneView {
         });
 
         let diff_raw_input = cx.new(|cx| {
-            components::TextInput::new(
+            let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     multiline: true,
                     read_only: true,
@@ -74,7 +83,9 @@ impl MainPaneView {
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_editor_font(cx);
+            input
         });
         let submodule_hash_inputs = (0..4)
             .map(|_| {
@@ -112,6 +123,7 @@ impl MainPaneView {
                 )),
                 cx,
             );
+            input.set_editor_font(cx);
             input
         });
 
@@ -197,6 +209,7 @@ impl MainPaneView {
                 )),
                 cx,
             );
+            input.set_editor_font(cx);
             input
         });
         let file_editor_subscription = cx.observe(&file_editor_input, |this, _input, cx| {
@@ -279,6 +292,7 @@ impl MainPaneView {
                 history_show_tags,
                 history_auto_fetch_tags_on_repo_activation,
                 root_view.clone(),
+                tooltip_host.clone(),
                 last_window_size,
                 window,
                 cx,
@@ -294,6 +308,7 @@ impl MainPaneView {
             theme,
             date_time_format,
             _ui_model_subscription: subscription,
+            _text_selection_owner_subscription: text_selection_owner_subscription,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
@@ -353,6 +368,7 @@ impl MainPaneView {
             diff_autoscroll_pending: false,
             diff_raw_input,
             submodule_hash_inputs,
+            submodule_summary_cache: None,
             diff_visible_indices: Vec::new(),
             diff_visible_inline_map: None,
             diff_wrap_visible_rows: Vec::new(),
@@ -384,7 +400,9 @@ impl MainPaneView {
             diff_text_query_cache_generation: 0,
             diff_selection_anchor: None,
             diff_selection_range: None,
+            diff_focused_change_block: None,
             diff_text_selecting: false,
+            diff_text_selection_owner: Default::default(),
             diff_text_anchor: None,
             diff_text_head: None,
             diff_text_autoscroll_seq: 0,
@@ -426,6 +444,8 @@ impl MainPaneView {
             file_diff_old_line_starts: Arc::default(),
             file_diff_pair_syntax_text: FxHashMap::default(),
             file_diff_click_syntax_inflight: FxHashMap::default(),
+            #[cfg(test)]
+            eager_source_backed_syntax_prepare: true,
             #[cfg(test)]
             file_diff_click_syntax_after_prepare_hook: None,
             #[cfg(test)]
@@ -540,14 +560,9 @@ impl MainPaneView {
             file_editor_provider_theme_epoch: 1,
             file_editor_scroll,
             file_editor_gutter_scroll: UniformListScrollHandle::new(),
-            file_editor_gutter_row_height: ui_scale::design_px_from_percent(
-                RESOLVED_OUTPUT_ROW_HEIGHT_PX,
-                ui_scale::current(cx).percent,
-            ),
-            conflict_resolved_gutter_row_height: ui_scale::design_px_from_percent(
-                RESOLVED_OUTPUT_ROW_HEIGHT_PX,
-                ui_scale::current(cx).percent,
-            ),
+            file_editor_gutter_row_height: theme.editor_row_height(ui_scale::current(cx).percent),
+            conflict_resolved_gutter_row_height: theme
+                .editor_row_height(ui_scale::current(cx).percent),
             file_editor_blame: None,
             file_editor_blame_width: px(0.0),
             file_editor_wrap_row_starts: Vec::new(),

@@ -21,8 +21,8 @@ use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind,
 use gitcomet_state::model::{
     AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptOperation,
     BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind,
-    GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable, RemoteSettings, RepoId,
-    RepoState, SubmoduleTrustPromptOperation,
+    FileBrowserSettings, GitHookOperation, GitHookOperationStatus, GitHookRunStatus, Loadable,
+    RemoteSettings, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{BranchExistsChoice, Msg, StoreEvent};
 use gitcomet_state::session;
@@ -55,6 +55,8 @@ const REPO_ACTIVATION_THROTTLE: Duration = Duration::from_secs(5);
 /// generous enough for a loaded system, short enough that a genuine alt-tab
 /// right after a drag is not mistaken for the grab.
 const WINDOW_GRAB_DEACTIVATE_GRACE: Duration = Duration::from_millis(1_500);
+/// Window activation re-probes gpg and ssh-keygen at most this often.
+const SIGNING_TOOLS_REPROBE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Upper bound on how long a drag may hold the grab before the re-activation is
 /// no longer treated as its echo. Only a safety valve: arming already requires a
@@ -88,9 +90,24 @@ actions!(
         TerminalSelectAll,
         ToggleCommandPalette,
         CommandPaletteDismiss,
+        ToggleRevealCommit,
         LocateFileInExplorer,
+        OpenRemoteInBrowser,
     ]
 );
+
+/// Chords owned by a focused status section, including empty sections.
+pub(crate) fn is_status_section_shortcut(keystroke: &gpui::Keystroke) -> bool {
+    let mods = keystroke.modifiers;
+    if mods.alt || mods.shift || mods.function {
+        return false;
+    }
+    if mods.control || mods.platform {
+        matches!(keystroke.key.as_str(), "a" | "s" | "u")
+    } else {
+        keystroke.key == "space"
+    }
+}
 
 pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
     let key = keystroke.key.as_str();
@@ -155,17 +172,18 @@ fn repo_activation_msg(
 mod app_model;
 mod branch_sidebar;
 mod caches;
-mod chrome;
+pub(crate) mod chrome;
 pub(crate) mod clone_progress;
 mod color;
 mod command_palette;
 mod commit_message_hover;
 mod commit_message_text;
+mod commit_signature;
 pub(crate) mod components;
 mod conflict_markers;
 pub(crate) mod conflict_resolver;
 mod date_time;
-mod diff_navigation;
+pub(crate) mod diff_navigation;
 mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
@@ -195,6 +213,7 @@ mod preference_sync;
 mod preferences;
 mod reflog_panel;
 mod repo_open;
+mod reveal_commit;
 pub(crate) mod rows;
 mod settings_window;
 pub(crate) mod shortcut_labels;
@@ -232,7 +251,7 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
-use preferences::{RemoteMarkdownImagePolicy, UiPreferences};
+use preferences::{HistoryBranchNamesMode, RemoteMarkdownImagePolicy, UiPreferences};
 pub(in crate::view) use terminal_preferences::{
     ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
     TerminalPreferences, parse_terminal_args_multiline, resolve_embedded_shell_program,
@@ -279,13 +298,14 @@ use panes::{
 };
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
-use tooltip::GitCometTooltipExt;
+pub(crate) use tooltip::GitCometTooltipExt;
 use tooltip_host::TooltipHost;
 
 #[cfg(test)]
 pub(crate) use chrome::window_frame;
-use color::with_alpha;
-use icons::{svg_icon, svg_spinner};
+use color::{composite_over, with_alpha};
+pub(crate) use icons::svg_icon;
+use icons::svg_spinner;
 
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;
 const HISTORY_COL_GRAPH_PX: f32 = 80.0;
@@ -297,7 +317,9 @@ const HISTORY_COL_HANDLE_PX: f32 = 8.0;
 
 const HISTORY_COL_BRANCH_MIN_PX: f32 = 60.0;
 const HISTORY_COL_BRANCH_MAX_PX: f32 = 320.0;
-const HISTORY_COL_GRAPH_MIN_PX: f32 = 44.0;
+/// One lane: the graph's left and right insets around column 0; every other lane
+/// pins onto it.
+const HISTORY_COL_GRAPH_MIN_PX: f32 = HISTORY_GRAPH_MARGIN_X_PX + HISTORY_GRAPH_MARGIN_RIGHT_PX;
 const HISTORY_COL_AUTHOR_MIN_PX: f32 = 80.0;
 const HISTORY_COL_AUTHOR_MAX_PX: f32 = 260.0;
 const HISTORY_COL_DATE_MIN_PX: f32 = 110.0;
@@ -309,7 +331,12 @@ const ERROR_BANNER_OVERFLOW_HINT_MIN_LINES: usize = 8;
 const ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS: usize = 240;
 
 const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
-const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
+/// Inset from the graph cell's left edge to column 0: 10px for a lane plus 2px
+/// padding.
+const HISTORY_GRAPH_MARGIN_X_PX: f32 = 12.0;
+/// Inset from the graph cell's right edge to the right-most lane, wider than the
+/// left one so a 16px node keeps 8px clear of the message border.
+const HISTORY_GRAPH_MARGIN_RIGHT_PX: f32 = 16.0;
 /// Corner radius where a graph line turns between columns. Against a 16px column
 /// pitch and a 14px half-row this leaves roughly a 10px straight horizontal run
 /// per column crossed and 8px of straight vertical below the corner, so the turn
@@ -330,11 +357,9 @@ const HISTORY_BRANCH_BADGE_MIN_W_PX: f32 = 34.0;
 /// Alpha of the hover branch badge. Faint by design -- it is an on-demand hint
 /// in a column that otherwise holds solid ref chips, and must not read as one.
 const HISTORY_BRANCH_BADGE_ALPHA: f32 = 0.70;
-/// Width of the lane-coloured border down the left edge of the message cell.
+/// Width of the lane-coloured border down the left edge of the message cell. It
+/// spans the full row height with square ends.
 const HISTORY_MESSAGE_BORDER_W_PX: f32 = 3.0;
-/// Vertical inset of that border, so consecutive rows read as separate borders
-/// rather than as one continuous stripe down the list.
-const HISTORY_MESSAGE_BORDER_INSET_Y_PX: f32 = 3.0;
 /// Gap between that border and the message text.
 const HISTORY_MESSAGE_BORDER_GAP_PX: f32 = 6.0;
 

@@ -1,6 +1,22 @@
-# Vendored from the `tree-sitter-c-sharp 0.23.5` crates.io release
-# (https://github.com/tree-sitter/tree-sitter-c-sharp, MIT -- see LICENSE), to
-# regenerate `src/parser.c` with a larger small-state threshold.
+# Vendored from https://github.com/tree-sitter/tree-sitter-c-sharp at 9150f7d
+# (MIT -- see LICENSE), to regenerate `src/parser.c` with a larger small-state
+# threshold.
+#
+# Past 0.23.5 for f1c7c1e, where `(x) && y` parsed as a cast of `&y` rather than
+# a logical AND -- no ERROR, just the wrong tree -- and for C# 14 (f2dea45):
+# extension blocks, `a?.b = c`, `operator +=`, `(ref x) =>` lambdas, partial
+# constructors and events. `"extension"` is captured in
+# queries/csharp_highlights.scm, which only compiles against this grammar.
+#
+# **Generated with tree-sitter-cli 0.26.5, not 0.26.13 like the rest of
+# vendor/.** 0.26.13 builds a *different* automaton for this grammar -- 8500
+# states where upstream ships 8495 -- and the parser vendored here before this
+# update had that drift: it turned `case string when IsOid(x):` into two ERROR
+# nodes, which upstream's own parser.c parses cleanly. 0.26.5 is what upstream's
+# package.json pins (`^0.26.5`), and it reproduces their `parser.c` byte for
+# byte, so the retune below is once again representation-only. Check
+# STATE_COUNT 8495 / SYMBOL_COUNT 542 after any regeneration; `grammar.json` and
+# `node-types.json` are byte-identical to upstream's.
 #
 # `tree-sitter generate` decides per parse state whether to emit a dense row in
 # `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in

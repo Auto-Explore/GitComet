@@ -1,8 +1,13 @@
 use super::*;
+use crate::appearance::{Appearance, FontRole, UiDensity};
 use crate::ui_scale;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
     GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
+};
+use gitcomet_core::signing_tools::{
+    DEFAULT_GPG_PROGRAM, DEFAULT_SSH_KEYGEN_PROGRAM, SigningTool, SigningToolAvailability,
+    SigningToolsState, detect_signing_tools,
 };
 use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
 use gitcomet_state::session::ExternalCodeEditorSetting;
@@ -22,11 +27,13 @@ const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
 const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
 const SETTINGS_WINDOW_TITLE: &str = "Settings: GitComet";
-const SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
+
 const MIN_GIT_MAJOR: u32 = 2;
 const MIN_GIT_MINOR: u32 = 50;
 const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
 const THEMES_GUIDE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/docs/themes.md";
+const SIGNATURE_GUIDE_URL: &str =
+    "https://github.com/Auto-Explore/GitComet/blob/main/docs/commit-signatures.md";
 const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
 const LICENSE_NAME: &str = "AGPL-3.0";
 
@@ -113,6 +120,19 @@ const CHANGE_TRACKING_OPTIONS: &[(&str, ChangeTrackingView, &str)] = &[
         "settings_window_change_tracking_split_untracked",
         ChangeTrackingView::SplitUntracked,
         "Show an Untracked block above Unstaged",
+    ),
+];
+
+const FILE_LIST_LAYOUT_OPTIONS: &[(&str, FileListLayout, &str)] = &[
+    (
+        "settings_window_file_list_layout_flat",
+        FileListLayout::Flat,
+        "Show every changed file as a full path",
+    ),
+    (
+        "settings_window_file_list_layout_tree",
+        FileListLayout::Tree,
+        "Group changed files under their folders",
     ),
 ];
 
@@ -265,11 +285,13 @@ enum SettingsSection {
     TerminalExternal,
     TerminalActionBar,
     ChangeTracking,
+    FileListLayout,
     DiffContentMode,
     Diff,
     DiffViewMode,
     GitLogDefaultMode,
     GitLogColumns,
+    GitLogBranchNames,
     GitLogTagFetch,
     AllowedRemoteProtocols,
     RemoteMarkdownImages,
@@ -290,10 +312,12 @@ impl SettingsSection {
             | Self::Timezone => SettingsCategory::General,
             Self::TerminalExternal | Self::TerminalActionBar => SettingsCategory::Terminal,
             Self::ChangeTracking => SettingsCategory::ChangeTracking,
+            Self::FileListLayout => SettingsCategory::ChangeTracking,
             Self::DiffContentMode | Self::Diff | Self::DiffViewMode => SettingsCategory::Diff,
-            Self::GitLogDefaultMode | Self::GitLogColumns | Self::GitLogTagFetch => {
-                SettingsCategory::GitLog
-            }
+            Self::GitLogDefaultMode
+            | Self::GitLogColumns
+            | Self::GitLogBranchNames
+            | Self::GitLogTagFetch => SettingsCategory::GitLog,
             Self::AllowedRemoteProtocols | Self::RemoteMarkdownImages => {
                 SettingsCategory::SecurityPrivacy
             }
@@ -346,7 +370,7 @@ impl SettingsCategory {
             Self::GitLog => "Git log",
             Self::Remotes => "Remotes",
             Self::Tags => "Tags",
-            Self::GitExecutable => "Git executable",
+            Self::GitExecutable => "Executables",
             Self::Environment => "Environment",
             Self::Links => "Links",
         }
@@ -392,7 +416,8 @@ impl SettingsCategory {
         match self {
             Self::General => {
                 "general theme date format ui scale ui font editor font ligatures \
-                 external code editor date timezone appearance"
+                 external code editor date timezone appearance density compact comfortable spacious \
+                 font size markdown preview"
             }
             Self::SecurityPrivacy => {
                 "security privacy allowed remote protocols https http ssh git file ftp ftps \
@@ -410,11 +435,15 @@ impl SettingsCategory {
             }
             Self::GitLog => {
                 "git log default history mode history columns relative dates show tags graph \
-                 author sha"
+                 author sha files tab follows selected commit browse repository file browsing start exit \
+                 verify commit signatures verification signing key trust"
             }
             Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
             Self::Tags => "tags automatically fetch tags",
-            Self::GitExecutable => "git executable custom path system path version",
+            Self::GitExecutable => {
+                "executables git executable custom path system path version gpg gnupg \
+                 openpgp x.509 ssh-keygen openssh commit signature verification verified trust key guide"
+            }
             Self::Environment => "environment build operating system app version",
             Self::Links => {
                 "links theme guide github license open source licenses professional edition \
@@ -475,6 +504,9 @@ pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
     ui_scale_percent: u32,
+    appearance_metrics: Appearance,
+    font_size_inputs: [Entity<components::TextInput>; 3],
+    _font_size_subscriptions: Vec<gpui::Subscription>,
     ui_font_family: String,
     editor_font_family: String,
     use_font_ligatures: bool,
@@ -490,6 +522,7 @@ pub(crate) struct SettingsWindowView {
     date_format_scroll: UniformListScrollHandle,
     timezone_scroll: UniformListScrollHandle,
     change_tracking_scroll: UniformListScrollHandle,
+    file_list_layout_scroll: UniformListScrollHandle,
     diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
     diff_view_mode_scroll: UniformListScrollHandle,
@@ -499,6 +532,7 @@ pub(crate) struct SettingsWindowView {
     timezone: Timezone,
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
+    file_list_layout: FileListLayout,
     terminal_preferences: TerminalPreferences,
     terminal_external_program_input: Entity<components::TextInput>,
     terminal_external_args_input: Entity<components::TextInput>,
@@ -514,13 +548,16 @@ pub(crate) struct SettingsWindowView {
     remote_markdown_image_policy: RemoteMarkdownImagePolicy,
     check_for_updates_on_startup: bool,
     diff_scroll_sync: DiffScrollSync,
+    history_branch_names: HistoryBranchNamesMode,
     history_show_graph: bool,
     history_show_author: bool,
     history_show_date: bool,
     history_show_sha: bool,
     history_relative_dates: bool,
     history_highlight_commit_chain: bool,
+    files_follow_selected_commit: bool,
     history_show_tags: bool,
+    history_verify_commit_signatures: bool,
     history_tag_fetch_mode: GitLogTagFetchMode,
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
@@ -532,6 +569,7 @@ pub(crate) struct SettingsWindowView {
     nav_scroll: ScrollHandle,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
+    signing_tools_probe: Option<gpui::Task<()>>,
     git_executable_mode: GitExecutableMode,
     git_custom_path_draft: String,
     git_executable_input: Entity<components::TextInput>,
@@ -608,14 +646,6 @@ fn settings_window_default_size_for_percent(percent: u32) -> gpui::Size<Pixels> 
     )
 }
 
-fn settings_window_traffic_light_position(_percent: u32) -> Point<Pixels> {
-    point(px(9.0), px(9.0))
-}
-
-fn settings_window_traffic_lights_safe_inset(_percent: u32) -> Pixels {
-    px(SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET_PX)
-}
-
 #[cfg(test)]
 fn settings_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
     settings_window_options_for_scale(bounds, ui_scale::DEFAULT_UI_SCALE_PERCENT)
@@ -628,7 +658,7 @@ fn settings_window_options_for_scale(
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(settings_window_min_size_for_percent(ui_scale_percent)),
-        titlebar: Some(settings_window_titlebar_options_for_scale(ui_scale_percent)),
+        titlebar: Some(settings_window_titlebar_options()),
         app_id: Some("gitcomet-settings".into()),
         window_decorations: Some(WindowDecorations::Client),
         window_background: crate::app::main_window_background_appearance(),
@@ -638,19 +668,14 @@ fn settings_window_options_for_scale(
     }
 }
 
-#[cfg(test)]
 fn settings_window_titlebar_options() -> TitlebarOptions {
-    settings_window_titlebar_options_for_scale(ui_scale::DEFAULT_UI_SCALE_PERCENT)
-}
-
-fn settings_window_titlebar_options_for_scale(ui_scale_percent: u32) -> TitlebarOptions {
     TitlebarOptions {
         title: Some(SETTINGS_WINDOW_TITLE.into()),
         // Windows needs a transparent native titlebar to avoid rendering its own
         // caption on top of the custom settings header.
         appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
         traffic_light_position: cfg!(target_os = "macos")
-            .then_some(settings_window_traffic_light_position(ui_scale_percent)),
+            .then_some(chrome::macos_traffic_light_position()),
     }
 }
 
@@ -879,6 +904,7 @@ impl SettingsWindowView {
 
         let ui_session = session::load();
         let ui_preferences = UiPreferences::from_session(&ui_session);
+        crate::appearance::initialize(&ui_session, cx);
         let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
@@ -887,6 +913,7 @@ impl SettingsWindowView {
         let timezone = ui_preferences.appearance.timezone;
         let show_timezone = ui_preferences.appearance.show_timezone;
         let change_tracking_view = ui_preferences.change_tracking.view;
+        let file_list_layout = ui_preferences.file_lists.layout;
         let terminal_preferences = ui_preferences.terminal.clone();
         let diff_scroll_sync = ui_preferences.diff.scroll_sync;
         let diff_content_mode = ui_preferences.diff.content_mode;
@@ -899,13 +926,16 @@ impl SettingsWindowView {
         let remote_url_policy = ui_preferences.security.remote_url_policy;
         let remote_markdown_image_policy = ui_preferences.security.remote_markdown_images;
         let check_for_updates_on_startup = ui_preferences.security.check_for_updates_on_startup;
+        let history_branch_names = ui_preferences.history.branch_names;
         let history_show_graph = ui_preferences.history.show_graph;
         let history_show_author = ui_preferences.history.show_author;
         let history_show_date = ui_preferences.history.show_date;
         let history_show_sha = ui_preferences.history.show_sha;
         let history_relative_dates = ui_preferences.history.relative_dates;
         let history_highlight_commit_chain = ui_preferences.history.highlight_commit_chain;
+        let files_follow_selected_commit = ui_preferences.history.files_follow_selected_commit;
         let history_show_tags = ui_preferences.history.show_tags;
+        let history_verify_commit_signatures = ui_preferences.history.verify_commit_signatures;
         let history_tag_fetch_mode = ui_preferences.history.tag_fetch_mode;
         let default_history_mode = ui_preferences.history.default_mode;
         let default_tag_type = ui_preferences.repository.default_tag_type;
@@ -935,6 +965,7 @@ impl SettingsWindowView {
             };
         let theme = theme_mode.resolve_theme(window.appearance());
         let runtime_info = SettingsRuntimeInfo::detect();
+        let signing_tools_probe = Self::spawn_signing_tools_probe(cx);
         let git_executable_mode =
             GitExecutableMode::from_preference(&runtime_info.git.runtime.preference);
         let git_custom_path_draft = match &runtime_info.git.runtime.preference {
@@ -957,7 +988,10 @@ impl SettingsWindowView {
                     if !this.theme_mode.is_automatic() {
                         return;
                     }
-                    this.theme = this.theme_mode.resolve_theme(window.appearance());
+                    this.theme = this
+                        .theme_mode
+                        .resolve_theme(window.appearance())
+                        .with_appearance(this.appearance_metrics);
                     cx.notify();
                 });
             })
@@ -1105,9 +1139,36 @@ impl SettingsWindowView {
             },
         );
 
+        let appearance_metrics = crate::appearance::current(cx);
+        let font_size_inputs = FontRole::ALL.map(|role| {
+            cx.new(|cx| {
+                let mut input =
+                    components::TextInput::new(components::TextInputOptions::default(), window, cx);
+                input.set_text(appearance_metrics.size(role).to_string(), cx);
+                input.set_theme(theme, cx);
+                input
+            })
+        });
+        let font_size_subscriptions = FontRole::ALL
+            .into_iter()
+            .map(|role| {
+                cx.observe(&font_size_inputs[role.index()], move |this, input, cx| {
+                    let text = input.read(cx).text().to_string();
+                    if let Ok(value) = text.trim().parse::<u32>()
+                        && role.range().contains(&value)
+                    {
+                        this.set_font_size(role, value, cx);
+                    }
+                })
+            })
+            .collect();
+
         Self {
             theme_mode,
-            theme,
+            appearance_metrics,
+            font_size_inputs,
+            _font_size_subscriptions: font_size_subscriptions,
+            theme: theme.with_appearance(appearance_metrics),
             ui_scale_percent: ui_scale.percent,
             ui_font_family: font_preferences.ui_font_family,
             editor_font_family: font_preferences.editor_font_family,
@@ -1124,6 +1185,7 @@ impl SettingsWindowView {
             date_format_scroll: UniformListScrollHandle::default(),
             timezone_scroll: UniformListScrollHandle::default(),
             change_tracking_scroll: UniformListScrollHandle::default(),
+            file_list_layout_scroll: UniformListScrollHandle::default(),
             diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
             diff_view_mode_scroll: UniformListScrollHandle::default(),
@@ -1133,6 +1195,7 @@ impl SettingsWindowView {
             timezone,
             show_timezone,
             change_tracking_view,
+            file_list_layout,
             terminal_preferences,
             terminal_external_program_input,
             terminal_external_args_input,
@@ -1148,13 +1211,16 @@ impl SettingsWindowView {
             remote_markdown_image_policy,
             check_for_updates_on_startup,
             diff_scroll_sync,
+            history_branch_names,
             history_show_graph,
             history_show_author,
             history_show_date,
             history_show_sha,
             history_relative_dates,
             history_highlight_commit_chain,
+            files_follow_selected_commit,
             history_show_tags,
+            history_verify_commit_signatures,
             history_tag_fetch_mode,
             default_history_mode,
             default_tag_type,
@@ -1166,6 +1232,7 @@ impl SettingsWindowView {
             nav_scroll: ScrollHandle::default(),
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
+            signing_tools_probe,
             git_executable_mode,
             git_custom_path_draft,
             git_executable_input,

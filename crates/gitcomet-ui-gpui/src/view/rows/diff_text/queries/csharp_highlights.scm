@@ -148,6 +148,8 @@
   "enum"
   "event"
   "explicit"
+  ;; C# 14 extension blocks; a new token, so this line needs the 9150f7d grammar.
+  "extension"
   "extern"
   "finally"
   "for"

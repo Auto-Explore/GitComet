@@ -204,7 +204,8 @@ pub(super) fn cached(
         super::rows_cache::RowsCacheOwner::Workspace,
         rows_signature(repo),
         query,
-    );
+    )
+    .with_query_dependent_model();
     super::rows_cache::get_or_build(&this.workspace_picker_rows_cache, key, |_now| {
         let built = rows(repo, query);
         (built.items, built.rows, built.marked_index)
@@ -274,7 +275,7 @@ pub(super) fn panel(
     let theme = this.theme;
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
     let width = super::LARGE_PICKER_WIDTH;
 
     let Some(search) = this.workspace_picker_search_input.clone() else {

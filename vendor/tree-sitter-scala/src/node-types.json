@@ -485,16 +485,6 @@
           }
         ]
       }
-    },
-    "children": {
-      "multiple": true,
-      "required": false,
-      "types": [
-        {
-          "type": "arguments",
-          "named": true
-        }
-      ]
     }
   },
   {
@@ -536,6 +526,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "capture_pattern",
+          "named": true
+        },
         {
           "type": "expression",
           "named": true
@@ -1001,6 +995,10 @@
           },
           {
             "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "postfix_expression",
             "named": true
           },
           {
@@ -2008,6 +2006,10 @@
           "named": true
         },
         {
+          "type": "erased_modifier",
+          "named": true
+        },
+        {
           "type": "lazy_parameter_type",
           "named": true
         },
@@ -2528,6 +2530,10 @@
         "multiple": false,
         "required": true,
         "types": [
+          {
+            "type": "block",
+            "named": true
+          },
           {
             "type": "parenthesized_expression",
             "named": true
@@ -3947,6 +3953,10 @@
       "required": false,
       "types": [
         {
+          "type": "erased_modifier",
+          "named": true
+        },
+        {
           "type": "lazy_parameter_type",
           "named": true
         },
@@ -5254,6 +5264,10 @@
             "named": true
           },
           {
+            "type": "type_lambda",
+            "named": true
+          },
+          {
             "type": "wildcard",
             "named": true
           }
@@ -5423,7 +5437,7 @@
     "fields": {
       "parameters": {
         "multiple": true,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": ":",
@@ -7003,6 +7017,10 @@
           "named": true
         },
         {
+          "type": "erased_modifier",
+          "named": true
+        },
+        {
           "type": "generic_type",
           "named": true
         },
@@ -7140,6 +7158,10 @@
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "erased_modifier",
+          "named": true
+        },
         {
           "type": "lazy_parameter_type",
           "named": true
@@ -7864,6 +7886,10 @@
           "named": true
         },
         {
+          "type": "capture_pattern",
+          "named": true
+        },
+        {
           "type": "capturing_type",
           "named": true
         },
@@ -8066,7 +8092,19 @@
       "required": true,
       "types": [
         {
+          "type": "do_while_expression",
+          "named": true
+        },
+        {
           "type": "expression",
+          "named": true
+        },
+        {
+          "type": "indented_block",
+          "named": true
+        },
+        {
+          "type": "indented_cases",
           "named": true
         }
       ]
@@ -10936,6 +10974,10 @@
   {
     "type": "type",
     "named": false
+  },
+  {
+    "type": "type_identifier",
+    "named": true
   },
   {
     "type": "update_modifier",

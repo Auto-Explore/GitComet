@@ -43,6 +43,13 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
         }
         RepoCommandKind::MergeRef { reference } => format!("{reference} → current branch"),
         RepoCommandKind::SquashRef { reference } => reference.clone(),
+        RepoCommandKind::PushWithTags { request } => format!(
+            "{} → {}/{} · {}",
+            request.local_branch,
+            request.remote,
+            request.branch,
+            request.mode.flag()
+        ),
         RepoCommandKind::Push | RepoCommandKind::ForcePush => {
             "Current branch → configured upstream".to_string()
         }
@@ -98,6 +105,9 @@ fn repo_command_context(command: &RepoCommandKind) -> Option<String> {
             ),
         },
         RepoCommandKind::CherryPick {
+            commit_id, summary, ..
+        }
+        | RepoCommandKind::Revert {
             commit_id, summary, ..
         } => message_subject(summary).unwrap_or_else(|| short_commit_id(commit_id.as_ref())),
         RepoCommandKind::MergeAbort => "Current merge".to_string(),
@@ -929,6 +939,33 @@ pub(super) fn schedule_squash_ref(
     );
 }
 
+pub(super) fn schedule_push_with_tags(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    request: gitcomet_core::tag_push::TagPushRequest,
+    auth: Option<StagedGitAuth>,
+) {
+    schedule_repo_command_with_context(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PushWithTags {
+            request: request.clone(),
+        },
+        Some(format!(
+            "{} → {}/{} · {}",
+            request.local_branch,
+            request.remote,
+            request.branch,
+            request.mode.flag()
+        )),
+        move |repo| run_with_git_auth(auth, || repo.push_with_tags(&request)),
+    );
+}
+
 pub(super) fn schedule_push(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -1335,6 +1372,50 @@ pub(super) fn schedule_cherry_pick_commit(
             summary,
         },
         move |repo| repo.cherry_pick_with_output(&commit_id, commit, mainline),
+    );
+}
+
+pub(super) fn schedule_revert_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    commit: bool,
+    mainline: Option<usize>,
+    summary: String,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_commit_id = commit_id.clone();
+    let suggestion_tx = msg_tx.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::Revert {
+            commit_id: command_commit_id,
+            commit,
+            mainline,
+            summary,
+        },
+        move |repo| {
+            let output = run_with_git_auth(auth, || {
+                repo.revert_with_output(&commit_id, commit, mainline)
+            });
+            // A staged revert leaves git's message behind; offer it to the
+            // commit box the user now has to type in.
+            if !commit
+                && output.is_ok()
+                && let Ok(Some(message)) = repo.commit_message_template()
+            {
+                send_or_log(
+                    &suggestion_tx,
+                    Msg::Internal(InternalMsg::CommitMessageSuggested { repo_id, message }),
+                );
+            }
+            output
+        },
     );
 }
 

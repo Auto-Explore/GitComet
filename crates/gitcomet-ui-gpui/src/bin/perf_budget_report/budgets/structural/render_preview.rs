@@ -39,6 +39,30 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::AtMost,
         threshold: 16.0,
     },
+    StructuralBudgetSpec {
+        bench: "picker_prompt/file_history_hover_frame/1200",
+        metric: "rows_matched",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 1200.0,
+    },
+    StructuralBudgetSpec {
+        bench: "picker_prompt/file_history_hover_frame/1200",
+        metric: "rows_rendered",
+        comparator: StructuralBudgetComparator::AtMost,
+        threshold: 24.0,
+    },
+    StructuralBudgetSpec {
+        bench: "picker_prompt/file_history_hover_frame/1200",
+        metric: "tooltip_parts",
+        comparator: StructuralBudgetComparator::AtMost,
+        threshold: 24.0,
+    },
+    StructuralBudgetSpec {
+        bench: "picker_prompt/file_history_hover_frame/1200",
+        metric: "text_parts",
+        comparator: StructuralBudgetComparator::AtMost,
+        threshold: 192.0,
+    },
     // --- resolved_output_recompute_incremental structural budgets ---
     StructuralBudgetSpec {
         bench: "resolved_output_recompute_incremental/full_recompute",

@@ -115,7 +115,7 @@ pub(super) fn panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
     let title = match purpose {
         StashPickerPurpose::Pop => "Pop Stash",
@@ -127,8 +127,8 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(420.0))
-        .child(popover_title(title))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default));
+        .child(popover_title(theme, title))
+        .child(super::popover_rule(theme));
 
     if let Some(search) = this.stash_picker_search_input.clone() {
         match this

@@ -179,6 +179,8 @@ impl MinimapColumn {
                         if !bounds.contains(&event.position) {
                             return;
                         }
+                        // Viewport manipulation, not content.
+                        crate::text_selection_owner::preserve(cx);
                         interaction.update(cx, |state, _cx| state.dragging = true);
                         on_jump(fraction_at(event.position.y), window, cx);
                         window.refresh();

@@ -26,6 +26,39 @@ fn unique_session_test_dir(label: &str) -> PathBuf {
     dir
 }
 
+#[test]
+fn history_branch_names_survives_other_session_writers() {
+    let dir = unique_session_test_dir("history-branch-names");
+    let path = dir.join("session.json");
+    assert_eq!(load_from_path(&path).history_branch_names, None);
+    for mode in ["inline", "separate_column"] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_branch_names: Some(mode.into()),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        // A later geometry/settings snapshot must not reset placement.
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_show_graph: Some(false),
+                window_width: Some(1200),
+                window_height: Some(800),
+                ..Default::default()
+            },
+            &path,
+        )
+        .unwrap();
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.history_branch_names.as_deref(), Some(mode));
+        assert_eq!(loaded.history_show_graph, Some(false));
+        assert_eq!(loaded.window_width, Some(1200));
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn assert_session_writer_waits_for_shared_lock(
     label: &str,
     persist: impl FnOnce(PathBuf) -> io::Result<()> + Send + 'static,
@@ -2835,4 +2868,97 @@ fn persist_repo_history_scope_skips_rewriting_unchanged_value() {
             "unchanged history scope should not rewrite the session file"
         );
     }
+}
+
+#[test]
+fn persist_ui_settings_round_trips_file_browser_follow_selected_commit() {
+    let dir = unique_session_test_dir("file-browser-follow-selected-commit");
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join("session.json");
+
+    // Absent from the file means "not chosen yet", which the UI reads as on.
+    assert_eq!(
+        load_from_path(&path).file_browser_follow_selected_commit,
+        None
+    );
+
+    persist_ui_settings_to_path(
+        UiSettings {
+            file_browser_follow_selected_commit: Some(false),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist ui settings");
+    assert_eq!(
+        load_from_path(&path).file_browser_follow_selected_commit,
+        Some(false)
+    );
+
+    // A later write that says nothing about the toggle must not clear it.
+    persist_ui_settings_to_path(
+        UiSettings {
+            diff_word_wrap: Some(true),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .expect("persist unrelated ui settings");
+    assert_eq!(
+        load_from_path(&path).file_browser_follow_selected_commit,
+        Some(false)
+    );
+}
+
+/// The layer stores density as an opaque string, so a value this build has never
+/// heard of must survive a write/read cycle intact rather than being dropped or
+/// normalised — that is what lets a newer build's choice come back.
+#[test]
+fn an_unknown_density_survives_the_session_round_trip() {
+    let path = unique_session_test_dir("density_forward_compat").join("session.json");
+
+    for density in ["compact", "comfortable", "spacious", "something-newer"] {
+        persist_ui_settings_to_path(
+            UiSettings {
+                ui_density: Some(density.into()),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .unwrap();
+
+        assert_eq!(load_from_path(&path).ui_density.as_deref(), Some(density));
+    }
+}
+
+#[test]
+fn appearance_settings_round_trip_and_partial_writes_preserve_independent_sizes() {
+    let path = unique_session_test_dir("appearance").join("session.json");
+    let default = load_from_path(&path);
+    assert_eq!(default.ui_density, None);
+    assert_eq!(default.ui_font_size_px, None);
+    persist_ui_settings_to_path(
+        UiSettings {
+            ui_density: Some("comfortable".into()),
+            ui_font_size_px: Some(18),
+            editor_font_size_px: Some(15),
+            markdown_preview_font_size_px: Some(22),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+    persist_ui_settings_to_path(
+        UiSettings {
+            editor_font_size_px: Some(17),
+            ..UiSettings::default()
+        },
+        &path,
+    )
+    .unwrap();
+    let loaded = load_from_path(&path);
+    assert_eq!(loaded.ui_density.as_deref(), Some("comfortable"));
+    assert_eq!(loaded.ui_font_size_px, Some(18));
+    assert_eq!(loaded.editor_font_size_px, Some(17));
+    assert_eq!(loaded.markdown_preview_font_size_px, Some(22));
 }

@@ -326,7 +326,7 @@ pub(super) fn panel(
     let theme = this.theme;
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
     let width = super::LARGE_PICKER_WIDTH;
     let can_unlink_branch = repo_for(this, repo_id).is_some_and(|repo| can_unlink(repo, &branch));
     let can_create_new_branch =
@@ -337,17 +337,20 @@ pub(super) fn panel(
         .flex_col()
         .min_w(width.min_px(ui_scale))
         .max_w(width.max_px(ui_scale))
-        .child(popover_title(if can_unlink_branch {
-            "Change Upstream"
-        } else {
-            "Set Upstream"
-        }))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(popover_title(
+            theme,
+            if can_unlink_branch {
+                "Change Upstream"
+            } else {
+                "Set Upstream"
+            },
+        ))
+        .child(super::popover_rule(theme))
         .child(
             div()
                 .px_2()
                 .pt_1()
-                .text_xs()
+                .text_size(theme.ui_text(12.0))
                 .text_color(theme.colors.foreground.secondary)
                 .child(format!("Local branch: {branch}")),
         );
@@ -467,7 +470,6 @@ pub(super) fn panel(
             .max_height(scaled_px(UPSTREAM_PICKER_LIST_MAX_HEIGHT_PX))
             .selected_index(branch_selected_index)
             .marked_index(built.marked_index)
-            .accent_selection()
             .render(
                 theme,
                 ui_scale_percent,

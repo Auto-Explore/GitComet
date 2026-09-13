@@ -583,6 +583,45 @@ fn cursor_file_history_pages_reuse_cached_follow_history() {
     );
 }
 
+/// `usize::MAX` reads as "every commit": both as a first page and as the
+/// continuation the picker asks for after its bounded first page. Neither may
+/// reserve that much up front or hand git a count it cannot parse.
+#[test]
+fn unbounded_file_history_pages_return_every_commit_without_a_cursor() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+
+    commit_file(workdir, "tracked.txt", "one\n", "one");
+    commit_file(workdir, "tracked.txt", "two\n", "two");
+    git_success(workdir, &["mv", "tracked.txt", "renamed.txt"]);
+    git_success(workdir, &["commit", "-m", "rename"]);
+    commit_file(workdir, "renamed.txt", "four\n", "four");
+
+    let repo = open_repo(workdir);
+    let first = repo
+        .log_file_page_impl(Path::new("renamed.txt"), 1, None)
+        .expect("bounded first page");
+    assert_eq!(first.commits.len(), 1);
+
+    let rest = repo
+        .log_file_page_impl(
+            Path::new("renamed.txt"),
+            usize::MAX,
+            first.next_cursor.as_ref(),
+        )
+        .expect("unbounded continuation");
+    let summaries: Vec<&str> = rest.commits.iter().map(|c| &*c.summary).collect();
+    assert_eq!(summaries, ["rename", "two", "one"]);
+    assert!(rest.next_cursor.is_none());
+
+    let all = repo
+        .log_file_page_impl(Path::new("renamed.txt"), usize::MAX, None)
+        .expect("unbounded first page");
+    assert_eq!(all.commits.len(), 4);
+    assert!(all.next_cursor.is_none());
+}
+
 #[test]
 fn reflog_head_entries_carry_the_committer_as_author() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -670,6 +709,42 @@ fn finishing_a_page_reports_a_request_that_was_superseded_while_it_was_built() {
         repo.cached_log_page(&key).is_some(),
         "a cancelled request still leaves the page it finished in the cache"
     );
+}
+
+#[test]
+fn deep_log_pages_share_a_total_cache_row_budget() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_test_repo(tmp.path());
+    commit_file(tmp.path(), "a.txt", "one\n", "first");
+    let repo = open_repo(tmp.path());
+    let shallow = shallow_snapshot(&repo._repo.to_thread_local()).expect("shallow snapshot");
+    let commit = repo.log_head_page_impl(1, None).unwrap().commits[0].clone();
+    for limit in [4000, 4001, 4002, 20_000] {
+        let key = repo.log_page_cache_key(
+            HistoryMode::AllBranches,
+            super::super::LogPageSeed::Tips(Arc::from(Vec::new())),
+            &shallow,
+            limit,
+            None,
+            None,
+        );
+        repo.store_log_page(
+            key.clone(),
+            &Arc::new(LogPage {
+                commits: vec![commit.clone(); limit],
+                next_cursor: None,
+            }),
+        );
+        let rows: usize = repo
+            .log_page_cache
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|e| e.page.commits.len())
+            .sum();
+        assert!(rows <= 10_000, "cached {rows} rows");
+        assert_eq!(repo.cached_log_page(&key).is_some(), limit <= 10_000);
+    }
 }
 
 #[test]
@@ -1688,4 +1763,68 @@ fn timing_ref_metadata_with_many_refs() {
             metadata.len()
         );
     }
+}
+
+#[test]
+fn resolve_commit_upgrades_an_abbreviated_reference_to_the_full_oid() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+    commit_file(workdir, "a.txt", "one\n", "first");
+    commit_file(workdir, "a.txt", "two\n", "second");
+    let repo = open_repo(workdir);
+
+    let head = git_stdout(workdir, &["rev-parse", "HEAD"]);
+    let short = &head[..7];
+
+    let resolved = repo
+        .resolve_commit_impl(&CommitId(short.into()))
+        .expect("resolve short sha");
+    assert_eq!(resolved.id.as_ref(), head);
+    assert_eq!(resolved.summary.as_ref(), "second");
+    assert_eq!(resolved.author.as_ref(), "Test User");
+    assert_eq!(resolved.parent_ids.len(), 1);
+}
+
+#[test]
+fn resolve_commit_accepts_any_revspec_git_understands() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+    commit_file(workdir, "a.txt", "one\n", "first");
+    commit_file(workdir, "a.txt", "two\n", "second");
+    // A global `tag.gpgSign` would otherwise turn this into an annotated tag.
+    git_success(workdir, &["config", "tag.gpgsign", "false"]);
+    git_success(workdir, &["tag", "v1"]);
+    let repo = open_repo(workdir);
+
+    let head = git_stdout(workdir, &["rev-parse", "HEAD"]);
+    let parent = git_stdout(workdir, &["rev-parse", "HEAD~1"]);
+    let branch = git_stdout(workdir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+    for (spec, expected) in [
+        ("HEAD", head.as_str()),
+        ("HEAD~1", parent.as_str()),
+        ("v1", head.as_str()),
+        (branch.as_str(), head.as_str()),
+    ] {
+        let resolved = repo
+            .resolve_commit_impl(&CommitId(spec.into()))
+            .unwrap_or_else(|e| panic!("resolve {spec}: {e}"));
+        assert_eq!(resolved.id.as_ref(), expected, "resolving {spec}");
+    }
+}
+
+#[test]
+fn resolve_commit_reports_an_unknown_reference() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let workdir = tmp.path();
+    init_test_repo(workdir);
+    commit_file(workdir, "a.txt", "one\n", "first");
+    let repo = open_repo(workdir);
+
+    assert!(
+        repo.resolve_commit_impl(&CommitId("nosuchref".into()))
+            .is_err()
+    );
 }

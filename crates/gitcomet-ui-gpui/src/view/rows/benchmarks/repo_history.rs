@@ -540,13 +540,22 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 detached.hash(&mut h);
                 is_active.hash(&mut h);
             }
-            BranchSidebarRow::SubmoduleItem { path } => {
+            BranchSidebarRow::SubmoduleItem {
+                path,
+                status,
+                recorded_head,
+                checked_out_head,
+            } => {
                 let path_len = path
                     .to_str()
                     .map_or_else(|| path.to_string_lossy().len(), str::len);
                 let path_label = path_display::path_display_shared_fast(path.as_path());
                 path_len.hash(&mut h);
                 path_label.len().hash(&mut h);
+                // The badge, tooltip and icon colour are built from these.
+                status.hash(&mut h);
+                recorded_head.hash(&mut h);
+                checked_out_head.hash(&mut h);
             }
             BranchSidebarRow::StashItem {
                 index,
@@ -1985,21 +1994,29 @@ impl HistoryLoadMoreAppendFixture {
         state.repos.push(repo_state);
         state.active_repo = Some(self.repo_id);
 
+        let seq = state.repos[0]
+            .loads_in_flight
+            .request_log(gitcomet_state::model::PendingLogLoad {
+                scope: self.scope,
+                author: None,
+                limit: self.existing_commits.len(),
+                cursor: None,
+            })
+            .expect("initial fixture load");
         // Seed the initial page through the reducer so benchmark setup matches
         // the production initial-load path, including any pagination slack.
         let _ = dispatch_sync(
             &mut state,
             Msg::Internal(InternalMsg::LogLoaded {
                 repo_id: self.repo_id,
-                // Nothing is tracking a walk in the fixture, so any sequence
-                // number is accepted; production carries the request's own.
-                seq: 0,
+                seq,
                 scope: self.scope,
                 cursor: None,
                 result: Ok(std::sync::Arc::new(LogPage {
                     commits: self.existing_commits.clone(),
                     next_cursor: self.request_cursor(),
-                })),
+                })
+                .into()),
             }),
         );
 
@@ -2033,16 +2050,29 @@ impl HistoryLoadMoreAppendFixture {
             .map(|repo| repo.history_state.log_rev)
             .unwrap_or_default();
 
+        let repo = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == self.repo_id)
+            .unwrap();
+        let seq = repo.loads_in_flight.active_log_seq().unwrap_or_else(|| {
+            repo.loads_in_flight
+                .request_log(gitcomet_state::model::PendingLogLoad {
+                    scope: self.scope,
+                    author: None,
+                    limit: page.commits.len(),
+                    cursor: cursor.clone(),
+                })
+                .expect("fixture load")
+        });
         let effects = dispatch_sync(
             state,
             Msg::Internal(InternalMsg::LogLoaded {
                 repo_id: self.repo_id,
-                // Nothing is tracking a walk in the fixture, so any sequence
-                // number is accepted; production carries the request's own.
-                seq: 0,
+                seq,
                 scope: self.scope,
                 cursor,
-                result: Ok(std::sync::Arc::new(page)),
+                result: Ok(page.into()),
             }),
         );
 

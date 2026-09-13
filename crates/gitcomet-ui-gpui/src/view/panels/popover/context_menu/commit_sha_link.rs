@@ -19,11 +19,11 @@ fn model_for_commit_sha_link(
         ContextMenuItem::Separator,
     ];
 
-    // Navigating to the commit you are already looking at is a no-op, so the
+    // Revealing the commit you are already looking at is a no-op, so the
     // commit's own SHA field offers only the browse entry.
     if allow_navigate {
         items.push(ContextMenuItem::Entry {
-            label: "Navigate".into(),
+            label: "Reveal commit".into(),
             icon: Some("icons/link.svg".into()),
             shortcut: None,
             disabled: false,
@@ -35,7 +35,7 @@ fn model_for_commit_sha_link(
     }
 
     items.push(ContextMenuItem::Entry {
-        label: "Browse repository at this point".into(),
+        label: "Start file browsing".into(),
         icon: Some("icons/history.svg".into()),
         shortcut: None,
         disabled: false,
@@ -64,13 +64,13 @@ mod tests {
     }
 
     #[test]
-    fn model_offers_navigating_and_browsing() {
+    fn model_offers_revealing_and_browsing() {
         let commit_id = CommitId("deadbeef".into());
         let model = model_for_commit_sha_link(RepoId(3), &commit_id, true);
 
         assert_eq!(
             entry_labels(&model),
-            vec!["Navigate", "Browse repository at this point"]
+            vec!["Reveal commit", "Start file browsing"]
         );
         // The id is shown so a reference in prose can be checked before acting.
         assert!(model.items.iter().any(|item| matches!(
@@ -80,14 +80,11 @@ mod tests {
     }
 
     #[test]
-    fn a_commits_own_sha_cannot_navigate_to_itself() {
+    fn a_commits_own_sha_cannot_reveal_itself() {
         let commit_id = CommitId("deadbeef".into());
         let model = model_for_commit_sha_link(RepoId(3), &commit_id, false);
 
-        assert_eq!(
-            entry_labels(&model),
-            vec!["Browse repository at this point"]
-        );
+        assert_eq!(entry_labels(&model), vec!["Start file browsing"]);
     }
 
     #[test]

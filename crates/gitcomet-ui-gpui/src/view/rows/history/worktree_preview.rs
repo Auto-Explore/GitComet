@@ -608,6 +608,7 @@ impl MainPaneView {
                 width_px,
                 ui_scale_percent,
                 theme_is_dark: self.theme.is_dark,
+                markdown_font_size_px: self.theme.metrics.markdown_preview_font_size_px,
                 editor_font_family_hash: markdown_preview_font_family_hash(&editor_font_family),
                 document_rev,
             },

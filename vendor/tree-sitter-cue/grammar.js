@@ -112,6 +112,7 @@ const primitive_types = [
   'string',
   'bytes',
   'bool',
+  'rune',
 ];
 
 module.exports = grammar({
@@ -138,21 +139,24 @@ module.exports = grammar({
   supertypes: $ => [
     $.expression,
     $.primary_expression,
+    $.literal,
   ],
 
   conflicts: $ => [
     [$._embedding, $._label_alias_expr],
+    [$._label_name, $.primary_expression],
+    [$._label_name, $.string],
   ],
 
   word: $ => $.identifier,
 
   rules: {
-    source_file: $ => seq(
-      optional($.attribute),
+    source_file: $ => prec(1, seq(
+      optionalCommaSep($.attribute),
       optional($.package_clause),
-      optional(repeat($.import_declaration)),
+      optionalCommaSep($.import_declaration),
       optionalCommaSep($._declaration),
-    ),
+    )),
 
     _package_identifier: $ => alias($.identifier, $.package_identifier),
 
@@ -197,6 +201,8 @@ module.exports = grammar({
         'let',
         'if',
         'for',
+        'else',
+        'try',
         ...primitive_types,
       ),
       $.identifier,
@@ -204,7 +210,7 @@ module.exports = grammar({
 
     attribute: $ => seq(
       '@',
-      $._attr_token,
+      field('name', $.identifier),
       '(',
       optional(choice(',', '-')),
       repeat(
@@ -218,7 +224,6 @@ module.exports = grammar({
       ),
       ')',
     ),
-    // old: attr_token: _ => /[^\(\)\[\]{}]+/,
     _attr_token: $ => prec.right(choice(
       $._attr_item,
       seq($._attr_item, '=', choice($._attr_item, $.attr_path)),
@@ -253,14 +258,18 @@ module.exports = grammar({
       'mod',
       'quo',
       'rem',
+      'matchN',
+      'matchIf',
+      'error',
     ),
 
-    _declaration: $ => choice(
+    _declaration: $ => prec(-1, choice(
+      $.attribute,
       $.field,
       $.ellipsis,
       $._embedding,
       $.let_clause,
-    ),
+    )),
 
     _list_elem: $ => prec.right(choice(
       $.ellipsis,
@@ -276,7 +285,7 @@ module.exports = grammar({
 
     struct_lit: $ => seq(
       '{',
-      optionalCommaSep(choice($._declaration, $.attribute)),
+      optionalCommaSep($._declaration),
       '}',
     ),
 
@@ -291,16 +300,25 @@ module.exports = grammar({
     ),
 
     _label_name: $ => choice(
-      $.identifier,
-      $.keyword_identifier,
-      alias($._simple_string_lit, $.string),
-      $.selector_expression,
+      prec.dynamic(1, $.identifier),
+      prec(1, $.keyword_identifier),
+      prec(1, alias($.primitive_type, $.identifier)),
+      prec(1, alias($.builtin_function, $.identifier)),
+      prec.dynamic(1, alias($._simple_string_lit, $.string)),
+      prec.dynamic(1, $.selector_expression),
+      prec.dynamic(1, alias($.parenthesized_expression, $.dynamic)),
     ),
 
     _label_alias_expr: $ => alias($._alias_expr, $.optional),
 
+    required: $ => seq($._label_name, '!'),
+
+    optional: $ => seq($._label_name, '?'),
+
     _label_expr: $ => choice(
-      seq($._label_name, optional('?')),
+      $._label_name,
+      $.optional,
+      $.required,
       seq('[', $._label_alias_expr, ']'),
     ),
 
@@ -312,8 +330,16 @@ module.exports = grammar({
       $._label_expr,
     ),
 
+    postfix_alias: $ => seq(
+      '~',
+      choice(
+        field('field', $.identifier),
+        seq('(', field('label', $.identifier), ',', field('field', $.identifier), ')'),
+      ),
+    ),
+
     field: $ => prec.right(seq(
-      repeat1(seq($.label, ':')),
+      repeat1(seq($.label, optional($.postfix_alias), ':')),
       $._value,
       optional($.attribute),
     )),
@@ -331,20 +357,26 @@ module.exports = grammar({
 
     let_clause: $ => seq('let', field('left', $.identifier), '=', field('right', $.expression)),
 
-    _clause: $ => choice($.for_clause, $.guard_clause, $.let_clause),
+    _clause: $ => choice($.for_clause, $.guard_clause, $.let_clause, $.try_clause),
 
-    comprehension: $ => seq(
-      choice($.for_clause, $.guard_clause),
+    try_clause: $ => seq(
+      'try',
+      optional(seq(field('left', $.identifier), '=', field('right', $.expression))),
+    ),
+
+    comprehension: $ => prec.right(seq(
+      choice($.for_clause, $.guard_clause, $.try_clause),
       repeat(seq(optional(','), $._clause)),
       $.struct_lit,
-    ),
+      optional($.else_clause),
+    )),
+
+    else_clause: $ => seq('else', $.struct_lit),
 
     _alias_expr: $ => seq(
       optional(seq(field('alias', $.identifier), '=')),
       $.expression,
     ),
-
-    parenthesized_expression: $ => seq('(', $.expression, ')'),
 
     expression: $ => prec.left(choice(
       $.primary_expression,
@@ -356,10 +388,16 @@ module.exports = grammar({
       $.parenthesized_expression,
       $.selector_expression,
       $.index_expression,
-      $.identifier,
-      $._literal,
       $.call_expression,
+      $.postfix_expression,
+      $.identifier,
+      $.literal,
     ),
+
+    postfix_expression: $ => prec(PREC.call, seq(
+      $.primary_expression,
+      '?',
+    )),
 
     binary_expression: $ => {
       const table = [
@@ -371,7 +409,7 @@ module.exports = grammar({
         ['&', PREC.bitwise_and],
         ['||', PREC.or],
         ['&&', PREC.and],
-        [choice('==', '!=', '<', '<=', '>', '>='), PREC.compare],
+        [choice('==', '=~', '!~', '!=', '<', '<=', '>', '>='), PREC.compare],
       ];
 
       // @ts-ignore
@@ -392,18 +430,21 @@ module.exports = grammar({
       ))));
     },
 
+    parenthesized_expression: $ => seq('(', $.expression, ')'),
+
     call_expression: $ => prec(PREC.call, seq(
       field('function', choice(
         $.builtin_function,
-        $.expression,
+        $.selector_expression,
+        $.identifier,
       )),
       $.arguments,
     )),
 
     index_expression: $ => seq(
       $.primary_expression,
-      '[',
-      $.expression,
+      token.immediate('['),
+      field('index', $.expression),
       ']',
     ),
 
@@ -419,7 +460,7 @@ module.exports = grammar({
       ')',
     ),
 
-    _literal: $ =>
+    literal: $ =>
       choice(
         $.struct_lit,
         $.list_lit,
@@ -493,9 +534,8 @@ module.exports = grammar({
       const decimal_exponent = seq(choice('e', 'E'), optional(choice('+', '-')), decimal_digits);
 
       const decimal_float_literal = choice(
-        seq(decimal_digits, '.', optional(decimal_digits), optional(decimal_exponent)),
+        seq(optional('-'), optional(decimal_digits), '.', optional(decimal_digits), optional(decimal_exponent)),
         seq(decimal_digits, decimal_exponent),
-        seq('.', decimal_digits, optional(decimal_exponent)),
       );
 
       const hex_exponent = seq(choice('p', 'P'), optional(choice('+', '-')), decimal_digits);

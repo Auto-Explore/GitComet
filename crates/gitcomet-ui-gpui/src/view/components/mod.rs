@@ -6,6 +6,7 @@ mod context_menu;
 mod diff_stat;
 mod interactive_row;
 mod modal;
+mod panel_tab;
 mod picker_prompt;
 mod repository_badge;
 mod resize_grip;
@@ -25,18 +26,21 @@ pub use avatar::{
 };
 pub use button::{Button, ButtonStyle};
 pub use commit_link_menu::{CommitLinkMenu, LinkTarget, MessageLink};
-pub use containers::{ScrollContainer, empty_state, empty_state_message, split_columns_header};
+pub use containers::{
+    ScrollContainer, content_header_bar, empty_state, empty_state_message, split_columns_header,
+};
 #[cfg(test)]
 pub use containers::{panel, pill};
 pub use context_menu::{
     ContextMenuEntry, ContextMenuIconSlot, ContextMenuText, context_menu, context_menu_description,
     context_menu_header, context_menu_label, context_menu_separator,
 };
-pub use diff_stat::diff_stat;
+pub use diff_stat::{diff_stat, diff_stat_optional};
 pub use interactive_row::{
     InteractiveRowExt, InteractiveRowState, InteractiveRowStyle, light_theme_selection_outline,
 };
 pub use modal::{modal_scrim, modal_surface, popover_surface};
+pub use panel_tab::{panel_tab, panel_tab_close};
 /// Public field type of [`PickerPromptLayout::headers`], carried out of the
 /// private module with it so a caller can name what that field hands them
 /// instead of only ever binding it through an inferred closure argument.
@@ -45,8 +49,8 @@ pub use picker_prompt::PickerPromptHeader;
 pub use picker_prompt::picker_prompt_layout;
 pub use picker_prompt::{
     PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptContextMenuEvent, PickerPromptGeometry,
-    PickerPromptItem, PickerPromptItemPart, PickerPromptLayout,
-    picker_prompt_layout_with_collapsed,
+    PickerPromptItem, PickerPromptItemPart, PickerPromptLayout, PickerPromptOrder,
+    picker_prompt_layout_ordered, row_height as picker_row_height,
 };
 pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,

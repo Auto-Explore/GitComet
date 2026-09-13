@@ -1,11 +1,6 @@
 use super::*;
 use crate::view::panes::main::DiffHorizontalScrollColumn;
 use crate::view::panes::main::diff_search::DiffSearchOptions;
-use gitcomet_core::domain::{
-    SubmoduleDiffRangeKind, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
-    SubmoduleStatus,
-};
-use gitcomet_state::model::{InlineSubmoduleDiffEntry, InlineSubmoduleDiffSection};
 use gpui::Focusable;
 
 struct DiffSearchOverlayLayer {
@@ -67,86 +62,6 @@ impl Element for DiffSearchOverlayLayer {
         // Diff text rows paint in their own layers, so layer the search UI as a unit.
         window.paint_layer(bounds, |window| self.child.paint(window, cx));
     }
-}
-
-fn short_submodule_hash(commit_id: &CommitId) -> String {
-    let raw = commit_id.as_ref();
-    raw.chars().take(12).collect()
-}
-
-fn short_submodule_hash_opt(commit_id: Option<&CommitId>) -> String {
-    commit_id
-        .map(short_submodule_hash)
-        .unwrap_or_else(|| "missing".to_string())
-}
-
-fn full_submodule_hash_opt(commit_id: Option<&CommitId>) -> String {
-    commit_id
-        .map(|commit_id| commit_id.as_ref().to_string())
-        .unwrap_or_else(|| "missing".to_string())
-}
-
-fn submodule_range_label(kind: SubmoduleDiffRangeKind) -> &'static str {
-    match kind {
-        SubmoduleDiffRangeKind::StagedPointer => "Committed -> Index",
-        SubmoduleDiffRangeKind::UnstagedPointer => "Index -> Checked out",
-        SubmoduleDiffRangeKind::CommitHistory => "Parent -> Commit",
-    }
-}
-
-fn inline_submodule_entries(summary: &SubmoduleDiffSummary) -> Vec<InlineSubmoduleDiffEntry> {
-    let capacity = summary.ranges.iter().fold(
-        summary
-            .live_staged
-            .len()
-            .saturating_add(summary.live_unstaged.len()),
-        |len, range| len.saturating_add(range.changes.len()),
-    );
-    let mut entries = Vec::with_capacity(capacity);
-    for range in &summary.ranges {
-        let Some((from_commit_id, to_commit_id)) = range.from.clone().zip(range.to.clone()) else {
-            continue;
-        };
-        entries.extend(range.changes.iter().map(|change| InlineSubmoduleDiffEntry {
-            path: change.path.clone(),
-            kind: change.kind,
-            target: DiffTarget::CommitRange {
-                from_commit_id: from_commit_id.clone(),
-                to_commit_id: Some(to_commit_id.clone()),
-                path: Some(change.path.clone()),
-            },
-            section: InlineSubmoduleDiffSection::Range(range.kind),
-        }));
-    }
-    entries.extend(
-        summary
-            .live_staged
-            .iter()
-            .map(|change| InlineSubmoduleDiffEntry {
-                path: change.path.clone(),
-                kind: change.kind,
-                target: DiffTarget::WorkingTree {
-                    path: change.path.clone(),
-                    area: DiffArea::Staged,
-                },
-                section: InlineSubmoduleDiffSection::LiveStaged,
-            }),
-    );
-    entries.extend(
-        summary
-            .live_unstaged
-            .iter()
-            .map(|change| InlineSubmoduleDiffEntry {
-                path: change.path.clone(),
-                kind: change.kind,
-                target: DiffTarget::WorkingTree {
-                    path: change.path.clone(),
-                    area: DiffArea::Unstaged,
-                },
-                section: InlineSubmoduleDiffSection::LiveUnstaged,
-            }),
-    );
-    entries
 }
 
 impl Focusable for MainPaneView {
@@ -212,6 +127,7 @@ impl MainPaneView {
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                     cx.stop_propagation();
                     crate::press_gesture::claim_press(cx);
+                    crate::text_selection_owner::preserve(cx);
                     this.annotate_resize = Some(AnnotateResizeState {
                         start_x: e.position.x,
                         start_width: this.annotate_column_width,
@@ -460,10 +376,13 @@ impl MainPaneView {
             let path = path.clone();
             let area = *area;
             let change_tracking_view = self.active_change_tracking_view(cx);
+            let status_section_order =
+                self.active_status_section_order(repo_id, change_tracking_view, cx);
             let next_path_in_section = status_nav::status_navigation_context_for_repo(
                 repo,
                 &diff_target,
                 change_tracking_view,
+                status_section_order.as_deref(),
             )
             .and_then(|navigation| navigation.next_or_prev_path());
             let status_ready = repo.status_entries_for_area(area).is_some();
@@ -488,17 +407,22 @@ impl MainPaneView {
                 return true;
             }
 
+            let consumes_selection =
+                self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
             if self.confirm_stage_conflict_markers(
                 repo_id,
                 area,
                 vec![path.clone()],
-                false,
+                consumes_selection,
                 window,
                 cx,
             ) {
                 return true;
             }
 
+            if consumes_selection {
+                self.clear_status_selection_for_shortcut(repo_id, cx);
+            }
             match (status_ready, area) {
                 (true, DiffArea::Unstaged) => {
                     self.store.dispatch(Msg::StagePath {
@@ -590,10 +514,13 @@ impl MainPaneView {
             match key {
                 "s" if area == DiffArea::Unstaged && !mods.shift => {
                     let change_tracking_view = self.active_change_tracking_view(cx);
+                    let status_section_order =
+                        self.active_status_section_order(repo_id, change_tracking_view, cx);
                     let next_path_in_section = status_nav::status_navigation_context_for_repo(
                         repo,
                         &diff_target,
                         change_tracking_view,
+                        status_section_order.as_deref(),
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
 
@@ -620,17 +547,22 @@ impl MainPaneView {
                         return true;
                     }
 
+                    let consumes_selection =
+                        self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
                     if self.confirm_stage_conflict_markers(
                         repo_id,
                         area,
                         vec![path.clone()],
-                        false,
+                        consumes_selection,
                         window,
                         cx,
                     ) {
                         return true;
                     }
 
+                    if consumes_selection {
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                    }
                     if status_ready {
                         self.store.dispatch(Msg::StagePath {
                             repo_id,
@@ -658,10 +590,13 @@ impl MainPaneView {
                 }
                 "u" if area == DiffArea::Staged && !mods.shift => {
                     let change_tracking_view = self.active_change_tracking_view(cx);
+                    let status_section_order =
+                        self.active_status_section_order(repo_id, change_tracking_view, cx);
                     let next_path_in_section = status_nav::status_navigation_context_for_repo(
                         repo,
                         &diff_target,
                         change_tracking_view,
+                        status_section_order.as_deref(),
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
 
@@ -686,6 +621,9 @@ impl MainPaneView {
                         return true;
                     }
 
+                    if self.status_single_selection_for_shortcut(repo_id, area, &path, cx) {
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                    }
                     if status_ready {
                         self.store.dispatch(Msg::UnstagePath {
                             repo_id,
@@ -722,23 +660,6 @@ impl MainPaneView {
                             repo_id,
                             area,
                             path: Some(path),
-                        },
-                        anchor,
-                        window,
-                        cx,
-                    );
-                    handled = true;
-                }
-                "h" if !mods.shift => {
-                    let bounds = window.window_bounds().get_bounds();
-                    let anchor = point(
-                        (bounds.size.width * 0.5).max(px(64.0)),
-                        (bounds.size.height * 0.25).max(px(24.0)),
-                    );
-                    self.open_popover_at(
-                        PopoverKind::FileHistory {
-                            repo_id,
-                            path: path.clone(),
                         },
                         anchor,
                         window,
@@ -786,7 +707,7 @@ impl MainPaneView {
                 .read(cx)
                 .focus_handle()
                 .is_focused(window)
-            && let Some(_repo_id) = self.active_repo_id()
+            && let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
             && let Some(diff_target) = repo.diff_state.diff_target.clone()
         {
@@ -797,6 +718,24 @@ impl MainPaneView {
             };
             if let Some(path) = path {
                 match key {
+                    "h" if !mods.shift => {
+                        let bounds = window.window_bounds().get_bounds();
+                        let anchor = point(
+                            (bounds.size.width * 0.5).max(px(64.0)),
+                            (bounds.size.height * 0.25).max(px(24.0)),
+                        );
+                        self.open_popover_at(
+                            PopoverKind::FileHistory {
+                                repo_id,
+                                path: path.clone(),
+                            },
+                            anchor,
+                            window,
+                            cx,
+                        );
+                        handled = true;
+                    }
+
                     "e" if !mods.shift
                         && crate::external_editor::configured_setting().is_some() =>
                     {
@@ -878,7 +817,7 @@ impl MainPaneView {
                 && !mods.shift
                 && key == "a"
             {
-                self.select_all_diff_text();
+                self.select_all_diff_text(window, cx);
                 handled = true;
             }
 
@@ -1124,7 +1063,7 @@ impl MainPaneView {
             && !mods.shift
             && key == "a"
         {
-            self.select_all_diff_text();
+            self.select_all_diff_text(window, cx);
             handled = true;
         }
 
@@ -1161,7 +1100,7 @@ impl MainPaneView {
         let focus = self.diff_search_input.read(cx).focus_handle();
         window.focus(&focus, cx);
         self.diff_search_input
-            .update(cx, |input, cx| input.select_all_text(cx));
+            .update(cx, |input, cx| input.select_all_text(window, cx));
     }
 
     fn deactivate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
@@ -1561,17 +1500,21 @@ impl MainPaneView {
             if theme.is_dark { 0.34 } else { 0.24 },
         );
         let options = self.diff_search_options;
-        let compact_control_height = px(26.0);
-        let compact_icon_button_width = px(22.0);
-        let compact_option_button_width = px(24.0);
-        let max_search_input_height = px(super::super::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX);
+        // A floating toolbar: its controls ride the same ramp as the toolbar
+        // buttons they mirror.
+        let ui_scale =
+            ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics);
+        let compact_control_height = ui_scale.row_height(26.0, 32.0);
+        let compact_icon_button_width = components::control_height(ui_scale);
+        let compact_option_button_width = ui_scale.row_height(24.0, 32.0);
+        let max_search_input_height = ui_scale.px(super::super::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX);
 
         let panel = div()
             .flex()
             .items_start()
-            .gap(px(2.0))
-            .px(px(4.0))
-            .py(px(2.0))
+            .gap(ui_scale.px(2.0))
+            .px(ui_scale.px(4.0))
+            .py(ui_scale.px(2.0))
             .rounded(px(theme.radii.control))
             .border_1()
             .border_color(theme.colors.stroke.default)
@@ -1580,8 +1523,8 @@ impl MainPaneView {
             .child(
                 div()
                     .relative()
-                    .w(px(220.0))
-                    .min_w(px(140.0))
+                    .w(ui_scale.px(220.0))
+                    .min_w(ui_scale.px(140.0))
                     .debug_selector(|| "diff_search_input_slot".to_string())
                     .child(
                         div()
@@ -1673,16 +1616,16 @@ impl MainPaneView {
             )
             .child(
                 div()
-                    .w(px(104.0))
-                    .min_w(px(104.0))
-                    .max_w(px(104.0))
+                    .w(ui_scale.px(104.0))
+                    .min_w(ui_scale.px(104.0))
+                    .max_w(ui_scale.px(104.0))
                     .h(compact_control_height)
                     .flex()
                     .items_center()
                     .justify_end()
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_xs()
+                    .text_size(theme.ui_text(12.0))
                     .text_color(match_label_color)
                     .debug_selector(|| "diff_search_match_label".to_string())
                     .child(match_label),
@@ -1717,8 +1660,10 @@ impl MainPaneView {
             .id("diff_search_overlay_panel")
             .debug_selector(|| "diff_search_overlay".to_string())
             .absolute()
-            .top(components::control_height_md(ui_scale_percent))
-            .right(px(8.0))
+            .top(components::content_header_height(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            ))
+            .right(ui_scale::design_px_from_percent(8.0, ui_scale_percent))
             .child(panel)
             .into_any_element();
 
@@ -1732,628 +1677,6 @@ impl MainPaneView {
             .into_any_element();
 
         Some(DiffSearchOverlayLayer { child: overlay }.into_any_element())
-    }
-
-    fn prepare_submodule_hash_input(
-        &mut self,
-        slot: usize,
-        value: String,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<components::TextInput> {
-        let Some(input) = self
-            .submodule_hash_inputs
-            .get(slot % self.submodule_hash_inputs.len().max(1))
-            .cloned()
-        else {
-            return self.diff_raw_input.clone();
-        };
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text(value, cx);
-            input.set_read_only(true, cx);
-        });
-        input
-    }
-
-    fn render_submodule_summary(
-        &mut self,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let Some(repo) = self.active_repo() else {
-            return components::empty_state(theme, "Submodule", "No repository.")
-                .into_any_element();
-        };
-        let Some(repo_id) = self.active_repo_id() else {
-            return components::empty_state(theme, "Submodule", "No repository.")
-                .into_any_element();
-        };
-        let Some(selected_target) = repo.diff_state.diff_target.as_ref().cloned() else {
-            return components::empty_state(theme, "Submodule", "No submodule selected.")
-                .into_any_element();
-        };
-        let (submodule_path, selected_area) = match &selected_target {
-            DiffTarget::WorkingTree { path, area } => (path.clone(), Some(*area)),
-            DiffTarget::Commit {
-                path: Some(path), ..
-            } => (path.clone(), None),
-            _ => {
-                return components::empty_state(theme, "Submodule", "No submodule selected.")
-                    .into_any_element();
-            }
-        };
-
-        let repo_workdir = repo.spec.workdir.clone();
-        let open_path = repo_workdir.join(&submodule_path);
-        let fallback_status = match &repo.submodules {
-            Loadable::Ready(submodules) => submodules
-                .iter()
-                .find(|submodule| submodule.path == submodule_path)
-                .map(|submodule| submodule.status),
-            _ => None,
-        };
-        let fallback_initialized = open_path.join(".git").exists();
-
-        match &repo.diff_state.submodule_summary {
-            Loadable::NotLoaded | Loadable::Loading => {
-                components::empty_state(theme, "Submodule", "Loading submodule summary…")
-                    .into_any_element()
-            }
-            Loadable::Error(error) => {
-                components::empty_state(theme, "Submodule", error.clone()).into_any_element()
-            }
-            Loadable::Ready(summary) => {
-                // Share the summary and the entry list: both were cloned per
-                // frame, and the entries once more per change row for the
-                // click handler.
-                let summary = Arc::clone(summary);
-                let inline_entries: Arc<[InlineSubmoduleDiffEntry]> =
-                    inline_submodule_entries(&summary).into();
-                let summary_status = summary.status.or(fallback_status);
-                let initialized = match summary_status {
-                    Some(SubmoduleStatus::NotInitialized) => false,
-                    Some(SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping) => false,
-                    Some(_) => true,
-                    None => fallback_initialized,
-                };
-                let can_open = initialized;
-                let can_change_pointer = summary.mode == SubmoduleDiffSummaryMode::Worktree
-                    && can_open
-                    && !matches!(
-                        summary_status,
-                        Some(SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping)
-                    );
-                let show_load = summary.mode == SubmoduleDiffSummaryMode::Worktree
-                    && (matches!(summary_status, Some(SubmoduleStatus::NotInitialized))
-                        || (summary_status.is_none() && !fallback_initialized));
-                let submodule_repo_path = repo_workdir.join(&summary.path);
-                let summary_path = summary.path.clone();
-
-                let status_badge = |status: SubmoduleStatus| {
-                    let (label, color) = match status {
-                        SubmoduleStatus::UpToDate => {
-                            ("Loaded", theme.colors.status.success.foreground)
-                        }
-                        SubmoduleStatus::NotInitialized => (
-                            "Not loaded",
-                            with_alpha(
-                                theme.colors.foreground.secondary,
-                                if theme.is_dark { 0.86 } else { 0.94 },
-                            ),
-                        ),
-                        SubmoduleStatus::HeadMismatch => {
-                            ("Head mismatch", theme.colors.status.warning.foreground)
-                        }
-                        SubmoduleStatus::MergeConflict => {
-                            ("Conflict", theme.colors.status.danger.foreground)
-                        }
-                        SubmoduleStatus::MissingMapping => {
-                            ("Missing mapping", theme.colors.status.danger.foreground)
-                        }
-                        SubmoduleStatus::Unknown(_) => {
-                            ("Unknown", theme.colors.foreground.secondary)
-                        }
-                    };
-
-                    div()
-                        .px_1p5()
-                        .h(px(20.0))
-                        .rounded(px(theme.radii.row))
-                        .border_1()
-                        .border_color(with_alpha(color, if theme.is_dark { 0.45 } else { 0.32 }))
-                        .bg(with_alpha(color, if theme.is_dark { 0.14 } else { 0.10 }))
-                        .text_xs()
-                        .text_color(color)
-                        .child(label)
-                };
-
-                let change_row_icon = |kind: FileStatusKind| match kind {
-                    FileStatusKind::Untracked | FileStatusKind::Added => {
-                        ("icons/plus.svg", theme.colors.status.success.foreground)
-                    }
-                    FileStatusKind::Modified => {
-                        ("icons/pencil.svg", theme.colors.status.warning.foreground)
-                    }
-                    FileStatusKind::Deleted => {
-                        ("icons/minus.svg", theme.colors.status.danger.foreground)
-                    }
-                    FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent.foreground),
-                    FileStatusKind::Conflicted => {
-                        ("icons/warning.svg", theme.colors.status.danger.foreground)
-                    }
-                };
-
-                let render_change_rows =
-                    |section_key: &str,
-                     changes: &[SubmoduleInnerChange],
-                     range_commits: Option<(CommitId, CommitId)>,
-                     live_area: Option<DiffArea>,
-                     _this: &mut MainPaneView,
-                     cx: &mut gpui::Context<MainPaneView>| {
-                        if changes.is_empty() {
-                            return vec![
-                                div()
-                                    .px_2()
-                                    .py_1()
-                                    .text_sm()
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child("No inner changes.")
-                                    .into_any_element(),
-                            ];
-                        }
-
-                        changes
-                            .iter()
-                            .map(|change| {
-                                let (icon, icon_color) = change_row_icon(change.kind);
-                                let additions = change
-                                    .additions
-                                    .map(|value| format!("+{value}"))
-                                    .unwrap_or_else(|| "—".to_string());
-                                let deletions = change
-                                    .deletions
-                                    .map(|value| format!("-{value}"))
-                                    .unwrap_or_else(|| "—".to_string());
-                                let change_path = change.path.clone();
-                                let target = range_commits.as_ref().map_or_else(
-                                    || {
-                                        live_area.map(|area| DiffTarget::WorkingTree {
-                                            path: change_path.clone(),
-                                            area,
-                                        })
-                                    },
-                                    |(from_commit_id, to_commit_id)| {
-                                        Some(DiffTarget::CommitRange {
-                                            from_commit_id: from_commit_id.clone(),
-                                            to_commit_id: Some(to_commit_id.clone()),
-                                            path: Some(change_path.clone()),
-                                        })
-                                    },
-                                );
-                                let inline_selected_ix = target.as_ref().and_then(|target| {
-                                    inline_entries
-                                        .iter()
-                                        .position(|entry| &entry.target == target)
-                                });
-                                let repo_path_for_click = submodule_repo_path.clone();
-                                let repo_path_for_menu = submodule_repo_path.clone();
-                                let summary_path_for_inline = summary.path.clone();
-                                let inline_entries_for_click = Arc::clone(&inline_entries);
-                                let context_menu_path = change_path.clone();
-
-                                let mut row = div()
-                                .id(format!("{}_{}", section_key, change_path.display()))
-                                .px_2()
-                                .py_1()
-                                .rounded(px(theme.radii.row))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(super::super::icons::svg_icon(
-                                    icon,
-                                    icon_color,
-                                    px(12.0),
-                                ))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.0))
-                                        .text_sm()
-                                        .line_clamp(1)
-                                        .child(change_path.display().to_string()),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_family(
-                                            crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
-                                        )
-                                        .text_color(theme.colors.status.success.foreground)
-                                        .child(additions),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_family(
-                                            crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
-                                        )
-                                        .text_color(theme.colors.status.danger.foreground)
-                                        .child(deletions),
-                                );
-
-                                if let Some(target) = target {
-                                    row = row
-                                        .cursor(CursorStyle::PointingHand)
-                                        .hover(move |row| {
-                                            row.bg(theme.colors.interaction.hover_background)
-                                        })
-                                        .on_click(cx.listener(
-                                            move |this, _e: &ClickEvent, _window, cx| {
-                                                let selected_ix = inline_selected_ix.unwrap_or(0);
-                                                this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
-                                                    repo_id,
-                                                    origin: gitcomet_state::model::ForeignDiffOrigin::Submodule,
-                                                    submodule_repo_path: repo_path_for_click
-                                                        .clone(),
-                                                    parent_submodule_path: summary_path_for_inline
-                                                        .clone(),
-                                                    entries: inline_entries_for_click.to_vec(),
-                                                    selected_ix,
-                                                });
-                                                cx.notify();
-                                            },
-                                        ))
-                                        .on_mouse_down(
-                                            MouseButton::Right,
-                                            cx.listener(
-                                                move |this, e: &MouseDownEvent, window, cx| {
-                                                    cx.stop_propagation();
-                                                    this.activate_context_menu_invoker(
-                                                        format!(
-                                                            "submodule_inner_diff_menu_{}_{}",
-                                                            repo_id.0,
-                                                            context_menu_path.display()
-                                                        )
-                                                        .into(),
-                                                        cx,
-                                                    );
-                                                    this.open_popover_at(
-                                                        PopoverKind::SubmoduleInnerDiffMenu {
-                                                            repo_id,
-                                                            submodule_repo_path: repo_path_for_menu
-                                                                .clone(),
-                                                            target: target.clone(),
-                                                        },
-                                                        e.position,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                },
-                                            ),
-                                        );
-                                }
-
-                                row.into_any_element()
-                            })
-                            .collect::<Vec<_>>()
-                    };
-
-                let render_change_section =
-                    |title: &'static str,
-                     section_key: &str,
-                     changes: &[SubmoduleInnerChange],
-                     range_commits: Option<(CommitId, CommitId)>,
-                     live_area: Option<DiffArea>,
-                     this: &mut MainPaneView,
-                     cx: &mut gpui::Context<MainPaneView>| {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .px_2()
-                                    .pt_1()
-                                    .text_xs()
-                                    .text_color(theme.colors.foreground.secondary)
-                                    .child(title),
-                            )
-                            .children(render_change_rows(
-                                section_key,
-                                changes,
-                                range_commits,
-                                live_area,
-                                this,
-                                cx,
-                            ))
-                            .into_any_element()
-                    };
-
-                let mut range_sections = Vec::new();
-                for (slot, range) in summary.ranges.iter().enumerate() {
-                    let emphasized = match range.kind {
-                        SubmoduleDiffRangeKind::StagedPointer => {
-                            selected_area == Some(DiffArea::Staged)
-                        }
-                        SubmoduleDiffRangeKind::UnstagedPointer => {
-                            selected_area == Some(DiffArea::Unstaged)
-                        }
-                        SubmoduleDiffRangeKind::CommitHistory => true,
-                    };
-                    let changed = range.from != range.to;
-                    let range_hash_input = self.prepare_submodule_hash_input(
-                        slot,
-                        format!(
-                            "{} -> {}",
-                            full_submodule_hash_opt(range.from.as_ref()),
-                            full_submodule_hash_opt(range.to.as_ref())
-                        ),
-                        theme,
-                        cx,
-                    );
-                    let range_commits = match (range.from.as_ref(), range.to.as_ref()) {
-                        (Some(from), Some(to)) => Some((from.clone(), to.clone())),
-                        _ => None,
-                    };
-
-                    let mut section = div()
-                        .id(format!("submodule_range_{:?}", range.kind))
-                        .px_2()
-                        .py_2()
-                        .rounded(px(theme.radii.row))
-                        .border_1()
-                        .border_color(if emphasized {
-                            theme.colors.interaction.pressed_background
-                        } else {
-                            theme.colors.stroke.default
-                        })
-                        .bg(if emphasized {
-                            with_alpha(
-                                theme.colors.interaction.hover_background,
-                                if theme.is_dark { 0.28 } else { 0.48 },
-                            )
-                        } else {
-                            gpui::rgba(0x00000000)
-                        })
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(theme.colors.foreground.secondary)
-                                        .child(submodule_range_label(range.kind)),
-                                )
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_family(
-                                            crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
-                                        )
-                                        .text_color(if changed {
-                                            theme.colors.foreground.primary
-                                        } else {
-                                            theme.colors.foreground.secondary
-                                        })
-                                        .child(format!(
-                                            "{} -> {}",
-                                            short_submodule_hash_opt(range.from.as_ref()),
-                                            short_submodule_hash_opt(range.to.as_ref())
-                                        )),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.colors.foreground.secondary)
-                                        .child("Hashes"),
-                                )
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .min_w(px(0.0))
-                                        .font_family(
-                                            crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
-                                        )
-                                        .child(range_hash_input),
-                                ),
-                        );
-                    if let Some(reason) = range.unavailable_reason.as_ref() {
-                        section = section.child(
-                            div()
-                                .px_2()
-                                .text_sm()
-                                .text_color(theme.colors.foreground.secondary)
-                                .child(reason.clone()),
-                        );
-                    }
-                    section = section.child(render_change_section(
-                        "Changes between hashes",
-                        &format!("submodule_range_{:?}", range.kind),
-                        &range.changes,
-                        range_commits,
-                        None,
-                        self,
-                        cx,
-                    ));
-                    range_sections.push(section.into_any_element());
-                }
-
-                div()
-                    .id("submodule_summary_scroll")
-                    .flex()
-                    .flex_col()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .gap_2()
-                    .bg(theme.colors.surface.canvas)
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(super::super::icons::svg_icon(
-                                        "icons/box.svg",
-                                        match summary_status.unwrap_or(SubmoduleStatus::UpToDate) {
-                                            SubmoduleStatus::NotInitialized => with_alpha(
-                                                theme.colors.foreground.secondary,
-                                                if theme.is_dark { 0.82 } else { 0.94 },
-                                            ),
-                                            SubmoduleStatus::HeadMismatch => {
-                                                theme.colors.status.warning.foreground
-                                            }
-                                            SubmoduleStatus::MergeConflict
-                                            | SubmoduleStatus::MissingMapping => {
-                                                theme.colors.status.danger.foreground
-                                            }
-                                            SubmoduleStatus::UpToDate
-                                            | SubmoduleStatus::Unknown(_) => {
-                                                theme.colors.accent.foreground
-                                            }
-                                        },
-                                        px(14.0),
-                                    ))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::BOLD)
-                                            .child(summary.path.display().to_string()),
-                                    )
-                                    .when_some(summary_status, |this, status| {
-                                        this.child(status_badge(status))
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        components::Button::new(
-                                            "submodule_summary_open",
-                                            "Open submodule",
-                                        )
-                                        .style(components::ButtonStyle::Outlined)
-                                        .disabled(!can_open)
-                                        .on_click(
-                                            theme,
-                                            cx,
-                                            move |this, _e, _w, cx| {
-                                                if can_open {
-                                                    this.store
-                                                        .dispatch(Msg::OpenRepo(open_path.clone()));
-                                                    cx.notify();
-                                                }
-                                            },
-                                        ),
-                                    )
-                                    .when(show_load, |row| {
-                                        let load_path = summary.path.clone();
-                                        row.child(
-                                            components::Button::new(
-                                                "submodule_summary_load",
-                                                "Load submodule",
-                                            )
-                                            .style(components::ButtonStyle::Outlined)
-                                            .on_click(
-                                                theme,
-                                                cx,
-                                                move |this, _e, _w, cx| {
-                                                    this.store.dispatch(Msg::LoadSubmodule {
-                                                        repo_id,
-                                                        path: load_path.clone(),
-                                                    });
-                                                    cx.notify();
-                                                },
-                                            ),
-                                        )
-                                    })
-                                    .child(
-                                        components::Button::new(
-                                            "submodule_summary_change_pointer",
-                                            "Change pointer…",
-                                        )
-                                        .style(components::ButtonStyle::Outlined)
-                                        .disabled(!can_change_pointer)
-                                        .on_click(
-                                            theme,
-                                            cx,
-                                            move |this, e, window, cx| {
-                                                if !can_change_pointer {
-                                                    return;
-                                                }
-                                                this.open_popover_at(
-                                                    PopoverKind::submodule(
-                                                        repo_id,
-                                                        SubmodulePopoverKind::ChangePointerPrompt {
-                                                            path: summary_path.clone(),
-                                                        },
-                                                    ),
-                                                    e.position(),
-                                                    window,
-                                                    cx,
-                                                );
-                                                cx.notify();
-                                            },
-                                        ),
-                                    ),
-                            ),
-                    )
-                    .children(range_sections)
-                    .when(
-                        summary.mode == SubmoduleDiffSummaryMode::Worktree
-                            && !summary.live_staged.is_empty(),
-                        |this| {
-                            this.child(render_change_section(
-                                "Uncommitted inner staged",
-                                "submodule_live_staged",
-                                &summary.live_staged,
-                                None,
-                                Some(DiffArea::Staged),
-                                self,
-                                cx,
-                            ))
-                        },
-                    )
-                    .when(
-                        summary.mode == SubmoduleDiffSummaryMode::Worktree
-                            && !summary.live_unstaged.is_empty(),
-                        |this| {
-                            this.child(render_change_section(
-                                "Uncommitted inner unstaged",
-                                "submodule_live_unstaged",
-                                &summary.live_unstaged,
-                                None,
-                                Some(DiffArea::Unstaged),
-                                self,
-                                cx,
-                            ))
-                        },
-                    )
-                    .into_any_element()
-            }
-        }
     }
 
     pub(in crate::view) fn diff_view(
@@ -2566,7 +1889,10 @@ impl MainPaneView {
                         .items_center()
                         .gap_1()
                         .px_1()
-                        .h(components::control_height(ui_scale_percent))
+                        .h(components::control_height(
+                            ui_scale::UiScale::from_percent(ui_scale_percent)
+                                .with_appearance(theme.metrics),
+                        ))
                         .rounded(px(theme.radii.row))
                         .when(diff_mode_active, |d| {
                             d.bg(theme.colors.interaction.pressed_background)
@@ -2585,7 +1911,7 @@ impl MainPaneView {
                                 .min_w(px(0.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .text_sm()
+                                .text_size(theme.ui_text(14.0))
                                 .child(diff_mode_label),
                         )
                         .child(svg_icon(
@@ -2609,16 +1935,8 @@ impl MainPaneView {
 
             if !is_image_diff_view {
                 let nav_entries = self.diff_nav_entries();
-                let can_nav_prev = diff_navigation::diff_nav_prev_target(
-                    &nav_entries,
-                    self.diff_nav_prev_current_ix(),
-                )
-                .is_some();
-                let can_nav_next = diff_navigation::diff_nav_next_target(
-                    &nav_entries,
-                    self.diff_nav_next_current_ix(),
-                )
-                .is_some();
+                let can_nav_prev = self.diff_nav_prev_target_ix(&nav_entries).is_some();
+                let can_nav_next = self.diff_nav_next_target_ix(&nav_entries).is_some();
 
                 let prev_hunk_btn = components::Button::new("diff_prev_hunk", "")
                     .start_slot(svg_icon(
@@ -2634,11 +1952,7 @@ impl MainPaneView {
                     })
                     .gitcomet_tooltip(
                         theme,
-                        format!(
-                            "Previous change (F2 / Shift+F7 / {})",
-                            crate::view::shortcut_labels::alt_shortcut("Up")
-                        )
-                        .into(),
+                        crate::view::shortcut_labels::previous_change_tooltip().into(),
                     );
 
                 let next_hunk_btn = components::Button::new("diff_next_hunk", "")
@@ -2655,11 +1969,7 @@ impl MainPaneView {
                     })
                     .gitcomet_tooltip(
                         theme,
-                        format!(
-                            "Next change (F3 / F7 / {})",
-                            crate::view::shortcut_labels::alt_shortcut("Down")
-                        )
-                        .into(),
+                        crate::view::shortcut_labels::next_change_tooltip().into(),
                     );
 
                 let diff_inline_btn = components::Button::new("diff_inline", "Inline")
@@ -2731,7 +2041,10 @@ impl MainPaneView {
                     .debug_selector(|| "diff_view_toggle".to_string())
                     .flex()
                     .items_center()
-                    .h(components::control_height(ui_scale_percent))
+                    .h(components::control_height(
+                        ui_scale::UiScale::from_percent(ui_scale_percent)
+                            .with_appearance(theme.metrics),
+                    ))
                     .rounded(px(theme.radii.row))
                     .border_1()
                     .border_color(view_toggle_border)
@@ -2929,7 +2242,9 @@ impl MainPaneView {
             .flex()
             .items_center()
             .justify_between()
-            .h(components::control_height_md(ui_scale_percent))
+            .h(components::content_header_height(
+                ui_scale::UiScale::from_percent(ui_scale_percent).with_appearance(theme.metrics),
+            ))
             .child(
                 div()
                     .flex_1()
@@ -2960,7 +2275,7 @@ impl MainPaneView {
         } else if let Some(message) = untracked_directory_notice {
             components::empty_state(theme, "Directory", message).into_any_element()
         } else if is_file_editor {
-            self.render_file_editor(theme, cx)
+            self.render_file_editor(theme, window, cx)
         } else if is_file_preview {
             if is_markdown_preview_view {
                 match &self.worktree_preview {
@@ -3567,6 +2882,9 @@ impl MainPaneView {
                                                                 crate::press_gesture::claim_press(
                                                                     cx,
                                                                 );
+                                                                crate::text_selection_owner::preserve(
+                                                                    cx,
+                                                                );
                                                                 this.diff_split_resize = Some(
                                                                     DiffSplitResizeState {
                                                                         handle:
@@ -3658,10 +2976,15 @@ impl MainPaneView {
                                                 // divider lines up. Padding keeps the band and its
                                                 // bottom border full-bleed.
                                                 .pr(shared_scrollbar_gutter)
-                                                .h(components::control_height(ui_scale_percent))
+                                                .h(components::control_height(
+                                                    ui_scale::UiScale::from_percent(
+                                                        ui_scale_percent,
+                                                    )
+                                                    .with_appearance(theme.metrics),
+                                                ))
                                                 .flex()
                                                 .items_center()
-                                                .text_xs()
+                                                .text_size(theme.ui_text(12.0))
                                                 .text_color(theme.colors.foreground.secondary)
                                                 .bg(crate::theme::content_header_bg(theme))
                                                 .border_b_1()
@@ -3950,7 +3273,10 @@ impl MainPaneView {
             }))
             .child(
                 header
-                    .h(components::control_height_md(ui_scale_percent))
+                    .h(components::content_header_height(
+                        ui_scale::UiScale::from_percent(ui_scale_percent)
+                            .with_appearance(theme.metrics),
+                    ))
                     .px_2()
                     .bg(if historical_browse {
                         crate::theme::historical_header_bg(

@@ -67,12 +67,22 @@ impl GixRepo {
     }
 
     pub(super) fn store_log_page(&self, key: super::LogPageCacheKey, page: &Arc<LogPage>) {
+        let row_limit = super::super::LOG_PAGE_CACHE_ROW_LIMIT;
+        if page.commits.len() > row_limit {
+            return;
+        }
         let mut cache = self.log_page_cache.lock().expect("log page cache");
         if let Some(index) = cache.iter().position(|entry| entry.key == key) {
             cache.remove(index);
         }
-        if cache.len() >= super::LOG_PAGE_CACHE_LIMIT {
-            cache.remove(0);
+        let mut rows = cache
+            .iter()
+            .map(|entry| entry.page.commits.len())
+            .sum::<usize>();
+        while !cache.is_empty()
+            && (cache.len() >= super::LOG_PAGE_CACHE_LIMIT || rows + page.commits.len() > row_limit)
+        {
+            rows -= cache.remove(0).page.commits.len();
         }
         cache.push(super::LogPageCacheEntry {
             key,
@@ -404,6 +414,17 @@ impl GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Arc<LogPage>> {
         self.log_history_mode_page_impl_inner(mode, None, limit, cursor, Some(cancellation), None)
+    }
+
+    pub(in super::super) fn log_history_mode_page_filtered_cancellable_impl(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        self.log_history_mode_page_impl_inner(mode, author, limit, cursor, Some(cancellation), None)
     }
 
     /// Filtered, cancellable, streaming variant: `on_chunk` sees the page as it
@@ -777,7 +798,9 @@ impl GixRepo {
         // reliably with `--skip` across renames. Cursor pages cache the full
         // follow result so repeated "load more" requests do not rescan history.
         if cursor.is_none() {
-            let commits = self.log_follow_commits(path, Some(limit.saturating_add(1)))?;
+            // One past the limit tells the page whether more follow; a limit
+            // that cannot grow reads as "every commit" and drops the bound.
+            let commits = self.log_follow_commits(path, limit.checked_add(1))?;
             return paginate_commits(commits.into_iter().map(Ok), limit, cursor).map(Arc::new);
         }
 
@@ -846,6 +869,27 @@ impl GixRepo {
             parent_ids,
             files,
         })
+    }
+
+    /// Resolve a reference (abbreviated sha, branch, tag, `HEAD~3`, …) to its
+    /// commit, without the parent diff `commit_details_impl` computes.
+    ///
+    /// `find_commit_by_id` sends anything that is not a full oid through
+    /// `rev_parse_single`, so an ambiguous prefix errors here rather than
+    /// silently picking one candidate.
+    pub(in super::super) fn resolve_commit_impl(&self, reference: &CommitId) -> Result<Commit> {
+        let repo = self.repo();
+        let spec = reference.as_ref();
+        let commit = find_commit_by_id(&repo, reference)?;
+        let id = commit.id;
+        let parent_oids = commit
+            .parent_ids()
+            .map(|parent| parent.detach())
+            .collect::<Vec<_>>();
+        let mut decode_state = CommitDecodeState::default();
+        // No author filter, so the decoder never returns `None`.
+        commit_from_walk_parts(&repo, &id, &parent_oids, None, &mut decode_state, None)?
+            .ok_or_else(|| Error::new(ErrorKind::Backend(format!("gix resolve commit {spec}"))))
     }
 
     pub(in super::super) fn diff_range_files_impl(

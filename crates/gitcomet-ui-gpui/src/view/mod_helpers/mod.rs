@@ -38,6 +38,39 @@ pub(in crate::view) enum PullRequest {
     NotReady,
 }
 
+/// What opening the repository's remote in a web browser should do.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum RemoteWebRequest {
+    NotReady,
+    NoRemotes,
+    NoWebPage,
+    Open(super::permalink::RemoteWebPage),
+    /// Several remotes have a page; `origin`'s comes first.
+    Choose(Vec<super::permalink::RemoteWebPage>),
+}
+
+impl RemoteWebRequest {
+    /// Why nothing can be opened, for a disabled palette or menu row.
+    pub(in crate::view) fn unavailable_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::NotReady => Some("The repository is still loading"),
+            Self::NoRemotes => Some("Add a remote first"),
+            Self::NoWebPage => Some("No remote URL points to a web page"),
+            Self::Open(_) | Self::Choose(_) => None,
+        }
+    }
+
+    /// The same, as the sentence a shortcut press shows in a toast.
+    pub(in crate::view) fn unavailable_message(&self) -> Option<&'static str> {
+        match self {
+            Self::NotReady => Some("This repository's remotes are still loading."),
+            Self::NoRemotes => Some("This repository has no remotes to open in a web browser."),
+            Self::NoWebPage => Some("None of this repository's remote URLs points to a web page."),
+            Self::Open(_) | Self::Choose(_) => None,
+        }
+    }
+}
+
 pub(in crate::view) fn head_is_detached(repo: &RepoState) -> bool {
     matches!(&repo.head_branch, Loadable::Ready(head) if head.is_empty() || head == "HEAD")
 }
@@ -101,6 +134,25 @@ pub(in crate::view) fn pull_request(repo: &RepoState) -> PullRequest {
     PullRequest::Pull
 }
 
+/// Whether the repository is part-way through a merge.
+pub(in crate::view) fn merge_in_progress(repo: &RepoState) -> bool {
+    matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
+}
+
+/// The rebase, apply, cherry-pick, or revert the repository is part-way
+/// through, if any. `rebase_in_progress` stands in until the sequencer state loads.
+pub(in crate::view) fn active_sequencer_state(
+    repo: &RepoState,
+) -> gitcomet_core::services::SequencerState {
+    match repo.sequencer_state {
+        Loadable::Ready(state) => state,
+        _ if matches!(&repo.rebase_in_progress, Loadable::Ready(true)) => {
+            gitcomet_core::services::SequencerState::RebaseOrApply
+        }
+        _ => gitcomet_core::services::SequencerState::None,
+    }
+}
+
 /// Decide whether an interactive Push can run immediately or first needs the
 /// existing set-upstream prompt. A configured upstream can name a branch that
 /// has not been pushed yet; that still gives Push an exact destination.
@@ -136,6 +188,23 @@ pub(in crate::view) fn push_request(repo: &RepoState) -> PushRequest {
         .name
         .clone();
     PushRequest::SetUpstream { remote }
+}
+
+/// Decide what "Open remote in web browser" does: open the one remote with a
+/// web page, or let the user choose when several have one.
+pub(in crate::view) fn remote_web_request(repo: &RepoState) -> RemoteWebRequest {
+    let Loadable::Ready(remotes) = &repo.remotes else {
+        return RemoteWebRequest::NotReady;
+    };
+    if remotes.is_empty() {
+        return RemoteWebRequest::NoRemotes;
+    }
+    let mut pages = super::permalink::remote_web_pages(remotes);
+    match pages.len() {
+        0 => RemoteWebRequest::NoWebPage,
+        1 => RemoteWebRequest::Open(pages.remove(0)),
+        _ => RemoteWebRequest::Choose(pages),
+    }
 }
 
 pub(in crate::view) fn selected_remote_branch_is_missing(
@@ -921,6 +990,10 @@ pub struct GitCometView {
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) command_palette: Entity<super::command_palette::CommandPaletteView>,
     pub(super) command_palette_open: bool,
+    pub(super) reveal_commit_dialog: Entity<super::reveal_commit::RevealCommitView>,
+    pub(super) reveal_commit_open: bool,
+    /// Focus to hand back when an overlay opened from a background window
+    /// closes. Shared by the command palette and the Reveal Commit dialog.
     pub(super) pre_palette_focus: Option<FocusHandle>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
@@ -938,11 +1011,16 @@ pub struct GitCometView {
     /// Set when a deactivation was caused by a move/resize grab we requested, so
     /// the matching re-activation does not trigger a repo refresh.
     pub(super) window_grab_activation_suppressed_at: Option<Instant>,
+    /// Background gpg/ssh-keygen detection. A newer probe supersedes older ones.
+    pub(super) signing_tools_probe_seq: u64,
+    pub(super) signing_tools_probe_in_flight: bool,
+    pub(super) signing_tools_probed_at: Option<Instant>,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
+    pub(super) file_list_layout: FileListLayout,
     pub(super) terminal_preferences: TerminalPreferences,
     pub(super) terminal_sessions: FxHashMap<RepoId, RepoTerminalSession>,
     pub(super) terminal_panel_height: Pixels,

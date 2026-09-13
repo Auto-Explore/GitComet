@@ -60,3 +60,5 @@ mod status;
 mod submodule;
 mod upstream;
 mod workspace;
+
+mod appearance_and_refs;

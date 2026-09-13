@@ -225,6 +225,7 @@ fn render_block_gap(
                     next_source_visible_ix,
                     region,
                     event.position,
+                    window,
                     cx,
                 );
                 cx.notify();
@@ -477,6 +478,7 @@ fn row_shell(
                             text_region,
                             position,
                             click_count,
+                            window,
                             cx,
                         );
                     }
@@ -859,6 +861,7 @@ fn render_code_padding(
                     text_region,
                     event.position,
                     event.click_count,
+                    window,
                     cx,
                 );
                 cx.notify();
@@ -1055,5 +1058,5 @@ fn render_image(
 }
 
 fn scaled(value: f32, context: &MarkdownDocumentContext) -> Pixels {
-    crate::ui_scale::design_px_from_percent(value, context.ui_scale_percent)
+    context.theme.markdown_px(value, context.ui_scale_percent)
 }

@@ -14,6 +14,8 @@ use super::RepoPathList;
 
 #[derive(Clone, Debug)]
 pub enum Effect {
+    IndexedHistory(crate::indexed_history::IndexedHistoryEffect),
+    HistoryAuthors(crate::history_authors::HistoryAuthorsEffect),
     PersistSession {
         repo_id: Option<RepoId>,
         action: &'static str,
@@ -67,6 +69,9 @@ pub enum Effect {
     LoadStagedStatus {
         repo_id: RepoId,
     },
+    LoadUncommittedLineStats {
+        repo_id: RepoId,
+    },
     LoadStatus {
         repo_id: RepoId,
     },
@@ -106,10 +111,14 @@ pub enum Effect {
         limit: usize,
         request_rev: u64,
     },
+    /// One page of a file's history. `cursor: None` is the bounded first
+    /// page; a cursor page resumes after it and is served from the backend's
+    /// cached full follow walk, so one such request can ask for everything.
     LoadFileHistory {
         repo_id: RepoId,
         path: PathBuf,
         limit: usize,
+        cursor: Option<LogCursor>,
     },
     LoadBlame {
         repo_id: RepoId,
@@ -150,6 +159,17 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Verify the signatures of `commit_ids`. Batched because verification
+    /// shells out to `git`; the backend drops unsigned commits for free.
+    VerifyCommitSignatures {
+        repo_id: RepoId,
+        epoch: u64,
+        cancellation: gitcomet_core::services::CancellationToken,
+        commit_ids: std::sync::Arc<[CommitId]>,
+        /// Only signatures in these formats are checked: the others have no
+        /// verifier installed.
+        formats: gitcomet_core::domain::SignatureFormats,
+    },
     LoadHoverCommitMessage {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -159,6 +179,17 @@ pub enum Effect {
     ResolveCommitForReveal {
         repo_id: RepoId,
         reference: CommitId,
+    },
+    /// Resolve a commit reference for the Reveal Commit dialog's preview row.
+    /// Lighter than `ResolveCommitForReveal` — no parent diff — because it runs
+    /// while the user is still typing.
+    ResolveCommitLookup {
+        repo_id: RepoId,
+        reference: CommitId,
+        purpose: crate::model::CommitLookupPurpose,
+        /// Echoed back on the reply so a completion that lost a race against a
+        /// newer lookup can be dropped. See `CommitLookup::request`.
+        request: u64,
     },
     LoadRangeFiles {
         repo_id: RepoId,
@@ -195,6 +226,7 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
         path: PathBuf,
+        content_preview: bool,
     },
     LoadDiff {
         repo_id: RepoId,
@@ -282,6 +314,11 @@ pub enum Effect {
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+        summary: String,
+        /// Signing or fetch auth staged when a failed revert is replayed.
+        auth: Option<StagedGitAuth>,
     },
     CreateBranch {
         repo_id: RepoId,
@@ -480,6 +517,17 @@ pub enum Effect {
     SquashRef {
         repo_id: RepoId,
         reference: String,
+    },
+    PushWithTags {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+        auth: Option<StagedGitAuth>,
+    },
+    PreviewTagPush {
+        repo_id: RepoId,
+        request: gitcomet_core::tag_push::TagPushRequest,
+        cancellation: gitcomet_core::services::CancellationToken,
+        generation: u64,
     },
     Push {
         repo_id: RepoId,

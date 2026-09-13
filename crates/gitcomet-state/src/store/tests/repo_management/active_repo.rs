@@ -1258,7 +1258,7 @@ fn set_active_repo_resets_the_activated_tabs_history_selection_only_on_change() 
         .expect("repo1 exists");
     target.history_state.selected_commit = Some(stale_commit.clone());
     target.history_state.multi_selection = CommitMultiSelection {
-        commits: vec![stale_commit.clone(), CommitId("older".into())],
+        commits: vec![stale_commit.clone(), CommitId("older".into())].into(),
         anchor: Some(stale_commit.clone()),
         anchor_index: Some(0),
         anchor_log_rev: Some(target.history_state.log_rev),
@@ -1352,7 +1352,7 @@ fn set_active_repo_inline_retires_the_activated_worktrees_orphaned_diff() {
         },
         submodule_repo_path: worktree.clone(),
         parent_submodule_path: worktree,
-        entries: Vec::new(),
+        entries: Vec::new().into(),
         selected_ix: 0,
         target: inline_target,
         rev: 1,
@@ -1685,6 +1685,7 @@ fn set_active_repo_reloads_cancelled_history_panes_but_resets_commit_selection()
             repo_id,
             path,
             limit: 200,
+            cursor: None,
         } if *repo_id == repo1 && path == &history_path
     )));
     assert!(reactivate_effects.iter().any(|effect| matches!(

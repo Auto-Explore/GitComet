@@ -1,11 +1,12 @@
+mod tag_push;
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextSide,
-    DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage,
-    RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
-    RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream, UpstreamDivergence,
-    Worktree,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, Diff, DiffArea,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
+    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
+    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
+    UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -46,12 +47,14 @@ mod discard;
 mod file_browser;
 mod git_ops;
 mod history;
+mod line_stats;
 mod log;
 mod mergetool;
 mod mergetool_builtin;
 mod patch;
 mod porcelain;
 mod remotes;
+mod signatures;
 mod status;
 mod submodules;
 mod tags;
@@ -384,6 +387,7 @@ struct AllBranchesTipsCacheEntry {
     tips: Arc<[gix::ObjectId]>,
 }
 const LOG_PAGE_CACHE_LIMIT: usize = 32;
+const LOG_PAGE_CACHE_ROW_LIMIT: usize = 10_000;
 const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
 const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
 /// Date-order walks retain in-degree state for the reachable history.
@@ -396,6 +400,8 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_page_cache: std::sync::Mutex<Vec<LogPageCacheEntry>>,
+    history_authors_cache: std::sync::Mutex<Option<log::HistoryAuthorsCache>>,
+    range_reader: std::sync::Mutex<Option<RangeReader>>,
     all_branches_tips: std::sync::Mutex<Option<AllBranchesTipsCacheEntry>>,
     divergence_cache: DivergenceCache,
     /// `list_ref_metadata` output keyed by the ref namespace fingerprint; the
@@ -405,6 +411,10 @@ pub(crate) struct GixRepo {
     worktree_source_memo: std::sync::Mutex<rustc_hash::FxHashMap<PathBuf, WorktreeSourceMemoEntry>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
+    /// Immutable signature formats by oid. `None` means an unsigned commit.
+    signature_format_cache: std::sync::Mutex<
+        lru::LruCache<gix::ObjectId, Option<gitcomet_core::domain::SignatureFormat>>,
+    >,
 }
 
 impl GixRepo {
@@ -416,6 +426,8 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
             log_page_cache: std::sync::Mutex::new(Vec::new()),
+            history_authors_cache: Default::default(),
+            range_reader: Default::default(),
             all_branches_tips: std::sync::Mutex::new(None),
             divergence_cache: DivergenceCache::default(),
             ref_metadata_cache: std::sync::Mutex::new(None),
@@ -423,6 +435,9 @@ impl GixRepo {
             worktree_source_memo: std::sync::Mutex::default(),
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
+            signature_format_cache: std::sync::Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(signatures::SIGNATURE_CACHE_LIMIT).unwrap(),
+            )),
         }
     }
 
@@ -449,15 +464,88 @@ impl GixRepo {
         crate::open::open_worktree_repo(&self.spec.workdir)
             .map_err(|e| crate::open::map_open_error(e, "gix open fresh repo"))
     }
+
+    /// The object store for indexed range reads, re-opened every
+    /// [`RANGE_READER_REOPEN_BLOCKS`] blocks. Range reads touch commit objects
+    /// across the whole pack set, and every page of a mapped pack they touch
+    /// stays resident until the mapping is dropped; scrolling a large history
+    /// this way grew resident memory by gigabytes. A fresh open costs a config
+    /// parse and releases the mappings, so the store's footprint stays bounded
+    /// by the blocks read since.
+    pub(super) fn range_reader_repo(&self) -> Result<gix::Repository> {
+        let mut slot = self.range_reader.lock().expect("range reader");
+        if slot
+            .as_ref()
+            .is_none_or(|reader| reader.blocks >= RANGE_READER_REOPEN_BLOCKS)
+        {
+            gitcomet_core::history_perf::record(
+                gitcomet_core::history_perf::Work::RangeStoreReopen,
+            );
+            *slot = Some(RangeReader {
+                repo: self.reopen_repo()?.into_sync(),
+                blocks: 0,
+            });
+        }
+        let reader = slot.as_mut().expect("range reader is open");
+        reader.blocks += 1;
+        Ok(reader.repo.to_thread_local())
+    }
 }
+
+/// See [`GixRepo::range_reader_repo`].
+struct RangeReader {
+    repo: gix::ThreadSafeRepository,
+    blocks: usize,
+}
+
+/// Blocks of 256 commits read through one range-reader store before it is
+/// re-opened. On chromium a block touches roughly 0.2 MiB of pack pages.
+const RANGE_READER_REOPEN_BLOCKS: usize = 64;
 
 pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
     mergetool::allow_test_repo_local_mergetool_command(workdir, tool_name);
 }
 
 impl GitRepository for GixRepo {
+    fn history_authors(
+        &self,
+        mode: HistoryMode,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<[Arc<str>]>> {
+        self.history_authors_impl(mode, cancellation)
+    }
     fn spec(&self) -> &RepoSpec {
         &self.spec
+    }
+
+    fn build_history_index(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        cancellation: &CancellationToken,
+        on_progress: &mut dyn FnMut(gitcomet_core::history_index::HistoryIndexProgress),
+    ) -> Result<Option<gitcomet_core::history_index::HistoryIndexHandle>> {
+        self.build_history_index_impl(mode, author, cancellation, on_progress)
+    }
+
+    fn read_history_range(
+        &self,
+        index: &gitcomet_core::history_index::HistoryIndexHandle,
+        range: std::ops::Range<usize>,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::history_index::HistoryRange> {
+        self.read_history_range_impl(index, range, cancellation)
+    }
+
+    fn read_history(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        request: &gitcomet_core::services::HistoryReadRequest,
+        cancellation: &CancellationToken,
+        on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
+    ) -> Result<gitcomet_core::services::HistoryReadResult> {
+        self.read_history_impl(mode, author, request, cancellation, on_chunk)
     }
 
     fn log_history_mode_page(
@@ -498,6 +586,24 @@ impl GitRepository for GixRepo {
             cursor,
             cancellation,
             on_chunk,
+        )
+    }
+
+    fn log_history_mode_page_filtered_cancellable(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<LogPage>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_history_mode_page_filtered_cancellable_impl(
+            mode,
+            author,
+            limit,
+            cursor,
+            cancellation,
         )
     }
 
@@ -553,12 +659,54 @@ impl GitRepository for GixRepo {
         self.commit_details_impl(id)
     }
 
+    fn verify_commit_signatures(
+        &self,
+        ids: &[CommitId],
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        self.verify_commit_signatures_impl(ids)
+    }
+
+    fn verify_commit_signatures_cancellable(
+        &self,
+        ids: &[CommitId],
+        formats: gitcomet_core::domain::SignatureFormats,
+        cancellation: &gitcomet_core::services::CancellationToken,
+    ) -> Result<Vec<(CommitId, CommitSignature)>> {
+        self.verify_commit_signatures_cancellable_impl(ids, formats, Some(cancellation))
+    }
+
+    fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {
+        self.resolve_commit_impl(reference)
+    }
+
     fn diff_range_files(
         &self,
         from: &CommitId,
         to: Option<&CommitId>,
     ) -> Result<Vec<CommitFileChange>> {
         self.diff_range_files_impl(from, to)
+    }
+
+    fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.uncommitted_line_stats_impl(&CancellationToken::new())
+    }
+
+    fn uncommitted_line_stats_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.uncommitted_line_stats_impl(cancellation)
+    }
+
+    fn uncommitted_line_stats_for_status_cancellable(
+        &self,
+        status: &RepoStatus,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.line_stats_for_entries_impl(&status.unstaged, cancellation)
     }
 
     fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
@@ -841,8 +989,17 @@ impl GitRepository for GixRepo {
         self.cherry_pick_with_output_impl(id, commit, mainline)
     }
 
-    fn revert(&self, id: &CommitId) -> Result<()> {
-        self.revert_impl(id)
+    fn commit_message_template(&self) -> Result<Option<String>> {
+        self.commit_message_template_impl()
+    }
+
+    fn revert_with_output(
+        &self,
+        id: &CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        self.revert_with_output_impl(id, commit, mainline)
     }
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
@@ -914,6 +1071,21 @@ impl GitRepository for GixRepo {
 
     fn pull_with_output_prune(&self, mode: PullMode, prune: bool) -> Result<CommandOutput> {
         self.pull_with_output_prune_impl(mode, prune)
+    }
+
+    fn push_with_tags(
+        &self,
+        request: &gitcomet_core::tag_push::TagPushRequest,
+    ) -> Result<CommandOutput> {
+        self.push_with_tags_impl(request)
+    }
+
+    fn preview_tag_push(
+        &self,
+        request: &gitcomet_core::tag_push::TagPushRequest,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::tag_push::TagPushPreview> {
+        self.preview_tag_push_impl(request, cancellation)
     }
 
     fn push(&self) -> Result<()> {
@@ -1263,6 +1435,14 @@ impl GitRepository for GixRepo {
 
     fn submodule_diff_summary(&self, target: &DiffTarget) -> Result<SubmoduleDiffSummary> {
         self.submodule_diff_summary_impl(target)
+    }
+
+    fn submodule_diff_summary_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<SubmoduleDiffSummary> {
+        self.submodule_diff_summary_cancellable_impl(target, cancellation)
     }
 
     fn check_submodule_add_trust(&self, url: &str, path: &Path) -> Result<SubmoduleTrustDecision> {

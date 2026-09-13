@@ -35,7 +35,7 @@ impl SplitButton {
     }
 
     pub fn render(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Div {
-        let ui_scale = ui_scale.into();
+        let ui_scale = ui_scale.into().with_appearance(theme.metrics);
         let borderless = self.style == SplitButtonStyle::Borderless;
         let bg = match self.style {
             SplitButtonStyle::Filled => theme.colors.surface.raised,

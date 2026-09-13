@@ -13,9 +13,19 @@
 # It is a representation change only -- the automaton, and so every parse tree, is
 # byte-identical. `vendor/README.md` has the procedure and the proof.
 #
-# Generated with tree-sitter-cli 0.26.13 at ABI 14, the ABI upstream ships,
-# and the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the
-# README there.
+# **Generated with tree-sitter-cli 0.26.5, not 0.26.13 like most of vendor/**, at
+# ABI 14, the ABI upstream ships; the `tree_sitter/` headers come from
+# vendor/tree-sitter-headers -- see the README there.
+#
+# The CLI version matters: 0.26.13 builds a *different* automaton for this
+# grammar (STATE_COUNT 5878/5994 against upstream's 5870/5986), and the parser
+# vendored here before this update had that drift. 0.26.5 reproduces upstream's
+# counts exactly, so the retune is once again representation-only. Upstream's
+# own `^0.24.4` reproduces `parser.c` byte for byte too, but 0.24-era output
+# uses the pre-0.26 parser.h API (`.version`, `TSLexMode`) and will not compile
+# against the shared headers. Regenerate from `src/grammar.json`, not
+# `grammar.js` -- the latter `require`s tree-sitter-javascript from
+# node_modules, which is not vendored.
 #
 # Upstream's published crate contains no LICENSE file -- it is excluded from the
 # package, though the repository has one and the crate metadata declares MIT.

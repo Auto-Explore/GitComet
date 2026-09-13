@@ -1,4 +1,7 @@
 use super::*;
+
+const TOOLTIP_CURSOR_OFFSET_X_PX: f32 = 11.0;
+const TOOLTIP_CURSOR_OFFSET_Y_PX: f32 = 17.0;
 #[cfg(test)]
 use std::cell::RefCell;
 
@@ -47,7 +50,7 @@ pub(super) fn dismiss_tooltips_on_mouse_down(cx: &mut App) {
     cx.set_global(TooltipDismissEpoch(next));
 }
 
-pub(super) trait GitCometTooltipExt: gpui::StatefulInteractiveElement + Sized {
+pub(crate) trait GitCometTooltipExt: gpui::StatefulInteractiveElement + Sized {
     fn gitcomet_tooltip(self, theme: AppTheme, text: SharedString) -> Self {
         self.tooltip(move |_window, cx| {
             let epoch = current_tooltip_dismiss_epoch(cx);
@@ -93,17 +96,24 @@ impl Render for TooltipBubbleView {
             value.replace(Some(self.text.clone()));
         });
 
-        div().pl(px(11.0)).pt(px(17.0)).child(
-            div()
-                .px_2()
-                .py_1()
-                .bg(self.theme.colors.tooltip.background)
-                .rounded(px(self.theme.radii.row))
-                .shadow(crate::theme::shadow_popover(self.theme))
-                .text_xs()
-                .text_color(self.theme.colors.tooltip.foreground)
-                .child(self.text.clone()),
-        )
+        // Offset from the cursor hotspot, scaled so the bubble clears a
+        // larger pointer.
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
+        div()
+            .pl(scaled_px(TOOLTIP_CURSOR_OFFSET_X_PX))
+            .pt(scaled_px(TOOLTIP_CURSOR_OFFSET_Y_PX))
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .bg(self.theme.colors.tooltip.background)
+                    .rounded(px(self.theme.radii.row))
+                    .shadow(crate::theme::shadow_popover(self.theme))
+                    .text_size(self.theme.ui_text(12.0))
+                    .text_color(self.theme.colors.tooltip.foreground)
+                    .child(self.text.clone()),
+            )
     }
 }
 
@@ -190,6 +200,10 @@ impl GitCometView {
                             repo_sidebar_pinned_branches: Some(repo_sidebar_pinned_branches),
                             theme_mode: Some(this.theme_mode.key().to_string()),
                             ui_scale_percent: Some(this.ui_scale_percent),
+                            ui_density: Some(crate::appearance::current(cx).density.key().to_string()),
+                            ui_font_size_px: Some(crate::appearance::current(cx).ui_font_size_px),
+                            editor_font_size_px: Some(crate::appearance::current(cx).editor_font_size_px),
+                            markdown_preview_font_size_px: Some(crate::appearance::current(cx).markdown_preview_font_size_px),
                             ui_font_family: Some(font_preferences.ui_font_family),
                             editor_font_family: Some(font_preferences.editor_font_family),
                             use_font_ligatures: Some(font_preferences.use_font_ligatures),
@@ -197,6 +211,7 @@ impl GitCometView {
                             timezone: Some(this.timezone.key()),
                             show_timezone: Some(this.show_timezone),
                             change_tracking_view: Some(this.change_tracking_view.key().to_string()),
+                            file_list_layout: Some(this.file_list_layout.key().to_string()),
                             // Owned by the repository picker, not this snapshot.
                             repo_picker_sort: None,
                             repo_picker_collapsed_sections: None,
@@ -235,17 +250,22 @@ impl GitCometView {
                             mergetool_view_three_way: Some(mergetool_view_three_way),
                             change_tracking_height,
                             untracked_height,
+                            // The settings window owns branch-name placement.
+                            history_branch_names: None,
                             history_show_graph: Some(history_show_graph),
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),
                             history_relative_dates: Some(history_relative_dates),
                             history_highlight_commit_chain: Some(history_highlight_commit_chain),
+                            // Owned by the settings window, which persists it itself.
+                            file_browser_follow_selected_commit: None,
                             terminal_external_mode: None,
                             terminal_external_program: None,
                             terminal_external_args: None,
                             terminal_action_bar_target: None,
                             history_show_tags: Some(history_show_tags),
+                            history_verify_commit_signatures: None,
                             history_tag_fetch_mode: Some(if history_auto_fetch_tags_on_repo_activation
                             {
                                 gitcomet_state::model::GitLogTagFetchMode::OnRepositoryActivation

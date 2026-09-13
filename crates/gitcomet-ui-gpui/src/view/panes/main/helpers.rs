@@ -8,13 +8,8 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::cell::RefCell;
 use std::collections::HashSet;
 
-const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
 const DIFF_FILE_HEADER_HEIGHT_PX: f32 = 28.0;
 const DIFF_HUNK_HEADER_HEIGHT_PX: f32 = 24.0;
-/// Height of one resolved-output gutter row. The row space navigation scrolls
-/// through is measured in these, so anything computing an output scroll offset
-/// by hand has to agree with what the gutter actually lays out.
-pub(in crate::view) const RESOLVED_OUTPUT_ROW_HEIGHT_PX: f32 = 20.0;
 
 /// Frames a sideways search reveal waits for its row to paint before giving up.
 pub(in crate::view) const DIFF_SEARCH_HORIZONTAL_REVEAL_ATTEMPTS: u8 = 4;
@@ -92,23 +87,25 @@ pub(in crate::view) fn reveal_scroll_x(
 }
 
 #[inline]
-fn scaled_diff_px(value: f32, ui_scale_percent: u32) -> Pixels {
-    crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+pub(in crate::view) fn diff_file_header_height_for_ui_scale(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> Pixels {
+    crate::ui_scale::design_px_from_percent(
+        theme.metrics.row_height(DIFF_FILE_HEADER_HEIGHT_PX, 32.0),
+        ui_scale_percent,
+    )
 }
 
 #[inline]
-pub(in crate::view) fn diff_row_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
-    scaled_diff_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
-}
-
-#[inline]
-pub(in crate::view) fn diff_file_header_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
-    scaled_diff_px(DIFF_FILE_HEADER_HEIGHT_PX, ui_scale_percent)
-}
-
-#[inline]
-pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
-    scaled_diff_px(DIFF_HUNK_HEADER_HEIGHT_PX, ui_scale_percent)
+pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> Pixels {
+    crate::ui_scale::design_px_from_percent(
+        DIFF_HUNK_HEADER_HEIGHT_PX.max(theme.metrics.editor_line_height() + 4.0),
+        ui_scale_percent,
+    )
 }
 
 /// Heuristic highlights for the rows overlapping `byte_range`.
@@ -2885,6 +2882,86 @@ pub(in crate::view) struct CollapsedDiffProjectionIdentity {
     pub(in crate::view) file_content_signature: Option<u64>,
 }
 
+/// The `ensure_diff_visible_indices` cache key: changes whenever the visible
+/// rows are laid out afresh.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffVisibleLayoutKey {
+    pub(in crate::view) len: usize,
+    pub(in crate::view) view: DiffViewMode,
+    pub(in crate::view) is_file_view: bool,
+    pub(in crate::view) projection_rev: u64,
+}
+
+/// Which sides of a diff a row, or a whole block, changes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct DiffChangeSides {
+    pub(in crate::view) removed: bool,
+    pub(in crate::view) added: bool,
+}
+
+impl DiffChangeSides {
+    pub(in crate::view) fn union(self, other: Self) -> Self {
+        Self {
+            removed: self.removed || other.removed,
+            added: self.added || other.added,
+        }
+    }
+}
+
+/// The change block F2/F3 last landed on, for the accent bar and outline
+/// that mark it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffFocusedChangeBlock {
+    /// Visual row navigation selected; the marks hide once the selection moves.
+    pub(in crate::view) anchor: usize,
+    /// Source-visible rows, so word-wrap continuations are covered too.
+    pub(in crate::view) rows: std::ops::Range<usize>,
+    /// Split views outline the old column only if the block removes something
+    /// and the new column only if it adds something.
+    pub(in crate::view) sides: DiffChangeSides,
+    pub(in crate::view) layout: DiffVisibleLayoutKey,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum DiffChangeSide {
+    Removed,
+    Added,
+}
+
+/// How one visual row paints its part of the focused block's marks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct FocusedChangeBlockRow {
+    /// First and last visual rows close the outline.
+    pub(in crate::view) top: bool,
+    pub(in crate::view) bottom: bool,
+    /// What this row itself changes; inline rows outline in their own colour.
+    pub(in crate::view) row_sides: DiffChangeSides,
+    pub(in crate::view) block_sides: DiffChangeSides,
+}
+
+impl FocusedChangeBlockRow {
+    /// Inline rows outline in their own colour; a `\ No newline` marker row,
+    /// which changes nothing itself, borrows the block's.
+    pub(in crate::view) fn inline_outline(self) -> DiffChangeSide {
+        if self.row_sides.removed {
+            DiffChangeSide::Removed
+        } else if self.row_sides.added || !self.block_sides.removed {
+            DiffChangeSide::Added
+        } else {
+            DiffChangeSide::Removed
+        }
+    }
+
+    /// A split column is outlined only if the block changes that side.
+    pub(in crate::view) fn column_outline(self, old_side: bool) -> Option<DiffChangeSide> {
+        if old_side {
+            self.block_sides.removed.then_some(DiffChangeSide::Removed)
+        } else {
+            self.block_sides.added.then_some(DiffChangeSide::Added)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum CollapsedDiffVisibleRow {
     HunkHeader {
@@ -3060,6 +3137,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) theme: AppTheme,
     pub(in crate::view) date_time_format: DateTimeFormat,
     pub(super) _ui_model_subscription: gpui::Subscription,
+    pub(super) _text_selection_owner_subscription: gpui::Subscription,
     pub(in crate::view) root_view: WeakEntity<GitCometView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     pub(super) notify_fingerprint: u64,
@@ -3149,6 +3227,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_panel_focus_handle: FocusHandle,
     pub(in crate::view) diff_autoscroll_pending: bool,
     pub(in crate::view) diff_raw_input: Entity<components::TextInput>,
+    pub(in crate::view) submodule_summary_cache:
+        Option<super::submodule_summary::SubmoduleSummaryCache>,
     pub(in crate::view) submodule_hash_inputs: Vec<Entity<components::TextInput>>,
     pub(in crate::view) diff_visible_indices: Vec<usize>,
     pub(in crate::view) diff_visible_inline_map: Option<super::diff_cache::PatchInlineVisibleMap>,
@@ -3179,9 +3259,13 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_text_query_cache_generation: u64,
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
+    pub(in crate::view) diff_focused_change_block: Option<DiffFocusedChangeBlock>,
     pub(in crate::view) diff_text_selecting: bool,
     pub(in crate::view) diff_text_anchor: Option<DiffTextPos>,
     pub(in crate::view) diff_text_head: Option<DiffTextPos>,
+    /// Which window's text selection the diff/preview character selection owns.
+    /// See [`crate::text_selection_owner`].
+    pub(in crate::view) diff_text_selection_owner: crate::text_selection_owner::SelectionOwnerToken,
     pub(super) diff_text_autoscroll_seq: u64,
     pub(super) diff_text_autoscroll_target: Option<DiffTextAutoscrollTarget>,
     pub(super) diff_text_last_mouse_pos: Point<Pixels>,
@@ -3268,6 +3352,11 @@ pub(crate) struct MainPaneView {
     /// The value identifies the syntax generation that owns the marker, so a
     /// superseded worker cannot remove a newer generation's marker.
     pub(in crate::view) file_diff_click_syntax_inflight: FxHashMap<DiffTextRegion, u64>,
+    /// Test-only switch for the eager source-backed prepare. Off, a source-backed
+    /// side gets a document only when clicked, which is what the click-path tests
+    /// are there to cover and what they would otherwise stop exercising.
+    #[cfg(test)]
+    pub(in crate::view) eager_source_backed_syntax_prepare: bool,
     /// Test-only mutation point after a click worker has parsed but before its
     /// result is returned to the UI thread.
     #[cfg(test)]

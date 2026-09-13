@@ -20,6 +20,13 @@ use crate::kit::TextInput;
 use crate::kit::TextInputOptions;
 use crate::view::components::InteractiveRowExt as _;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+// File rows borrow the branch tree's row height: one rhythm for both lists.
+use crate::view::rows::sidebar::{sidebar_list_row_height, sidebar_list_row_height_px};
+
+/// Icon action beside a single-line input (filter clear, search options).
+/// Smaller than the input at rest, same height when Comfortable.
+const SIDEBAR_INPUT_ACTION_HEIGHT_PX: f32 = 24.0;
+const SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
 
 type FileBrowserRowsCache = std::cell::RefCell<
     Option<(
@@ -71,7 +78,6 @@ impl FileBrowserVisibleRow {
 /// the branch tree's sections use.
 const FILE_BROWSER_UNSAVED_SECTION_KEY: &str = "file_browser:unsaved_edits";
 
-const FILE_BROWSER_ROW_HEIGHT_PX: f32 = 22.0;
 /// How long a queued reveal may wait for the expanded rows it needs. Generous
 /// enough for the store round trip, short enough that a request the user has
 /// moved on from never fires.
@@ -310,6 +316,7 @@ pub(in super::super) struct SidebarPaneView {
     /// shared branch-row renderer draws the section-scoped rows instead of the
     /// full cached presentation. `None` during normal (expanded) rendering.
     pub(in super::super) collapsed_popover_presentation: Option<SidebarPresentation>,
+    collapsed_popover_rows_cache: Option<CollapsedPopoverRowsCache>,
     /// When set (and the sidebar is collapsed), this pane renders only the given
     /// section as popover content instead of the full sidebar. The root view
     /// syncs this to its `sidebar_collapsed_popover` before embedding the pane.
@@ -322,6 +329,96 @@ pub(in super::super) struct SidebarPaneView {
     pending_file_browser_reveal_at: Option<std::time::Instant>,
     #[cfg(test)]
     pub(in crate::view) render_count: usize,
+    #[cfg(test)]
+    pub(in crate::view) rendered_rows: usize,
+}
+
+struct CollapsedPopoverRowsCache {
+    repo_id: RepoId,
+    fingerprint: BranchSidebarFingerprint,
+    section: CollapsedSidebarSection,
+    /// The persisted sets as stored, before this popover's own force-expansions.
+    /// They are the key, so a hit compares them without copying them first.
+    collapsed: BTreeSet<String>,
+    pinned: BTreeSet<String>,
+    query: String,
+    /// The density's row height the prefix sum was built from. Part of the key:
+    /// a density switch keeps the rows but moves every one of their tops.
+    row_height_px: f32,
+    rows: Rc<[BranchSidebarRow]>,
+    /// Prefix heights in design pixels, including an end sentinel. Shared by
+    /// every frame; spacers are shorter than ordinary sidebar rows.
+    tops: Vec<f32>,
+}
+
+impl CollapsedPopoverRowsCache {
+    fn visible_range(&self, offset: f32, viewport: f32) -> Range<usize> {
+        let count = self.rows.len();
+        let total = self.tops[count];
+        let offset = offset.max(0.0).min((total - viewport).max(0.0));
+        // The scroll surface also contains the title and optional filter. A
+        // viewport of overdraw above the rows covers those without measuring
+        // them or relying on the preceding frame's panel bounds.
+        let first = self
+            .tops
+            .partition_point(|top| *top <= (offset - viewport).max(0.0))
+            .saturating_sub(1)
+            .min(count);
+        let end = self
+            .tops
+            .partition_point(|top| *top < offset + viewport)
+            .min(count);
+        first..end.max(first)
+    }
+}
+
+/// Visible slice of a uniform-height popover list, with a viewport of overdraw
+/// on each side to cover the title and filter chrome above the rows.
+fn uniform_visible_range(
+    count: usize,
+    row_height: f32,
+    offset: f32,
+    viewport: f32,
+) -> Range<usize> {
+    if count == 0 || row_height <= 0.0 {
+        return 0..0;
+    }
+    let total = count as f32 * row_height;
+    let offset = offset.max(0.0).min((total - viewport).max(0.0));
+    let first = (((offset - viewport).max(0.0)) / row_height).floor() as usize;
+    let end = ((offset + viewport) / row_height).ceil() as usize;
+    let first = first.min(count);
+    first..end.min(count).max(first)
+}
+
+/// Unscaled height of one popover row, matching what the shared row renderer
+/// lays out for that variant.
+///
+/// Exhaustive on purpose: this prefix sum places every row of a virtualized
+/// popover, so a new variant must state its height rather than silently drift
+/// the band. `collapsed_popover_row_heights_match_what_is_laid_out` measures
+/// the answers against the real layout.
+fn branch_sidebar_row_height_px(row: &BranchSidebarRow, theme: AppTheme) -> f32 {
+    use crate::view::rows::sidebar::BRANCH_TREE_SPACER_HEIGHT_PX;
+    match row {
+        BranchSidebarRow::SectionSpacer => BRANCH_TREE_SPACER_HEIGHT_PX,
+        BranchSidebarRow::PinnedHeader { .. }
+        | BranchSidebarRow::SectionHeader { .. }
+        | BranchSidebarRow::FilterGroupHeader { .. }
+        | BranchSidebarRow::Placeholder { .. }
+        | BranchSidebarRow::RemoteHeader { .. }
+        | BranchSidebarRow::GroupHeader { .. }
+        | BranchSidebarRow::Branch { .. }
+        | BranchSidebarRow::WorktreesHeader { .. }
+        | BranchSidebarRow::WorktreePlaceholder { .. }
+        | BranchSidebarRow::WorktreeItem { .. }
+        | BranchSidebarRow::SubmodulesHeader { .. }
+        | BranchSidebarRow::SubmodulePlaceholder { .. }
+        | BranchSidebarRow::SubmoduleItem { .. }
+        | BranchSidebarRow::StashHeader { .. }
+        | BranchSidebarRow::StashPlaceholder { .. }
+        | BranchSidebarRow::StashItem { .. } => sidebar_list_row_height_px(theme),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -341,7 +438,12 @@ struct SidebarNotifyFingerprint {
 }
 
 impl SidebarNotifyFingerprint {
+    #[cfg(test)]
     fn from_state(state: &AppState) -> Self {
+        Self::from_state_with_cache(state, &mut SidebarPresentationCache::default())
+    }
+
+    fn from_state_with_cache(state: &AppState, cache: &mut SidebarPresentationCache) -> Self {
         let active_repo_id = state.active_repo;
         let repo_fingerprint = active_repo_id
             .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
@@ -349,7 +451,7 @@ impl SidebarNotifyFingerprint {
         let (open_repo_workdirs_count, open_repo_workdirs_hash) =
             open_repo_workdirs_fingerprint(state);
         let (active_workspace_badges_count, active_workspace_badges_hash) =
-            active_workspace_badges_fingerprint(state);
+            cache.active_workspace_badges_fingerprint(state);
         let file_browser_rev = active_repo_id
             .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
             .map(|r| r.file_browser.file_browser_rev)
@@ -384,10 +486,17 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
-        let initial_fingerprint = SidebarNotifyFingerprint::from_state(&state);
+        let mut sidebar_presentation_cache = SidebarPresentationCache::default();
+        let initial_fingerprint = SidebarNotifyFingerprint::from_state_with_cache(
+            &state,
+            &mut sidebar_presentation_cache,
+        );
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
-            let next_fingerprint = SidebarNotifyFingerprint::from_state(&next);
+            let next_fingerprint = SidebarNotifyFingerprint::from_state_with_cache(
+                &next,
+                &mut this.sidebar_presentation_cache,
+            );
             let should_notify = next_fingerprint != this.notify_fingerprint;
             let repo_changed =
                 this.notify_fingerprint.active_repo_id != next_fingerprint.active_repo_id;
@@ -403,6 +512,9 @@ impl SidebarPaneView {
             // Guarded by repo change so it never fights per-keystroke edits.
             if repo_changed {
                 this.sync_search_input_with_state(cx);
+                this.collapsed_popover_scroll
+                    .set_offset(point(px(0.0), px(0.0)));
+                this.collapsed_popover_rows_cache = None;
             }
 
             if should_notify {
@@ -507,7 +619,7 @@ impl SidebarPaneView {
             collapsed_popover_filter_input,
             collapsed_popover_filter_query: String::new(),
             _collapsed_popover_filter_subscription: collapsed_popover_filter_subscription,
-            sidebar_presentation_cache: SidebarPresentationCache::default(),
+            sidebar_presentation_cache,
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             sidebar_collapsed_items_by_repo,
             sidebar_pinned_branches_by_repo,
@@ -520,11 +632,14 @@ impl SidebarPaneView {
             file_search_options: DiffSearchOptions::default(),
             file_browser_rows_cache: std::cell::RefCell::new(None),
             collapsed_popover_presentation: None,
+            collapsed_popover_rows_cache: None,
             collapsed_popover_section: None,
             pending_file_browser_reveal: None,
             pending_file_browser_reveal_at: None,
             #[cfg(test)]
             render_count: 0,
+            #[cfg(test)]
+            rendered_rows: 0,
         };
         this.dispatch_sidebar_data_request_if_needed(cx);
         // Reflect any already-active repo's stored search query on first mount.
@@ -550,6 +665,9 @@ impl SidebarPaneView {
             return;
         }
         self.collapsed_popover_section = section;
+        self.collapsed_popover_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        self.collapsed_popover_rows_cache = None;
         self.reset_collapsed_popover_filter(cx);
         cx.notify();
     }
@@ -1044,7 +1162,8 @@ impl SidebarPaneView {
     ) -> AnyElement {
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let ui_scale = ui_scale::UiScale::current(cx);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
 
         // Only the branch sections carry a filter; Files has its own always-visible
         // search bar, and the remaining sections have nothing to narrow.
@@ -1078,7 +1197,7 @@ impl SidebarPaneView {
                 div()
                     .flex_1()
                     .min_w(px(0.0))
-                    .text_size(scaled_px(12.0))
+                    .text_size(theme.ui_text(12.0))
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.colors.foreground.primary)
                     .child(section.title()),
@@ -1105,8 +1224,8 @@ impl SidebarPaneView {
                         .on_click(theme, cx, move |this, _e, window, cx| {
                             this.toggle_collapsed_popover_filter(window, cx);
                         })
-                        .w(scaled_px(22.0))
-                        .h(scaled_px(22.0))
+                        .w(components::control_height(ui_scale))
+                        .h(components::control_height(ui_scale))
                         .gitcomet_tooltip(
                             theme,
                             if filter_open {
@@ -1141,8 +1260,8 @@ impl SidebarPaneView {
                             this.activate_context_menu_invoker(invoker.clone(), cx);
                             this.open_popover_at(kind.clone(), e.position(), window, cx);
                         })
-                        .w(scaled_px(22.0))
-                        .h(scaled_px(22.0))
+                        .w(components::control_height(ui_scale))
+                        .h(components::control_height(ui_scale))
                         .gitcomet_tooltip(theme, "More actions".into())
                         .debug_selector(|| "collapsed_popover_section_menu".to_string()),
                 )
@@ -1212,7 +1331,8 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let ui_scale = ui_scale::UiScale::current(cx);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         let has_query = !self.collapsed_popover_filter_query.trim().is_empty();
         div()
             .flex_none()
@@ -1225,7 +1345,7 @@ impl SidebarPaneView {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .min_h(scaled_px(28.0))
+                    .min_h(components::content_header_height(ui_scale))
                     .pl(scaled_px(8.0))
                     .pr(scaled_px(2.0))
                     .rounded(px(theme.radii.control))
@@ -1252,8 +1372,14 @@ impl SidebarPaneView {
                                 .on_click(theme, cx, |this, _e, _w, cx| {
                                     this.clear_collapsed_popover_filter(cx);
                                 })
-                                .w(scaled_px(24.0))
-                                .h(scaled_px(24.0))
+                                .w(ui_scale.row_height(
+                                    SIDEBAR_INPUT_ACTION_HEIGHT_PX,
+                                    SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX,
+                                ))
+                                .h(ui_scale.row_height(
+                                    SIDEBAR_INPUT_ACTION_HEIGHT_PX,
+                                    SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX,
+                                ))
                                 .gitcomet_tooltip(theme, "Clear filter".into())
                                 .debug_selector(|| "collapsed_popover_filter_clear".to_string()),
                         )
@@ -1308,6 +1434,8 @@ impl SidebarPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         let search_bar = self.render_file_browser_search_bar(theme, cx);
         let visible_rows = self.file_browser_visible_rows(cx);
         let body: AnyElement = if visible_rows.is_empty() {
@@ -1322,18 +1450,38 @@ impl SidebarPaneView {
             };
             components::empty_state(theme, "Files", message).into_any_element()
         } else {
-            let rows = Self::render_file_browser_rows(self, 0..visible_rows.len(), window, cx);
-            // Match the branch-section popovers: intrinsic eager rows, with the
-            // enclosing popover panel owning the min/max bounds and scrolling.
+            // Virtualized like the branch-section popovers: only the visible
+            // slice becomes elements, with spacers standing in for the rest.
+            let scale = crate::ui_scale::UiScale::current(cx);
+            let panel_height = self.collapsed_popover_scroll.bounds().size.height;
+            let viewport = if scale.design_units_from_pixels(panel_height) > 1.0 {
+                panel_height
+            } else {
+                window.viewport_size().height
+            };
+            // Design units, so the spacers match what `render_file_browser_rows`
+            // lays out at the current density before either is scaled.
+            let row_height_px = sidebar_list_row_height_px(theme);
+            let range = uniform_visible_range(
+                visible_rows.len(),
+                row_height_px,
+                scale.design_units_from_pixels(-self.collapsed_popover_scroll.offset().y),
+                scale.design_units_from_pixels(viewport).max(1.0),
+            );
+            let before = scale.px(range.start as f32 * row_height_px);
+            let after = scale.px((visible_rows.len() - range.end) as f32 * row_height_px);
+            let rows = Self::render_file_browser_rows(self, range, window, cx);
             div()
                 .debug_selector(|| "collapsed_file_browser_rows".to_string())
                 .flex()
                 .flex_col()
-                .pt(px(2.0))
-                .pb(px(6.0))
-                .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
-                .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+                .pt(scaled_px(2.0))
+                .pb(scaled_px(6.0))
+                .pl(scaled_px(components::ROW_HIGHLIGHT_INSET_PX))
+                .pr(scaled_px(components::ROW_HIGHLIGHT_INSET_PX))
+                .child(div().flex_shrink_0().h(before))
                 .children(rows)
+                .child(div().flex_shrink_0().h(after))
                 .into_any_element()
         };
 
@@ -1351,6 +1499,8 @@ impl SidebarPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         let theme = self.theme;
         let Some(presentation) = self.build_collapsed_popover_presentation(section) else {
             return components::empty_state(theme, section.title(), "No repository selected.")
@@ -1368,10 +1518,29 @@ impl SidebarPaneView {
             return components::empty_state(theme, section.title(), message).into_any_element();
         }
 
-        // Render the scoped rows eagerly (a single section is bounded) so the
-        // shared row renderer can reuse the transient presentation override.
+        let scale = crate::ui_scale::UiScale::current(cx);
+        let cache = self
+            .collapsed_popover_rows_cache
+            .as_ref()
+            .expect("popover rows cached");
+        // The panel's own height once it has been laid out; the window is a safe
+        // over-estimate for the first frame, before any bounds exist.
+        let panel_height = self.collapsed_popover_scroll.bounds().size.height;
+        let viewport = if scale.design_units_from_pixels(panel_height) > 1.0 {
+            panel_height
+        } else {
+            window.viewport_size().height
+        };
+        let range = cache.visible_range(
+            scale.design_units_from_pixels(-self.collapsed_popover_scroll.offset().y),
+            scale.design_units_from_pixels(viewport).max(1.0),
+        );
+        let before = scale.px(cache.tops[range.start]);
+        let after = scale.px(cache.tops[row_count] - cache.tops[range.end]);
+        // Only the visible slice gets elements. Keep the override local to the
+        // shared renderer so expanded and popup presentations never mix.
         self.collapsed_popover_presentation = Some(presentation);
-        let rows = Self::render_branch_sidebar_rows(self, 0..row_count, window, cx);
+        let rows = Self::render_branch_sidebar_rows(self, range, window, cx);
         self.collapsed_popover_presentation = None;
 
         // Intrinsic height: the enclosing popover panel sizes to content and owns
@@ -1379,13 +1548,16 @@ impl SidebarPaneView {
         div()
             .flex()
             .flex_col()
-            .pt(px(2.0))
+            .flex_shrink_0()
+            .pt(scaled_px(2.0))
             // A little breathing room below the last row (content-sized popovers
             // otherwise sit the last item flush against the bottom border).
-            .pb(px(6.0))
-            .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
-            .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+            .pb(scaled_px(6.0))
+            .pl(scaled_px(components::ROW_HIGHLIGHT_INSET_PX))
+            .pr(scaled_px(components::ROW_HIGHLIGHT_INSET_PX))
+            .child(div().flex_shrink_0().h(before))
             .children(rows)
+            .child(div().flex_shrink_0().h(after))
             .into_any_element()
     }
 
@@ -1395,12 +1567,48 @@ impl SidebarPaneView {
     ) -> Option<SidebarPresentation> {
         // Workspace badges are collapse-independent; reuse the cached ones.
         let base = self.branch_sidebar_presentation_cached()?;
+        let theme = self.theme;
         let repo = self.active_repo()?;
-        let mut collapsed = self
+        let empty = BTreeSet::new();
+        // Probed against what is *stored*, not a mutated copy: every edit below
+        // is a pure function of `section` and `query`, which the key already
+        // carries. So a hit clones neither set, on every frame it is open.
+        let stored_collapsed = self
             .sidebar_collapsed_items_by_repo
             .get(&repo.spec.workdir)
-            .cloned()
-            .unwrap_or_default();
+            .unwrap_or(&empty);
+        let pinned = self
+            .sidebar_pinned_branches_by_repo
+            .get(&repo.spec.workdir)
+            .unwrap_or(&empty);
+        let query = if self.collapsed_popover_filter_open {
+            self.collapsed_popover_filter_query.trim()
+        } else {
+            ""
+        };
+        let fingerprint = BranchSidebarFingerprint::from_repo(repo);
+        let row_height_px = sidebar_list_row_height_px(theme);
+        if let Some(cached) = self.collapsed_popover_rows_cache.as_ref().filter(|cached| {
+            cached.repo_id == repo.id
+                && cached.fingerprint == fingerprint
+                && cached.section == section
+                && cached.query == query
+                && cached.row_height_px == row_height_px
+                && &cached.collapsed == stored_collapsed
+                && &cached.pinned == pinned
+        }) {
+            return Some(SidebarPresentation {
+                rows: Rc::clone(&cached.rows),
+                workspace_badges: base.workspace_badges,
+            });
+        }
+        // While filtering, ignore every persisted collapse state: a match hidden
+        // inside a collapsed `feat/` group would make the filter look broken.
+        let mut collapsed = if query.is_empty() {
+            stored_collapsed.clone()
+        } else {
+            BTreeSet::new()
+        };
         // Force-expand the target section so its content is present regardless of
         // the persisted collapse state (which we never mutate here).
         if let Some(key) = section.storage_key()
@@ -1421,31 +1629,33 @@ impl SidebarPaneView {
                 branch_sidebar::toggle_collapse_state(&mut collapsed, pinned_key);
             }
         }
-        let pinned = self
-            .sidebar_pinned_branches_by_repo
-            .get(&repo.spec.workdir)
-            .cloned()
-            .unwrap_or_default();
-        let query = if self.collapsed_popover_filter_open {
-            self.collapsed_popover_filter_query.trim()
-        } else {
-            ""
-        };
-        // While filtering, ignore every persisted collapse state: a match hidden
-        // inside a collapsed `feat/` group would make the filter look broken.
-        let collapsed = if query.is_empty() {
-            collapsed
-        } else {
-            BTreeSet::new()
-        };
-        let full = branch_sidebar::branch_sidebar_rows(repo, &collapsed, &pinned, query);
+        let full = branch_sidebar::branch_sidebar_rows(repo, &collapsed, pinned, query);
         let scoped = if query.is_empty() {
             section_content_rows(&full, section)
         } else {
             filter_result_rows(&full, section)
         };
+        let rows: Rc<[BranchSidebarRow]> = scoped.into();
+        let mut tops = Vec::with_capacity(rows.len() + 1);
+        let mut top = 0.0;
+        for row in rows.iter() {
+            tops.push(top);
+            top += branch_sidebar_row_height_px(row, theme);
+        }
+        tops.push(top);
+        self.collapsed_popover_rows_cache = Some(CollapsedPopoverRowsCache {
+            repo_id: repo.id,
+            fingerprint,
+            section,
+            collapsed: stored_collapsed.clone(),
+            pinned: pinned.clone(),
+            query: query.to_owned(),
+            row_height_px,
+            rows: Rc::clone(&rows),
+            tops,
+        });
         Some(SidebarPresentation {
-            rows: scoped.into(),
+            rows,
             workspace_badges: base.workspace_badges,
         })
     }
@@ -1501,7 +1711,8 @@ impl SidebarPaneView {
 
     fn render_tab_bar(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let ui_scale = ui_scale::UiScale::current(cx);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         let mode = self.state.sidebar_mode;
         // The Files tab's list is the thing pinned to a commit, so the header
         // above it takes the browse tint only while that list is on screen.
@@ -1564,7 +1775,7 @@ impl SidebarPaneView {
             .flex_row()
             .items_center()
             .px(scaled_px(8.0))
-            .h(scaled_px(22.0))
+            .h(components::control_height(ui_scale))
             .rounded(px(theme.radii.control))
             .border_1()
             .when(mode == SidebarMode::Branches, |d| {
@@ -1586,7 +1797,7 @@ impl SidebarPaneView {
                 }
             })
             .cursor(CursorStyle::PointingHand)
-            .text_size(scaled_px(12.0))
+            .text_size(theme.ui_text(12.0))
             .child("Branches")
             .on_mouse_down(
                 MouseButton::Left,
@@ -1604,7 +1815,7 @@ impl SidebarPaneView {
             .flex_row()
             .items_center()
             .px(scaled_px(8.0))
-            .h(scaled_px(22.0))
+            .h(components::control_height(ui_scale))
             .rounded(px(theme.radii.control))
             .border_1()
             .when(mode == SidebarMode::Files, |d| {
@@ -1635,7 +1846,7 @@ impl SidebarPaneView {
                 }
             })
             .cursor(CursorStyle::PointingHand)
-            .text_size(scaled_px(12.0))
+            .text_size(theme.ui_text(12.0))
             .child("Files")
             .on_mouse_down(
                 MouseButton::Left,
@@ -1665,7 +1876,7 @@ impl SidebarPaneView {
             .items_center()
             .gap(scaled_px(2.0))
             .w_full()
-            .h(scaled_px(28.0))
+            .h(components::content_header_height(ui_scale))
             .px(scaled_px(4.0))
             .bg(bg)
             .child(branches_tab)
@@ -1699,8 +1910,8 @@ impl SidebarPaneView {
                         // Pushed to the far edge so it reads as an action on the
                         // strip rather than a third tab.
                         .ml_auto()
-                        .w(scaled_px(22.0))
-                        .h(scaled_px(22.0))
+                        .w(components::control_height(ui_scale))
+                        .h(components::control_height(ui_scale))
                         .gitcomet_tooltip(theme, tooltip)
                         .debug_selector(|| "sidebar_locate_active_branch".to_string()),
                 )
@@ -1726,8 +1937,8 @@ impl SidebarPaneView {
                         // Pushed to the far edge so it reads as an action on the
                         // strip rather than a third tab.
                         .ml_auto()
-                        .w(scaled_px(22.0))
-                        .h(scaled_px(22.0))
+                        .w(components::control_height(ui_scale))
+                        .h(components::control_height(ui_scale))
                         .gitcomet_tooltip(
                             theme,
                             if can_locate_open_file {
@@ -1886,6 +2097,10 @@ impl SidebarPaneView {
         if !repo.file_browser.search_query.is_empty() {
             return;
         }
+        // Rows for a browse point that has moved on are about to be replaced.
+        if repo.file_browser.stale {
+            return;
+        }
         let Loadable::Ready(entries) = &repo.file_browser.entries else {
             return;
         };
@@ -1925,7 +2140,8 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let ui_scale = ui_scale::UiScale::current(cx);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         let has_query = !self.branch_filter_query.trim().is_empty();
         div()
             .px(scaled_px(8.0))
@@ -1936,7 +2152,7 @@ impl SidebarPaneView {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .min_h(scaled_px(28.0))
+                    .min_h(components::content_header_height(ui_scale))
                     .pl(scaled_px(8.0))
                     .pr(scaled_px(2.0))
                     .rounded(px(theme.radii.control))
@@ -1963,8 +2179,14 @@ impl SidebarPaneView {
                                 .on_click(theme, cx, |this, _e, _w, cx| {
                                     this.clear_branch_filter(cx);
                                 })
-                                .w(scaled_px(24.0))
-                                .h(scaled_px(24.0))
+                                .w(ui_scale.row_height(
+                                    SIDEBAR_INPUT_ACTION_HEIGHT_PX,
+                                    SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX,
+                                ))
+                                .h(ui_scale.row_height(
+                                    SIDEBAR_INPUT_ACTION_HEIGHT_PX,
+                                    SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX,
+                                ))
                                 .gitcomet_tooltip(theme, "Clear filter".into())
                                 .debug_selector(|| "branch_filter_clear".to_string()),
                         )
@@ -1987,6 +2209,8 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         const SIDEBAR_TOP_INSET_PX: f32 = 2.0;
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
 
         let filter_bar = self.render_branch_filter_bar(theme, cx);
         let Some(presentation) = self.branch_sidebar_presentation_cached() else {
@@ -2019,9 +2243,9 @@ impl SidebarPaneView {
         let list = div()
             .flex_1()
             .min_h(px(0.0))
-            .pt(px(SIDEBAR_TOP_INSET_PX))
-            .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
-            .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+            .pt(scaled_px(SIDEBAR_TOP_INSET_PX))
+            .pl(scaled_px(components::ROW_HIGHLIGHT_INSET_PX))
+            .pr(scaled_px(components::ROW_HIGHLIGHT_INSET_PX))
             .child(list);
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
@@ -2057,7 +2281,8 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let ui_scale = ui_scale::UiScale::current(cx);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         let search_options = self.file_search_options;
         let search_query = self
             .active_repo()
@@ -2079,7 +2304,7 @@ impl SidebarPaneView {
                     .flex()
                     .flex_row()
                     .items_start()
-                    .min_h(scaled_px(28.0))
+                    .min_h(components::content_header_height(ui_scale))
                     .pl(scaled_px(8.0))
                     .pr(scaled_px(2.0))
                     .rounded(px(theme.radii.control))
@@ -2100,7 +2325,7 @@ impl SidebarPaneView {
                     .child(
                         div()
                             .flex_none()
-                            .h(scaled_px(28.0))
+                            .h(components::content_header_height(ui_scale))
                             .flex()
                             .items_center()
                             .child(
@@ -2115,8 +2340,14 @@ impl SidebarPaneView {
                                             cx,
                                         );
                                     })
-                                    .w(scaled_px(24.0))
-                                    .h(scaled_px(24.0))
+                                    .w(ui_scale.row_height(
+                                        SIDEBAR_INPUT_ACTION_HEIGHT_PX,
+                                        SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX,
+                                    ))
+                                    .h(ui_scale.row_height(
+                                        SIDEBAR_INPUT_ACTION_HEIGHT_PX,
+                                        SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX,
+                                    ))
                                     .gitcomet_tooltip(theme, "Match case".into())
                                     .debug_selector(|| "file_search_match_case".to_string()),
                             )
@@ -2132,8 +2363,14 @@ impl SidebarPaneView {
                                             cx,
                                         );
                                     })
-                                    .w(scaled_px(24.0))
-                                    .h(scaled_px(24.0))
+                                    .w(ui_scale.row_height(
+                                        SIDEBAR_INPUT_ACTION_HEIGHT_PX,
+                                        SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX,
+                                    ))
+                                    .h(ui_scale.row_height(
+                                        SIDEBAR_INPUT_ACTION_HEIGHT_PX,
+                                        SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX,
+                                    ))
                                     .gitcomet_tooltip(theme, "Match whole word".into())
                                     .debug_selector(|| "file_search_whole_word".to_string()),
                             )
@@ -2149,8 +2386,14 @@ impl SidebarPaneView {
                                             cx,
                                         );
                                     })
-                                    .w(scaled_px(24.0))
-                                    .h(scaled_px(24.0))
+                                    .w(ui_scale.row_height(
+                                        SIDEBAR_INPUT_ACTION_HEIGHT_PX,
+                                        SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX,
+                                    ))
+                                    .h(ui_scale.row_height(
+                                        SIDEBAR_INPUT_ACTION_HEIGHT_PX,
+                                        SIDEBAR_INPUT_ACTION_COMFORTABLE_HEIGHT_PX,
+                                    ))
                                     .gitcomet_tooltip(theme, "Use regular expression".into())
                                     .debug_selector(|| "file_search_regex".to_string()),
                             ),
@@ -2163,6 +2406,8 @@ impl SidebarPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
         let search_bar = self.render_file_browser_search_bar(theme, cx);
 
         let visible_rows = self.file_browser_visible_rows(cx);
@@ -2195,9 +2440,9 @@ impl SidebarPaneView {
             let list = div()
                 .flex_1()
                 .min_h(px(0.0))
-                .pt(px(2.0))
-                .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
-                .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+                .pt(scaled_px(2.0))
+                .pl(scaled_px(components::ROW_HIGHLIGHT_INSET_PX))
+                .pr(scaled_px(components::ROW_HIGHLIGHT_INSET_PX))
                 .child(list);
             div()
                 .id("file_browser_scroll_container")
@@ -2460,12 +2705,17 @@ impl SidebarPaneView {
         const ICON_SLOT_PX: f32 = 16.0;
 
         let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
 
+        #[cfg(test)]
+        {
+            this.rendered_rows += range.len();
+        }
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
         };
         let theme = this.theme;
+        let row_height = sidebar_list_row_height(theme, ui_scale_percent);
         let icon_muted = with_alpha(
             theme.colors.foreground.secondary,
             if theme.is_dark { 0.6 } else { 0.5 },
@@ -2583,7 +2833,7 @@ impl SidebarPaneView {
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
+                                .h(row_height)
                                 .w_full()
                                 .pl(scaled_px(6.0))
                                 .pr_2()
@@ -2609,7 +2859,7 @@ impl SidebarPaneView {
                                     div()
                                         .flex_1()
                                         .min_w(px(0.0))
-                                        .text_xs()
+                                        .text_size(theme.ui_text(12.0))
                                         .text_color(theme.colors.foreground.secondary)
                                         .child(format!("Unsaved edits ({count})")),
                                 )
@@ -2628,7 +2878,7 @@ impl SidebarPaneView {
                             },
                             Arc::clone(path),
                             scaled_px(6.0 + INDENT_STEP_PX),
-                            scaled_px(FILE_BROWSER_ROW_HEIGHT_PX),
+                            row_height,
                             scaled_px(ICON_SLOT_PX),
                             Arc::clone(&store),
                             cx,
@@ -2674,7 +2924,7 @@ impl SidebarPaneView {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
+                        .h(row_height)
                         .w_full()
                         .pl(left_pad)
                         .pr_2()
@@ -2762,10 +3012,12 @@ impl SidebarPaneView {
                         .child({
                             let highlight_ranges =
                                 file_search_highlight_ranges(&search_matchers, entry.name.as_ref());
-                            let mut label = components::TruncatedText::new(entry.name.to_string())
-                                .profile(components::TextTruncationProfile::End)
-                                .text_color(row_text_color)
-                                .text_sm();
+                            let mut label = components::TruncatedText::new(
+                                entry.name.to_string(),
+                                theme.ui_text(14.0),
+                            )
+                            .profile(components::TextTruncationProfile::End)
+                            .text_color(row_text_color);
                             if !highlight_ranges.is_empty() {
                                 let style = gpui::HighlightStyle {
                                     color: Some(theme.colors.accent.foreground.into_color()),
@@ -2883,6 +3135,7 @@ impl Render for SidebarPaneView {
         #[cfg(test)]
         {
             self.render_count += 1;
+            self.rendered_rows = 0;
         }
         match self.collapsed_popover_section {
             Some(section) => self.render_collapsed_popover(section, window, cx),
@@ -3044,34 +3297,6 @@ fn open_repo_workdirs_fingerprint(state: &AppState) -> (usize, u64) {
     (state.repos.len(), hasher.finish())
 }
 
-fn active_workspace_badges_fingerprint(state: &AppState) -> (usize, u64) {
-    let Some(active_repo_id) = state.active_repo else {
-        return (0, 0);
-    };
-    let Some(active_repo) = state.repos.iter().find(|repo| repo.id == active_repo_id) else {
-        return (0, 0);
-    };
-
-    let mut badges =
-        crate::view::rows::active_workspace_paths_by_branch(active_repo, state.repos.as_slice())
-            .into_iter()
-            .collect::<Vec<_>>();
-    badges.sort_unstable_by(|(left_branch, left_path), (right_branch, right_path)| {
-        left_branch
-            .cmp(right_branch)
-            .then_with(|| left_path.as_os_str().cmp(right_path.as_os_str()))
-    });
-
-    let mut hasher = FxHasher::default();
-    badges.len().hash(&mut hasher);
-    for (branch, path) in &badges {
-        branch.hash(&mut hasher);
-        path.hash(&mut hasher);
-    }
-
-    (badges.len(), hasher.finish())
-}
-
 /// One matcher per non-empty query line: lines are OR-alternatives, so a
 /// multiline query (via the newline button / Shift+Enter) filters by any of
 /// several patterns at once.
@@ -3139,6 +3364,8 @@ fn unsaved_file_row(
         ix,
         is_open,
     } = ctx;
+    let ui_scale_percent = crate::ui_scale::current(cx).percent;
+    let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
     let icon_px = crate::ui_scale::design_px_from_percent(12.0, 100);
     // The full repo-relative path, not just the file name: two `mod.rs` under
     // different folders are indistinguishable here, and this row is the only
@@ -3156,7 +3383,7 @@ fn unsaved_file_row(
         .w_full()
         .pl(left_pad)
         .pr_2()
-        .gap(px(4.0))
+        .gap(scaled_px(4.0))
         .interactive_row(
             row_style,
             components::InteractiveRowState::default().selected(is_open, open_row_bg),
@@ -3187,12 +3414,11 @@ fn unsaved_file_row(
         )
         .child(
             div().flex_1().min_w(px(0.0)).child(
-                components::TruncatedText::new(label)
-                    // Path elision keeps the file name, which is what identifies
-                    // the row, and drops the folders in the middle.
+                components::TruncatedText::new(label, theme.ui_text(14.0))
+                    // Path elision keeps the file name, which identifies the
+                    // row, and drops the folders in the middle.
                     .profile(components::TextTruncationProfile::Path)
                     .text_color(file_browser_row_label_color(theme, is_open))
-                    .text_sm()
                     .render(cx),
             ),
         )
@@ -3805,3 +4031,6 @@ mod tests {
         assert_eq!(branch_names(&rows), vec!["origin/release".to_string()]);
     }
 }
+
+#[cfg(test)]
+mod long_list_tests;

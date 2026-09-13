@@ -374,25 +374,6 @@ pub(super) fn schedule_checkout_commit(
     );
 }
 
-pub(super) fn schedule_revert_commit(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    commit_id: gitcomet_core::domain::CommitId,
-) {
-    let context = Some(short_commit_id(commit_id.as_ref()));
-    schedule_repo_action(
-        executor,
-        repos,
-        msg_tx,
-        repo_id,
-        RepoActionKind::RevertCommit,
-        context,
-        move |repo| repo.revert(&commit_id),
-    );
-}
-
 pub(super) fn schedule_create_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,

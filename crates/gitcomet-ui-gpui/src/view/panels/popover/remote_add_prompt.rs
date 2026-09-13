@@ -13,8 +13,8 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(popover_title("Add remote"))
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(popover_title(theme, "Add remote"))
+        .child(super::popover_rule(theme))
         .child(input_label(theme, "Name"))
         .child(
             div()
@@ -33,14 +33,9 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.remote_url_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.stroke.default))
+        .child(super::popover_rule(theme))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
+            super::prompt_footer_row()
                 .child(
                     cancel_button("add_remote_cancel", "add_remote_cancel_hint", theme)
                         .focus_handle(this.remote_add_focus.cancel.clone())

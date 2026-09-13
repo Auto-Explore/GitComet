@@ -749,6 +749,10 @@ impl SelectionState {
 
 pub(super) struct InteractionState {
     pub(super) is_selecting: bool,
+    /// Set by this input's own mouse-down handlers, cleared in the capture
+    /// phase of every press. Read after the press resolves to tell "the user
+    /// clicked me" from "the user clicked away", which is what decides blur.
+    pub(super) took_press: bool,
     /// Fixed document endpoint for the mouse drag in progress. Keyboard
     /// selections can infer their anchor from `range` + `reversed`, but a mouse
     /// drag must not let repeated move handlers or a direction change move it.
@@ -777,6 +781,11 @@ pub(super) struct InteractionState {
     pub(super) enter_pressed: bool,
     pub(super) escape_pressed: bool,
     pub(super) arrow_up_pressed: bool,
+    pub(super) document_home_pressed: bool,
+    pub(super) document_end_pressed: bool,
+    pub(super) page_up_pressed: bool,
+    pub(super) page_down_pressed: bool,
+
     pub(super) arrow_down_pressed: bool,
     pub(super) tab_pressed: bool,
     pub(super) shift_tab_pressed: bool,
@@ -787,6 +796,7 @@ impl InteractionState {
     pub(super) fn new() -> Self {
         Self {
             is_selecting: false,
+            took_press: false,
             mouse_selection_anchor: None,
             pending_mouse_selection_anchor: None,
             suppress_right_click: false,
@@ -802,6 +812,11 @@ impl InteractionState {
             enter_pressed: false,
             escape_pressed: false,
             arrow_up_pressed: false,
+            document_home_pressed: false,
+            document_end_pressed: false,
+            page_up_pressed: false,
+            page_down_pressed: false,
+
             arrow_down_pressed: false,
             tab_pressed: false,
             shift_tab_pressed: false,
@@ -829,6 +844,9 @@ impl ContentWidthCache {
 }
 
 pub struct TextInput {
+    pub(super) appearance_metrics: crate::appearance::Appearance,
+    pub(super) editor_font: bool,
+    pub(super) editor_line_height: Pixels,
     pub(super) focus_handle: FocusHandle,
     pub(super) content: TextModel,
     pub(super) placeholder: SharedString,
@@ -855,6 +873,11 @@ pub struct TextInput {
     /// spans ride along with edits elsewhere so they stay accurate between
     /// refreshes by the owner.
     pub(super) protected_ranges: Arc<[Range<usize>]>,
+    /// Which window's selection this input currently owns, if any. Cleared
+    /// remotely when any other surface takes over; see
+    /// [`crate::text_selection_owner`].
+    pub(super) selection_owner: crate::text_selection_owner::SelectionOwnerToken,
+    pub(super) _selection_owner_observer: gpui::Subscription,
 }
 
 #[cfg(test)]

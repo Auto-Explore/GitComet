@@ -759,10 +759,36 @@ fn terminate_process_tree_and_wait(
 }
 
 fn run_command_with_timeout(
+    cmd: Command,
+    label: &str,
+    timeout: Duration,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Output> {
+    run_command_with_timeout_auth(cmd, label, timeout, cancellation, true)
+}
+
+/// Read-only network probes must not open auth prompts or consume credentials
+/// staged for a user-initiated command.
+pub(crate) fn run_git_preview_output(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<Output> {
+    run_command_with_timeout_auth(
+        cmd,
+        label,
+        Duration::from_secs(30),
+        Some(cancellation),
+        false,
+    )
+}
+
+fn run_command_with_timeout_auth(
     mut cmd: Command,
     label: &str,
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
+    allow_auth: bool,
 ) -> Result<Output> {
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
@@ -774,7 +800,11 @@ fn run_command_with_timeout(
     )?;
     let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref());
     let askpass_context = if command_may_require_auth(&cmd) {
-        let auth = take_pending_git_auth();
+        let auth = if allow_auth {
+            take_pending_git_auth()
+        } else {
+            None
+        };
         let script = create_askpass_script().map_err(io_err)?;
         configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
         Some((script, auth))
@@ -1356,9 +1386,18 @@ pub(crate) fn run_git_capture_cancellable(
     label: &str,
     cancellation: &CancellationToken,
 ) -> Result<String> {
+    let bytes = run_git_capture_bytes_cancellable(cmd, label, cancellation)?;
+    Ok(bytes_to_text_preserving_utf8(&bytes))
+}
+
+pub(crate) fn run_git_capture_bytes_cancellable(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<Vec<u8>> {
     let output = run_command_with_timeout(cmd, label, git_command_timeout(), Some(cancellation))?;
     if output.status.success() {
-        Ok(bytes_to_text_preserving_utf8(&output.stdout))
+        Ok(output.stdout)
     } else {
         Err(git_command_failed_error(label, output))
     }
@@ -2188,6 +2227,8 @@ mod tests {
             vec!["rebase", "--continue"],
             vec!["cherry-pick", "abc123"],
             vec!["revert", "--no-edit", "abc123"],
+            vec!["revert", "--continue"],
+            vec!["commit", "--no-verify", "-F", "MERGE_MSG"],
             vec!["am", "--3way"],
         ] {
             let mut cmd = Command::new("git");
@@ -2554,6 +2595,28 @@ mod tests {
             matches!(error.kind(), ErrorKind::Cancelled),
             "cancellation must win before spawn, got {error:?}"
         );
+    }
+
+    #[test]
+    fn submodule_byte_capture_stops_an_in_flight_command() {
+        let token = CancellationToken::new();
+        let child_token = token.clone();
+        let handle = thread::spawn(move || {
+            run_git_capture_bytes_cancellable(
+                sleep_command(10),
+                "git synthetic submodule numstat",
+                &child_token,
+            )
+        });
+        thread::sleep(Duration::from_millis(50));
+        let cancelled_at = Instant::now();
+        token.cancel();
+        let error = handle
+            .join()
+            .expect("capture worker")
+            .expect_err("cancelled capture");
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
+        assert!(cancelled_at.elapsed() < Duration::from_secs(2));
     }
 
     #[cfg(unix)]

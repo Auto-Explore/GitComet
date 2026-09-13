@@ -17,7 +17,7 @@ fn diff_text_empty_space_surface(
             let focus = left_view.read(cx).diff_panel_focus_handle.clone();
             window.focus(&focus, cx);
             left_view.update(cx, |this, cx| {
-                this.handle_diff_text_empty_space_mouse_down(region, event.position, cx);
+                this.handle_diff_text_empty_space_mouse_down(region, event.position, window, cx);
                 cx.notify();
             });
         })

@@ -167,3 +167,75 @@ fn shutdown_confirmation_for_an_exited_tab_does_not_close_its_sibling(
         assert_eq!(session.active_index, 0);
     });
 }
+
+/// Both bottom-panel strips and the terminal's own tabs: click targets that
+/// used to sit at a fixed pixel size whatever the density.
+#[gpui::test]
+fn comfortable_bottom_panel_tabs_grow_with_the_density(cx: &mut gpui::TestAppContext) {
+    use crate::appearance::{Appearance, UiDensity};
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.terminal_sessions
+                .insert(repo_id, test_terminal_session(vec![(10, None)], 0, cx));
+            this.open_reflog_panel(repo_id, cx);
+            this.active_bottom_panel
+                .insert(repo_id, crate::view::BottomPanelTab::Terminal);
+        })
+    });
+
+    let selectors = [
+        "terminal_tab-0",
+        "terminal_tab_close-0",
+        "bottom_panel_tab_terminal",
+        "bottom_panel_tab_terminal_close",
+        "bottom_panel_tab_reflog",
+    ];
+    let mut per_density: Vec<Vec<gpui::Pixels>> = Vec::new();
+
+    for density in UiDensity::ALL {
+        cx.update(|_window, app| {
+            app.set_global(Appearance {
+                density,
+                ..Appearance::default()
+            });
+            view.update(app, |this, cx| this.notify_font_preferences_changed(cx));
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        let mut height = |selector: &'static str| {
+            cx.debug_bounds(selector)
+                .unwrap_or_else(|| panic!("missing {selector} at {density:?} density"))
+                .size
+                .height
+        };
+        per_density.push(selectors.into_iter().map(&mut height).collect());
+
+        // Both strips are built from `panel_tab`, so they must agree.
+        assert_eq!(
+            height("terminal_tab-0"),
+            height("bottom_panel_tab_terminal")
+        );
+        assert_eq!(
+            height("terminal_tab_close-0"),
+            height("bottom_panel_tab_terminal_close")
+        );
+    }
+
+    for (step, pair) in per_density.windows(2).enumerate() {
+        for (ix, selector) in selectors.into_iter().enumerate() {
+            assert!(
+                pair[1][ix] > pair[0][ix],
+                "{selector} must grow from {:?} to {:?}, stayed {:?}",
+                UiDensity::ALL[step],
+                UiDensity::ALL[step + 1],
+                pair[1][ix]
+            );
+        }
+    }
+}

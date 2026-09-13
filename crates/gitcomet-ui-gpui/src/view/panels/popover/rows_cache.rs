@@ -57,6 +57,7 @@ pub(super) struct RowsCacheKey {
     /// rebuild it is here to save.
     signature: u64,
     query: String,
+    order: components::PickerPromptOrder,
     /// Sections folded away while these rows were laid out. Part of the key
     /// because [`get_or_build`] resolves the layout, and a folded section drops
     /// its rows from it.
@@ -69,6 +70,7 @@ impl RowsCacheKey {
             owner,
             signature,
             query: query.to_string(),
+            order: components::PickerPromptOrder::Relevance,
             collapsed: BTreeSet::new(),
         }
     }
@@ -77,6 +79,21 @@ impl RowsCacheKey {
     /// out with nothing folded.
     pub(super) fn with_collapsed(mut self, collapsed: &BTreeSet<gpui::SharedString>) -> Self {
         self.collapsed = collapsed.clone();
+        self
+    }
+
+    /// Creation rows depend on the query as well as the repository data.
+    pub(super) fn with_query_dependent_model(mut self) -> Self {
+        use std::hash::Hash;
+        self.signature = signature(|hasher| {
+            self.signature.hash(hasher);
+            self.query.hash(hasher);
+        });
+        self
+    }
+
+    pub(super) fn with_order(mut self, order: components::PickerPromptOrder) -> Self {
+        self.order = order;
         self
     }
 
@@ -129,9 +146,38 @@ pub(super) struct CachedRows<T> {
     pub(super) payloads: Rc<[T]>,
     pub(super) layout: Rc<components::PickerPromptLayout>,
     pub(super) marked_index: Option<usize>,
+    geometry: RefCell<Option<Rc<components::PickerPromptGeometry>>>,
 }
 
 impl<T> CachedRows<T> {
+    pub(super) fn geometry(
+        &self,
+        ui_scale: crate::ui_scale::UiScale,
+    ) -> Rc<components::PickerPromptGeometry> {
+        let mut slot = self.geometry.borrow_mut();
+        if let Some(geometry) = slot
+            .as_ref()
+            .filter(|geometry| geometry.ui_scale() == ui_scale)
+        {
+            return Rc::clone(geometry);
+        }
+        let geometry = Rc::new(components::PickerPromptGeometry::new(
+            &self.items,
+            &self.layout,
+            ui_scale,
+        ));
+        *slot = Some(Rc::clone(&geometry));
+        geometry
+    }
+
+    pub(super) fn filtered_len(&self) -> usize {
+        self.layout.item_indices.len()
+    }
+
+    pub(super) fn filtered_payload(&self, index: usize) -> Option<&T> {
+        self.payloads.get(*self.layout.item_indices.get(index)?)
+    }
+
     /// Used when there is no repository to build rows from.
     pub(super) fn empty() -> Rc<Self> {
         Rc::new(Self {
@@ -139,6 +185,7 @@ impl<T> CachedRows<T> {
             payloads: Rc::from(Vec::new()),
             layout: Rc::new(components::PickerPromptLayout::default()),
             marked_index: None,
+            geometry: RefCell::new(None),
         })
     }
 
@@ -195,16 +242,32 @@ where
         return Rc::clone(cached);
     }
 
-    let (items, payloads, marked_index) = build(SystemTime::now());
-    // The collapsed set is empty for every picker but the repository one, where
-    // this is the same call `picker_prompt_layout` makes.
+    // A query changes only the layout. Retain the immutable row model while
+    // the owner and its data signature are unchanged.
+    let previous = cache
+        .slot
+        .borrow()
+        .as_ref()
+        .filter(|(old, _)| old.owner == key.owner && old.signature == key.signature)
+        .map(|(_, rows)| Rc::clone(rows));
+    let (items, payloads, marked_index) = if let Some(rows) = previous {
+        (
+            Rc::clone(&rows.items),
+            Rc::clone(&rows.payloads),
+            rows.marked_index,
+        )
+    } else {
+        let (items, payloads, marked_index) = build(SystemTime::now());
+        (Rc::from(items), Rc::from(payloads), marked_index)
+    };
     let layout =
-        components::picker_prompt_layout_with_collapsed(&items, key.query(), key.collapsed());
+        components::picker_prompt_layout_ordered(&items, key.query(), key.collapsed(), key.order);
     let built = Rc::new(CachedRows {
-        items: Rc::from(items),
-        payloads: Rc::from(payloads),
+        items,
+        payloads,
         layout: Rc::new(layout),
         marked_index,
+        geometry: RefCell::new(None),
     });
     *cache.slot.borrow_mut() = Some((key, Rc::clone(&built)));
     built
@@ -322,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn typing_rebuilds_the_rows() {
+    fn typing_relayouts_without_rebuilding_the_rows() {
         let repo = repo();
         let cache = RowsCache::default();
         let builds = std::cell::Cell::new(0);
@@ -330,7 +393,7 @@ mod tests {
         build_once(&cache, workspace_key(&repo, ""), &builds);
         build_once(&cache, workspace_key(&repo, "fea"), &builds);
 
-        assert_eq!(builds.get(), 2);
+        assert_eq!(builds.get(), 1);
     }
 
     #[test]
@@ -364,10 +427,52 @@ mod tests {
             payloads: Rc::from(vec![10u8, 20u8]),
             layout: Rc::new(layout),
             marked_index: None,
+            geometry: RefCell::new(None),
         };
 
         // "alpha" matches at index 0 and sorts ahead of "zulu-a"'s later hit, so
         // the payloads come back in render order, not declaration order.
         assert_eq!(cached.filtered_payloads(), vec![20u8, 10u8]);
+    }
+    #[test]
+    fn filtering_shares_models_but_invalidates_geometry_and_data_changes_rebuild() {
+        let cache = RowsCache::default();
+        let build = |_| {
+            (
+                vec![
+                    components::PickerPromptItem::plain("alpha"),
+                    components::PickerPromptItem::plain("beta"),
+                ],
+                vec![1, 2],
+                None,
+            )
+        };
+        let key = |revision, query| RowsCacheKey::new(RowsCacheOwner::FileHistory, revision, query);
+        let first = get_or_build(&cache, key(1, ""), build);
+        let geometry = first.geometry(100u32.into());
+        assert!(Rc::ptr_eq(&geometry, &first.geometry(100u32.into())));
+        let filtered = get_or_build(&cache, key(1, "bet"), |_| {
+            panic!("typing must reuse the model")
+        });
+        assert!(Rc::ptr_eq(&first.items, &filtered.items));
+        assert!(Rc::ptr_eq(&first.payloads, &filtered.payloads));
+        assert!(!Rc::ptr_eq(&first.layout, &filtered.layout));
+        assert_eq!(filtered.filtered_payload(0), Some(&2));
+        assert!(!Rc::ptr_eq(&geometry, &filtered.geometry(100u32.into())));
+        assert!(!Rc::ptr_eq(&geometry, &first.geometry(125u32.into())));
+        let changed = get_or_build(&cache, key(2, "bet"), build);
+        assert!(!Rc::ptr_eq(&filtered.items, &changed.items));
+    }
+
+    #[test]
+    fn query_dependent_creation_rows_rebuild() {
+        let cache = RowsCache::default();
+        let builds = std::cell::Cell::new(0);
+        for query in ["new-a", "new-b"] {
+            let key = RowsCacheKey::new(RowsCacheOwner::BranchCheckout, 1, query)
+                .with_query_dependent_model();
+            build_once(&cache, key, &builds);
+        }
+        assert_eq!(builds.get(), 2);
     }
 }
