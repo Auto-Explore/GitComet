@@ -1823,6 +1823,30 @@ fn selecting_a_second_commit_details_field_clears_the_first(cx: &mut gpui::TestA
     });
 }
 
+/// Wait for the store worker to apply the selection a reveal dispatched.
+///
+/// GPUI's executor does not drive the store's worker thread, so
+/// `run_until_parked` can return before `Msg::SelectCommit` has been reduced.
+fn wait_for_store_selected_commit(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    expected: &str,
+) {
+    super::shortcuts::wait_until(cx, "store to select the revealed commit", |cx| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .store
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.history_state.selected_commit.as_ref())
+                .is_some_and(|id| id.as_ref() == expected)
+        })
+    });
+}
+
 /// Click inside a commit-details text input and report which menu, if any, the
 /// popover host opened for it.
 fn click_commit_details_link(
@@ -2158,6 +2182,7 @@ fn commit_details_message_sha_click_menu_navigate_reveals_referenced_commit(
         .expect("expected reveal commit entry");
     simulate_counted_click(cx, reveal_bounds.center(), 1);
     cx.run_until_parked();
+    wait_for_store_selected_commit(cx, &view, repo_id, target_sha);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             crate::view::test_support::sync_store_snapshot(this, cx);
@@ -2635,6 +2660,7 @@ fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
         .expect("expected parent reveal commit entry");
     simulate_counted_click(cx, reveal_bounds.center(), 1);
     cx.run_until_parked();
+    wait_for_store_selected_commit(cx, &view, repo_id, parent_sha);
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             crate::view::test_support::sync_store_snapshot(this, cx);
