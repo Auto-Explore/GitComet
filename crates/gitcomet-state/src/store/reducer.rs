@@ -1066,6 +1066,18 @@ fn reduce_inner(
             state.git_runtime = runtime;
             Vec::new()
         }
+        Msg::SetSigningToolsState(tools) => {
+            if state.signing_tools == tools {
+                return Vec::new();
+            }
+            let formats_changed = state.signing_tools.usable_formats() != tools.usable_formats();
+            state.signing_tools = tools;
+            if !formats_changed || !state.git_log_settings.verify_commit_signatures {
+                return Vec::new();
+            }
+            // A verifier was installed or went missing: badges must follow it.
+            util::reverify_all_commit_signatures_effects(state)
+        }
         Msg::SetRemoteUrlPolicy(policy) => {
             state.remote_url_policy = policy;
             Vec::new()
@@ -1083,22 +1095,9 @@ fn reduce_inner(
             if !verification_toggled {
                 return Vec::new();
             }
-            if !verify_commit_signatures {
-                // Drop the verdicts so every badge clears on the next paint.
-                for repo_state in state.repos.iter_mut() {
-                    repo_state.clear_commit_signatures();
-                }
-                return Vec::new();
-            }
-            // Turning it back on re-checks what is already loaded, so badges
-            // appear without waiting for the next log reload.
-            let mut effects = Vec::new();
-            for repo_state in state.repos.iter_mut() {
-                effects.extend(util::reverify_loaded_commit_signatures_effect(
-                    true, repo_state,
-                ));
-            }
-            effects
+            // Turning it off drops the verdicts so every badge clears on the next
+            // paint; turning it back on re-checks what is already loaded.
+            util::reverify_all_commit_signatures_effects(state)
         }
         Msg::SetRemoteSettings(settings) => {
             state.remote_settings = settings;

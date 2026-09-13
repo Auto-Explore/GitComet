@@ -620,7 +620,7 @@ pub(super) fn log_loaded(
     result: std::result::Result<gitcomet_core::services::HistoryReadResult, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
-    let verify_signatures = state.git_log_settings.verify_commit_signatures;
+    let signature_formats = state.signature_verification_formats();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let is_load_more = cursor.is_some();
         let mut appended_signature_ids = Vec::new();
@@ -644,7 +644,7 @@ pub(super) fn log_loaded(
                 // HEAD even though the retained history still matches Git.
                 reconcile_detached_head_from_log(repo_state, scope);
                 effects.extend(super::util::reverify_loaded_commit_signatures_effect(
-                    verify_signatures,
+                    signature_formats,
                     repo_state,
                 ));
                 effects.extend(finish_log_load(repo_state));
@@ -772,12 +772,12 @@ pub(super) fn log_loaded(
 
         if !is_load_more {
             effects.extend(super::util::reverify_loaded_commit_signatures_effect(
-                verify_signatures,
+                signature_formats,
                 repo_state,
             ));
         } else {
             effects.extend(super::util::verify_commit_signatures_effect(
-                verify_signatures,
+                signature_formats,
                 repo_state,
                 repo_id,
                 appended_signature_ids,

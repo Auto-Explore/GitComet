@@ -676,13 +676,20 @@ pub trait GitRepository: Send + Sync {
             "signature verification is not implemented for this backend",
         )))
     }
+    /// Like [`Self::verify_commit_signatures`], restricted to signatures in
+    /// `formats`: other formats get no badge and should cost no verifier run.
     fn verify_commit_signatures_cancellable(
         &self,
         ids: &[CommitId],
+        formats: crate::domain::SignatureFormats,
         cancellation: &CancellationToken,
     ) -> Result<Vec<(CommitId, CommitSignature)>> {
         cancellation.check_cancelled()?;
-        let result = self.verify_commit_signatures(ids)?;
+        if formats.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut result = self.verify_commit_signatures(ids)?;
+        result.retain(|(_, signature)| formats.contains(signature.format));
         cancellation.check_cancelled()?;
         Ok(result)
     }

@@ -1011,6 +1011,10 @@ pub struct GitCometView {
     /// Set when a deactivation was caused by a move/resize grab we requested, so
     /// the matching re-activation does not trigger a repo refresh.
     pub(super) window_grab_activation_suppressed_at: Option<Instant>,
+    /// Background gpg/ssh-keygen detection. A newer probe supersedes older ones.
+    pub(super) signing_tools_probe_seq: u64,
+    pub(super) signing_tools_probe_in_flight: bool,
+    pub(super) signing_tools_probed_at: Option<Instant>,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,

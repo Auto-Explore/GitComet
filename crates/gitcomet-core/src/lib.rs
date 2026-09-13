@@ -20,6 +20,7 @@ pub mod platform;
 pub mod process;
 pub mod remote_url;
 pub mod services;
+pub mod signing_tools;
 pub mod squash;
 pub mod text_utils;
 

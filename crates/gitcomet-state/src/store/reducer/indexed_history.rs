@@ -4,7 +4,7 @@ use gitcomet_core::history_index::{HISTORY_BLOCK_SIZE, HISTORY_ROW_CACHE_LIMIT};
 use gitcomet_core::services::CancellationToken;
 
 pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
-    let verify_signatures = state.git_log_settings.verify_commit_signatures;
+    let signature_formats = state.signature_verification_formats();
     let repo_id = match &event {
         Event::Retry { repo_id }
         | Event::Select { repo_id, .. }
@@ -328,7 +328,7 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
             history.rev = history.rev.wrapping_add(1);
             if let Some(range) = loaded_range {
                 effects.extend(super::util::verify_commit_signatures_effect(
-                    verify_signatures,
+                    signature_formats,
                     repo,
                     repo_id,
                     range.commits.iter().map(|commit| commit.id.clone()),
@@ -569,8 +569,11 @@ mod tests {
 
         let repo = &mut state.repos[0];
         for _ in 0..2 {
-            let work =
-                super::super::util::reverify_loaded_commit_signatures_effect(true, repo).unwrap();
+            let work = super::super::util::reverify_loaded_commit_signatures_effect(
+                gitcomet_core::domain::SignatureFormats::ALL,
+                repo,
+            )
+            .unwrap();
             let Effect::VerifyCommitSignatures { commit_ids, .. } = work else {
                 panic!("expected signatures")
             };
@@ -578,7 +581,11 @@ mod tests {
             assert_eq!(repo.history_state.commit_signatures_requested.len(), 256);
         }
         assert!(
-            super::super::util::reverify_loaded_commit_signatures_effect(false, repo).is_none()
+            super::super::util::reverify_loaded_commit_signatures_effect(
+                gitcomet_core::domain::SignatureFormats::NONE,
+                repo
+            )
+            .is_none()
         );
         assert!(repo.history_state.commit_signatures_requested.is_empty());
     }

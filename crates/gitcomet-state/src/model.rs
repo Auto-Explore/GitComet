@@ -12,6 +12,7 @@ use gitcomet_core::services::{
     BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext, SequencerState,
     SubmoduleTrustTarget,
 };
+use gitcomet_core::signing_tools::SigningToolsState;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -676,12 +677,26 @@ pub struct AppState {
     /// trust dialog (or a silent proceed) appears.
     pub submodule_trust_check_pending: Option<SubmoduleTrustCheckState>,
     pub git_runtime: GitRuntimeState,
+    /// The signature verifiers Git can run. Formats without one are not verified.
+    pub signing_tools: SigningToolsState,
     pub remote_url_policy: RemoteUrlPolicy,
     pub git_log_settings: GitLogSettings,
     pub remote_settings: RemoteSettings,
     pub file_browser_settings: FileBrowserSettings,
     pub sidebar_mode: SidebarMode,
     pub default_tag_type: DefaultTagType,
+}
+
+impl AppState {
+    /// The signature formats to verify: none when the preference is off,
+    /// otherwise those whose verifier was not found missing.
+    pub fn signature_verification_formats(&self) -> SignatureFormats {
+        if self.git_log_settings.verify_commit_signatures {
+            self.signing_tools.usable_formats()
+        } else {
+            SignatureFormats::NONE
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

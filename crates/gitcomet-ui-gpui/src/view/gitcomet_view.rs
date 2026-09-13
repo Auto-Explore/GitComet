@@ -1346,6 +1346,8 @@ impl GitCometView {
             if !runtime.is_available() || self_initiated_grab {
                 return;
             }
+            // Coming back to the app may follow installing gpg or ssh-keygen.
+            this.refresh_signing_tools(false, cx);
             if let Some(msg) =
                 repo_activation_msg(&this.state, &mut this.last_repo_activation_dispatch_at, now)
             {
@@ -1546,6 +1548,9 @@ impl GitCometView {
             ui_settings_persist_seq: 0,
             last_repo_activation_dispatch_at: FxHashMap::default(),
             window_grab_activation_suppressed_at: None,
+            signing_tools_probe_seq: 0,
+            signing_tools_probe_in_flight: false,
+            signing_tools_probed_at: None,
             date_time_format,
             timezone,
             show_timezone,
@@ -1639,6 +1644,7 @@ impl GitCometView {
         view.drive_submodule_diff_bootstrap();
         view.maybe_show_user_survey_on_startup(cx);
         view.maybe_check_for_updates_on_startup(cx);
+        view.refresh_signing_tools(false, cx);
 
         crate::app::sync_gitcomet_window_state(
             cx,
@@ -2798,6 +2804,43 @@ impl GitCometView {
     #[cfg(test)]
     pub(in crate::view) fn terminal_preferences_for_test(&self) -> &TerminalPreferences {
         &self.terminal_preferences
+    }
+
+    /// Re-probes gpg and ssh-keygen off the UI thread, so signature badges are
+    /// only requested for formats Git can verify. Window activation fires on
+    /// every app switch, so unforced probes are throttled.
+    pub(super) fn refresh_signing_tools(&mut self, force: bool, cx: &mut gpui::Context<Self>) {
+        // View tests drive a fixed store state and must not probe the host's tools.
+        if cfg!(test) {
+            return;
+        }
+        let now = Instant::now();
+        let recently_probed = self
+            .signing_tools_probed_at
+            .is_some_and(|at| now.duration_since(at) < SIGNING_TOOLS_REPROBE_INTERVAL);
+        if !force && (self.signing_tools_probe_in_flight || recently_probed) {
+            return;
+        }
+        self.signing_tools_probe_seq = self.signing_tools_probe_seq.wrapping_add(1);
+        let seq = self.signing_tools_probe_seq;
+        self.signing_tools_probe_in_flight = true;
+        self.signing_tools_probed_at = Some(now);
+
+        let detection =
+            cx.background_spawn(async { gitcomet_core::signing_tools::detect_signing_tools() });
+        cx.spawn(async move |view, cx| {
+            let tools = detection.await;
+            let _ = view.update(cx, |this, _cx| {
+                if this.signing_tools_probe_seq != seq {
+                    return;
+                }
+                this.signing_tools_probe_in_flight = false;
+                if tools != this.state.signing_tools {
+                    this.store.dispatch(Msg::SetSigningToolsState(tools));
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn resume_after_git_runtime_recovery(&mut self) {

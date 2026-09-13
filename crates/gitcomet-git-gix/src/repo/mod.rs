@@ -669,9 +669,10 @@ impl GitRepository for GixRepo {
     fn verify_commit_signatures_cancellable(
         &self,
         ids: &[CommitId],
+        formats: gitcomet_core::domain::SignatureFormats,
         cancellation: &gitcomet_core::services::CancellationToken,
     ) -> Result<Vec<(CommitId, CommitSignature)>> {
-        self.verify_commit_signatures_cancellable_impl(ids, Some(cancellation))
+        self.verify_commit_signatures_cancellable_impl(ids, formats, Some(cancellation))
     }
 
     fn resolve_commit(&self, reference: &CommitId) -> Result<Commit> {

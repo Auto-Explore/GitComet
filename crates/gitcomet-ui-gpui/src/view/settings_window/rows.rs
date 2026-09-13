@@ -676,65 +676,138 @@ impl SettingsWindowView {
             ),
         };
 
+        self.runtime_tool_row(
+            "settings_window_git_runtime",
+            "Git",
+            None,
+            Some((git_icon_path, git_icon_color)),
+            self.runtime_info.git.version_display.clone(),
+            (git_status_text, git_icon_color),
+            theme,
+        )
+    }
+
+    pub(super) fn signing_tool_row(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        description: &'static str,
+        info: &SigningToolInfo,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        let (icon, status_color, status_text) = match info.status {
+            SigningToolStatus::Found => (
+                Some("icons/check.svg"),
+                theme.colors.status.success.foreground,
+                "Found",
+            ),
+            SigningToolStatus::NotFound => (
+                Some("icons/warning.svg"),
+                theme.colors.status.warning.foreground,
+                "Not found",
+            ),
+            SigningToolStatus::Unknown => (
+                Some("icons/warning.svg"),
+                theme.colors.foreground.secondary,
+                "Unknown",
+            ),
+            SigningToolStatus::Detecting => (None, theme.colors.foreground.secondary, "Detecting…"),
+        };
+
+        self.runtime_tool_row(
+            id,
+            label,
+            Some(description),
+            icon.map(|icon| (icon, status_color)),
+            info.version_display.clone(),
+            (status_text.into(), status_color),
+            theme,
+        )
+    }
+
+    /// One detected executable, stacked so narrow windows never squeeze it: the
+    /// program name and its status, then the detected version, then why GitComet
+    /// needs the program.
+    fn runtime_tool_row(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        description: Option<&'static str>,
+        icon: Option<(&'static str, gpui::Rgba)>,
+        version_display: SharedString,
+        (status_text, status_color): (SharedString, gpui::Rgba),
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
         div()
-            .id("settings_window_git_runtime")
-            .debug_selector(|| "settings_window_git_runtime".to_string())
+            .id(id)
+            .debug_selector(move || id.to_string())
             .w_full()
             .px_2()
             .pt_1()
             .pb_3()
             .flex()
-            .items_center()
-            .gap_2()
+            .flex_col()
+            .gap_1()
             .overflow_hidden()
             .child(
                 div()
-                    .debug_selector(|| "settings_window_git_runtime_label".to_string())
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .text_size(theme.ui_text(14.0))
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .child("Detected runtime"),
-                    ),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "settings_window_git_runtime_value".to_string())
+                    .w_full()
                     .min_w(px(0.0))
                     .flex()
                     .items_center()
-                    .justify_end()
                     .gap_2()
-                    .overflow_hidden()
-                    .child(svg_icon(git_icon_path, git_icon_color, px(14.0)))
                     .child(
                         div()
+                            .debug_selector(move || format!("{id}_label"))
+                            .flex_1()
                             .min_w(px(0.0))
                             .text_size(theme.ui_text(14.0))
-                            .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
-                            .child(self.runtime_info.git.version_display.clone()),
+                            .child(label),
                     )
                     .child(
                         div()
-                            .min_w(px(0.0))
-                            .text_size(theme.ui_text(12.0))
-                            .text_color(git_icon_color)
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
+                            .debug_selector(move || format!("{id}_status"))
                             .flex_shrink_0()
-                            .child(git_status_text),
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .when_some(icon, |this, (path, color)| {
+                                this.child(svg_icon(path, color, px(14.0)))
+                            })
+                            .child(
+                                div()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(status_color)
+                                    .whitespace_nowrap()
+                                    .child(status_text),
+                            ),
                     ),
             )
+            .when(!version_display.is_empty(), |this| {
+                this.child(
+                    div()
+                        .debug_selector(move || format!("{id}_value"))
+                        .w_full()
+                        .min_w(px(0.0))
+                        .text_size(theme.ui_text(14.0))
+                        .font_family(UI_MONOSPACE_FONT_FAMILY)
+                        .text_color(theme.colors.foreground.secondary)
+                        .child(version_display),
+                )
+            })
+            .when_some(description, |this, description| {
+                this.child(
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .text_size(theme.ui_text(12.0))
+                        .text_color(theme.colors.foreground.secondary)
+                        .child(description),
+                )
+            })
     }
 
     pub(super) fn overflow_probe_content(&self, theme: AppTheme) -> Stateful<gpui::Div> {
@@ -777,7 +850,14 @@ impl SettingsWindowView {
                             .into(),
                         theme,
                     ))
-                    .child(self.git_runtime_row(theme)),
+                    .child(self.git_runtime_row(theme))
+                    .child(self.signing_tool_row(
+                        "settings_window_gpg_runtime",
+                        "GPG",
+                        GPG_DESCRIPTION,
+                        &gpg_info(self.runtime_info.signing_tools.as_ref()),
+                        theme,
+                    )),
             )
     }
 

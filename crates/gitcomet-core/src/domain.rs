@@ -192,6 +192,36 @@ impl SignatureFormat {
     }
 }
 
+/// A set of [`SignatureFormat`]s, such as the formats whose verifier is installed.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SignatureFormats(u8);
+
+impl SignatureFormats {
+    pub const NONE: Self = Self(0);
+    pub const ALL: Self = Self(0b111);
+
+    const fn bit(format: SignatureFormat) -> u8 {
+        match format {
+            SignatureFormat::OpenPgp => 0b001,
+            SignatureFormat::Ssh => 0b010,
+            SignatureFormat::X509 => 0b100,
+        }
+    }
+
+    #[must_use]
+    pub const fn with(self, format: SignatureFormat) -> Self {
+        Self(self.0 | Self::bit(format))
+    }
+
+    pub const fn contains(self, format: SignatureFormat) -> bool {
+        self.0 & Self::bit(format) != 0
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
 /// A verified commit signature. Only built for commits that earn a badge, so
 /// "absent from the signature map" and "no badge" are the same thing.
 #[derive(Clone, Debug, Eq, PartialEq)]
