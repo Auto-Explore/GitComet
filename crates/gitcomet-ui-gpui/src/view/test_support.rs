@@ -138,6 +138,27 @@ pub(crate) fn redraw(cx: &mut gpui::VisualTestContext) {
     });
 }
 
+/// Inspect render output inside a frame so GPUI releases arena-owned elements.
+/// Return only inspected data; rendered elements must stay inside the callback.
+pub(crate) fn inspect_render<R>(
+    cx: &mut gpui::VisualTestContext,
+    inspect: impl FnOnce(&mut Window, &mut App) -> R,
+) -> R {
+    let mut result = None;
+    cx.draw(
+        gpui::point(px(0.0), px(0.0)),
+        gpui::size(
+            gpui::AvailableSpace::MinContent,
+            gpui::AvailableSpace::MinContent,
+        ),
+        |window, app| {
+            result = Some(inspect(window, app));
+            gpui::Empty
+        },
+    );
+    result.expect("render inspection should run while drawing the test frame")
+}
+
 pub(crate) fn wait_for_native_tooltip(cx: &mut gpui::VisualTestContext) {
     cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_millis(500));

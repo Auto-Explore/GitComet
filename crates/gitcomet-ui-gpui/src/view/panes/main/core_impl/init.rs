@@ -445,6 +445,8 @@ impl MainPaneView {
             file_diff_pair_syntax_text: FxHashMap::default(),
             file_diff_click_syntax_inflight: FxHashMap::default(),
             #[cfg(test)]
+            eager_source_backed_syntax_prepare: true,
+            #[cfg(test)]
             file_diff_click_syntax_after_prepare_hook: None,
             #[cfg(test)]
             file_diff_click_syntax_before_complete_hook: None,

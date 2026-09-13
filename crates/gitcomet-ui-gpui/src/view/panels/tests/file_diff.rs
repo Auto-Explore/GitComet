@@ -6,14 +6,6 @@ use crate::view::panes::main::DiffChangeSide;
 use crate::view::panes::main::diff_cache::PatchInlineVisibleMap;
 use std::path::PathBuf;
 
-fn fixture_repo_root() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .expect("test fixtures should run from the workspace root")
-        .to_path_buf()
-}
-
 fn push_inline_submodule_diff_content_mode_state(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -7234,7 +7226,8 @@ fn collapsed_diff_inline_unscrolled_unmeasured_render_keeps_horizontal_scroll_ra
 }
 
 mod cache_and_blame;
+mod fixtures;
 mod scrolling;
 mod syntax;
+use fixtures::{BUILD_RELEASE_ARTIFACTS, COMMIT_PATCH, DEPLOYMENT_CI};
 use scrolling::push_raw_patch_diff_state_with_rev;
-use syntax::{fixture_git_diff, fixture_git_show};

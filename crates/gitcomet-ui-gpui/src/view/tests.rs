@@ -244,6 +244,15 @@ fn commit_lookup(store: &AppStore) -> gitcomet_state::model::CommitLookup {
         .clone()
 }
 
+fn wait_for_commit_lookup(store: &AppStore, repo_id: RepoId, reference: &str) {
+    // GPUI's executor does not drive the store's worker thread. These fixtures
+    // have no open backend repository, so wait for the request, not a Git reply.
+    wait_until("store lookup for the current commit reference", || {
+        let lookup = repo_commit_lookup(store, repo_id);
+        lookup.reference.as_ref().map(|id| id.as_ref()) == Some(reference)
+    });
+}
+
 fn repo_commit_lookup(store: &AppStore, repo_id: RepoId) -> gitcomet_state::model::CommitLookup {
     store
         .snapshot()
@@ -5641,6 +5650,7 @@ fn reveal_commit_reissues_its_lookup_against_a_newly_active_repository(
 
     cx.simulate_input("deadbee");
     cx.run_until_parked();
+    wait_for_commit_lookup(&store, RepoId(1), "deadbee");
     test_support::redraw(cx);
     assert_eq!(
         repo_commit_lookup(&store, RepoId(1)).reference,
@@ -5656,6 +5666,7 @@ fn reveal_commit_reissues_its_lookup_against_a_newly_active_repository(
     store.replace_snapshot_for_test(Arc::new(switched));
     sync_view_snapshot(cx, &view);
     cx.run_until_parked();
+    wait_for_commit_lookup(&store, RepoId(2), "deadbee");
     test_support::redraw(cx);
 
     assert_eq!(
@@ -5821,6 +5832,7 @@ fn reveal_commit_asks_git_only_once_the_query_could_be_a_reference(cx: &mut gpui
 
     cx.simulate_input("eadbee");
     cx.run_until_parked();
+    wait_for_commit_lookup(&store, RepoId(1), "deadbee");
     test_support::redraw(cx);
     assert_eq!(
         commit_lookup(&store).reference,
@@ -5861,6 +5873,7 @@ fn reveal_commit_enter_reveals_the_resolved_full_id(cx: &mut gpui::TestAppContex
 
     cx.simulate_input("deadbee");
     cx.run_until_parked();
+    wait_for_commit_lookup(&store, RepoId(1), "deadbee");
     test_support::redraw(cx);
 
     // Stand in for the backend answering the lookup the typing just issued.

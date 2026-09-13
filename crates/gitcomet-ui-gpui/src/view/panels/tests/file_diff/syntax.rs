@@ -1,46 +1,5 @@
 use super::*;
 
-fn fixture_git_command(repo_root: &std::path::Path) -> std::process::Command {
-    let mut command = std::process::Command::new("git");
-    command
-        .current_dir(repo_root)
-        .args(["-c", &format!("safe.directory={}", repo_root.display())]);
-    command
-}
-
-pub(super) fn fixture_git_show(repo_root: &std::path::Path, spec: &str, context: &str) -> String {
-    let output = fixture_git_command(repo_root)
-        .args(["show", spec])
-        .output()
-        .unwrap_or_else(|_| panic!("git show should run for {context}"));
-    assert!(
-        output.status.success(),
-        "git show {spec} failed: status={:?} stderr={}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr),
-    );
-    String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
-}
-
-pub(super) fn fixture_git_diff(
-    repo_root: &std::path::Path,
-    old_spec: &str,
-    new_spec: &str,
-    context: &str,
-) -> String {
-    let output = fixture_git_command(repo_root)
-        .args(["diff", old_spec, new_spec])
-        .output()
-        .unwrap_or_else(|_| panic!("git diff should run for {context}"));
-    assert!(
-        output.status.success(),
-        "git diff for {context} failed: status={:?} stderr={}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr),
-    );
-    String::from_utf8(output.stdout).expect("git diff output should be valid UTF-8")
-}
-
 #[gpui::test]
 fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -491,22 +450,9 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     let commit_id =
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
-    let repo_root = fixture_repo_root();
-    let git_show =
-        |spec: &str| fixture_git_show(&repo_root, spec, "YAML commit file-diff regression fixture");
-    let git_diff = || {
-        fixture_git_diff(
-            &repo_root,
-            "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml",
-            "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml",
-            "YAML commit file-diff regression fixture",
-        )
-    };
-    let old_text =
-        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
-    let new_text =
-        git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml");
-    let unified = git_diff();
+    let old_text = DEPLOYMENT_CI.old_text.to_owned();
+    let new_text = DEPLOYMENT_CI.new_text.to_owned();
+    let unified = DEPLOYMENT_CI.unified_diff().to_owned();
 
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: commit_id.clone(),
@@ -1001,13 +947,7 @@ fn yaml_commit_patch_diff_keeps_consistent_highlighting_for_added_paths_and_keys
     ));
     let commit_id =
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
-    let repo_root = fixture_repo_root();
-    let unified = fixture_git_diff(
-        &repo_root,
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml",
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml",
-        "YAML commit patch-diff regression fixture",
-    );
+    let unified = DEPLOYMENT_CI.unified_diff().to_owned();
 
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: commit_id.clone(),
@@ -1844,9 +1784,7 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
     ));
     let commit_id =
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
-    let unified =
-        std::fs::read_to_string(fixture_repo_root().join("test_data/commit-bd8b4a04.patch"))
-            .expect("should read multi-file YAML commit patch regression fixture");
+    let unified = COMMIT_PATCH.to_owned();
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: commit_id.clone(),
         path: None,
@@ -2767,21 +2705,9 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     let commit_id =
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let path = std::path::PathBuf::from(".github/workflows/build-release-artifacts.yml");
-    let repo_root = fixture_repo_root();
-    let git_show =
-        |spec: &str| fixture_git_show(&repo_root, spec, "YAML commit patch/file parity fixture");
-    let unified = fixture_git_diff(
-        &repo_root,
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/build-release-artifacts.yml",
-        "YAML commit patch/file parity fixture",
-    );
-    let old_text = git_show(
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
-    );
-    let new_text = git_show(
-        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/build-release-artifacts.yml",
-    );
+    let unified = BUILD_RELEASE_ARTIFACTS.unified_diff().to_owned();
+    let old_text = BUILD_RELEASE_ARTIFACTS.old_text.to_owned();
+    let new_text = BUILD_RELEASE_ARTIFACTS.new_text.to_owned();
 
     let file_target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: commit_id.clone(),

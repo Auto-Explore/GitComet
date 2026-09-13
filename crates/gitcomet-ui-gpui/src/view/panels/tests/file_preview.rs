@@ -3021,3 +3021,230 @@ fn preview_click_before_the_document_lands_is_replayed(cx: &mut gpui::TestAppCon
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+/// The read-only preview of a template, where clicking a tag lit nothing.
+///
+/// Same markup as `file_preview_click_lights_whole_html_tags_across_lines`, only
+/// wrapped in `{% if %}` so it arrives as a combined injection instead of being
+/// the host grammar's own tree. That one difference was the whole bug: the
+/// editor pairs it, and this view did not.
+#[gpui::test]
+fn file_preview_click_lights_whole_tags_in_a_template(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(921);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_pair_njk",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview_pair.njk");
+    let preview_abs_path = workdir.join(&file_rel);
+    let preview_lines: Arc<Vec<String>> = Arc::new(vec![
+        "{% if shown %}".to_string(),
+        r#"<div class="card">"#.to_string(),
+        "  <span>hi</span>".to_string(),
+        "</div>".to_string(),
+        "{% endif %}".to_string(),
+    ]);
+    let preview_text = preview_lines.join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create preview njk workdir");
+    std::fs::write(&preview_abs_path, &preview_text).expect("write preview njk fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = preview_abs_path.clone();
+            let preview_lines = Arc::clone(&preview_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    preview_abs_path,
+                    preview_lines,
+                    preview_text.len(),
+                    cx,
+                );
+            });
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "template preview prepared syntax",
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_syntax_language == Some(rows::DiffSyntaxLanguage::Jinja)
+                && pane.worktree_preview_prepared_syntax_document().is_some()
+        },
+        |pane| {
+            (
+                pane.is_file_preview_active(),
+                pane.worktree_preview_syntax_language,
+                pane.worktree_preview_prepared_syntax_document().is_some(),
+            )
+        },
+    );
+
+    // The element name in the start tag on line 1.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        1,
+        DiffTextRegion::Inline,
+        1..4,
+        "template preview pair tag hitbox",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("clicking inside `<div ...>` in a template should light the element");
+        assert_eq!(pair.kind, rows::SyntaxPairKind::Tag);
+        assert_eq!(
+            pair.spans
+                .iter()
+                .map(|span| (span.source_visible_ix, span.range.clone()))
+                .collect::<Vec<_>>(),
+            vec![(1, 0..18), (3, 0..6)],
+            "the whole start tag on line 1 and its closing tag on line 3"
+        );
+
+        assert_eq!(
+            pane.diff_text_local_pair_ranges(1, DiffTextRegion::Inline)
+                .into_vec(),
+            vec![0..18]
+        );
+        assert_eq!(
+            pane.diff_text_local_pair_ranges(3, DiffTextRegion::Inline)
+                .into_vec(),
+            vec![0..6]
+        );
+        assert!(
+            pane.diff_text_local_pair_ranges(2, DiffTextRegion::Inline)
+                .is_empty()
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup preview njk fixture");
+}
+
+/// Occurrences inside an injected region, in the read-only preview.
+///
+/// A `<script>` body is one opaque leaf to the HTML grammar, so clicking a name
+/// there found no token at all and lit nothing. Deliberately a plain `.html`, to
+/// show the gap was never specific to templates.
+#[gpui::test]
+fn file_preview_click_lights_every_use_of_a_name_in_a_script(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(922);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_script_occurrences",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview_script.html");
+    let preview_abs_path = workdir.join(&file_rel);
+    let preview_lines: Arc<Vec<String>> = Arc::new(vec![
+        "<script>".to_string(),
+        "const total = 1;".to_string(),
+        "report(total);".to_string(),
+        "</script>".to_string(),
+    ]);
+    let preview_text = preview_lines.join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create preview script workdir");
+    std::fs::write(&preview_abs_path, &preview_text).expect("write preview script fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = preview_abs_path.clone();
+            let preview_lines = Arc::clone(&preview_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    preview_abs_path,
+                    preview_lines,
+                    preview_text.len(),
+                    cx,
+                );
+            });
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "script preview prepared syntax",
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_prepared_syntax_document().is_some()
+        },
+        |pane| {
+            (
+                pane.is_file_preview_active(),
+                pane.worktree_preview_prepared_syntax_document().is_some(),
+            )
+        },
+    );
+
+    // `total` on line 1, inside the JavaScript body.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        1,
+        DiffTextRegion::Inline,
+        6..11,
+        "script occurrence hitbox",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let occurrences = pane.diff_text_occurrences_for_tests();
+        let rows: Vec<usize> = occurrences.iter().map(|(row, _)| *row).collect();
+        assert!(
+            rows.contains(&1) && rows.contains(&2),
+            "both uses of `total` inside the script body should light: {occurrences:?}"
+        );
+        assert!(
+            !pane
+                .diff_text_local_occurrence_ranges(2, DiffTextRegion::Inline)
+                .is_empty(),
+            "the second use must reach the paint path too"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup preview script fixture");
+}

@@ -3673,6 +3673,9 @@ mod tests {
                     || name.ends_with("tests.rs")
                     || name == "theme.rs"
                     || name == "smoke_tests.rs"
+                    // TextInput's constructor supplies a default until set_theme is called.
+                    // Match path components before formatting platform-specific diagnostics.
+                    || path.ends_with(std::path::Path::new("kit/text_input/editing.rs"))
                 {
                     continue;
                 }
@@ -3691,7 +3694,6 @@ mod tests {
 
         let mut offenders = Vec::new();
         walk(std::path::Path::new("src"), &mut offenders);
-        offenders.retain(|site| !site.contains("kit/text_input/editing.rs"));
 
         assert!(
             offenders.is_empty(),
