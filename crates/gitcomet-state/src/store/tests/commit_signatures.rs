@@ -1,7 +1,8 @@
 use super::*;
 use gitcomet_core::domain::{
-    CommitDetails, CommitId, CommitSignature, SignatureFormat, SignatureStatus,
+    CommitDetails, CommitId, CommitSignature, SignatureFormat, SignatureFormats, SignatureStatus,
 };
+use gitcomet_core::signing_tools::{SigningTool, SigningToolAvailability, SigningToolsState};
 
 fn repo_with_selected_commit(
     commit_id: &CommitId,
@@ -803,4 +804,201 @@ fn closing_repositories_cancels_their_signature_work() {
         reduce(&mut repos, &AtomicU64::new(2), &mut state, msg);
         assert!(cancellation.is_cancelled());
     }
+}
+
+fn signing_tools(gpg_found: bool, ssh_keygen_found: bool) -> SigningToolsState {
+    let tool = |program: &str, found: bool| SigningTool {
+        program: program.to_string(),
+        availability: if found {
+            SigningToolAvailability::Available {
+                version: Some(format!("{program} 1.0")),
+            }
+        } else {
+            SigningToolAvailability::NotFound {
+                detail: format!("`{program}` was not found on Git's PATH."),
+            }
+        },
+    };
+    SigningToolsState {
+        gpg: tool("gpg", gpg_found),
+        ssh_keygen: tool("ssh-keygen", ssh_keygen_found),
+    }
+}
+
+fn requested_formats(effects: &[Effect]) -> Option<SignatureFormats> {
+    effects.iter().find_map(|effect| match effect {
+        Effect::VerifyCommitSignatures { formats, .. } => Some(*formats),
+        _ => None,
+    })
+}
+
+fn load_selected_details(
+    state: &mut AppState,
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    commit_id: &CommitId,
+) -> Vec<Effect> {
+    let id_alloc = AtomicU64::new(2);
+    reduce(
+        repos,
+        &id_alloc,
+        state,
+        Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
+            repo_id: RepoId(1),
+            commit_id: commit_id.clone(),
+            result: Ok(commit_details_for(commit_id)),
+        }),
+    )
+}
+
+#[test]
+fn unprobed_verifiers_do_not_hold_verification_back() {
+    let commit_id = CommitId("deadbeef".into());
+    let (mut state, mut repos) = repo_with_selected_commit(&commit_id);
+
+    let effects = load_selected_details(&mut state, &mut repos, &commit_id);
+
+    assert_eq!(
+        requested_formats(&effects),
+        Some(SignatureFormats::ALL),
+        "got {effects:?}"
+    );
+}
+
+#[test]
+fn no_installed_verifier_suppresses_verification_entirely() {
+    let commit_id = CommitId("deadbeef".into());
+    let (mut state, mut repos) = repo_with_selected_commit(&commit_id);
+    state.signing_tools = signing_tools(false, false);
+
+    let effects = load_selected_details(&mut state, &mut repos, &commit_id);
+
+    assert_eq!(requested_formats(&effects), None, "got {effects:?}");
+    assert!(
+        state.repos[0]
+            .history_state
+            .commit_signatures_requested
+            .is_empty(),
+        "nothing may be queued for a later batch either"
+    );
+}
+
+#[test]
+fn verification_is_limited_to_formats_with_an_installed_verifier() {
+    let commit_id = CommitId("deadbeef".into());
+    let (mut state, mut repos) = repo_with_selected_commit(&commit_id);
+    state.signing_tools = signing_tools(false, true);
+
+    let effects = load_selected_details(&mut state, &mut repos, &commit_id);
+
+    let formats = requested_formats(&effects).expect("SSH signatures are still verifiable");
+    assert!(formats.contains(SignatureFormat::Ssh));
+    assert!(!formats.contains(SignatureFormat::OpenPgp));
+    assert!(!formats.contains(SignatureFormat::X509));
+}
+
+#[test]
+fn losing_every_verifier_clears_the_badges_and_cancels_running_work() {
+    let commit_id = CommitId("deadbeef".into());
+    let (mut state, mut repos) = repo_with_selected_commit(&commit_id);
+    state.signing_tools = signing_tools(true, true);
+    state.repos[0].merge_commit_signatures(vec![(commit_id.clone(), good_signature())]);
+    let history = &state.repos[0].history_state;
+    let (rev, epoch) = (
+        history.commit_signatures_rev,
+        history.commit_signatures_epoch,
+    );
+    let running = history.commit_signatures_cancellation.clone();
+    let id_alloc = AtomicU64::new(2);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetSigningToolsState(signing_tools(false, false)),
+    );
+
+    let history = &state.repos[0].history_state;
+    assert!(history.commit_signatures.is_empty());
+    assert_ne!(history.commit_signatures_rev, rev);
+    assert_ne!(history.commit_signatures_epoch, epoch);
+    assert!(running.is_cancelled());
+    assert!(effects.is_empty(), "got {effects:?}");
+}
+
+#[test]
+fn installing_a_verifier_rechecks_the_loaded_page() {
+    let commit_id = CommitId("aaaa".into());
+    let (mut state, mut repos) = repo_with_selected_commit(&commit_id);
+    state.repos[0].set_log(Loadable::Ready(Arc::new(log_page_with(&["aaaa", "bbbb"]))));
+    state.signing_tools = signing_tools(false, false);
+    let id_alloc = AtomicU64::new(2);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetSigningToolsState(signing_tools(true, false)),
+    );
+
+    let (commit_ids, formats) = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::VerifyCommitSignatures {
+                commit_ids,
+                formats,
+                ..
+            } => Some((commit_ids.clone(), *formats)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected a re-verification effect, got {effects:?}"));
+    assert_eq!(
+        commit_ids.as_ref(),
+        [CommitId("aaaa".into()), CommitId("bbbb".into())].as_slice()
+    );
+    assert!(formats.contains(SignatureFormat::OpenPgp));
+    assert!(!formats.contains(SignatureFormat::Ssh));
+}
+
+#[test]
+fn a_new_verifier_version_alone_does_not_recheck() {
+    let commit_id = CommitId("deadbeef".into());
+    let (mut state, mut repos) = repo_with_selected_commit(&commit_id);
+    state.signing_tools = signing_tools(true, true);
+    state.repos[0].merge_commit_signatures(vec![(commit_id.clone(), good_signature())]);
+    let mut upgraded = signing_tools(true, true);
+    upgraded.gpg.availability = SigningToolAvailability::Available {
+        version: Some("gpg 2.0".to_string()),
+    };
+    let id_alloc = AtomicU64::new(2);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetSigningToolsState(upgraded.clone()),
+    );
+
+    assert!(effects.is_empty(), "got {effects:?}");
+    assert_eq!(state.signing_tools, upgraded);
+    assert!(
+        state.repos[0]
+            .history_state
+            .commit_signatures
+            .contains_key(&commit_id)
+    );
+}
+
+#[test]
+fn enabling_the_preference_without_any_verifier_requests_nothing() {
+    let commit_id = CommitId("aaaa".into());
+    let (mut state, mut repos) = repo_with_selected_commit(&commit_id);
+    state.repos[0].set_log(Loadable::Ready(Arc::new(log_page_with(&["aaaa", "bbbb"]))));
+    state.git_log_settings.verify_commit_signatures = false;
+    state.signing_tools = signing_tools(false, false);
+    let id_alloc = AtomicU64::new(2);
+
+    let msg = set_verification(&mut state, true);
+    let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
+
+    assert!(effects.is_empty(), "got {effects:?}");
 }

@@ -2959,7 +2959,7 @@ pub(super) fn commit_reveal_resolved(
     reference: CommitId,
     result: std::result::Result<CommitDetails, Error>,
 ) -> Vec<Effect> {
-    let verify_signatures = state.git_log_settings.verify_commit_signatures;
+    let signature_formats = state.signature_verification_formats();
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -2987,7 +2987,7 @@ pub(super) fn commit_reveal_resolved(
     repo_state.set_reveal_target(Some(commit_id.clone()));
     repo_state.set_commit_details(Loadable::Ready(Arc::new(details)));
     let signature_effect = super::util::verify_commit_signatures_effect(
-        verify_signatures,
+        signature_formats,
         repo_state,
         repo_id,
         [commit_id.clone()],
@@ -3003,7 +3003,7 @@ pub(super) fn commit_details_loaded(
     commit_id: CommitId,
     result: std::result::Result<CommitDetails, Error>,
 ) -> Vec<Effect> {
-    let verify_signatures = state.git_log_settings.verify_commit_signatures;
+    let signature_formats = state.signature_verification_formats();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.history_state.selected_commit.as_ref() == Some(&commit_id)
     {
@@ -3023,7 +3023,7 @@ pub(super) fn commit_details_loaded(
         // The selected commit is usually a log row, but a reveal or a link menu
         // can select one the loaded page does not contain.
         let signature_effect = super::util::verify_commit_signatures_effect(
-            verify_signatures,
+            signature_formats,
             repo_state,
             repo_id,
             [commit_id.clone()],
@@ -3050,7 +3050,8 @@ pub(super) fn commit_signatures_verified(
     epoch: u64,
     result: std::result::Result<Vec<(CommitId, CommitSignature)>, Error>,
 ) -> Vec<Effect> {
-    if !state.git_log_settings.verify_commit_signatures {
+    let signature_formats = state.signature_verification_formats();
+    if signature_formats.is_empty() {
         return Vec::new();
     }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
@@ -3065,7 +3066,7 @@ pub(super) fn commit_signatures_verified(
     if let Ok(verified) = result {
         repo_state.merge_commit_signatures(verified);
     }
-    super::util::verify_commit_signatures_effect(true, repo_state, repo_id, [])
+    super::util::verify_commit_signatures_effect(signature_formats, repo_state, repo_id, [])
         .into_iter()
         .collect()
 }

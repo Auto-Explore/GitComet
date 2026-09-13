@@ -8,7 +8,9 @@
 
 use super::{GixRepo, with_object_cache};
 use crate::util::{run_git_with_stdin_capture, validate_hex_commit_id};
-use gitcomet_core::domain::{CommitId, CommitSignature, SignatureFormat, SignatureStatus};
+use gitcomet_core::domain::{
+    CommitId, CommitSignature, SignatureFormat, SignatureFormats, SignatureStatus,
+};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice as _;
@@ -107,12 +109,13 @@ impl GixRepo {
         &self,
         ids: &[CommitId],
     ) -> Result<Vec<(CommitId, CommitSignature)>> {
-        self.verify_commit_signatures_cancellable_impl(ids, None)
+        self.verify_commit_signatures_cancellable_impl(ids, SignatureFormats::ALL, None)
     }
 
     pub(in super::super) fn verify_commit_signatures_cancellable_impl(
         &self,
         ids: &[CommitId],
+        verifiable: SignatureFormats,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Vec<(CommitId, CommitSignature)>> {
         if let Some(cancellation) = cancellation {
@@ -130,7 +133,7 @@ impl GixRepo {
                 requested.push((id.clone(), oid));
             }
         }
-        if requested.is_empty() {
+        if requested.is_empty() || verifiable.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -140,6 +143,8 @@ impl GixRepo {
         let signed: Vec<_> = requested
             .iter()
             .filter_map(|(_, oid)| formats.get(oid).map(|format| (*oid, *format)))
+            // A format without an installed verifier would only yield `N`.
+            .filter(|(_, format)| verifiable.contains(*format))
             .collect();
         for chunk in signed.chunks(VERIFY_BATCH_SIZE) {
             if let Some(cancellation) = cancellation {

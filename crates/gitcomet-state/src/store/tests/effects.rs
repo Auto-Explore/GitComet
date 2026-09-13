@@ -52,6 +52,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
                 epoch: 0,
                 cancellation: CancellationToken::new(),
                 commit_ids: vec![CommitId("aaaa".into())].into(),
+                formats: gitcomet_core::domain::SignatureFormats::ALL,
             },
         );
         if cancel_repo_loads {

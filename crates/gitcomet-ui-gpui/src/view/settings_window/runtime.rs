@@ -3,6 +3,8 @@ use super::*;
 #[derive(Clone, Debug)]
 pub(super) struct SettingsRuntimeInfo {
     pub(super) git: GitRuntimeInfo,
+    /// `None` until the background probe finishes.
+    pub(super) signing_tools: Option<SigningToolsState>,
     pub(super) app_version_display: SharedString,
     pub(super) operating_system: SharedString,
 }
@@ -74,7 +76,11 @@ impl SettingsWindowView {
             }
         }
 
+        let signing_tools = self.runtime_info.signing_tools.take();
         self.runtime_info = SettingsRuntimeInfo::from_runtime(runtime.clone());
+        self.runtime_info.signing_tools = signing_tools;
+        // A different Git resolves gpg and ssh-keygen with a different PATH.
+        self.refresh_signing_tools(cx);
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, _cx| {
             view.store
@@ -102,6 +108,38 @@ impl SettingsWindowView {
     }
 }
 
+impl SettingsWindowView {
+    pub(super) fn refresh_signing_tools(&mut self, cx: &mut gpui::Context<Self>) {
+        self.signing_tools_probe = Self::spawn_signing_tools_probe(cx);
+    }
+
+    /// Probes gpg and ssh-keygen off the UI thread, then shares the result with
+    /// the main windows so their signature badges follow it. Dropping the
+    /// returned task cancels a probe that a newer one replaced.
+    pub(super) fn spawn_signing_tools_probe(
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<gpui::Task<()>> {
+        // Tests render fixed runtime info and must not depend on the host's tools.
+        if cfg!(test) {
+            return None;
+        }
+        let detection = cx.background_spawn(async { detect_signing_tools() });
+        Some(cx.spawn(
+            async move |this: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let tools = detection.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.runtime_info.signing_tools = Some(tools.clone());
+                    this.update_main_windows(cx, move |view, _window, _cx| {
+                        view.store
+                            .dispatch(Msg::SetSigningToolsState(tools.clone()));
+                    });
+                    cx.notify();
+                });
+            },
+        ))
+    }
+}
+
 impl SettingsRuntimeInfo {
     pub(super) fn detect() -> Self {
         Self::from_runtime(refresh_git_runtime())
@@ -110,6 +148,7 @@ impl SettingsRuntimeInfo {
     pub(super) fn from_runtime(runtime: GitRuntimeState) -> Self {
         Self {
             git: git_runtime_info_from_state(runtime),
+            signing_tools: None,
             app_version_display: format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into(),
             operating_system: format!(
                 "{} ({})",
@@ -193,4 +232,83 @@ pub(super) fn parse_u32_prefix(part: &str) -> Option<u32> {
 pub(super) fn is_supported_git_version(version: GitVersion) -> bool {
     version.major > MIN_GIT_MAJOR
         || (version.major == MIN_GIT_MAJOR && version.minor >= MIN_GIT_MINOR)
+}
+
+pub(super) const GPG_DESCRIPTION: &str =
+    "Verifies GPG and X.509 commit signatures, such as commits made on GitHub.";
+pub(super) const SSH_KEYGEN_DESCRIPTION: &str = "Verifies SSH commit signatures.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SigningToolStatus {
+    Detecting,
+    Found,
+    NotFound,
+    Unknown,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SigningToolInfo {
+    pub(super) status: SigningToolStatus,
+    pub(super) version_display: SharedString,
+    pub(super) detail: Option<SharedString>,
+}
+
+pub(super) fn gpg_info(tools: Option<&SigningToolsState>) -> SigningToolInfo {
+    signing_tool_info(
+        tools.map(|tools| &tools.gpg),
+        DEFAULT_GPG_PROGRAM,
+        "gpg.program",
+        "GPG and X.509 commit signatures",
+    )
+}
+
+pub(super) fn ssh_keygen_info(tools: Option<&SigningToolsState>) -> SigningToolInfo {
+    signing_tool_info(
+        tools.map(|tools| &tools.ssh_keygen),
+        DEFAULT_SSH_KEYGEN_PROGRAM,
+        "gpg.ssh.program",
+        "SSH commit signatures",
+    )
+}
+
+fn signing_tool_info(
+    tool: Option<&SigningTool>,
+    default_program: &str,
+    config_key: &str,
+    signatures: &str,
+) -> SigningToolInfo {
+    let Some(tool) = tool else {
+        return SigningToolInfo {
+            status: SigningToolStatus::Detecting,
+            version_display: SharedString::default(),
+            detail: None,
+        };
+    };
+    let program = tool.program.as_str();
+    match &tool.availability {
+        SigningToolAvailability::Available { version } => SigningToolInfo {
+            status: SigningToolStatus::Found,
+            version_display: version.as_deref().unwrap_or(program).to_string().into(),
+            detail: (!tool.is_default_program(default_program))
+                .then(|| format!("Configured with `{config_key}`: {program}").into()),
+        },
+        SigningToolAvailability::NotFound { detail } => SigningToolInfo {
+            status: SigningToolStatus::NotFound,
+            version_display: program.to_string().into(),
+            detail: Some(
+                format!(
+                    "{detail} {signatures} are not verified. Install it, or set `{config_key}` to its full path."
+                )
+                .into(),
+            ),
+        },
+        SigningToolAvailability::Unknown => SigningToolInfo {
+            status: SigningToolStatus::Unknown,
+            version_display: program.to_string().into(),
+            detail: Some(
+                format!("Could not check `{program}`. Git still tries to verify {signatures}.")
+                    .into(),
+            ),
+        },
+    }
 }

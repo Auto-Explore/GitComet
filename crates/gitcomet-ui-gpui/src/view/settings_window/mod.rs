@@ -5,6 +5,10 @@ use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
     GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
 };
+use gitcomet_core::signing_tools::{
+    DEFAULT_GPG_PROGRAM, DEFAULT_SSH_KEYGEN_PROGRAM, SigningTool, SigningToolAvailability,
+    SigningToolsState, detect_signing_tools,
+};
 use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
 use gitcomet_state::session::ExternalCodeEditorSetting;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
@@ -28,6 +32,8 @@ const MIN_GIT_MAJOR: u32 = 2;
 const MIN_GIT_MINOR: u32 = 50;
 const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
 const THEMES_GUIDE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/docs/themes.md";
+const SIGNATURE_GUIDE_URL: &str =
+    "https://github.com/Auto-Explore/GitComet/blob/main/docs/commit-signatures.md";
 const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
 const LICENSE_NAME: &str = "AGPL-3.0";
 
@@ -364,7 +370,7 @@ impl SettingsCategory {
             Self::GitLog => "Git log",
             Self::Remotes => "Remotes",
             Self::Tags => "Tags",
-            Self::GitExecutable => "Git executable",
+            Self::GitExecutable => "Executables",
             Self::Environment => "Environment",
             Self::Links => "Links",
         }
@@ -434,7 +440,10 @@ impl SettingsCategory {
             }
             Self::Remotes => "remotes remote fetch pull prune deleted branches automatically ghost",
             Self::Tags => "tags automatically fetch tags",
-            Self::GitExecutable => "git executable custom path system path version",
+            Self::GitExecutable => {
+                "executables git executable custom path system path version gpg gnupg \
+                 openpgp x.509 ssh-keygen openssh commit signature verification verified trust key guide"
+            }
             Self::Environment => "environment build operating system app version",
             Self::Links => {
                 "links theme guide github license open source licenses professional edition \
@@ -560,6 +569,7 @@ pub(crate) struct SettingsWindowView {
     nav_scroll: ScrollHandle,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
+    signing_tools_probe: Option<gpui::Task<()>>,
     git_executable_mode: GitExecutableMode,
     git_custom_path_draft: String,
     git_executable_input: Entity<components::TextInput>,
@@ -955,6 +965,7 @@ impl SettingsWindowView {
             };
         let theme = theme_mode.resolve_theme(window.appearance());
         let runtime_info = SettingsRuntimeInfo::detect();
+        let signing_tools_probe = Self::spawn_signing_tools_probe(cx);
         let git_executable_mode =
             GitExecutableMode::from_preference(&runtime_info.git.runtime.preference);
         let git_custom_path_draft = match &runtime_info.git.runtime.preference {
@@ -1221,6 +1232,7 @@ impl SettingsWindowView {
             nav_scroll: ScrollHandle::default(),
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
+            signing_tools_probe,
             git_executable_mode,
             git_custom_path_draft,
             git_executable_input,

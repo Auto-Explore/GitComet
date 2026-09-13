@@ -2043,6 +2043,7 @@ pub(super) fn schedule_effect(
             epoch,
             cancellation,
             commit_ids,
+            formats,
         } => {
             // Signature requests have their own lifetime: staging and tab switches
             // cancel repo loads, but must not silently lose pending verification.
@@ -2054,6 +2055,7 @@ pub(super) fn schedule_effect(
                 epoch,
                 cancellation,
                 commit_ids,
+                formats,
             );
         }
         Effect::LoadHoverCommitMessage { repo_id, commit_id } => {

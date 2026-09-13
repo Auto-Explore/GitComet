@@ -1967,7 +1967,7 @@ impl Render for SettingsWindowView {
                     }));
 
                     let mut git_executable_card = self
-                        .card("settings_window_git_executable", "Git executable", theme)
+                        .card("settings_window_git_executable", "Executables", theme)
                         .child(
                             div()
                                 .id("settings_window_git_executable_scope_note")
@@ -2083,6 +2083,50 @@ impl Render for SettingsWindowView {
                                 .child(detail),
                         );
                     }
+
+                    let signing_tools = self.runtime_info.signing_tools.as_ref();
+                    for (row_id, detail_id, label, description, info) in [
+                        (
+                            "settings_window_gpg_runtime",
+                            "settings_window_gpg_runtime_detail",
+                            "GPG",
+                            GPG_DESCRIPTION,
+                            gpg_info(signing_tools),
+                        ),
+                        (
+                            "settings_window_ssh_keygen_runtime",
+                            "settings_window_ssh_keygen_runtime_detail",
+                            "ssh-keygen",
+                            SSH_KEYGEN_DESCRIPTION,
+                            ssh_keygen_info(signing_tools),
+                        ),
+                    ] {
+                        git_executable_card = git_executable_card
+                            .child(self.signing_tool_row(row_id, label, description, &info, theme));
+                        if let Some(detail) = info.detail {
+                            git_executable_card = git_executable_card.child(
+                                div()
+                                    .id(detail_id)
+                                    .px_2()
+                                    .pb_1()
+                                    .text_size(theme.ui_text(12.0))
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child(detail),
+                            );
+                        }
+                    }
+
+                    git_executable_card = git_executable_card.child(
+                        self.link_row(
+                            "settings_window_signature_guide",
+                            "Signature verification guide",
+                            "docs/commit-signatures.md".into(),
+                            theme,
+                        )
+                        .on_click(|_, _, cx| {
+                            cx.open_url(SIGNATURE_GUIDE_URL);
+                        }),
+                    );
 
                     let environment_card = self
                         .card("settings_window_environment", "Environment", theme)

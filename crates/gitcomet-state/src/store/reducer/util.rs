@@ -11,7 +11,7 @@ use gitcomet_core::auth::{
 };
 #[cfg(test)]
 use gitcomet_core::domain::Upstream;
-use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind};
+use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, FileStatusKind, SignatureFormats};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
@@ -27,12 +27,12 @@ pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
 /// Queue each commit at most once per refresh, including no-badge results.
 /// One small batch per repository runs at a time; replies start the next batch.
 pub(super) fn verify_commit_signatures_effect(
-    enabled: bool,
+    formats: SignatureFormats,
     repo_state: &mut RepoState,
     repo_id: RepoId,
     ids: impl IntoIterator<Item = CommitId>,
 ) -> Option<Effect> {
-    if !enabled {
+    if formats.is_empty() {
         return None;
     }
     let history = &mut repo_state.history_state;
@@ -61,15 +61,16 @@ pub(super) fn verify_commit_signatures_effect(
         epoch: history.commit_signatures_epoch,
         cancellation: history.commit_signatures_cancellation.clone(),
         commit_ids,
+        formats,
     })
 }
 
 pub(super) fn reverify_loaded_commit_signatures_effect(
-    enabled: bool,
+    formats: SignatureFormats,
     repo_state: &mut RepoState,
 ) -> Option<Effect> {
     repo_state.clear_commit_signatures();
-    if !enabled {
+    if formats.is_empty() {
         return None;
     }
     let mut ids: Vec<CommitId> = match &repo_state.log {
@@ -95,7 +96,19 @@ pub(super) fn reverify_loaded_commit_signatures_effect(
     {
         ids.push(selected.clone());
     }
-    verify_commit_signatures_effect(true, repo_state, repo_state.id, ids)
+    verify_commit_signatures_effect(formats, repo_state, repo_state.id, ids)
+}
+
+/// Clears every repository's verdicts and re-checks what is loaded with the
+/// current formats, so badges follow the preference and installed verifiers
+/// without waiting for the next log reload.
+pub(super) fn reverify_all_commit_signatures_effects(state: &mut AppState) -> Vec<Effect> {
+    let formats = state.signature_verification_formats();
+    state
+        .repos
+        .iter_mut()
+        .filter_map(|repo_state| reverify_loaded_commit_signatures_effect(formats, repo_state))
+        .collect()
 }
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;

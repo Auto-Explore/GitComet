@@ -1566,6 +1566,24 @@ fn settings_window_rows_clamp_under_lilex_at_minimum_width(cx: &mut gpui::TestAp
         settings.runtime_info.git.version_display =
             "git version 2.51.0 (overflow-regression-build-with-very-long-metadata)".into();
         settings.runtime_info.git.compatibility = GitCompatibility::Supported;
+        settings.runtime_info.signing_tools = Some({
+            use gitcomet_core::signing_tools::{
+                SigningTool, SigningToolAvailability, SigningToolsState,
+            };
+            let found = |program: &str, version: &str| SigningTool {
+                program: program.to_string(),
+                availability: SigningToolAvailability::Available {
+                    version: Some(version.to_string()),
+                },
+            };
+            SigningToolsState {
+                gpg: found(
+                    "gpg",
+                    "gpg (GnuPG) 2.4.7 (overflow-regression-build-with-very-long-metadata)",
+                ),
+                ssh_keygen: found("ssh-keygen", "OpenSSH_10.3p1, LibreSSL 3.3.6"),
+            }
+        });
         settings.overflow_probe = true;
         cx.notify();
     });
@@ -1605,9 +1623,44 @@ fn settings_window_rows_clamp_under_lilex_at_minimum_width(cx: &mut gpui::TestAp
             "settings_window_git_runtime_label",
             "settings_window_git_runtime_value",
         ),
+        (
+            "settings_window_gpg_runtime",
+            "settings_window_gpg_runtime_label",
+            "settings_window_gpg_runtime_value",
+        ),
     ] {
         assert_debug_bounds_within(&mut settings_cx, row_selector, label_selector);
         assert_debug_bounds_within(&mut settings_cx, row_selector, value_selector);
+    }
+
+    // Executables stack the version under the program name, so a long version
+    // never competes with the name and status for one line on narrow windows.
+    for (row_selector, label_selector, status_selector, version_selector) in [
+        (
+            "settings_window_git_runtime",
+            "settings_window_git_runtime_label",
+            "settings_window_git_runtime_status",
+            "settings_window_git_runtime_value",
+        ),
+        (
+            "settings_window_gpg_runtime",
+            "settings_window_gpg_runtime_label",
+            "settings_window_gpg_runtime_status",
+            "settings_window_gpg_runtime_value",
+        ),
+    ] {
+        assert_debug_bounds_within(&mut settings_cx, row_selector, status_selector);
+        let label = settings_cx
+            .debug_bounds(label_selector)
+            .unwrap_or_else(|| panic!("expected `{label_selector}` bounds"));
+        let version = settings_cx
+            .debug_bounds(version_selector)
+            .unwrap_or_else(|| panic!("expected `{version_selector}` bounds"));
+        assert!(
+            version.top() >= label.bottom() - px(0.5),
+            "expected `{version_selector}` on its own line below `{label_selector}` \
+             (label={label:?}, version={version:?})"
+        );
     }
 }
 
@@ -3312,4 +3365,102 @@ fn history_branch_names_options_update_every_main_window(cx: &mut gpui::TestAppC
             }
         });
     }
+}
+
+fn signing_tools_fixture() -> gitcomet_core::signing_tools::SigningToolsState {
+    use gitcomet_core::signing_tools::{SigningTool, SigningToolAvailability, SigningToolsState};
+    SigningToolsState {
+        gpg: SigningTool {
+            program: "gpg".to_string(),
+            availability: SigningToolAvailability::NotFound {
+                detail: "`gpg` was not found on Git's PATH.".to_string(),
+            },
+        },
+        ssh_keygen: SigningTool {
+            program: "/usr/bin/ssh-keygen".to_string(),
+            availability: SigningToolAvailability::Available {
+                version: Some("OpenSSH_10.3p1".to_string()),
+            },
+        },
+    }
+}
+
+#[test]
+fn a_missing_signing_tool_explains_what_is_lost_and_how_to_fix_it() {
+    let tools = signing_tools_fixture();
+    let gpg = gpg_info(Some(&tools));
+
+    assert_eq!(gpg.status, SigningToolStatus::NotFound);
+    let detail = gpg.detail.expect("a missing gpg must explain itself");
+    assert!(detail.contains("not verified"), "{detail}");
+    assert!(detail.contains("gpg.program"), "{detail}");
+}
+
+#[test]
+fn a_found_signing_tool_shows_its_version_and_custom_program() {
+    let tools = signing_tools_fixture();
+    let ssh_keygen = ssh_keygen_info(Some(&tools));
+
+    assert_eq!(ssh_keygen.status, SigningToolStatus::Found);
+    assert_eq!(ssh_keygen.version_display.as_ref(), "OpenSSH_10.3p1");
+    let detail = ssh_keygen.detail.expect("a non-default program is named");
+    assert!(detail.contains("gpg.ssh.program"), "{detail}");
+}
+
+#[test]
+fn signing_tools_show_as_detecting_until_probed() {
+    assert_eq!(gpg_info(None).status, SigningToolStatus::Detecting);
+    assert_eq!(ssh_keygen_info(None).status, SigningToolStatus::Detecting);
+}
+
+#[test]
+fn the_executables_page_is_found_by_its_tools() {
+    for query in ["executables", "git executable", "gpg", "ssh-keygen"] {
+        assert!(
+            SettingsCategory::GitExecutable.matches_query(query),
+            "{query}"
+        );
+    }
+}
+
+#[gpui::test]
+fn the_executables_page_links_to_the_signature_guide(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+    let (_main_view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        open_settings_window(app);
+    });
+    cx.run_until_parked();
+
+    let settings_window = cx.update(|_window, app| {
+        app.windows()
+            .into_iter()
+            .find_map(|window| window.downcast::<SettingsWindowView>())
+            .expect("settings window should be open")
+    });
+
+    let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+    settings_cx.run_until_parked();
+    settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+    settings_cx.run_until_parked();
+
+    let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+        settings.select_category(SettingsCategory::GitExecutable, cx);
+    });
+    settings_cx.run_until_parked();
+    settings_cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let guide_bounds = settings_cx
+        .debug_bounds("settings_window_signature_guide")
+        .expect("expected signature guide row bounds");
+    settings_cx.simulate_click(guide_bounds.center(), Modifiers::default());
+    settings_cx.run_until_parked();
+
+    assert_eq!(cx.opened_url(), Some(SIGNATURE_GUIDE_URL.to_string()));
 }

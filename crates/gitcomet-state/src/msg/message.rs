@@ -17,6 +17,7 @@ use gitcomet_core::services::{
     SafePushAfterCommitDecision, SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision,
     SubmoduleTrustTarget,
 };
+use gitcomet_core::signing_tools::SigningToolsState;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -215,6 +216,7 @@ pub enum Msg {
     },
     CancelAuthPrompt,
     SetGitRuntimeState(GitRuntimeState),
+    SetSigningToolsState(SigningToolsState),
     SetRemoteUrlPolicy(RemoteUrlPolicy),
     SetGitLogSettings {
         show_history_tags: bool,

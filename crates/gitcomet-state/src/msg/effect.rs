@@ -166,6 +166,9 @@ pub enum Effect {
         epoch: u64,
         cancellation: gitcomet_core::services::CancellationToken,
         commit_ids: std::sync::Arc<[CommitId]>,
+        /// Only signatures in these formats are checked: the others have no
+        /// verifier installed.
+        formats: gitcomet_core::domain::SignatureFormats,
     },
     LoadHoverCommitMessage {
         repo_id: RepoId,
