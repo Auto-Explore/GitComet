@@ -643,12 +643,9 @@ pub(super) fn log_loaded(
                 // A failed checkout may have changed the optimistic detached
                 // HEAD even though the retained history still matches Git.
                 reconcile_detached_head_from_log(repo_state, scope);
-                effects.extend(super::util::reverify_loaded_commit_signatures_effect(
-                    signature_formats,
-                    repo_state,
-                ));
-                effects.extend(finish_log_load(repo_state));
-                return effects;
+                // Activation and watcher checks can leave history unchanged.
+                // Keep its badges and ongoing verification until a page reloads.
+                return finish_log_load(repo_state);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Invalidated) => {
                 let request = super::util::refresh_log_request(repo_state);

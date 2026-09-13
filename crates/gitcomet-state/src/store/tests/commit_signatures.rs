@@ -452,109 +452,288 @@ fn a_resolved_reveal_verifies_the_full_commit_outside_the_loaded_page() {
 }
 
 #[test]
-fn refreshing_history_rechecks_verdicts_even_when_the_log_is_unchanged() {
-    for unchanged in [false, true] {
-        let commit_id = CommitId("aaaa".into());
-        let revealed = CommitId("cccc".into());
-        let (mut state, mut repos) = repo_with_selected_commit(&revealed);
-        let page = Arc::new(log_page_with(&["aaaa", "bbbb"]));
-        let repo = &mut state.repos[0];
-        repo.set_log(Loadable::Ready(page.clone()));
-        repo.merge_commit_signatures(vec![
-            (commit_id, good_signature()),
-            (revealed.clone(), good_signature()),
-        ]);
-        let seq = repo
-            .loads_in_flight
-            .request_log(crate::model::PendingLogLoad {
-                scope: gitcomet_core::domain::LogScope::AllBranches,
-                author: None,
-                limit: 200,
-                cursor: None,
-            })
-            .expect("start refresh");
-        let result = if unchanged {
-            gitcomet_core::services::HistoryReadResult::Unchanged
-        } else {
-            gitcomet_core::services::HistoryReadResult::Page {
-                page,
-                snapshot: None,
-            }
-        };
-        let effects = reduce(
-            &mut repos,
-            &AtomicU64::new(2),
-            &mut state,
-            Msg::Internal(crate::msg::InternalMsg::LogLoaded {
-                repo_id: RepoId(1),
-                seq,
-                scope: gitcomet_core::domain::LogScope::AllBranches,
-                cursor: None,
-                result: Ok(result),
-            }),
-        );
-        assert!(
-            state.repos[0].history_state.commit_signatures.is_empty(),
-            "stale badges must be invalidated"
-        );
-        let requested = effects
-            .iter()
-            .find_map(|e| match e {
-                Effect::VerifyCommitSignatures { commit_ids, .. } => Some(commit_ids.as_ref()),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("refresh must reverify, got {effects:?}"));
-        assert_eq!(
-            requested,
-            [CommitId("aaaa".into()), CommitId("bbbb".into()), revealed].as_slice()
-        );
-        let epoch = effects
-            .iter()
-            .find_map(|effect| match effect {
-                Effect::VerifyCommitSignatures { epoch, .. } => Some(*epoch),
-                _ => None,
-            })
-            .unwrap();
-        // A successful refresh can now return no badge; an earlier good verdict
-        // must neither survive nor be restored by an older batch finishing last.
-        reduce(
-            &mut repos,
-            &AtomicU64::new(2),
-            &mut state,
-            Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
-                repo_id: RepoId(1),
-                epoch,
-                result: Ok(Vec::new()),
-            }),
-        );
-        reduce(
-            &mut repos,
-            &AtomicU64::new(2),
-            &mut state,
-            Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
-                repo_id: RepoId(1),
-                epoch: 0,
-                result: Ok(vec![(CommitId("aaaa".into()), good_signature())]),
-            }),
-        );
-        assert!(state.repos[0].history_state.commit_signatures.is_empty());
-        let mut bad = good_signature();
-        bad.status = SignatureStatus::Bad;
-        reduce(
-            &mut repos,
-            &AtomicU64::new(2),
-            &mut state,
-            Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
-                repo_id: RepoId(1),
-                epoch,
-                result: Ok(vec![(CommitId("aaaa".into()), bad)]),
-            }),
-        );
-        assert_eq!(
-            state.repos[0].history_state.commit_signatures[&CommitId("aaaa".into())].status,
-            SignatureStatus::Bad
-        );
-    }
+fn replacing_history_rechecks_verdicts_and_discards_old_replies() {
+    let commit_id = CommitId("aaaa".into());
+    let revealed = CommitId("cccc".into());
+    let (mut state, mut repos) = repo_with_selected_commit(&revealed);
+    let page = Arc::new(log_page_with(&["aaaa", "bbbb"]));
+    let repo = &mut state.repos[0];
+    repo.set_log(Loadable::Ready(page.clone()));
+    repo.merge_commit_signatures(vec![
+        (commit_id, good_signature()),
+        (revealed.clone(), good_signature()),
+    ]);
+    let previous_epoch = repo.history_state.commit_signatures_epoch;
+    let cancellation = repo.history_state.commit_signatures_cancellation.clone();
+    let seq = repo
+        .loads_in_flight
+        .request_log(crate::model::PendingLogLoad {
+            scope: gitcomet_core::domain::LogScope::AllBranches,
+            author: None,
+            limit: 200,
+            cursor: None,
+        })
+        .expect("start refresh");
+    let result = gitcomet_core::services::HistoryReadResult::Page {
+        page,
+        snapshot: None,
+    };
+    let effects = reduce(
+        &mut repos,
+        &AtomicU64::new(2),
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: gitcomet_core::domain::LogScope::AllBranches,
+            cursor: None,
+            result: Ok(result),
+        }),
+    );
+    assert!(
+        state.repos[0].history_state.commit_signatures.is_empty(),
+        "stale badges must be invalidated"
+    );
+    assert!(cancellation.is_cancelled());
+    let requested = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::VerifyCommitSignatures { commit_ids, .. } => Some(commit_ids.as_ref()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("refresh must reverify, got {effects:?}"));
+    assert_eq!(
+        requested,
+        [CommitId("aaaa".into()), CommitId("bbbb".into()), revealed].as_slice()
+    );
+    let epoch = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::VerifyCommitSignatures { epoch, .. } => Some(*epoch),
+            _ => None,
+        })
+        .unwrap();
+    assert_ne!(epoch, previous_epoch);
+    // A successful refresh can now return no badge; an earlier good verdict
+    // must neither survive nor be restored by an older batch finishing last.
+    reduce(
+        &mut repos,
+        &AtomicU64::new(2),
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+            repo_id: RepoId(1),
+            epoch,
+            result: Ok(Vec::new()),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &AtomicU64::new(2),
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+            repo_id: RepoId(1),
+            epoch: previous_epoch,
+            result: Ok(vec![(CommitId("aaaa".into()), good_signature())]),
+        }),
+    );
+    assert!(state.repos[0].history_state.commit_signatures.is_empty());
+    let mut bad = good_signature();
+    bad.status = SignatureStatus::Bad;
+    reduce(
+        &mut repos,
+        &AtomicU64::new(2),
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+            repo_id: RepoId(1),
+            epoch,
+            result: Ok(vec![(CommitId("aaaa".into()), bad)]),
+        }),
+    );
+    assert_eq!(
+        state.repos[0].history_state.commit_signatures[&CommitId("aaaa".into())].status,
+        SignatureStatus::Bad
+    );
+}
+
+fn assert_history_check_preserves_verification(
+    result: Result<gitcomet_core::services::HistoryReadResult>,
+) {
+    // Complete one batch with a badge and unsigned commits, leave another in
+    // flight, and keep a third queued when the history check finishes.
+    let unsigned = CommitId("0001".into());
+    let (mut state, mut repos) = repo_with_selected_commit(&unsigned);
+    let ids: Vec<_> = (0..34).map(|ix| format!("{ix:04x}")).collect();
+    state.repos[0].set_log(Loadable::Ready(Arc::new(log_page_with(
+        &ids.iter().map(String::as_str).collect::<Vec<_>>(),
+    ))));
+    state.git_log_settings.verify_commit_signatures = false;
+    let id_alloc = AtomicU64::new(2);
+    let msg = set_verification(&mut state, true);
+    let effects = reduce(&mut repos, &id_alloc, &mut state, msg);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::VerifyCommitSignatures { .. }]
+    ));
+    let epoch = state.repos[0].history_state.commit_signatures_epoch;
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+            repo_id: RepoId(1),
+            epoch,
+            result: Ok(vec![(CommitId("0000".into()), good_signature())]),
+        }),
+    );
+    let [Effect::VerifyCommitSignatures { commit_ids, .. }] = effects.as_slice() else {
+        panic!("expected the second batch, got {effects:?}");
+    };
+    let running_commit = commit_ids[0].clone();
+    let repo = &mut state.repos[0];
+    let history = &repo.history_state;
+    let signatures = history.commit_signatures.clone();
+    let rev = history.commit_signatures_rev;
+    let cancellation = history.commit_signatures_cancellation.clone();
+    let requested = history.commit_signatures_requested.clone();
+    let queue = history.commit_signatures_queue.clone();
+    assert!(!queue.is_empty());
+    let seq = repo
+        .loads_in_flight
+        .request_log(crate::model::PendingLogLoad {
+            scope: gitcomet_core::domain::LogScope::AllBranches,
+            author: None,
+            limit: 200,
+            cursor: None,
+        })
+        .expect("start refresh");
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: gitcomet_core::domain::LogScope::AllBranches,
+            cursor: None,
+            result,
+        }),
+    );
+    assert!(effects.is_empty(), "unexpected refresh work: {effects:?}");
+    let history = &state.repos[0].history_state;
+    assert!(Arc::ptr_eq(&history.commit_signatures, &signatures));
+    assert_eq!(history.commit_signatures_rev, rev);
+    assert_eq!(history.commit_signatures_epoch, epoch);
+    assert!(!cancellation.is_cancelled());
+    assert!(history.commit_signatures_in_flight);
+    assert_eq!(history.commit_signatures_requested, requested);
+    assert_eq!(history.commit_signatures_queue, queue);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+            repo_id: RepoId(1),
+            epoch,
+            result: Ok(vec![(running_commit.clone(), good_signature())]),
+        }),
+    );
+    assert_eq!(
+        state.repos[0]
+            .history_state
+            .commit_signatures
+            .get(&running_commit),
+        Some(&good_signature()),
+        "the batch started before the history check must still be accepted"
+    );
+    let [Effect::VerifyCommitSignatures { commit_ids, .. }] = effects.as_slice() else {
+        panic!("expected the queued batch to resume, got {effects:?}");
+    };
+    assert_eq!(commit_ids, &queue[0]);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
+            repo_id: RepoId(1),
+            epoch,
+            result: Ok(Vec::new()),
+        }),
+    );
+    assert!(effects.is_empty());
+    assert!(!state.repos[0].history_state.commit_signatures_in_flight);
+    let effects = load_selected_details(&mut state, &mut repos, &unsigned);
+    assert!(
+        effects.is_empty(),
+        "unsigned commits must stay cached: {effects:?}"
+    );
+}
+
+#[test]
+fn unchanged_history_preserves_badges_and_running_verification() {
+    assert_history_check_preserves_verification(Ok(
+        gitcomet_core::services::HistoryReadResult::Unchanged,
+    ));
+}
+
+#[test]
+fn failed_history_refresh_preserves_badges_and_running_verification() {
+    assert_history_check_preserves_verification(Err(gitcomet_core::error::Error::new(
+        gitcomet_core::error::ErrorKind::Backend("history refresh failed".into()),
+    )));
+}
+
+#[test]
+fn loading_more_history_preserves_badges_and_verifies_only_new_commits() {
+    let commit_id = CommitId("aaaa".into());
+    let (mut state, mut repos) = repo_with_selected_commit(&commit_id);
+    let cursor = gitcomet_core::domain::LogCursor {
+        last_seen: commit_id.clone(),
+        resume_from: None,
+        resume_token: None,
+    };
+    let mut page = log_page_with(&["aaaa"]);
+    page.next_cursor = Some(cursor.clone());
+    let repo = &mut state.repos[0];
+    repo.set_log(Loadable::Ready(Arc::new(page)));
+    repo.merge_commit_signatures(vec![(commit_id.clone(), good_signature())]);
+    let signatures = repo.history_state.commit_signatures.clone();
+    let rev = repo.history_state.commit_signatures_rev;
+    let epoch = repo.history_state.commit_signatures_epoch;
+    let cancellation = repo.history_state.commit_signatures_cancellation.clone();
+    let seq = repo
+        .loads_in_flight
+        .request_log(crate::model::PendingLogLoad {
+            scope: gitcomet_core::domain::LogScope::AllBranches,
+            author: None,
+            limit: 200,
+            cursor: Some(cursor.clone()),
+        })
+        .expect("start loading more");
+    let effects = reduce(
+        &mut repos,
+        &AtomicU64::new(2),
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: gitcomet_core::domain::LogScope::AllBranches,
+            cursor: Some(cursor),
+            result: Ok(Arc::new(log_page_with(&["bbbb", "cccc"])).into()),
+        }),
+    );
+    let [Effect::VerifyCommitSignatures { commit_ids, .. }] = effects.as_slice() else {
+        panic!("expected verification of the added page, got {effects:?}");
+    };
+    assert_eq!(
+        commit_ids.as_ref(),
+        &[CommitId("bbbb".into()), CommitId("cccc".into())]
+    );
+    let history = &state.repos[0].history_state;
+    assert!(Arc::ptr_eq(&history.commit_signatures, &signatures));
+    assert_eq!(history.commit_signatures_rev, rev);
+    assert_eq!(history.commit_signatures_epoch, epoch);
+    assert!(!cancellation.is_cancelled());
 }
 
 #[test]
