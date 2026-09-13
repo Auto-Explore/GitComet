@@ -825,8 +825,8 @@ fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::Te
         })
     });
 
-    let (before_graph_rows, before_base_request, before_decoration_request, before_when_text) = cx
-        .update(|window, app| {
+    let (before_graph_rows, before_base_request, before_decoration_request, before_when_text) =
+        crate::view::test_support::inspect_render(cx, |window, app| {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             let rows_len = history_view.update(app, |history, cx| {
@@ -866,7 +866,7 @@ fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::Te
         )
     );
 
-    cx.update(|window, app| {
+    crate::view::test_support::inspect_render(cx, |window, app| {
         let main_pane = view.read(app).main_pane.clone();
         let history_view = main_pane.read(app).history_view.clone();
         history_view.update(app, |history, cx| {
@@ -879,6 +879,8 @@ fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::Te
                 "history row should still render after date change"
             );
         });
+    });
+    cx.update(|window, app| {
         window.refresh();
         let _ = window.draw(app);
     });
@@ -2593,7 +2595,7 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
     });
 
     let (before_graph_rows, before_base_request, before_branches_text) =
-        cx.update(|window, app| {
+        crate::view::test_support::inspect_render(cx, |window, app| {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             let rows_len = history_view.update(app, |history, cx| {
@@ -2639,31 +2641,32 @@ fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations
         })
     });
 
-    let (after_graph_rows, after_base_request, after_branches_text) = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let history_view = main_pane.read(app).history_view.clone();
-        let rows_len = history_view.update(app, |history, cx| {
-            HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
-        });
-        assert_eq!(
-            rows_len, 1,
-            "updated current-branch row should still render"
-        );
+    let (after_graph_rows, after_base_request, after_branches_text) =
+        crate::view::test_support::inspect_render(cx, |window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            let rows_len = history_view.update(app, |history, cx| {
+                HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
+            });
+            assert_eq!(
+                rows_len, 1,
+                "updated current-branch row should still render"
+            );
 
-        let history = history_view.read(app);
-        let cache = history
-            .history_cache
-            .as_ref()
-            .expect("history cache should be available");
-        (
-            Arc::clone(&cache.base.graph_rows),
-            cache.base.request.clone(),
-            cache.decorations.row_vms[0]
-                .branches_text
+            let history = history_view.read(app);
+            let cache = history
+                .history_cache
                 .as_ref()
-                .to_owned(),
-        )
-    });
+                .expect("history cache should be available");
+            (
+                Arc::clone(&cache.base.graph_rows),
+                cache.base.request.clone(),
+                cache.decorations.row_vms[0]
+                    .branches_text
+                    .as_ref()
+                    .to_owned(),
+            )
+        });
 
     assert!(
         Arc::ptr_eq(&before_graph_rows, &after_graph_rows),
@@ -2743,7 +2746,7 @@ fn current_branch_local_branch_changes_reuse_base_cache_and_refresh_decorations(
     });
 
     let (before_graph_rows, before_base_request, before_branches_text) =
-        cx.update(|window, app| {
+        crate::view::test_support::inspect_render(cx, |window, app| {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             let rows_len = history_view.update(app, |history, cx| {
@@ -2789,31 +2792,32 @@ fn current_branch_local_branch_changes_reuse_base_cache_and_refresh_decorations(
         })
     });
 
-    let (after_graph_rows, after_base_request, after_branches_text) = cx.update(|window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let history_view = main_pane.read(app).history_view.clone();
-        let rows_len = history_view.update(app, |history, cx| {
-            HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
-        });
-        assert_eq!(
-            rows_len, 1,
-            "updated current-branch row should still render"
-        );
+    let (after_graph_rows, after_base_request, after_branches_text) =
+        crate::view::test_support::inspect_render(cx, |window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            let rows_len = history_view.update(app, |history, cx| {
+                HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
+            });
+            assert_eq!(
+                rows_len, 1,
+                "updated current-branch row should still render"
+            );
 
-        let history = history_view.read(app);
-        let cache = history
-            .history_cache
-            .as_ref()
-            .expect("history cache should be available");
-        (
-            Arc::clone(&cache.base.graph_rows),
-            cache.base.request.clone(),
-            cache.decorations.row_vms[0]
-                .branches_text
+            let history = history_view.read(app);
+            let cache = history
+                .history_cache
                 .as_ref()
-                .to_owned(),
-        )
-    });
+                .expect("history cache should be available");
+            (
+                Arc::clone(&cache.base.graph_rows),
+                cache.base.request.clone(),
+                cache.decorations.row_vms[0]
+                    .branches_text
+                    .as_ref()
+                    .to_owned(),
+            )
+        });
 
     assert!(
         Arc::ptr_eq(&before_graph_rows, &after_graph_rows),
@@ -2901,8 +2905,8 @@ fn current_branch_head_target_changes_rebuild_base_cache_and_move_head_marker(
         })
     });
 
-    let (before_graph_rows, before_base_request, before_head_rows, before_branches_text) = cx
-        .update(|window, app| {
+    let (before_graph_rows, before_base_request, before_head_rows, before_branches_text) =
+        crate::view::test_support::inspect_render(cx, |window, app| {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             let rows_len = history_view.update(app, |history, cx| {
@@ -2966,7 +2970,7 @@ fn current_branch_head_target_changes_rebuild_base_cache_and_move_head_marker(
     });
 
     let (after_graph_rows, after_base_request, after_head_rows, after_branches_text) =
-        cx.update(|window, app| {
+        crate::view::test_support::inspect_render(cx, |window, app| {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             let rows_len = history_view.update(app, |history, cx| {
@@ -3128,7 +3132,7 @@ fn history_scope_switch_keeps_rows_visible_and_refreshes_automatically(
         })
     });
 
-    cx.update(|window, app| {
+    crate::view::test_support::inspect_render(cx, |window, app| {
         let main_pane = view.read(app).main_pane.clone();
         let history_view = main_pane.read(app).history_view.clone();
         history_view.update(app, |history, cx| {

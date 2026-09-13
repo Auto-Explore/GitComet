@@ -3702,7 +3702,7 @@ fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflict
         },
     );
 
-    cx.update(|window, app| {
+    crate::view::test_support::inspect_render(cx, |window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.diff_view = DiffViewMode::Split;
@@ -3849,7 +3849,7 @@ fn conflict_compare_split_renderer_uses_visible_projection_when_rows_are_hidden(
         },
     );
 
-    cx.update(|window, app| {
+    crate::view::test_support::inspect_render(cx, |window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 let first_block = pane

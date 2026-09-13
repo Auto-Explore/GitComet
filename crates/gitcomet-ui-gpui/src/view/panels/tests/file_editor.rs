@@ -1177,8 +1177,8 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
     cx.update(|window, app| {
         main_pane.update(app, |pane, cx| {
             pane.set_diff_word_wrap(true, cx);
-            let _ = pane.diff_view(window, cx);
         });
+        let _ = window.draw(app);
     });
 
     cx.update(|_window, app| {
@@ -1193,8 +1193,8 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
     cx.update(|window, app| {
         main_pane.update(app, |pane, cx| {
             pane.set_diff_word_wrap(false, cx);
-            let _ = pane.diff_view(window, cx);
         });
+        let _ = window.draw(app);
     });
     cx.update(|_window, app| {
         assert!(
@@ -1391,16 +1391,15 @@ async fn the_gutter_projects_through_wrap_so_numbers_track_their_lines(
     cx.update(|window, app| {
         main_pane.update(app, |pane, cx| {
             pane.set_diff_word_wrap(true, cx);
-            let _ = pane.diff_view(window, cx);
         });
+        let _ = window.draw(app);
     });
     cx.run_until_parked();
     // A second pass: the row counts are maintained during the buffer's prepaint,
     // so the frame that can project them is the one after it has laid out.
     cx.update(|window, app| {
-        main_pane.update(app, |pane, cx| {
-            let _ = pane.diff_view(window, cx);
-        });
+        window.refresh();
+        let _ = window.draw(app);
     });
 
     cx.update(|_window, app| {
