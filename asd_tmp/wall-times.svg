@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="350" viewBox="0 0 820 350">
+<rect width="100%" height="100%" fill="white"/><g font-family="Segoe UI, sans-serif" fill="#17212b"><text x="24" y="28" font-size="18">Individual wall times (seconds); vertical bar = median</text>
+<text x="24" y="55" font-size="13">dev / replay / linker; sample 50 ms; drain 1000 ms</text>
+<line x1="140" x2="140" y1="67" y2="155" stroke="#e5e7eb"/><text x="140" y="171" text-anchor="middle" font-size="11">0</text>
+<line x1="295" x2="295" y1="67" y2="155" stroke="#e5e7eb"/><text x="295" y="171" text-anchor="middle" font-size="11">1.577</text>
+<line x1="450" x2="450" y1="67" y2="155" stroke="#e5e7eb"/><text x="450" y="171" text-anchor="middle" font-size="11">3.155</text>
+<line x1="605" x2="605" y1="67" y2="155" stroke="#e5e7eb"/><text x="605" y="171" text-anchor="middle" font-size="11">4.732</text>
+<line x1="760" x2="760" y1="67" y2="155" stroke="#e5e7eb"/><text x="760" y="171" text-anchor="middle" font-size="11">6.31</text>
+<text x="24" y="96" font-size="12">msvc (n=11)</text>
+<circle cx="688.905" cy="86" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<circle cx="693.606" cy="89" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<circle cx="701.545" cy="92" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<circle cx="698.418" cy="95" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<circle cx="689.193" cy="98" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<circle cx="700.856" cy="86" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<circle cx="694.505" cy="89" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<circle cx="701.514" cy="92" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<circle cx="693.168" cy="95" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<circle cx="701.101" cy="98" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<circle cx="703.636" cy="86" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<line x1="698.418" x2="698.418" y1="79" y2="105" stroke="#3564bb" stroke-width="2"/>
+<text x="24" y="134" font-size="12">lld (n=11)</text>
+<circle cx="578.877" cy="124" r="3" fill="#008978" fill-opacity="0.7"/>
+<circle cx="586.1" cy="127" r="3" fill="#008978" fill-opacity="0.7"/>
+<circle cx="582.94" cy="130" r="3" fill="#008978" fill-opacity="0.7"/>
+<circle cx="584.341" cy="133" r="3" fill="#008978" fill-opacity="0.7"/>
+<circle cx="584.848" cy="136" r="3" fill="#008978" fill-opacity="0.7"/>
+<circle cx="582.681" cy="124" r="3" fill="#008978" fill-opacity="0.7"/>
+<circle cx="582.089" cy="127" r="3" fill="#008978" fill-opacity="0.7"/>
+<circle cx="585.967" cy="130" r="3" fill="#008978" fill-opacity="0.7"/>
+<circle cx="586.382" cy="133" r="3" fill="#008978" fill-opacity="0.7"/>
+<circle cx="579.464" cy="136" r="3" fill="#008978" fill-opacity="0.7"/>
+<circle cx="582.941" cy="124" r="3" fill="#008978" fill-opacity="0.7"/>
+<line x1="582.941" x2="582.941" y1="117" y2="143" stroke="#008978" stroke-width="2"/>
+<text x="24" y="205" font-size="13">shipping-release / replay / linker; sample 50 ms; drain 10 ms</text>
+<line x1="140" x2="140" y1="217" y2="305" stroke="#e5e7eb"/><text x="140" y="321" text-anchor="middle" font-size="11">0</text>
+<line x1="295" x2="295" y1="217" y2="305" stroke="#e5e7eb"/><text x="295" y="321" text-anchor="middle" font-size="11">0.349</text>
+<line x1="450" x2="450" y1="217" y2="305" stroke="#e5e7eb"/><text x="450" y="321" text-anchor="middle" font-size="11">0.698</text>
+<line x1="605" x2="605" y1="217" y2="305" stroke="#e5e7eb"/><text x="605" y="321" text-anchor="middle" font-size="11">1.047</text>
+<line x1="760" x2="760" y1="217" y2="305" stroke="#e5e7eb"/><text x="760" y="321" text-anchor="middle" font-size="11">1.396</text>
+<text x="24" y="246" font-size="12">msvc (n=1)</text>
+<circle cx="703.636" cy="236" r="3" fill="#3564bb" fill-opacity="0.7"/>
+<line x1="703.636" x2="703.636" y1="229" y2="255" stroke="#3564bb" stroke-width="2"/>
+<text x="24" y="284" font-size="12">lld (n=1)</text>
+<circle cx="583.184" cy="274" r="3" fill="#008978" fill-opacity="0.7"/>
+<line x1="583.184" x2="583.184" y1="267" y2="293" stroke="#008978" stroke-width="2"/>
+</g></svg>
