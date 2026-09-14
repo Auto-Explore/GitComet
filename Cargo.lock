@@ -2206,7 +2206,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "gitcomet"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "clap",
  "embed-resource",
@@ -2228,7 +2228,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-core"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "memchr",
  "regex",
@@ -2241,7 +2241,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-git-gix"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "gitcomet-core",
  "gix",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-state"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "gitcomet-core",
  "gitcomet-git-gix",
@@ -2271,7 +2271,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-tree-sitter-alloc"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "ctor",
  "libmimalloc-sys",
@@ -2281,7 +2281,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui-gpui"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -7291,9 +7291,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-cmake"
-version = "0.7.4"
+version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "164e0c4f4236ec5ceff14824a5528615cf462e100467e49826442ff57d327061"
+checksum = "d22893fac54133fdb93497efc45713d53a96d93b035288c7a8ab0c2af77c0ddd"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -8030,9 +8030,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
-version = "3.4.1"
+version = "3.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af5546be8f5378d5414f83733f5c9a2526f4645829edbc1c41790aeef1b38e8b"
+checksum = "9a7ac20be9b7726e0bbdbf974c059676d9acb1cd414961f570a4e8231cacd7fc"
 dependencies = [
  "base64 0.23.1",
  "flate2",
@@ -8047,9 +8047,9 @@ dependencies = [
 
 [[package]]
 name = "ureq-proto"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabc3e92916c89c95b20eef7b06b00b066bc217ef9ea3a4ac9bf1a7e35261e10"
+checksum = "5b0809a01d1ca5a51ca70db32bb2a19157582a526505ef3c19e3b343a59aa5ad"
 dependencies = [
  "base64 0.23.1",
  "http",
