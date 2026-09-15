@@ -97,6 +97,101 @@ fn removing_and_recreating_ignored_dir_does_not_rebuild() {
 }
 
 #[test]
+fn ignored_directory_replaced_by_file_keeps_creation_and_edits_visible() {
+    let (_temp, root) = repository();
+    fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    let boundary = root.join("build");
+    fs::create_dir(&boundary).unwrap();
+    let (monitor, _, builds) = counted_monitor(&root);
+    for cycle in 0..2 {
+        fs::remove_dir_all(&boundary).unwrap();
+        monitor.quiet(); // Removing an ignored directory alone is still noise.
+        if cycle == 0 {
+            fs::write(&boundary, "now an untracked file").unwrap();
+        } else {
+            let replacement = root.join("replacement");
+            fs::write(&replacement, "renamed into the excluded boundary").unwrap();
+            monitor.refresh();
+            fs::rename(replacement, &boundary).unwrap();
+        }
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args([
+                "--no-optional-locks",
+                "status",
+                "--porcelain",
+                "--",
+                "build",
+            ])
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+        assert_eq!(String::from_utf8_lossy(&status.stdout).trim(), "?? build");
+        monitor.refresh();
+        fs::write(&boundary, "later in-place edit").unwrap();
+        monitor.refresh();
+        fs::remove_file(&boundary).unwrap();
+        fs::create_dir(&boundary).unwrap();
+        monitor.refresh(); // The previously visible file was removed.
+        let before = builds.load(Ordering::Relaxed);
+        fs::write(boundary.join(format!("ignored-{cycle}")), "ignored again").unwrap();
+        monitor.quiet();
+        assert_eq!(builds.load(Ordering::Relaxed), before);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn null_device_global_config_keeps_coverage_healthy() {
+    const CHILD: &str = "GITCOMET_TEST_NULL_DEVICE_CONFIG";
+    if std::env::var_os(CHILD).is_none() {
+        // A child process keeps this valid Git configuration isolated from
+        // other tests without mutating their environment.
+        let name = concat!(
+            module_path!(),
+            "::null_device_global_config_keeps_coverage_healthy"
+        );
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name.split_once("::").unwrap().1, "--nocapture"])
+            .env(CHILD, "1")
+            .env("GIT_CONFIG_GLOBAL", "NUL")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+    let (_temp, root) = repository();
+    fs::create_dir(root.join("source")).unwrap();
+    let builds = Arc::new(AtomicU64::new(0));
+    let count = builds.clone();
+    let monitor = RunningMonitor::start_custom(
+        &root,
+        Arc::new(gitcomet_git_gix::GixBackend),
+        MonitorConfig {
+            idle_tick: Duration::from_millis(50),
+            recovery_interval: Duration::from_millis(200),
+            before_registration: Some(Box::new(move || {
+                count.fetch_add(1, Ordering::Relaxed);
+            })),
+            ..Default::default()
+        },
+    );
+    monitor.settle(); // Reject degraded warnings and repeated recovery refreshes.
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
+    fs::write(root.join("source/file.txt"), "observed").unwrap();
+    monitor.refresh();
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn new_nested_directory_is_watched_without_full_rebuild() {
     let (_temp, root) = repository();
     let (monitor, _, builds) = counted_monitor(&root);

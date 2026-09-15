@@ -111,12 +111,6 @@ impl PolicySnapshot {
         }
     }
 
-    pub fn with_excluded(&self, dir: PathBuf) -> Self {
-        let mut next = self.clone();
-        next.excluded_roots.insert(dir);
-        next
-    }
-
     pub fn input_below(&self, path: &Path) -> bool {
         self.input_ancestors.contains(path)
     }
@@ -154,7 +148,8 @@ pub(super) fn triage(policy: &PolicySnapshot, event: &notify::Event) -> Triage {
         match policy.classify(path) {
             PathClass::Cache => false,
             PathClass::Excluded | PathClass::Outside => {
-                structural_event(event) && policy.input_below(path)
+                structural_event(event)
+                    && (policy.input_below(path) || policy.excluded_roots.contains(path))
             }
             _ => true,
         }
@@ -364,6 +359,18 @@ fn expand_watch_paths(
     for input in inputs {
         let mut current = input;
         for hop in 0..=64 {
+            // Windows' NUL (also \\.\NUL) disables a Git input but has no
+            // filesystem metadata. Check before expansion, including link hops.
+            #[cfg(windows)]
+            if current
+                .as_os_str()
+                .as_encoded_bytes()
+                .rsplit(|byte| matches!(byte, b'/' | b'\\'))
+                .next()
+                .is_some_and(|name| name.eq_ignore_ascii_case(b"NUL"))
+            {
+                break;
+            }
             // Preserve parent components until links have been resolved: two
             // lexically equal inputs can refer to different physical files.
             if !visited.insert(current.clone()) {
@@ -428,6 +435,31 @@ fn expand_watch_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn null_device_inputs_are_not_stamped_or_reported_incomplete() {
+        let temp = tempfile::tempdir().unwrap();
+        for path in [
+            PathBuf::from("NUL"),
+            PathBuf::from("nul"),
+            PathBuf::from(r"\\.\NUL"),
+            temp.path().join("NUL"),
+        ] {
+            let mut inputs = WatchInputs::default();
+            inputs.add_inputs(vec![path.clone()]);
+            assert!(
+                !inputs.info.discovery_incomplete,
+                "null device marked incomplete: {path:?}"
+            );
+            assert!(
+                inputs.inputs.is_empty(),
+                "null device became a policy input: {path:?}"
+            );
+            assert!(!inputs.stamps.changed());
+        }
+    }
+
     #[test]
     fn input_links_are_resolved_before_lexical_deduplication() {
         let temp = tempfile::tempdir().unwrap();

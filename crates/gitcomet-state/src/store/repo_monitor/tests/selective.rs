@@ -2,6 +2,7 @@ use super::*;
 mod efficiency;
 mod native_lifecycle;
 mod path_identities;
+mod policy_lifecycle;
 mod runtime_recovery;
 mod setup_recovery;
 mod storage_and_links;
@@ -274,15 +275,22 @@ fn newly_created_ignored_directory_immediately_suppresses_descendants() {
         .add_path(root.join("node_modules"));
     let effect = summarize_event(&root, Some(&root.join(".git")), &mut rules, &event);
     assert_eq!(effect.new_ignored_dirs, vec![root.join("node_modules")]);
-    let policy = rules
-        .state
-        .snapshot()
-        .with_excluded(root.join("node_modules"));
+    let mut policy = (*rules.state.snapshot()).clone();
+    policy.excluded_roots.insert(root.join("node_modules"));
     assert_eq!(
         policy.classify(&root.join("node_modules/pkg/.gitignore")),
         PathClass::Excluded
     );
-    assert_eq!(triage(&policy, &event), Triage::Drop);
+    // Recheck lifecycle events at the boundary, but suppress them while it
+    // remains an ignored directory. Its descendants never reach the matcher.
+    assert_eq!(triage(&policy, &event), Triage::Relevant);
+    assert_eq!(
+        summarize(&policy, &mut rules, &event),
+        EventEffect::default()
+    );
+    let descendant = notify::Event::new(EventKind::Create(CreateKind::File))
+        .add_path(root.join("node_modules/pkg/file.txt"));
+    assert_eq!(triage(&policy, &descendant), Triage::Drop);
     assert!(policy.relevant(&root.join(".gitignore")));
 }
 
@@ -503,11 +511,19 @@ impl RunningMonitor {
         monitor.settle();
         monitor
     }
-    fn start_custom(root: &Path, backend: Arc<dyn GitBackend>, mut config: MonitorConfig) -> Self {
+    fn start_custom(root: &Path, backend: Arc<dyn GitBackend>, config: MonitorConfig) -> Self {
+        Self::start_with_callback(root, backend, config, None)
+    }
+    fn start_with_callback(
+        root: &Path,
+        backend: Arc<dyn GitBackend>,
+        mut config: MonitorConfig,
+        callback_tx: Option<mpsc::Sender<MonitorMsg>>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel();
         let (store_tx, store_rx) = mpsc::channel();
         let root = root.to_path_buf();
-        let thread_tx = tx.clone();
+        let thread_tx = callback_tx.unwrap_or_else(|| tx.clone());
         let native_events = Arc::new(AtomicU64::new(0));
         config.native_events = Some(native_events.clone());
         let thread = std::thread::spawn(move || {
@@ -533,6 +549,7 @@ impl RunningMonitor {
             native_events,
         }
     }
+    #[track_caller]
     fn refresh(&self) {
         match self.rx.recv_timeout(Duration::from_secs(10)) {
             Ok(Msg::RepoExternallyChanged { .. }) => {}

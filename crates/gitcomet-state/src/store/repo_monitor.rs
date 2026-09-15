@@ -30,7 +30,7 @@ use ignore_rules::IgnoreRules;
 #[cfg(test)]
 use monitor::{EventEffect, MAX_WORKTREE_WATCH_DIRS, MonitorState, summarize};
 use monitor::{MonitorConfig, WatchSetupOutcome, repo_monitor_thread};
-use native_watcher::{MonitorWatcher, WATCH_MODE, WatchMode};
+use native_watcher::MonitorWatcher;
 use plan::WatchPlan;
 use policy::{
     PathClass, PolicyCell, PolicySnapshot, Triage, WatchInputs, normalized, structural_event,

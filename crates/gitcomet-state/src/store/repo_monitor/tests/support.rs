@@ -96,7 +96,7 @@ impl TestRules {
         result
     }
     pub fn reload(&mut self, root: &Path) {
-        if self.state.reload(root, &*self.backend, "test") {
+        if self.state.reload(root, &*self.backend, false) {
             self.state
                 .publish(PolicySnapshot::new(root, &self.state.inputs));
         }

@@ -57,27 +57,29 @@ impl MonitorState {
             .write()
             .unwrap_or_else(|error| error.into_inner()) = Arc::new(snapshot);
     }
-    pub fn reload(&mut self, workdir: &Path, backend: &dyn GitBackend, scope: &str) -> bool {
+    pub fn reload(&mut self, workdir: &Path, backend: &dyn GitBackend, index_only: bool) -> bool {
         repo_load_trace::trace!(
             "repo_monitor_reload scope={} workdir={}",
-            scope,
+            if index_only { "index" } else { "all" },
             workdir.display()
         );
         match WatchInputs::load(workdir, backend) {
             Ok(mut inputs) => {
                 // Retain discovered nested .gitignore inputs between index-only
                 // reloads. Link targets are resolved again from those spellings.
-                inputs.add_inputs(
-                    self.inputs
-                        .inputs
-                        .iter()
-                        .filter(|path| {
-                            path.starts_with(workdir)
-                                && path.file_name().is_some_and(|name| name == ".gitignore")
-                        })
-                        .cloned()
-                        .collect(),
-                );
+                if index_only {
+                    inputs.add_inputs(
+                        self.inputs
+                            .inputs
+                            .iter()
+                            .filter(|path| {
+                                path.starts_with(workdir)
+                                    && path.file_name().is_some_and(|name| name == ".gitignore")
+                            })
+                            .cloned()
+                            .collect(),
+                    );
+                }
                 let loaded = self.rules.reload(workdir, backend, &inputs.info);
                 self.inputs = inputs;
                 loaded
@@ -106,7 +108,7 @@ impl MonitorState {
     ) -> Option<(MonitorWatcher, WatchSetupOutcome)> {
         for attempt in 0..config.setup_passes.max(1) {
             if reload {
-                self.reload(workdir, backend, "all");
+                self.reload(workdir, backend, false);
             }
             self.plan = WatchPlan::default();
             self.publish(PolicySnapshot::new(workdir, &self.inputs));
@@ -200,27 +202,26 @@ impl MonitorState {
         unreachable!()
     }
 
-    fn apply_directories(
+    pub(super) fn apply_directories(
         &mut self,
         effect: &EventEffect,
         watcher: &mut MonitorWatcher,
         config: &MonitorConfig,
     ) {
+        let snapshot = self.snapshot();
+        let previous_boundaries = self.plan.boundaries.len();
         for path in &effect.dir_removed {
-            if !self.plan.dirs.contains(path) {
+            if !self.plan.dirs.contains(path) && !snapshot.excluded_roots.contains(path) {
                 continue;
             }
             watcher.remove_tree(path);
             self.plan.dirs.retain(|dir| !dir.starts_with(path));
             self.plan.worktree_dirs.retain(|dir| !dir.starts_with(path));
+            self.plan.boundaries.retain(|dir| !dir.starts_with(path));
         }
-        let mut snapshot = self.snapshot();
-        for path in &effect.new_ignored_dirs {
-            if !snapshot.excluded_roots.contains(path) {
-                snapshot = Arc::new(snapshot.with_excluded(path.clone()));
-                self.plan.boundaries.push(path.clone());
-            }
-        }
+        self.plan
+            .boundaries
+            .extend(effect.new_ignored_dirs.iter().cloned());
         for (path, worktree) in &effect.dir_added {
             self.plan.walk(
                 [path.clone()],
@@ -232,10 +233,16 @@ impl MonitorState {
                 |dir| watcher.add(dir),
             );
         }
-        if !effect.dir_added.is_empty() || !effect.new_ignored_dirs.is_empty() {
+        if self.plan.boundaries.len() != previous_boundaries
+            || !effect.dir_added.is_empty()
+            || !effect.new_ignored_dirs.is_empty()
+        {
             let mut next = PolicySnapshot::new(&snapshot.workdir, &self.inputs);
-            next.excluded_roots
-                .extend(self.plan.boundaries.iter().cloned());
+            // Publish once per batch, deduplicating boundaries discovered both
+            // by an event and by traversal of its newly added parent.
+            self.plan
+                .boundaries
+                .retain(|dir| next.excluded_roots.insert(dir.clone()));
             self.publish(next);
         }
     }
@@ -279,6 +286,25 @@ pub(super) fn summarize(
         if structural && snapshot.input_below(path) && path != &snapshot.workdir {
             effect.policy_dirty = true;
         }
+        // A directory-only ignore rule need not match its replacement file.
+        // Rebuild only when the boundary becomes eligible; ignored directory
+        // deletion/recreation and events deeper inside it remain quiet.
+        if class == PathClass::Excluded
+            && structural
+            && snapshot.excluded_roots.contains(path)
+            && let Ok(relative) = path.strip_prefix(&snapshot.workdir)
+        {
+            match fs::symlink_metadata(path) {
+                Ok(metadata) if !rules.is_ignored_rel(relative, Some(metadata.is_dir())) => {
+                    effect.policy_dirty = true;
+                    change.worktree = true;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    effect.dir_removed.push(path.clone());
+                }
+                _ => {} // A delayed removal must not unexclude a recreated directory.
+            }
+        }
         if matches!(class, PathClass::Excluded | PathClass::Outside) {
             continue;
         }
@@ -309,7 +335,12 @@ pub(super) fn summarize(
                     }
                     continue;
                 }
-                let directory = structural && path_dir_hint(event) != Some(false) && path.is_dir();
+                // A removal describes the old entry, not a directory that may
+                // already have replaced a previously visible file at this path.
+                let directory = structural
+                    && !matches!(event.kind, notify::EventKind::Remove(_))
+                    && path_dir_hint(event) != Some(false)
+                    && path.is_dir();
                 if rules.is_ignored_rel(
                     relative,
                     if directory {
@@ -419,13 +450,9 @@ pub(super) fn repo_monitor_thread(
                     Ok(event) => match triage(&snapshot, &event) {
                         Triage::Drop => {}
                         Triage::Rescan => {
-                            if WATCH_MODE == WatchMode::Shallow
-                                || watcher
-                                    .as_ref()
-                                    .is_some_and(|watcher| watcher.root_lost(&event, &snapshot))
-                            {
-                                rebuild = Some("rescan");
-                            }
+                            // Lost lifecycle events can invalidate exclusions
+                            // even when recursive native roots remain intact.
+                            rebuild = Some("rescan");
                             due_change = debouncer.push(RepoExternalChange::all(), Instant::now());
                         }
                         Triage::Relevant => {
@@ -477,9 +504,7 @@ pub(super) fn repo_monitor_thread(
                             "native watcher event",
                             error,
                         );
-                        if WATCH_MODE == WatchMode::Shallow {
-                            rebuild = Some("native-error");
-                        }
+                        rebuild = Some("native-error");
                         due_change = debouncer.push(RepoExternalChange::all(), Instant::now());
                     }
                 }
@@ -518,7 +543,7 @@ pub(super) fn repo_monitor_thread(
                 rebuild = Some("policy");
             } else if index_dirty && rebuild.is_none() {
                 let old_info = state.inputs.info.clone();
-                let succeeded = state.reload(&workdir, &*backend, "index");
+                let succeeded = state.reload(&workdir, &*backend, true);
                 loaded = true;
                 if !succeeded
                     || old_info != state.inputs.info

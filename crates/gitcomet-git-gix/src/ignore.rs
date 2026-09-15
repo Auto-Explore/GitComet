@@ -123,15 +123,23 @@ pub(crate) fn repository_watch_info(
             {
                 for value in section.values("path") {
                     let value = gix::config::Path::from(value);
-                    let path = value
-                        .interpolate(gix::config::path::interpolate::Context {
-                            home_dir: home.as_deref(),
-                            git_install_dir: gix::path::env::installation_config_prefix(),
-                            ..Default::default()
-                        })
-                        .map_err(|error| {
-                            Error::new(ErrorKind::Backend(format!("watch config include: {error}")))
-                        })?;
+                    let path = match value.interpolate(gix::config::path::interpolate::Context {
+                        home_dir: home.as_deref(),
+                        git_install_dir: gix::path::env::installation_config_prefix(),
+                        ..Default::default()
+                    }) {
+                        Ok(path) => path,
+                        // Inactive conditions may name users unavailable here.
+                        // Opening the repo already processed active includes;
+                        // keep observing this section's config even if its
+                        // optional target cannot be resolved on this machine.
+                        Err(_) if header.name().eq_ignore_ascii_case(b"includeIf") => continue,
+                        Err(error) => {
+                            return Err(Error::new(ErrorKind::Backend(format!(
+                                "watch config include: {error}"
+                            ))));
+                        }
+                    };
                     let parent = section
                         .meta()
                         .path

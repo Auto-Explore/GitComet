@@ -125,6 +125,8 @@ pub(super) fn native_exclusions(
         if path == root
             || !path.starts_with(root)
             || exclusions.iter().any(|parent| path.starts_with(parent))
+            // A nested Git root may share the worktree's only native stream.
+            || policy.git_roots.iter().any(|git| git.starts_with(&path))
         {
             continue;
         }

@@ -60,8 +60,12 @@ rebuilds if repository discovery changed or a previously ignored boundary now
 contains a tracked exception. Every actual replacement refreshes all repository
 state to reconcile its registration gap. Newly ignored directories update the
 policy immediately; their creation and removal do not cause full rebuilds.
+Removed directory boundaries are pruned from the plan and callback policy.
+Full reloads rediscover nested `.gitignore` inputs; only index reloads retain them.
 
-Native failures request reconciliation. A degraded warning describes failed
+Overflow, rescans and native errors rebuild coverage and exclusion policy on all
+platforms, since lost events can leave stale boundaries even with intact native
+roots. A degraded warning describes failed
 coverage, rather than an isolated callback error. Recovery is throttled, and a
 failed reload retains the last usable matcher. Failed path lookups are never
 cached. Trace records `repo_monitor_reload scope=`, `repo_monitor_rebuild reason=`,

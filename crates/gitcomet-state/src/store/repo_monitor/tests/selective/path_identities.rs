@@ -1,5 +1,78 @@
 use super::*;
 
+#[test]
+fn ignored_parent_of_separate_git_dir_keeps_metadata_visible() {
+    let (_temp, root) = repository();
+    fs::create_dir(root.join("private")).unwrap();
+    run_git(&root, &["init", "--separate-git-dir", "private/gitdir"]);
+    fs::write(root.join(".gitignore"), "private/\n").unwrap();
+    let git_dir = normalized(&resolve_git_dir(&root).unwrap());
+    assert_eq!(git_dir, root.join("private/gitdir"));
+    let mut rules = load_gitignore_rules(&root);
+    let plan = TestPlan::build(&root, Some(&git_dir), &mut rules);
+    assert!(plan.policy.excluded_roots.contains(&root.join("private")));
+    // Exercise the macOS stream selection on every platform: a recursive
+    // worktree stream subsumes this nested Git root, so it must not exclude it.
+    let roots = native_watcher::minimal_roots(&plan.policy);
+    assert_eq!(roots, vec![root.clone()]);
+    let boundaries: Vec<_> = plan.policy.excluded_roots.iter().cloned().collect();
+    let exclusions = plan::native_exclusions(&root, &plan.policy, &boundaries);
+    assert!(
+        exclusions.iter().all(|path| !git_dir.starts_with(path)),
+        "native exclusions hide the only Git metadata stream: {exclusions:?}"
+    );
+    assert!(exclusions.contains(&git_dir.join("objects")));
+    let monitor = RunningMonitor::start(&root);
+    run_git(&root, &["commit", "--allow-empty", "-m", "External commit"]);
+    monitor.refresh();
+    run_git(&root, &["checkout", "-b", "other"]);
+    monitor.refresh();
+}
+
+#[test]
+fn inactive_unresolvable_include_keeps_source_coverage() {
+    let (_temp, root) = repository();
+    let external = unique_temp_dir("gitcomet-conditional-include");
+    let include = normalized(&external.path().canonicalize().unwrap()).join("future-config");
+    run_git(
+        &root,
+        &[
+            "config",
+            "includeIf.gitdir:/gitcomet-never-matches/.path",
+            "~gitcomet-nonexistent-config-user/.gitconfig",
+        ],
+    );
+    run_git(
+        &root,
+        &[
+            "config",
+            "includeIf.gitdir:**.path",
+            include.to_str().unwrap(),
+        ],
+    );
+    fs::create_dir(root.join("source")).unwrap();
+    run_git(&root, &["status", "--porcelain"]);
+    assert!(
+        gitcomet_git_gix::GixBackend
+            .worktree_ignore_matcher(&root)
+            .unwrap()
+            .is_some()
+    );
+    let info = gitcomet_git_gix::GixBackend
+        .repository_watch_info(&root)
+        .unwrap()
+        .unwrap();
+    assert!(!info.discovery_incomplete);
+    assert!(info.ignore_inputs.contains(&root.join(".git/config")));
+    assert!(info.ignore_inputs.contains(&include));
+    let monitor = RunningMonitor::start(&root);
+    fs::write(root.join("source/file.txt"), "observed").unwrap();
+    monitor.refresh();
+    fs::write(&include, "[core]\n    ignoreCase = true\n").unwrap();
+    monitor.revalidate();
+    monitor.refresh();
+}
+
 #[cfg(windows)]
 #[test]
 fn native_windows_lfs_storage_casing_does_not_admit_cache_traffic() {
