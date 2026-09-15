@@ -1699,7 +1699,9 @@ pub(super) fn schedule_launch_mergetool(
 
 #[cfg(test)]
 mod worktree_save_target_tests {
-    use super::{append_gitignore_patterns_in_workdir, resolve_worktree_save_target};
+    #[cfg(unix)]
+    use super::append_gitignore_patterns_in_workdir;
+    use super::resolve_worktree_save_target;
     use gitcomet_core::error::ErrorKind;
     use std::path::Path;
 

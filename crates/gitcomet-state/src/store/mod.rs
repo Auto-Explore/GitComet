@@ -594,6 +594,7 @@ impl AppStore {
                         // that case. A full refresh keeps every view correct regardless of whether,
                         // or how reliably, the watcher is delivering events; activation is throttled
                         // upstream (REPO_ACTIVATION_THROTTLE), so this does not run on every alt-tab.
+                        worker_ctx.repo_monitors.revalidate(repo_id);
                         let change = RepoExternalChange::all();
                         worker_ctx.reduce_and_handle(
                             &mut repos,

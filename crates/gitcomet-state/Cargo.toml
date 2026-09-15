@@ -27,3 +27,6 @@ tempfile = { workspace = true }
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }
 gitcomet-git-gix = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gitcomet-fs-watch = { path = "../gitcomet-fs-watch" }
