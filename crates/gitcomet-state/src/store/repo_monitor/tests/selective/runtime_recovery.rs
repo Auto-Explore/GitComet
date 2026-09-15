@@ -10,6 +10,41 @@ fn embedded_gitlink(root: &Path, name: &str) -> PathBuf {
 }
 
 #[test]
+fn indexed_gitlink_replaced_by_file_keeps_healthy_monitoring() {
+    let (_temp, root) = repository();
+    let child = embedded_gitlink(&root, "child");
+    fs::remove_dir_all(&child).unwrap();
+    fs::write(&child, "unstaged replacement").unwrap();
+    let mut rules = load_gitignore_rules(&root);
+    assert!(!rules.failed);
+    assert!(rules.state.inputs.inputs.contains(&child.join(".git")));
+    let (watcher, outcome, _rx) = rules.start_watcher(&root);
+    assert_eq!(outcome, WatchSetupOutcome::Watching { failed_dirs: 0 });
+    drop(watcher);
+
+    let builds = Arc::new(AtomicU64::new(0));
+    let count = builds.clone();
+    let monitor = RunningMonitor::start_custom(
+        &root,
+        Arc::new(gitcomet_git_gix::GixBackend),
+        MonitorConfig {
+            idle_tick: Duration::from_millis(100),
+            recovery_interval: Duration::from_millis(100),
+            before_registration: Some(Box::new(move || {
+                count.fetch_add(1, Ordering::Relaxed);
+            })),
+            ..Default::default()
+        },
+    );
+    monitor.settle();
+    monitor.quiet();
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
+    fs::write(&child, "another edit").unwrap();
+    monitor.refresh();
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn embedded_gitlink_commit_refreshes_parent() {
     let (_temp, root) = repository();
     let child = embedded_gitlink(&root, "child");

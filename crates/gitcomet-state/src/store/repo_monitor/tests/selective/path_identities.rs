@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn directory_symlink_rename_is_not_hidden_by_directory_only_ignore() {
+    let (_temp, root) = repository();
+    let target = unique_temp_dir("gitcomet-directory-symlink-target");
+    fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    let link = root.join("build");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target.path(), &link).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target.path(), &link).unwrap();
+    let mut rules = load_gitignore_rules(&root);
+    let event = notify::Event::new(EventKind::Modify(ModifyKind::Name(
+        notify::event::RenameMode::To,
+    )))
+    .add_path(link);
+    assert_eq!(path_dir_hint(&event), None);
+    let effect = summarize_event(&root, Some(&root.join(".git")), &mut rules, &event);
+    assert!(
+        effect.change.is_some_and(|change| change.worktree),
+        "a symlink to a directory is visible to Git: {effect:?}"
+    );
+    assert!(effect.new_ignored_dirs.is_empty());
+    assert!(effect.dir_added.is_empty());
+}
+
+#[test]
+fn moving_directory_symlink_into_worktree_refreshes_status() {
+    let (_temp, root) = repository();
+    let external = unique_temp_dir("gitcomet-incoming-directory-symlink");
+    let target = external.path().join("target");
+    let incoming = external.path().join("incoming");
+    fs::create_dir(&target).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &incoming).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&target, &incoming).unwrap();
+    fs::write(root.join(".gitignore"), "build/\n").unwrap();
+    let monitor = RunningMonitor::start(&root);
+    // Only the destination is watched, so an event for a visible source path
+    // cannot mask a dropped rename notification for the symlink itself.
+    fs::rename(&incoming, root.join("build")).unwrap();
+    let status = Command::new("git")
+        .arg("--no-optional-locks")
+        .arg("-C")
+        .arg(&root)
+        .args(["status", "--porcelain", "--", "build"])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    assert_eq!(String::from_utf8_lossy(&status.stdout).trim(), "?? build");
+    monitor.refresh();
+}
+
+#[test]
 fn ignored_parent_of_separate_git_dir_keeps_metadata_visible() {
     let (_temp, root) = repository();
     fs::create_dir(root.join("private")).unwrap();

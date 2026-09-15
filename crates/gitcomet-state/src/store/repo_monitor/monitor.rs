@@ -347,7 +347,7 @@ pub(super) fn summarize(
                 let directory = structural
                     && !matches!(event.kind, notify::EventKind::Remove(_))
                     && path_dir_hint(event) != Some(false)
-                    && path.is_dir();
+                    && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir());
                 if rules.is_ignored_rel(
                     relative,
                     if directory {

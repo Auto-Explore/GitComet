@@ -414,7 +414,10 @@ fn expand_watch_paths(
                     }
                     Ok(_) => {}
                     Err(error) => {
-                        if error.kind() != std::io::ErrorKind::NotFound {
+                        if !matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                        ) {
                             *incomplete = true;
                         }
                         break;
