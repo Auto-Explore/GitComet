@@ -1229,17 +1229,18 @@ fn reduce_inner(
         }
         Msg::RepoWatchDegraded { repo_id: _, reason } => {
             let message = match reason {
+                crate::msg::RepoWatchDegradedReason::IgnorePolicyFailed =>
+                    "Live file watching is limited because repository ignore rules could not be read. Changes refresh when the window regains focus; watching will retry automatically.".into(),
                 crate::msg::RepoWatchDegradedReason::TooManyFolders { dir_count } => format!(
-                    "This repository has {dir_count} folders — live file watching is disabled to \
-                     stay within system limits. Changes refresh when the window regains focus. Add \
-                     build/output dirs to .gitignore or raise fs.inotify.max_user_watches to \
-                     re-enable."
+                    "This repository has at least {dir_count} folders outside its ignore rules. \
+                     Live watching of subfolders is limited. Add generated folders to .gitignore \
+                     to reduce coverage. Changes also refresh when the window regains focus."
                 ),
                 crate::msg::RepoWatchDegradedReason::WatchLimitReached { unwatched_dirs } => {
                     format!(
-                        "Live file watching is partial: {unwatched_dirs} folders could not be watched \
-                     (the system inotify limit was reached). Changes in them refresh when the window \
-                     regains focus. Raise fs.inotify.max_user_watches to watch everything."
+                        "Live file watching is partial: {unwatched_dirs} locations could not be watched \
+                     because a native watch could not be registered. Changes in them refresh when the window \
+                     regains focus. Watching will retry automatically."
                     )
                 }
             };
@@ -2931,12 +2932,14 @@ mod nav_history_tests {
     use std::sync::atomic::AtomicU64;
 
     fn available_state_with_repo(repo_id: RepoId) -> AppState {
-        let mut state = AppState::default();
-        state.git_runtime = GitRuntimeState {
-            preference: GitExecutablePreference::SystemPath,
-            availability: GitExecutableAvailability::Available {
-                version_output: "git version 2.0.0".to_string(),
+        let mut state = AppState {
+            git_runtime: GitRuntimeState {
+                preference: GitExecutablePreference::SystemPath,
+                availability: GitExecutableAvailability::Available {
+                    version_output: "git version 2.0.0".to_string(),
+                },
             },
+            ..Default::default()
         };
         state.repos.push(RepoState::new_opening(
             repo_id,
@@ -3499,12 +3502,14 @@ mod comparison_tests {
     /// simply older than the loaded page — so the merged-diff base is a real
     /// parent rather than the root-commit fallback.
     fn state_with_log(repo_id: RepoId) -> AppState {
-        let mut state = AppState::default();
-        state.git_runtime = GitRuntimeState {
-            preference: GitExecutablePreference::SystemPath,
-            availability: GitExecutableAvailability::Available {
-                version_output: "git version 2.0.0".to_string(),
+        let mut state = AppState {
+            git_runtime: GitRuntimeState {
+                preference: GitExecutablePreference::SystemPath,
+                availability: GitExecutableAvailability::Available {
+                    version_output: "git version 2.0.0".to_string(),
+                },
             },
+            ..Default::default()
         };
         let mut repo_state = RepoState::new_opening(
             repo_id,

@@ -1834,8 +1834,30 @@ pub trait WorktreeIgnoreMatcher: Send {
     fn is_ignored(&mut self, relative_path: &Path, kind: WorktreePathKind) -> Result<bool>;
 }
 
+/// Filesystem inputs for monitoring one repository, including linked worktrees.
+/// Paths may name files which do not exist yet (for example `info/exclude`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RepositoryWatchInfo {
+    pub git_dirs: Vec<PathBuf>,
+    /// Additional private cache directories, including the LFS-owned folders
+    /// in configured storage. These can be absent until the first filter run.
+    pub cache_dirs: Vec<PathBuf>,
+    pub ignore_inputs: Vec<PathBuf>,
+    /// Initialized checkouts that can supply ignore matchers. Administrative
+    /// repositories retained after submodule deinit belong only in `git_dirs`.
+    /// Includes indexed gitlinks even when they have no `.gitmodules` entry.
+    pub worktrees: Vec<PathBuf>,
+    /// Discovery hit a filesystem error or its bounded administrative walk.
+    pub discovery_incomplete: bool,
+}
+
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
+
+    /// Resolve metadata and ignore/configuration sources without running status or filters.
+    fn repository_watch_info(&self, _workdir: &Path) -> Result<Option<RepositoryWatchInfo>> {
+        Ok(None)
+    }
 
     /// Build a worktree ignore matcher when the backend supports one.
     ///

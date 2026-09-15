@@ -167,11 +167,13 @@ impl ConflictAutosolveStats {
 /// Why the file-system watcher is in a degraded state (carried by [`Msg::RepoWatchDegraded`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RepoWatchDegradedReason {
-    /// The worktree has more non-ignored folders than the watch budget, so its source folders are
-    /// not watched live at all. Carries the folder count.
+    /// Ignore/configuration inputs could not be read; existing selective coverage is retained.
+    IgnorePolicyFailed,
+    /// The worktree exceeds its watch budget; only the worktree root and Git
+    /// metadata retain coverage. Carries a lower bound on the folder count.
     TooManyFolders { dir_count: usize },
-    /// Some per-directory watches could not be added (the kernel inotify limit was reached), so part
-    /// of the worktree is not watched live. Carries the number of folders left unwatched.
+    /// Some native registrations failed, so coverage is incomplete. Carries the
+    /// number of locations that could not be watched.
     WatchLimitReached { unwatched_dirs: usize },
 }
 

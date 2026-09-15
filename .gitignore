@@ -10,6 +10,7 @@ callgrind.out*
 gitcomet-agent*
 local_*.sh
 tmp/*
+.tmp/
 feat/*
 .autoresearch/*
 dist/
