@@ -90,7 +90,9 @@ fn load_gitignore_rules(workdir: &Path) -> TestRules {
 #[test]
 fn lfs_reads_cannot_schedule_another_refresh() {
     let dir = unique_temp_dir("gitcomet-lfs-policy");
-    let workdir = dir.path();
+    // Like the monitor, classify canonical paths: Git directories are reported
+    // canonically, while raw macOS temp paths still begin at the /var link.
+    let workdir = &normalized(&dir.path().canonicalize().unwrap());
     init_repo_for_ignore_tests(workdir);
     let git_dir = workdir.join(".git");
     let mut rules = load_gitignore_rules(workdir);
@@ -113,7 +115,7 @@ fn lfs_reads_cannot_schedule_another_refresh() {
 #[test]
 fn nested_submodule_lfs_cache_is_excluded() {
     let dir = unique_temp_dir("gitcomet-submodule-policy");
-    let workdir = dir.path();
+    let workdir = &normalized(&dir.path().canonicalize().unwrap());
     init_repo_for_ignore_tests(workdir);
     let git_dir = workdir.join(".git");
     let submodule = git_dir.join("modules/Assets/Standard Assets/CharacterBuilder");
@@ -150,7 +152,7 @@ fn ignored_gitignore_does_not_reload_policy() {
 #[test]
 fn ignore_edit_does_not_hide_index_change_in_same_event() {
     let dir = unique_temp_dir("gitcomet-mixed-config");
-    let workdir = dir.path();
+    let workdir = &normalized(&dir.path().canonicalize().unwrap());
     init_repo_for_ignore_tests(workdir);
     let mut rules = load_gitignore_rules(workdir);
     let event = notify::Event::new(EventKind::Any)

@@ -277,31 +277,45 @@ fn late_removal_event_keeps_a_recreated_ignored_boundary() {
 
 #[test]
 fn delayed_file_removal_refreshes_before_excluding_its_replacement_directory() {
-    let (_temp, root) = repository();
-    fs::write(root.join(".gitignore"), "build/\n").unwrap();
-    let path = root.join("build");
-    fs::write(&path, "visible file").unwrap();
-    let mut rules = load_gitignore_rules(&root);
-    let (mut watcher, _, _rx) = rules.start_watcher(&root);
-    let snapshot = rules.state.snapshot();
-    let edit = notify::Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path.clone());
-    assert!(
-        summarize(&snapshot, &mut rules, &edit)
-            .change
-            .unwrap()
-            .worktree
-    );
-    fs::remove_file(&path).unwrap();
-    fs::create_dir(&path).unwrap();
-    // Windows removal notifications have no entry kind. The current directory
-    // must not overwrite the cached classification of the file that vanished.
-    let removed = notify::Event::new(EventKind::Remove(RemoveKind::Any)).add_path(path.clone());
-    let effect = summarize(&snapshot, &mut rules, &removed);
-    assert!(effect.change.is_some_and(|change| change.worktree));
-    rules
-        .state
-        .apply_directories(&effect, &mut watcher, &rules.config);
-    assert!(rules.state.snapshot().excluded_roots.contains(&path));
+    // Windows removal notifications have no entry kind. FSEvents reports every
+    // rename as Any, and can repeat an earlier rename flag for a later removal.
+    // The current directory must not overwrite the cached classification of
+    // the file that vanished.
+    for kind in [
+        EventKind::Remove(RemoveKind::Any),
+        EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Any)),
+        EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::From)),
+    ] {
+        let (_temp, root) = repository();
+        fs::write(root.join(".gitignore"), "build/\n").unwrap();
+        let path = root.join("build");
+        fs::write(&path, "visible file").unwrap();
+        let mut rules = load_gitignore_rules(&root);
+        let (mut watcher, _, _rx) = rules.start_watcher(&root);
+        let snapshot = rules.state.snapshot();
+        let edit = notify::Event::new(EventKind::Modify(ModifyKind::Any)).add_path(path.clone());
+        assert!(
+            summarize(&snapshot, &mut rules, &edit)
+                .change
+                .unwrap()
+                .worktree
+        );
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        let removed = notify::Event::new(kind).add_path(path.clone());
+        let effect = summarize(&snapshot, &mut rules, &removed);
+        assert!(
+            effect.change.is_some_and(|change| change.worktree),
+            "{kind:?}"
+        );
+        rules
+            .state
+            .apply_directories(&effect, &mut watcher, &rules.config);
+        assert!(
+            rules.state.snapshot().excluded_roots.contains(&path),
+            "{kind:?}"
+        );
+    }
 }
 
 #[test]

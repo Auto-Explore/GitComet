@@ -143,7 +143,10 @@ impl Stream {
         }
         let reservation = Reservation::acquire()?;
         let paths = path_array(&[root])?;
-        let exclusions = path_array(&exclusions)?;
+        // FSEvents rejects an empty exclusion array instead of excluding nothing.
+        let exclusions = (!exclusions.is_empty())
+            .then(|| path_array(&exclusions))
+            .transpose()?;
         let queue = DispatchQueue::new("gitcomet.fsevents", None);
         let mut owned_context = Box::new(Context { handler });
         let mut context = fs::FSEventStreamContext {
@@ -179,7 +182,9 @@ impl Stream {
         };
         // SAFETY: stream and exclusion array are live, and setup precedes Start.
         unsafe {
-            if !fs::FSEventStreamSetExclusionPaths(stream, exclusions.as_opaque()) {
+            if let Some(exclusions) = &exclusions
+                && !fs::FSEventStreamSetExclusionPaths(stream, exclusions.as_opaque())
+            {
                 return Err(notify::Error::generic(
                     "Cannot apply native FSEvents exclusions",
                 ));
@@ -264,17 +269,54 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
         let (_watcher, errors) = FsEventsWatcher::new(vec![(root, vec![cache.clone()])], tx);
         assert!(errors.is_empty());
+        // A new stream can still report the fixture's cache creation. Events
+        // arrive in ID order, so an edit made after registration drains it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            assert!(std::time::Instant::now() < deadline, "no readiness event");
+            std::fs::write(&source, "readiness edit").unwrap();
+            if let Ok(Ok(event)) = rx.recv_timeout(std::time::Duration::from_millis(100))
+                && event.paths.contains(&source)
+            {
+                break;
+            }
+        }
         std::fs::write(cache.join("temporary"), "cache traffic").unwrap();
         std::fs::write(&source, "source edit").unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut saw_source = false;
         while std::time::Instant::now() < deadline {
             if let Ok(Ok(event)) = rx.recv_timeout(std::time::Duration::from_millis(100)) {
-                assert!(!event.paths.iter().any(|path| path.starts_with(&cache)));
+                assert!(
+                    !event.paths.iter().any(|path| path.starts_with(&cache)),
+                    "{event:?}"
+                );
                 saw_source |= event.paths.contains(&source);
             }
         }
         assert!(saw_source);
+    }
+
+    #[test]
+    fn stream_without_exclusions_delivers_events() {
+        // A linked worktree or separate Git directory can leave its checkout
+        // root with no cache roots and no ignored boundaries to exclude.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let source = root.join("source.txt");
+        let (tx, rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
+        let (_watcher, errors) = FsEventsWatcher::new(vec![(root, Vec::new())], tx);
+        assert!(errors.is_empty(), "{errors:?}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            assert!(std::time::Instant::now() < deadline, "no source event");
+            std::fs::write(&source, "source edit").unwrap();
+            if let Ok(Ok(event)) = rx.recv_timeout(std::time::Duration::from_millis(100))
+                && event.paths.contains(&source)
+            {
+                break;
+            }
+        }
     }
 
     #[test]

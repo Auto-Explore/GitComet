@@ -290,7 +290,14 @@ pub(super) fn summarize(
         if class == PathClass::Cache || snapshot.is_git_directory_modify(path, event) {
             continue;
         }
-        if structural && snapshot.input_below(path) && path != &snapshot.workdir {
+        // A regular file holds no inputs. Any input that vanished when it
+        // replaced a directory changed its stamp, checked at the same flush;
+        // FSEvents can repeat that replacement's flags on later edits.
+        if structural
+            && snapshot.input_below(path)
+            && path != &snapshot.workdir
+            && !fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file())
+        {
             effect.policy_dirty = true;
         }
         // A directory-only ignore rule need not match its replacement file.
@@ -353,8 +360,17 @@ pub(super) fn summarize(
                 }
                 // A removal describes the old entry, not a directory that may
                 // already have replaced a previously visible file at this path.
+                // So can a rename source; FSEvents never says which side it was.
                 let directory = structural
-                    && !matches!(event.kind, notify::EventKind::Remove(_))
+                    && !matches!(
+                        event.kind,
+                        notify::EventKind::Remove(_)
+                            | notify::EventKind::Modify(notify::event::ModifyKind::Name(
+                                notify::event::RenameMode::From
+                                    | notify::event::RenameMode::Any
+                                    | notify::event::RenameMode::Other
+                            ))
+                    )
                     && path_dir_hint(event) != Some(false)
                     && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir());
                 if rules.is_ignored_rel(

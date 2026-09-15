@@ -45,6 +45,37 @@ fn indexed_gitlink_replaced_by_file_keeps_healthy_monitoring() {
 }
 
 #[test]
+fn stale_directory_flags_on_a_replacement_file_do_not_rebuild_policy() {
+    let (_temp, root) = repository();
+    let child = embedded_gitlink(&root, "child");
+    let mut rules = load_gitignore_rules(&root);
+    fs::remove_dir_all(&child).unwrap();
+    fs::write(&child, "unstaged replacement").unwrap();
+    // FSEvents can repeat the removed directory's lifecycle flags for later
+    // edits of the file. The vanished child/.git input is detected by its
+    // stamp instead, and the reloaded policy stays stable.
+    for reloaded in [false, true] {
+        if reloaded {
+            rules.reload(&root);
+        }
+        assert_eq!(rules.state.inputs.stamps.changed(), !reloaded);
+        let snapshot = rules.state.snapshot();
+        for kind in [
+            EventKind::Remove(RemoveKind::Folder),
+            EventKind::Create(CreateKind::File),
+        ] {
+            let event = notify::Event::new(kind).add_path(child.clone());
+            let effect = summarize(&snapshot, &mut rules.state.rules, &event);
+            assert!(!effect.policy_dirty, "{kind:?}");
+            assert!(
+                effect.change.is_some_and(|change| change.worktree),
+                "{kind:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn embedded_gitlink_commit_refreshes_parent() {
     let (_temp, root) = repository();
     let child = embedded_gitlink(&root, "child");

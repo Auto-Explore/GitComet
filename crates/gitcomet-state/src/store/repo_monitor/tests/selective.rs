@@ -491,6 +491,32 @@ fn linked_worktree_watches_own_index_and_common_refs_without_caches() {
 }
 
 #[test]
+fn linked_worktree_without_exclusions_keeps_native_coverage() {
+    let (_temp, root) = repository();
+    let linked_temp = unique_temp_dir("gitcomet-linked-native");
+    let linked = linked_temp.path().join("checkout");
+    run_git(
+        &root,
+        &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
+    );
+    let linked = normalized(&linked.canonicalize().unwrap());
+    // Every cache lives in the main Git directory, and nothing is ignored, so
+    // a recursive checkout stream has no native exclusions at all.
+    let mut rules = load_gitignore_rules(&linked);
+    let (_watcher, outcome, rx) = rules.start_watcher(&linked);
+    assert_eq!(outcome, WatchSetupOutcome::Watching { failed_dirs: 0 });
+    ready(&root, &rx);
+    fs::write(linked.join("source.txt"), "edit").unwrap();
+    let events = drain_monitor(&rx, Duration::from_secs(3));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.paths.contains(&linked.join("source.txt"))),
+        "{events:?}"
+    );
+}
+
+#[test]
 fn external_ignore_inputs_and_missing_config_includes_are_observed() {
     let (_temp, root) = repository();
     let external = unique_temp_dir("gitcomet-external-ignore");
@@ -521,6 +547,32 @@ fn external_ignore_inputs_and_missing_config_includes_are_observed() {
     assert!(!rules.is_ignored_rel(Path::new("generated"), Some(true)));
     assert!(rules.is_ignored_rel(Path::new("other"), Some(true)));
 }
+
+/// A "since now" FSEvents stream still receives kernel events that fseventsd
+/// had not read when the stream started, so fixture writes made just before a
+/// monitor starts can reach it as real changes. Once a later marker has been
+/// delivered, every event queued before that marker is too old to arrive.
+#[cfg(target_os = "macos")]
+fn flush_native_events() {
+    let temp = unique_temp_dir("gitcomet-fsevents-barrier");
+    let dir = normalized(&temp.path().canonicalize().unwrap());
+    let marker = dir.join("marker");
+    let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
+    let (_stream, errors) = gitcomet_fs_watch::FsEventsWatcher::new(vec![(dir, Vec::new())], tx);
+    assert!(errors.is_empty(), "barrier stream failed: {errors:?}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(Instant::now() < deadline, "no FSEvents barrier event");
+        fs::write(&marker, "barrier").unwrap();
+        if let Ok(Ok(event)) = rx.recv_timeout(Duration::from_millis(100))
+            && event.paths.contains(&marker)
+        {
+            return;
+        }
+    }
+}
+#[cfg(not(target_os = "macos"))]
+fn flush_native_events() {}
 
 struct RunningMonitor {
     tx: mpsc::Sender<MonitorMsg>,
@@ -553,6 +605,7 @@ impl RunningMonitor {
         mut config: MonitorConfig,
         callback_tx: Option<mpsc::Sender<MonitorMsg>>,
     ) -> Self {
+        flush_native_events();
         let (tx, rx) = mpsc::channel();
         let (store_tx, store_rx) = mpsc::channel();
         let root = root.to_path_buf();
