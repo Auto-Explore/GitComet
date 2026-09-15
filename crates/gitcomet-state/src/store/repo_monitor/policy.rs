@@ -25,7 +25,7 @@ pub(super) struct PolicySnapshot {
     pub excluded_roots: FxHashSet<PathBuf>,
     pub control_files: FxHashSet<PathBuf>,
     pub control_entries: FxHashSet<PathBuf>,
-    pub index_files: FxHashSet<PathBuf>,
+    index_file: Option<PathBuf>,
     tag_roots: FxHashSet<PathBuf>,
     packed_refs: FxHashSet<PathBuf>,
     input_ancestors: FxHashSet<PathBuf>,
@@ -35,6 +35,7 @@ impl PolicySnapshot {
     pub fn new(workdir: &Path, inputs: &WatchInputs) -> Self {
         let mut policy = Self {
             workdir: workdir.to_path_buf(),
+            index_file: inputs.index_file.clone(),
             ..Self::default()
         };
         policy
@@ -45,7 +46,6 @@ impl PolicySnapshot {
             .extend(inputs.cache_roots.iter().cloned());
         for root in &policy.git_roots {
             policy.cache_roots.insert(root.join("index.lock"));
-            policy.index_files.insert(root.join("index"));
             policy.tag_roots.insert(root.join("refs/tags"));
             policy.packed_refs.insert(root.join("packed-refs"));
         }
@@ -98,7 +98,7 @@ impl PolicySnapshot {
             PathClass::Control
         } else if self.control_entries.contains(path) {
             PathClass::ControlEntry
-        } else if self.index_files.contains(path) {
+        } else if self.index_file.as_deref() == Some(path) {
             PathClass::Index
         } else if git {
             PathClass::Git { tags }
@@ -253,12 +253,18 @@ pub(super) struct WatchInputs {
     pub inputs: Vec<PathBuf>,
     pub stamps: Stamps,
     pub indexes: Stamps,
+    pub index_file: Option<PathBuf>,
     cache_roots: Vec<PathBuf>,
 }
 impl WatchInputs {
     pub fn load(workdir: &Path, backend: &dyn GitBackend) -> gitcomet_core::services::Result<Self> {
         // These inputs bracket discovery itself, including the unborn index.
         let root_git = resolve_git_dir(workdir);
+        // Only this checkout's index gets an index-only notification. Keep
+        // stamping every discovered index below for ignore-policy invalidation.
+        let index_file = root_git
+            .as_ref()
+            .map(|root| normalized(&super::super::canonicalize_path(root.clone())).join("index"));
         let mut stamps = Stamps::capture([workdir.join(".git"), workdir.join(".gitignore")]);
         stamps.add(workdir.to_path_buf());
         let mut indexes = Stamps::default();
@@ -281,6 +287,7 @@ impl WatchInputs {
             info,
             stamps,
             indexes,
+            index_file,
             ..Self::default()
         };
         let mut links = Vec::new();

@@ -192,6 +192,7 @@ pub(super) fn summarize_event(
         let mut inputs = WatchInputs::default();
         if let Some(git) = git {
             inputs.info.git_dirs.push(git.to_path_buf());
+            inputs.index_file = Some(normalized(git).join("index"));
             inputs.add_inputs(vec![
                 git.join("config"),
                 git.join("info/exclude"),

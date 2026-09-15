@@ -84,6 +84,59 @@ fn external_git_add_refreshes_index_without_rebuild() {
 }
 
 #[test]
+fn staging_in_other_worktree_refreshes_dirty_status() {
+    let (_temp, root) = repository();
+    let linked_temp = unique_temp_dir("gitcomet-other-worktree-staging");
+    let linked = linked_temp.path().join("checkout");
+    run_git(
+        &root,
+        &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
+    );
+    fs::write(linked.join("file.txt"), "staged in another checkout").unwrap();
+    let (monitor, reloads, builds) = counted_monitor(&root);
+    let loaded = reloads.load(Ordering::Relaxed);
+    run_git(&linked, &["add", "file.txt"]);
+    match monitor.rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+        Msg::RepoExternallyChanged { change, .. } => assert!(
+            change.git_state,
+            "other worktree dirty status requires a Git-state refresh: {change:?}"
+        ),
+        other => panic!("unexpected message: {other:?}"),
+    }
+    monitor.settle();
+    assert_eq!(reloads.load(Ordering::Relaxed), loaded + 1);
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn recreated_newly_ignored_directory_keeps_native_coverage() {
+    let (_temp, root) = repository();
+    fs::write(root.join(".gitignore"), "generated/\n").unwrap();
+    let relative = "generated/nested/source.txt";
+    let file = root.join(relative);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "tracked exception").unwrap();
+    run_git(&root, &["add", "-f", relative]);
+    run_git(&root, &["commit", "-m", "Track ignored file"]);
+    let (monitor, _, builds) = counted_monitor(&root);
+    run_git(&root, &["rm", "--cached", relative]);
+    monitor.refresh();
+    fs::remove_dir_all(root.join("generated")).unwrap();
+    monitor.quiet();
+    run_git(&root, &["reset", "HEAD", "--", relative]);
+    monitor.refresh();
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "recreated").unwrap();
+    monitor.refresh();
+    // The parent watch sees recreation even when stale plan entries suppress
+    // registration. A later in-place edit proves nested coverage was restored.
+    fs::write(&file, "later edit").unwrap();
+    monitor.refresh();
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn removing_and_recreating_ignored_dir_does_not_rebuild() {
     let (_temp, root) = repository();
     fs::write(root.join(".gitignore"), "node_modules/\n").unwrap();

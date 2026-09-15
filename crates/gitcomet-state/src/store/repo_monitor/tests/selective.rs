@@ -411,6 +411,39 @@ fn directory_budget_and_renames_rebuild_coverage_without_stale_counts() {
 }
 
 #[test]
+fn worktree_index_events_preserve_other_checkout_git_state() {
+    let (_temp, root) = repository();
+    let linked_temp = unique_temp_dir("gitcomet-linked-index");
+    let linked = linked_temp.path().join("checkout");
+    run_git(
+        &root,
+        &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
+    );
+    let linked = normalized(&linked.canonicalize().unwrap());
+    let main_git = root.join(".git");
+    let linked_git = normalized(&resolve_git_dir(&linked).unwrap());
+    for (workdir, own_git, other_git) in [
+        (&root, &main_git, &linked_git),
+        (&linked, &linked_git, &main_git),
+    ] {
+        let mut rules = load_gitignore_rules(workdir);
+        for (git, own) in [(own_git, true), (other_git, false)] {
+            let effect = summarize_event(
+                workdir,
+                Some(own_git),
+                &mut rules,
+                &notify::Event::new(EventKind::Modify(ModifyKind::Any)).add_path(git.join("index")),
+            );
+            let change = effect.change.expect("index changes must refresh");
+            assert_eq!(change.git_state, !own, "workdir={workdir:?}, index={git:?}");
+            if own {
+                assert!(change.index && effect.index_dirty);
+            }
+        }
+    }
+}
+
+#[test]
 fn linked_worktree_watches_own_index_and_common_refs_without_caches() {
     let (_temp, root) = repository();
     let linked_temp = unique_temp_dir("gitcomet-linked-watch");

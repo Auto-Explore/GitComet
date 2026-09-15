@@ -99,6 +99,60 @@ fn apply_directory_event(
 }
 
 #[test]
+fn newly_ignored_directory_removal_prunes_watches() {
+    for rename in [false, true] {
+        let (_temp, root) = repository();
+        fs::write(root.join(".gitignore"), "generated/\n").unwrap();
+        let directory = root.join("generated");
+        let relative = "generated/nested/source.txt";
+        fs::create_dir_all(directory.join("nested")).unwrap();
+        fs::write(root.join(relative), "tracked exception").unwrap();
+        run_git(&root, &["add", "-f", relative]);
+        let mut rules = load_gitignore_rules(&root);
+        let (mut watcher, _, _rx) = rules.start_watcher(&root);
+        assert!(rules.state.plan.dirs.contains(&directory.join("nested")));
+        run_git(&root, &["rm", "--cached", "-f", relative]);
+        rules.reload(&root);
+        let kind = if rename {
+            fs::rename(&directory, root.join("moved")).unwrap();
+            EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::From))
+        } else {
+            fs::remove_dir_all(&directory).unwrap();
+            EventKind::Remove(RemoveKind::Folder)
+        };
+        let effect = summarize(
+            &rules.state.snapshot(),
+            &mut rules,
+            &notify::Event::new(kind).add_path(directory.clone()),
+        );
+        // A rename has no directory hint once the source is gone, so it can
+        // conservatively refresh. An explicitly ignored folder removal cannot.
+        if !rename {
+            assert_eq!(effect.change, None, "ignored removal should stay quiet");
+        }
+        rules
+            .state
+            .apply_directories(&effect, &mut watcher, &rules.config);
+        assert!(
+            rules
+                .state
+                .plan
+                .dirs
+                .iter()
+                .all(|path| !path.starts_with(&directory)),
+            "ignored removal left stale directory coverage: {effect:?}"
+        );
+        #[cfg(target_os = "linux")]
+        assert!(
+            watcher
+                .watched
+                .iter()
+                .all(|path| !path.starts_with(&directory))
+        );
+    }
+}
+
+#[test]
 fn directory_batch_deduplicates_ignored_boundaries() {
     let (_temp, root) = repository();
     fs::write(root.join(".gitignore"), "generated/\n").unwrap();

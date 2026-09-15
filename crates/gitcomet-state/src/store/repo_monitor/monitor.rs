@@ -315,6 +315,15 @@ pub(super) fn summarize(
         if matches!(class, PathClass::Excluded | PathClass::Outside) {
             continue;
         }
+        // A removed watch must be pruned even if its directory became ignored
+        // after the last tracked exception was removed from the index.
+        if matches!(
+            event.kind,
+            notify::EventKind::Remove(_)
+                | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+        ) {
+            effect.dir_removed.push(path.clone());
+        }
         match class {
             PathClass::Control => {
                 effect.policy_dirty = true;
@@ -365,21 +374,13 @@ pub(super) fn summarize(
             }
             _ => {}
         }
-        if structural {
-            if matches!(
-                event.kind,
-                notify::EventKind::Remove(_)
-                    | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
-            ) {
-                effect.dir_removed.push(path.clone());
-            }
-            if path_dir_hint(event) != Some(false)
-                && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
-            {
-                effect
-                    .dir_added
-                    .push((path.clone(), class == PathClass::Worktree));
-            }
+        if structural
+            && path_dir_hint(event) != Some(false)
+            && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
+        {
+            effect
+                .dir_added
+                .push((path.clone(), class == PathClass::Worktree));
         }
     }
     effect.change = (!change.is_empty()).then_some(change);
