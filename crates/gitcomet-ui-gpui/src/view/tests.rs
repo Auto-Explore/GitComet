@@ -1405,10 +1405,16 @@ fn explicit_initial_repository_mode_seeds_empty_session() {
 
 #[test]
 fn splash_backdrop_embedded_png_decodes() {
-    assert_eq!(
-        super::splash::load_splash_backdrop_image().format(),
-        gpui::ImageFormat::Png,
-        "expected splash backdrop image to decode from embedded PNG bytes"
+    for is_dark in [true, false] {
+        let backdrop = super::splash::load_splash_backdrop_image(is_dark);
+        let decoded = image::load_from_memory_with_format(&backdrop.bytes, image::ImageFormat::Png)
+            .expect("expected splash backdrop to decode from embedded PNG bytes");
+        assert!(decoded.width() > 0 && decoded.height() > 0);
+    }
+    assert_ne!(
+        super::splash::load_splash_backdrop_image(true).id(),
+        super::splash::load_splash_backdrop_image(false).id(),
+        "dark and light themes must have different backdrop artwork"
     );
 }
 
@@ -3629,13 +3635,21 @@ fn git_unavailable_overlay_clears_after_runtime_recovery(cx: &mut gpui::TestAppC
 }
 
 #[gpui::test]
-fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
+fn splash_backdrop_renders_native_layers_and_tracks_theme(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     cx.update(|window, app| {
+        let initial = view.read(app);
+        assert!(
+            Arc::ptr_eq(
+                &initial.splash_backdrop_image,
+                &super::splash::load_splash_backdrop_image(initial.theme.is_dark),
+            ),
+            "expected the resolved theme's backdrop before the first draw"
+        );
         let _ = window.draw(app);
     });
 
@@ -3643,13 +3657,27 @@ fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
         .expect("expected native splash backdrop root");
     cx.debug_bounds("splash_backdrop_image")
         .expect("expected SVG-backed splash image layer");
-    cx.update(|_window, app| {
-        assert_eq!(
-            view.read(app).splash_backdrop_image.format(),
-            gpui::ImageFormat::Png,
-            "expected splash backdrop to be preloaded before the first draw"
-        );
-    });
+    for theme in [
+        AppTheme::gitcomet_dark(),
+        AppTheme::gitcomet_light(),
+        AppTheme::gitcomet_dark(),
+    ] {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| this.set_theme(theme, cx));
+            assert!(
+                Arc::ptr_eq(
+                    &view.read(app).splash_backdrop_image,
+                    &super::splash::load_splash_backdrop_image(theme.is_dark),
+                ),
+                "expected theme changes to select the matching cached backdrop"
+            );
+            let _ = window.draw(app);
+        });
+        cx.debug_bounds("splash_backdrop_image")
+            .expect("expected backdrop after switching themes");
+        cx.debug_bounds("splash_open_repo_action")
+            .expect("expected splash controls after switching themes");
+    }
     assert!(
         cx.debug_bounds("splash_backdrop_glow_layer").is_none(),
         "expected legacy procedural glow layer to be removed"
