@@ -444,11 +444,7 @@ impl Element for TextElement {
             }
 
             // The soft-wrap arm still works over the whole document: its row
-            // counts, y-offset prefix sum and wrap job are all document-wide, so
-            // windowing the text alone would buy nothing. Soft wrap is only ever
-            // enabled on small inputs today (commit messages, toasts, details
-            // panes) — windowing this arm is the prerequisite for offering it on
-            // a large file, and is deliberately not attempted here.
+            // counts, y-offset prefix sum and wrap job are all document-wide.
             let display_text: SharedString = match substitute_text.as_ref() {
                 Some(text) => text.clone(),
                 None => content.as_shared_string(),
@@ -457,33 +453,37 @@ impl Element for TextElement {
 
             let wrap_width = bounds.size.width.max(px(0.0));
             let rounded_wrap_width = wrap_width.round();
-            let wrap_width_key = wrap_width_cache_key(rounded_wrap_width);
             if input.wrap.row_counts.len() != line_count {
                 input.wrap.row_counts.resize(line_count, 1);
+                input.wrap.row_counts_current.resize(line_count, false);
                 input.request_wrap_recompute();
             }
-            if input.wrap.row_counts_width != Some(rounded_wrap_width) {
+            let wrap_font = (base_font.clone(), font_size);
+            if input.wrap.row_counts_width != Some(rounded_wrap_width)
+                || input.wrap.row_counts_font.as_ref() != Some(&wrap_font)
+            {
                 input.wrap.row_counts_width = Some(rounded_wrap_width);
+                input.wrap.row_counts_font = Some(wrap_font);
+                input.wrap.row_counts_current.fill(false);
+                input.wrap.pending_job = None;
                 input.request_wrap_recompute();
             }
             for rows in &mut input.wrap.row_counts {
                 *rows = (*rows).max(1);
             }
-            let started_wrap_job = input.maybe_recompute_wrap_rows(
+            let mut row_counts_changed = input.apply_pending_dirty_wrap_updates(
+                display_text_str,
+                line_starts.as_ref(),
+                rounded_wrap_width,
+                font_size,
+            );
+            input.maybe_recompute_wrap_rows(
                 display_text_str,
                 line_starts.as_ref(),
                 rounded_wrap_width,
                 font_size,
                 line_count,
                 cx,
-            );
-
-            let mut row_counts_changed = input.apply_pending_dirty_wrap_updates(
-                display_text_str,
-                line_starts.as_ref(),
-                rounded_wrap_width,
-                font_size,
-                !started_wrap_job,
             );
 
             let mut y_offsets = vec![Pixels::ZERO; line_count];
@@ -505,12 +505,6 @@ impl Element for TextElement {
                 .map(|_| WrappedLine::default())
                 .collect::<Vec<_>>();
             let mut shaped_mask = vec![false; line_count];
-            let job_accepts_interpolation = pending_wrap_job_accepts_interpolated_patch(
-                input.wrap.pending_job.as_ref(),
-                wrap_width_key,
-                line_count,
-                !started_wrap_job,
-            );
             let wrapped_line_source = LineTextSource::Whole {
                 text: display_text_str,
                 starts: line_starts.as_ref(),
@@ -544,22 +538,7 @@ impl Element for TextElement {
                     window,
                 );
                 let rows = wrapped.wrap_boundaries().len().saturating_add(1).max(1);
-                let old_rows = input
-                    .wrap
-                    .row_counts
-                    .get(line_ix)
-                    .copied()
-                    .unwrap_or(1)
-                    .max(1);
-                if old_rows != rows {
-                    if let Some(slot) = input.wrap.row_counts.get_mut(line_ix) {
-                        *slot = rows;
-                    }
-                    row_counts_changed = true;
-                    if job_accepts_interpolation {
-                        input.push_interpolated_wrap_patch(wrap_width_key, line_ix, old_rows, rows);
-                    }
-                }
+                row_counts_changed |= input.set_measured_wrap_rows(line_ix, rows);
                 if let Some(slot) = lines.get_mut(line_ix) {
                     *slot = wrapped;
                 }
@@ -589,27 +568,7 @@ impl Element for TextElement {
                     window,
                 );
                 let rows = wrapped.wrap_boundaries().len().saturating_add(1).max(1);
-                let old_rows = input
-                    .wrap
-                    .row_counts
-                    .get(cursor_line_ix)
-                    .copied()
-                    .unwrap_or(1)
-                    .max(1);
-                if old_rows != rows {
-                    if let Some(slot) = input.wrap.row_counts.get_mut(cursor_line_ix) {
-                        *slot = rows;
-                    }
-                    row_counts_changed = true;
-                    if job_accepts_interpolation {
-                        input.push_interpolated_wrap_patch(
-                            wrap_width_key,
-                            cursor_line_ix,
-                            old_rows,
-                            rows,
-                        );
-                    }
-                }
+                row_counts_changed |= input.set_measured_wrap_rows(cursor_line_ix, rows);
                 if let Some(slot) = lines.get_mut(cursor_line_ix) {
                     *slot = wrapped;
                 }
@@ -663,25 +622,20 @@ impl Element for TextElement {
                         window,
                     );
                     let rows = wrapped.wrap_boundaries().len().saturating_add(1).max(1);
-                    let old_rows = input
-                        .wrap
-                        .row_counts
-                        .get(line_ix)
-                        .copied()
-                        .unwrap_or(1)
-                        .max(1);
-                    if let Some(slot) = input.wrap.row_counts.get_mut(line_ix) {
-                        *slot = rows;
-                    }
-                    if old_rows != rows && job_accepts_interpolation {
-                        input.push_interpolated_wrap_patch(wrap_width_key, line_ix, old_rows, rows);
-                    }
+                    input.set_measured_wrap_rows(line_ix, rows);
                     if let Some(slot) = lines.get_mut(line_ix) {
                         *slot = wrapped;
                     }
                     if let Some(mask) = shaped_mask.get_mut(line_ix) {
                         *mask = true;
                     }
+                }
+                // The additional visible lines may also differ from their
+                // estimates. Paint and hit testing must share the final rows.
+                y = Pixels::ZERO;
+                for (ix, rows) in input.wrap.row_counts.iter().enumerate() {
+                    y_offsets[ix] = y;
+                    y += line_height * *rows as f32;
                 }
             }
 
@@ -990,11 +944,8 @@ impl Element for TextElement {
                 None
             };
             if prev_height_rows != next_height_rows {
-                // Wrapped height changes land one frame later in the parent scroll container.
-                // Keep one follow-up pass so Enter-at-EOF remains pinned to the true bottom.
-                if had_pending_cursor_autoscroll && input.cursor_offset() == input.content.len() {
-                    input.interaction.pending_cursor_autoscroll = true;
-                }
+                // Apply the measured height to the parent on the next frame.
+                // The caret reveal owns its bounded retry while that happens.
                 cx.notify();
             }
         });

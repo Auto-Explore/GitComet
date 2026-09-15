@@ -5,6 +5,9 @@ use crate::view::panes::main::{
 };
 use palette::IntoColor;
 
+#[path = "file_editor_scrolling.rs"]
+mod scrolling;
+
 /// A repo whose working tree holds `file_rel` with `contents`, already showing
 /// that file in the editor.
 fn editor_state(

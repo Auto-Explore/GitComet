@@ -332,6 +332,9 @@ impl MainPaneView {
     /// sits in, and its own caret autoscroll is vertical only, so a match far
     /// along a long line otherwise scrolls into view still off the right edge.
     fn reveal_file_editor_search_match_horizontally(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.diff_word_wrap {
+            return;
+        }
         let Some(range) = self.file_editor_search_current_range() else {
             return;
         };
@@ -1569,7 +1572,7 @@ impl MainPaneView {
                 // The caret has moved but not been laid out at its new place yet,
                 // so the sideways half waits for the frame that paints it. The
                 // input's own caret autoscroll only handles the vertical axis.
-                self.file_editor_search_reveal_x_pending = true;
+                self.file_editor_search_reveal_x_pending = !self.diff_word_wrap;
             }
         } else if self.file_editor_search_reveal_x_pending {
             self.file_editor_search_reveal_x_pending = false;
@@ -1639,10 +1642,12 @@ impl MainPaneView {
 
         let editor_scroll = self.file_editor_scroll.clone();
         let gutter_scroll = self.file_editor_gutter_scroll.clone();
-        let scrollbar_gutter = components::Scrollbar::visible_gutter(
-            editor_scroll.clone(),
-            components::ScrollbarAxis::Vertical,
-        );
+        let scrollbar_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
+        let horizontal_gutter = if soft_wrap {
+            px(0.0)
+        } else {
+            components::Scrollbar::gutter(components::ScrollbarAxis::Horizontal)
+        };
         let editor_scrollbar =
             components::Scrollbar::new("file_editor_scrollbar", editor_scroll.clone());
         #[cfg(test)]
@@ -1695,6 +1700,7 @@ impl MainPaneView {
                         .id("file_editor_gutter")
                         .w(gutter_width)
                         .h_full()
+                        .pb(horizontal_gutter)
                         .min_h(px(0.0))
                         .flex_shrink_0()
                         .bg(theme.colors.editor.gutter_background)
@@ -1727,6 +1733,7 @@ impl MainPaneView {
                     .flex_1()
                     .min_w(px(0.0))
                     .h_full()
+                    .pb(horizontal_gutter)
                     .min_h(px(0.0))
                     .child(
                         div()
@@ -1745,14 +1752,44 @@ impl MainPaneView {
                             .min_h(px(0.0))
                             .pl_2()
                             .pr(scrollbar_gutter)
-                            .when(soft_wrap, |d| d.overflow_y_scroll())
+                            .when(soft_wrap, |d| {
+                                restrict_scroll_to_vertical_axis(
+                                    d.overflow_hidden().overflow_y_scroll(),
+                                )
+                            })
                             .when(!soft_wrap, |d| d.overflow_scroll())
                             .track_scroll(&self.file_editor_scroll)
                             .child(self.file_editor_input.clone()),
                     )
                     // The track must be outside the moving scroll surface or
                     // GPUI applies the content offset to the scrollbar itself.
-                    .child(editor_scrollbar.render(theme)),
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .right_0()
+                            .bottom(horizontal_gutter)
+                            .w(scrollbar_gutter)
+                            .child(editor_scrollbar.render(theme)),
+                    )
+                    .when(!soft_wrap, |container| {
+                        let scrollbar = components::Scrollbar::horizontal(
+                            "file_editor_hscrollbar",
+                            editor_scroll.clone(),
+                        )
+                        .always_visible();
+                        #[cfg(test)]
+                        let scrollbar = scrollbar.debug_selector("file_editor_hscrollbar");
+                        container.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .right(scrollbar_gutter)
+                                .bottom_0()
+                                .h(horizontal_gutter)
+                                .child(scrollbar.render(theme)),
+                        )
+                    }),
             )
             .when_some(annotate_handle, |row, handle| row.child(handle))
             .into_any_element()

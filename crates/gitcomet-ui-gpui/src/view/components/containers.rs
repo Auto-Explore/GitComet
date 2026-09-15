@@ -137,7 +137,7 @@ pub fn empty_state(
 }
 
 /// A vertically scrolling area paired with its overlay scrollbar: the wheel is
-/// restricted to the vertical axis, the content gets a visible scrollbar
+/// restricted to the vertical axis, the content gets a stable scrollbar
 /// gutter, and the scrollbar is anchored to the returned container.
 pub struct ScrollContainer {
     surface_id: ElementId,
@@ -182,10 +182,10 @@ impl ScrollContainer {
             .w_full()
             .min_w(px(0.0))
             .max_h(self.max_height)
-            .pr(super::Scrollbar::visible_gutter(
-                self.scroll.clone(),
-                super::ScrollbarAxis::Vertical,
-            ))
+            // Growing past max_height must not change the width of wrapped
+            // text, otherwise showing the thumb causes a second reflow.
+            .pr(super::Scrollbar::gutter(super::ScrollbarAxis::Vertical))
+            .overflow_hidden()
             .overflow_y_scroll()
             .track_scroll(&self.scroll);
         if let Some(selector) = self.debug_selector {

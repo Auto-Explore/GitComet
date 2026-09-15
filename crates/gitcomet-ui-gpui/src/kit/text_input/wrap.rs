@@ -1,5 +1,4 @@
 use super::shaping::*;
-use super::state::*;
 use super::*;
 
 #[cfg(feature = "benchmarks")]
@@ -249,6 +248,7 @@ pub(super) fn estimate_wrap_rows_budgeted(
     line_starts: &[usize],
     wrap_columns: usize,
     rows: &mut [usize],
+    current: &[bool],
     budget: Duration,
 ) {
     let line_count = line_starts.len().min(rows.len());
@@ -264,8 +264,10 @@ pub(super) fn estimate_wrap_rows_budgeted(
         {
             break;
         }
-        let line_text = line_text_for_index(text, line_starts, line_ix);
-        *row_slot = estimate_wrap_rows_for_line(line_text, wrap_columns);
+        if !current.get(line_ix).copied().unwrap_or(false) {
+            let line_text = line_text_for_index(text, line_starts, line_ix);
+            *row_slot = estimate_wrap_rows_for_line(line_text, wrap_columns);
+        }
     }
 }
 
@@ -401,80 +403,4 @@ pub(super) fn advance_ascii_tab_general(rows: &mut usize, column: &mut usize, wr
     } else {
         *column += tab_width;
     }
-}
-
-pub(super) fn clamp_offset_to_char_boundary(text: &str, mut offset: usize) -> usize {
-    offset = offset.min(text.len());
-    while offset > 0 && !text.is_char_boundary(offset) {
-        offset = offset.saturating_sub(1);
-    }
-    offset
-}
-
-pub(super) fn expanded_dirty_wrap_line_range_for_edit(
-    text: &str,
-    line_starts: &[usize],
-    old_range: &Range<usize>,
-    new_range: &Range<usize>,
-) -> Range<usize> {
-    let line_count = line_starts.len().max(1);
-    if line_count == 0 {
-        return 0..0;
-    }
-
-    let mut start_offset = old_range.start.min(new_range.start).min(text.len());
-    let mut end_offset = old_range.end.max(new_range.end).min(text.len());
-    start_offset = clamp_offset_to_char_boundary(text, start_offset);
-    end_offset = clamp_offset_to_char_boundary(text, end_offset.max(start_offset));
-
-    let start_line = line_index_for_offset(line_starts, start_offset, line_count);
-    let mut end_line = line_index_for_offset(line_starts, end_offset, line_count)
-        .saturating_add(1)
-        .min(line_count);
-    if end_line <= start_line {
-        end_line = (start_line + 1).min(line_count);
-    }
-
-    start_line.min(line_count)..end_line.min(line_count)
-}
-
-pub(super) fn apply_interpolated_wrap_patch_delta(
-    rows: &mut [usize],
-    patch: &InterpolatedWrapPatch,
-) {
-    for (ix, old_rows) in patch.old_rows.iter().copied().enumerate() {
-        let Some(new_rows) = patch.new_rows.get(ix).copied() else {
-            break;
-        };
-        let Some(slot) = rows.get_mut(patch.line_start.saturating_add(ix)) else {
-            break;
-        };
-        let delta = new_rows as isize - old_rows as isize;
-        let next = (*slot as isize + delta).max(1) as usize;
-        *slot = next;
-    }
-}
-
-pub(super) fn reset_interpolated_wrap_patches_on_overflow(
-    interpolated_wrap_patches: &mut Vec<InterpolatedWrapPatch>,
-    wrap_recompute_requested: &mut bool,
-) -> bool {
-    if interpolated_wrap_patches.len() < TEXT_INPUT_MAX_INTERPOLATED_WRAP_PATCHES {
-        return false;
-    }
-    interpolated_wrap_patches.clear();
-    *wrap_recompute_requested = true;
-    true
-}
-
-pub(super) fn pending_wrap_job_accepts_interpolated_patch(
-    pending_wrap_job: Option<&PendingWrapJob>,
-    width_key: i32,
-    line_count: usize,
-    allow_interpolated_patches: bool,
-) -> bool {
-    allow_interpolated_patches
-        && pending_wrap_job
-            .map(|job| job.width_key == width_key && job.line_count == line_count)
-            .unwrap_or(false)
 }

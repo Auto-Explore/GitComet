@@ -182,7 +182,7 @@ pub(super) struct HighlightEditPatch {
 /// Keeps stale highlights pinned to their tokens between the edit that moved
 /// them and the debounced recompute that catches up.
 ///
-/// Mirrors `WrapState::interpolated_patches`: cheap, synchronous, applied on
+/// Tracks edits cheaply and synchronously, applied on
 /// every edit so rendering gets stale-but-positionally-correct highlights.
 ///
 /// Deliberately one coalesced interval rather than a sorted disjoint list. A
@@ -553,14 +553,6 @@ pub(super) struct PendingWrapJob {
     pub(super) wrap_columns: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct InterpolatedWrapPatch {
-    pub(super) width_key: i32,
-    pub(super) line_start: usize,
-    pub(super) old_rows: Vec<usize>,
-    pub(super) new_rows: Vec<usize>,
-}
-
 /// The shaped lines a frame actually touches, addressed by absolute line index.
 ///
 /// A plain multiline input only shapes its visible window, plus the caret's own
@@ -701,12 +693,15 @@ pub(super) struct WrapState {
     pub(super) cache: Option<WrapCache>,
     pub(super) last_rows: Option<usize>,
     pub(super) row_counts: Vec<usize>,
+    /// Rows measured by shaping or updated after an edit at the current wrap
+    /// metrics. An estimate from a background snapshot must not replace them.
+    pub(super) row_counts_current: Vec<bool>,
     pub(super) row_counts_width: Option<Pixels>,
+    pub(super) row_counts_font: Option<(gpui::Font, Pixels)>,
     pub(super) recompute_sequence: u64,
     pub(super) recompute_requested: bool,
     pub(super) pending_job: Option<PendingWrapJob>,
     pub(super) dirty_ranges: Vec<Range<usize>>,
-    pub(super) interpolated_patches: Vec<InterpolatedWrapPatch>,
 }
 
 impl WrapState {
@@ -715,12 +710,13 @@ impl WrapState {
             cache: None,
             last_rows: None,
             row_counts: Vec::new(),
+            row_counts_current: Vec::new(),
             row_counts_width: None,
+            row_counts_font: None,
             recompute_sequence: 1,
             recompute_requested: false,
             pending_job: None,
             dirty_ranges: Vec::new(),
-            interpolated_patches: Vec::new(),
         }
     }
 }
@@ -772,9 +768,9 @@ pub(super) struct InteractionState {
     /// the shared scroll handle (used for column↔output scroll sync).
     pub(super) content_width_layout: bool,
     pub(super) pending_cursor_autoscroll: bool,
-    /// Set after a stale-max_offset retry so the next attempt always clears the flag,
-    /// preventing an infinite notify loop when cursor_bottom sits at the viewport edge.
-    pub(super) cursor_autoscroll_retry_exhausted: bool,
+    /// Bounds follow-up frames while the destination's wrapped rows and the
+    /// parent scroll extent catch up with a caret reveal.
+    pub(super) cursor_autoscroll_retries_remaining: u8,
     pub(super) has_focus: bool,
     pub(super) cursor_blink_visible: bool,
     pub(super) cursor_blink_task: Option<gpui::Task<()>>,
@@ -805,7 +801,7 @@ impl InteractionState {
             vertical_scroll_handle: None,
             content_width_layout: false,
             pending_cursor_autoscroll: false,
-            cursor_autoscroll_retry_exhausted: false,
+            cursor_autoscroll_retries_remaining: 0,
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,

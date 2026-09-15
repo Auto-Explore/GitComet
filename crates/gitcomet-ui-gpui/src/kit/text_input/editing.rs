@@ -154,7 +154,6 @@ impl TextInput {
     pub(super) fn clear_wrap_recompute_state(&mut self) {
         self.wrap.pending_job = None;
         self.wrap.dirty_ranges.clear();
-        self.wrap.interpolated_patches.clear();
         self.wrap.recompute_requested = false;
     }
 
@@ -163,7 +162,9 @@ impl TextInput {
         self.layout.last = None;
         self.layout.line_starts = None;
         self.wrap.row_counts.clear();
+        self.wrap.row_counts_current.clear();
         self.wrap.row_counts_width = None;
+        self.wrap.row_counts_font = None;
         self.clear_wrap_recompute_state();
         self.wrap.last_rows = None;
         self.clear_shaped_row_caches();
@@ -194,14 +195,13 @@ impl TextInput {
         self.invalidate_layout_caches_preserving_wrap_rows();
     }
 
-    pub(super) fn invalidate_highlights(&mut self, preserve_wrap_rows: bool) {
+    pub(super) fn invalidate_highlights(&mut self) {
         self.highlight.provider_cache = None;
         self.highlight.epoch = self.highlight.epoch.wrapping_add(1).max(1);
-        if preserve_wrap_rows {
-            self.bump_shape_style_epoch_preserving_wrap_rows();
-        } else {
-            self.bump_shape_style_epoch();
-        }
+        // Highlight providers are rebound on keystrokes and caret movement.
+        // Dropping the document height here clamps the outer scroll handle to
+        // the unwrapped height before the next shaping pass can restore it.
+        self.bump_shape_style_epoch_preserving_wrap_rows();
     }
 
     /// Background syntax chunks landed for the text the provider already
@@ -210,7 +210,7 @@ impl TextInput {
     /// every highlight to coordinates the buffer left behind.
     pub(super) fn note_provider_highlights_changed(&mut self) {
         self.highlight.interpolated_cache = None;
-        self.invalidate_highlights(true);
+        self.invalidate_highlights();
     }
 
     /// Record a text edit against the highlights currently on screen.
@@ -501,7 +501,7 @@ impl TextInput {
             // though the vector itself is unchanged.
             if !self.highlight.interpolation.is_exact() {
                 self.reset_highlight_interpolation();
-                self.invalidate_highlights(false);
+                self.invalidate_highlights();
                 cx.notify();
             }
             return;
@@ -516,7 +516,7 @@ impl TextInput {
         self.highlight.superseded = None;
         // A fresh highlight source describes the buffer as it stands now.
         self.reset_highlight_interpolation();
-        self.invalidate_highlights(false);
+        self.invalidate_highlights();
         cx.notify();
     }
 
@@ -598,7 +598,7 @@ impl TextInput {
         // Only past the early return: an unchanged binding key means the same
         // closure over the same text, so its anchor must survive.
         self.reset_highlight_interpolation();
-        self.invalidate_highlights(false);
+        self.invalidate_highlights();
         cx.notify();
     }
 
@@ -867,10 +867,7 @@ impl TextInput {
         line.len().max(line_display_columns(&line))
     }
 
-    fn content_width_affected_lines(
-        content: &TextModelSnapshot,
-        byte_range: Range<usize>,
-    ) -> Range<usize> {
+    fn affected_lines(content: &TextModelSnapshot, byte_range: Range<usize>) -> Range<usize> {
         let line_count = content.line_count().max(1);
         let start = content.row_for_offset(byte_range.start);
         let end = content.row_for_offset(byte_range.end);
@@ -899,17 +896,20 @@ impl TextInput {
     fn replace_content_range(&mut self, range: Range<usize>, new_text: &str) -> Range<usize> {
         // Snapshotting is an `Arc` bump, and it is the only way to read the
         // pre-edit row layout after `replace_range` has already moved on.
-        let old_affected = self
-            .content_width_cache
-            .as_ref()
-            .map(|_| Self::content_width_affected_lines(&self.content.snapshot(), range.clone()));
+        let track_lines = self.content_width_cache.is_some() || (self.multiline && self.soft_wrap);
+        let old_affected =
+            track_lines.then(|| Self::affected_lines(&self.content.snapshot(), range.clone()));
         let inserted = self.content.replace_range(range, new_text);
         let Some(old_affected) = old_affected else {
             return inserted;
         };
 
         let content = self.content.snapshot();
-        let new_affected = Self::content_width_affected_lines(&content, inserted.clone());
+        let new_affected = Self::affected_lines(&content, inserted.clone());
+        self.mark_wrap_dirty_from_edit(old_affected.clone(), new_affected.clone());
+        if self.content_width_cache.is_none() {
+            return inserted;
+        }
         let replacement_units = new_affected
             .clone()
             .map(|line_ix| Self::content_width_line_units(&content, line_ix))
@@ -949,7 +949,7 @@ impl TextInput {
 
     pub(super) fn queue_cursor_autoscroll(&mut self) {
         self.interaction.pending_cursor_autoscroll = true;
-        self.interaction.cursor_autoscroll_retry_exhausted = false;
+        self.interaction.cursor_autoscroll_retries_remaining = TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
     }
 
     pub(super) fn resolve_provider_highlights(
@@ -1129,29 +1129,46 @@ impl TextInput {
 
     pub(super) fn mark_wrap_dirty_from_edit(
         &mut self,
-        old_range: Range<usize>,
-        new_range: Range<usize>,
+        old_lines: Range<usize>,
+        new_lines: Range<usize>,
     ) {
-        if !(self.multiline && self.soft_wrap) {
+        if !(self.multiline && self.soft_wrap) || self.wrap.row_counts.is_empty() {
             return;
         }
-
-        let text = self.content.as_ref();
-        let line_starts = self.content.line_starts();
-        let line_count = line_starts.len().max(1);
-        if self.wrap.row_counts.len() != line_count {
-            self.wrap.row_counts.resize(line_count, 1);
-            self.wrap.recompute_requested = true;
-            self.wrap.pending_job = None;
-            self.wrap.interpolated_patches.clear();
-            return;
+        debug_assert_eq!(old_lines.start, new_lines.start);
+        // Keep the previous height provisionally for the edited lines, and
+        // splice at the edit so all unchanged lines retain their measurements.
+        let previous = &self.wrap.row_counts[old_lines.clone()];
+        let replacement = (0..new_lines.len())
+            .map(|ix| previous.get(ix).copied().unwrap_or(1))
+            .collect::<Vec<_>>();
+        self.wrap.row_counts.splice(old_lines.clone(), replacement);
+        self.wrap.row_counts_current.splice(
+            old_lines.clone(),
+            std::iter::repeat_n(true, new_lines.len()),
+        );
+        if old_lines.len() != new_lines.len() {
+            // A background snapshot still addresses the old line indices.
+            if self.wrap.pending_job.take().is_some() {
+                self.request_wrap_recompute();
+            }
+            for dirty in &mut self.wrap.dirty_ranges {
+                dirty.start = if dirty.start >= old_lines.end {
+                    dirty.start - old_lines.end + new_lines.end
+                } else {
+                    dirty.start.min(old_lines.start)
+                };
+                dirty.end = if dirty.end >= old_lines.end {
+                    dirty.end - old_lines.end + new_lines.end
+                } else if dirty.end > old_lines.start {
+                    new_lines.end
+                } else {
+                    dirty.end
+                };
+            }
         }
-
-        let dirty_range =
-            expanded_dirty_wrap_line_range_for_edit(text, line_starts, &old_range, &new_range);
-        if dirty_range.start < dirty_range.end {
-            self.wrap.dirty_ranges.push(dirty_range);
-        }
+        self.wrap.dirty_ranges.push(new_lines);
+        self.wrap.last_rows = Some(total_wrap_rows(&self.wrap.row_counts));
     }
 
     pub(super) fn take_normalized_wrap_dirty_ranges(
@@ -1182,38 +1199,14 @@ impl TextInput {
         merged
     }
 
-    pub(super) fn push_interpolated_wrap_patch(
-        &mut self,
-        width_key: i32,
-        line_ix: usize,
-        old_rows: usize,
-        new_rows: usize,
-    ) {
-        if old_rows == new_rows {
-            return;
-        }
-
-        if let Some(last) = self.wrap.interpolated_patches.last_mut()
-            && last.width_key == width_key
-            && last.line_start + last.old_rows.len() == line_ix
-        {
-            last.old_rows.push(old_rows);
-            last.new_rows.push(new_rows);
-            return;
-        }
-
-        if reset_interpolated_wrap_patches_on_overflow(
-            &mut self.wrap.interpolated_patches,
-            &mut self.wrap.recompute_requested,
-        ) {
-            return;
-        }
-        self.wrap.interpolated_patches.push(InterpolatedWrapPatch {
-            width_key,
-            line_start: line_ix,
-            old_rows: vec![old_rows],
-            new_rows: vec![new_rows],
-        });
+    pub(super) fn set_measured_wrap_rows(&mut self, line_ix: usize, rows: usize) -> bool {
+        let rows = rows.max(1);
+        let changed = self.wrap.row_counts[line_ix] != rows;
+        self.wrap.row_counts[line_ix] = rows;
+        // Protect even an unchanged count: a late estimator may disagree with
+        // shaping, including on the very frame that launched its job.
+        self.wrap.row_counts_current[line_ix] = true;
+        changed
     }
 
     pub(super) fn apply_pending_dirty_wrap_updates(
@@ -1222,7 +1215,6 @@ impl TextInput {
         line_starts: &[usize],
         rounded_wrap_width: Pixels,
         font_size: Pixels,
-        allow_interpolated_patches: bool,
     ) -> bool {
         if self.wrap.dirty_ranges.is_empty() {
             return false;
@@ -1240,18 +1232,14 @@ impl TextInput {
             .map(|range| range.end.saturating_sub(range.start))
             .sum::<usize>();
         if dirty_line_count > TEXT_INPUT_WRAP_DIRTY_SYNC_LINE_LIMIT {
+            for range in ranges {
+                self.wrap.row_counts_current[range].fill(false);
+            }
             self.request_wrap_recompute();
             return false;
         }
 
-        let width_key = wrap_width_cache_key(rounded_wrap_width);
         let wrap_columns = wrap_columns_for_width(rounded_wrap_width, font_size);
-        let job_accepts_interpolation = pending_wrap_job_accepts_interpolated_patch(
-            self.wrap.pending_job.as_ref(),
-            width_key,
-            line_count,
-            allow_interpolated_patches,
-        );
         let mut changed = false;
         for range in ranges.drain(..) {
             for line_ix in range {
@@ -1266,9 +1254,6 @@ impl TextInput {
                 if old_rows != new_rows {
                     self.wrap.row_counts[line_ix] = new_rows;
                     changed = true;
-                    if job_accepts_interpolation {
-                        self.push_interpolated_wrap_patch(width_key, line_ix, old_rows, new_rows);
-                    }
                 }
             }
         }
@@ -1283,46 +1268,31 @@ impl TextInput {
         font_size: Pixels,
         line_count: usize,
         cx: &mut Context<Self>,
-    ) -> bool {
+    ) {
+        if !self.wrap.recompute_requested {
+            return;
+        }
         let width_key = wrap_width_cache_key(rounded_wrap_width);
         let wrap_columns = wrap_columns_for_width(rounded_wrap_width, font_size);
-        if line_count <= TEXT_INPUT_WRAP_SYNC_LINE_THRESHOLD {
-            self.wrap.pending_job = None;
-            self.wrap.interpolated_patches.clear();
-            estimate_wrap_rows_with_line_starts(
-                display_text,
-                line_starts,
-                wrap_columns,
-                &mut self.wrap.row_counts,
-            );
-            self.wrap.recompute_requested = false;
-            return false;
-        }
-
-        let has_compatible_job = self
-            .wrap
-            .pending_job
-            .map(|job| job.width_key == width_key && job.line_count == line_count)
-            .unwrap_or(false);
-        if has_compatible_job && !self.wrap.recompute_requested {
-            return false;
-        }
-        if !self.wrap.recompute_requested {
-            return false;
-        }
-
-        let mut budget_rows = std::mem::take(&mut self.wrap.row_counts);
-        budget_rows.resize(line_count, 1);
+        let synchronous = line_count <= TEXT_INPUT_WRAP_SYNC_LINE_THRESHOLD;
         estimate_wrap_rows_budgeted(
             display_text,
             line_starts,
             wrap_columns,
-            &mut budget_rows,
-            Duration::from_millis(TEXT_INPUT_WRAP_FOREGROUND_BUDGET_MS),
+            &mut self.wrap.row_counts,
+            &self.wrap.row_counts_current,
+            if synchronous {
+                Duration::MAX
+            } else {
+                Duration::from_millis(TEXT_INPUT_WRAP_FOREGROUND_BUDGET_MS)
+            },
         );
-        self.wrap.row_counts = budget_rows;
         self.wrap.row_counts_width = Some(rounded_wrap_width);
         self.wrap.recompute_requested = false;
+        self.wrap.pending_job = None;
+        if synchronous {
+            return;
+        }
 
         let sequence = self.wrap.recompute_sequence.wrapping_add(1).max(1);
         self.wrap.recompute_sequence = sequence;
@@ -1332,21 +1302,20 @@ impl TextInput {
             line_count,
             wrap_columns,
         });
-        self.wrap.interpolated_patches.clear();
 
         let snapshot = display_text.to_string();
+        let estimate = cx
+            .background_executor()
+            .spawn(async move { estimate_wrap_rows_for_text(&snapshot, wrap_columns) });
         cx.spawn(
             async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
-                let rows =
-                    smol::unblock(move || estimate_wrap_rows_for_text(&snapshot, wrap_columns))
-                        .await;
+                let rows = estimate.await;
                 let _ = input.update(cx, |input, cx| {
                     input.complete_wrap_recompute_job(sequence, width_key, line_count, rows, cx);
                 });
             },
         )
         .detach();
-        true
     }
 
     pub(super) fn complete_wrap_recompute_job(
@@ -1368,15 +1337,14 @@ impl TextInput {
         for rows_per_line in &mut rows {
             *rows_per_line = (*rows_per_line).max(1);
         }
-        for patch in &self.wrap.interpolated_patches {
-            if patch.width_key == width_key {
-                apply_interpolated_wrap_patch_delta(rows.as_mut_slice(), patch);
+        for (ix, rows) in rows.into_iter().enumerate() {
+            if !self.wrap.row_counts_current[ix] {
+                self.wrap.row_counts[ix] = rows;
             }
         }
-        self.wrap.interpolated_patches.clear();
-        self.wrap.row_counts = rows;
         self.wrap.pending_job = None;
         self.wrap.last_rows = Some(total_wrap_rows(self.wrap.row_counts.as_slice()));
+        self.wrap.cache = None;
         cx.notify();
     }
 
@@ -1419,6 +1387,15 @@ impl TextInput {
     }
 
     pub fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
+        if soft_wrap {
+            self.layout.scroll_x = px(0.0);
+            if let Some(handle) = &self.interaction.vertical_scroll_handle {
+                let offset = handle.offset();
+                if offset.x != px(0.0) {
+                    handle.set_offset(point(px(0.0), offset.y));
+                }
+            }
+        }
         if self.soft_wrap == soft_wrap {
             return;
         }
@@ -1907,7 +1884,18 @@ impl TextInput {
         if viewport_height <= px(0.0) {
             return;
         }
-        let caret_margin = px(10.0);
+        // Wrapping is measured during prepaint, after the parent's scroll
+        // extent was laid out. Wait for that height instead of scrolling
+        // against a temporary, shorter document and correcting it next frame.
+        let waiting_for_layout = self.multiline
+            && self.soft_wrap
+            && self.wrap.cache.is_some_and(|cache| {
+                (self.layout.line_height * cache.rows as f32 - text_bounds.size.height).abs()
+                    > px(1.0)
+            })
+            && self.interaction.cursor_autoscroll_retries_remaining > 0;
+        let caret_margin =
+            px(10.0).min(((viewport_height - self.layout.line_height) / 2.0).max(px(0.0)));
 
         let Some((cursor_top, cursor_bottom)) = self.cursor_vertical_span(self.cursor_offset())
         else {
@@ -1920,66 +1908,41 @@ impl TextInput {
         let text_origin_in_child = text_bounds.top() - child_top;
         let cursor_top = text_origin_in_child + cursor_top;
         let cursor_bottom = text_origin_in_child + cursor_bottom;
-        let negative_axis = current.y < px(0.0);
-        let mut scroll_y = if negative_axis { -current.y } else { current.y };
-
         let max_offset = handle.max_offset().y.max(px(0.0));
-        if max_offset <= px(0.0) {
-            let cursor_out_of_view = cursor_top < scroll_y + caret_margin
-                || cursor_bottom > scroll_y + viewport_height - caret_margin;
-            if self.cursor_offset() == self.content.len() {
-                handle.scroll_to_bottom();
-                cx.notify();
-                self.interaction.pending_cursor_autoscroll = true;
-            } else if cursor_out_of_view {
-                cx.notify();
-                self.interaction.pending_cursor_autoscroll = true;
-            } else {
-                self.interaction.pending_cursor_autoscroll = false;
-            }
-            return;
-        }
-
-        scroll_y = scroll_y.max(px(0.0)).min(max_offset);
-
-        let target_scroll = if self.cursor_offset() == self.content.len() {
-            max_offset
+        let scroll_y = (-current.y).clamp(px(0.0), max_offset);
+        let target_scroll = if waiting_for_layout {
+            scroll_y
         } else if cursor_top < scroll_y + caret_margin {
             cursor_top - caret_margin
         } else if cursor_bottom > scroll_y + viewport_height - caret_margin {
             cursor_bottom - viewport_height + caret_margin
         } else {
-            self.interaction.pending_cursor_autoscroll = false;
-            return;
+            scroll_y
         }
         .max(px(0.0))
         .min(max_offset);
 
-        if target_scroll == scroll_y {
-            self.interaction.pending_cursor_autoscroll = false;
-            return;
+        let moved = current.y != -target_scroll;
+        if moved {
+            handle.set_offset(point(current.x, -target_scroll));
         }
-
-        let next_y = if negative_axis {
-            -target_scroll
-        } else {
-            target_scroll
-        };
-        handle.set_offset(point(current.x, next_y));
-        // max_offset is one frame stale when content just grew. If the cursor isn't
-        // actually in view at target_scroll, allow one retry so the next frame can use
-        // the updated max_offset. After that single retry we always stop: when the cursor
-        // is at end-of-document cursor_bottom equals the content height, which is always
-        // outside the caret_margin zone, so without a retry cap this would loop forever.
-        let cursor_will_be_visible = cursor_top >= target_scroll + caret_margin
-            && cursor_bottom <= target_scroll + viewport_height - caret_margin;
-        if !cursor_will_be_visible && !self.interaction.cursor_autoscroll_retry_exhausted {
+        // Scrolling reveals lines that may still have estimated wrap counts.
+        // Keep the reveal alive through their shaping and the following layout,
+        // even if the estimated caret position fits now (notably Ctrl+End).
+        // A fixed retry budget prevents notifications from continuing forever.
+        let cursor_will_be_visible =
+            cursor_top >= target_scroll && cursor_bottom <= target_scroll + viewport_height;
+        if (waiting_for_layout || (self.soft_wrap && moved) || !cursor_will_be_visible)
+            && self.interaction.cursor_autoscroll_retries_remaining > 0
+        {
             self.interaction.pending_cursor_autoscroll = true;
-            self.interaction.cursor_autoscroll_retry_exhausted = true;
+            self.interaction.cursor_autoscroll_retries_remaining -= 1;
         } else {
             self.interaction.pending_cursor_autoscroll = false;
         }
-        cx.notify();
+        if moved || self.interaction.pending_cursor_autoscroll {
+            cx.notify();
+        }
     }
 
     pub(super) fn page_up(&mut self, _: &PageUp, _: &mut Window, cx: &mut Context<Self>) {
@@ -2265,7 +2228,6 @@ impl TextInput {
             .pending_text_edit_deltas
             .push((range.clone(), inserted.clone()));
         let cursor = inserted.end;
-        self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
         if preserve_view {
             let start = self.clamp_to_char_boundary(
                 Self::shift_offset_across_edit(previous_selection.start, &range, &inserted)
@@ -2511,7 +2473,16 @@ impl TextInput {
     ) {
         let text_edit_delta =
             utf8_edit_delta_between_texts(self.content.as_ref(), snapshot.content.as_ref());
+        let old_lines = text_edit_delta
+            .as_ref()
+            .map(|(old, _)| Self::affected_lines(&self.content.snapshot(), old.clone()));
         self.content = snapshot.content.into();
+        if let Some(old_lines) = old_lines
+            && let Some((_, new)) = &text_edit_delta
+        {
+            let new_lines = Self::affected_lines(&self.content.snapshot(), new.clone());
+            self.mark_wrap_dirty_from_edit(old_lines, new_lines);
+        }
         // The spans described the buffer this snapshot just replaced; the owner
         // republishes them for the restored one.
         self.protected_ranges = Arc::from([]);
@@ -2527,10 +2498,7 @@ impl TextInput {
         self.interaction.is_selecting = false;
         self.interaction.mouse_selection_anchor = None;
         self.interaction.pending_mouse_selection_anchor = None;
-        self.invalidate_layout_caches();
-        if self.multiline && self.soft_wrap {
-            self.request_wrap_recompute();
-        }
+        self.invalidate_layout_caches_preserving_wrap_rows();
         if let Some(delta) = text_edit_delta {
             self.note_text_edit_for_highlights(&delta.0, &delta.1);
             self.selection.pending_text_edit_deltas.push(delta);
@@ -3466,7 +3434,6 @@ impl EntityInputHandler for TextInput {
         self.selection
             .pending_text_edit_deltas
             .push((range.clone(), inserted.clone()));
-        self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
         self.push_undo_snapshot(undo_snapshot);
         self.selection.range = inserted.end..inserted.end;
         self.selection.reversed = false;
@@ -3509,7 +3476,6 @@ impl EntityInputHandler for TextInput {
         self.selection
             .pending_text_edit_deltas
             .push((range.clone(), inserted.clone()));
-        self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
         self.push_undo_snapshot(undo_snapshot);
         if !new_text.is_empty() {
             self.selection.marked_range = Some(inserted.clone());
