@@ -1,4 +1,5 @@
 //! Monitor orchestration: input reloads and coverage decisions meet at one flush.
+use super::native_watcher::WATCH_MODE;
 use super::*;
 
 pub(super) const MAX_WORKTREE_WATCH_DIRS: usize = 4096;
@@ -188,13 +189,19 @@ impl MonitorState {
                 }
             };
             if !self.inputs.stamps.changed() && !self.inputs.indexes.changed() {
-                return Some((watcher, self.plan.outcome(&self.rules, &self.inputs)));
+                return Some((
+                    watcher,
+                    self.plan.outcome(&self.rules, &self.inputs, WATCH_MODE),
+                ));
             }
             if attempt + 1 == config.setup_passes.max(1) {
                 // Keep useful partial coverage and retry through ordinary input
                 // revalidation. No synthetic event can create a retry loop.
                 self.plan.failures += 1;
-                return Some((watcher, self.plan.outcome(&self.rules, &self.inputs)));
+                return Some((
+                    watcher,
+                    self.plan.outcome(&self.rules, &self.inputs, WATCH_MODE),
+                ));
             }
             drop(watcher);
             reload = true;
@@ -469,7 +476,8 @@ pub(super) fn repo_monitor_thread(
                                 // recover, without turning directory events into
                                 // immediate full rebuilds.
                                 if !state.rules.failed {
-                                    let next = state.plan.outcome(&state.rules, &state.inputs);
+                                    let next =
+                                        state.plan.outcome(&state.rules, &state.inputs, WATCH_MODE);
                                     if next != outcome {
                                         outcome = next;
                                         let was_degraded = degraded;

@@ -1,4 +1,93 @@
+use super::super::super::native_watcher::WatchMode;
 use super::*;
+
+#[test]
+fn traversal_budget_only_degrades_per_directory_coverage() {
+    let (_temp, root) = repository();
+    fs::create_dir_all(root.join("source/child")).unwrap();
+    for worktree in [true, false] {
+        let mut rules = load_gitignore_rules(&root);
+        let snapshot = rules.state.snapshot();
+        let mut plan = WatchPlan::default();
+        plan.walk(
+            [if worktree {
+                root.clone()
+            } else {
+                root.join(".git")
+            }],
+            worktree,
+            &snapshot,
+            &mut rules.state.rules,
+            &mut rules.state.inputs,
+            1,
+            |_| Ok(()),
+        );
+        assert_eq!(plan.dirs.len(), 1, "discovery must stay bounded");
+        assert_eq!(plan.skipped.is_some(), worktree);
+        assert_eq!(plan.git_dirs_skipped, !worktree);
+        assert_eq!(plan.failures, 0, "a traversal limit is not a watch error");
+        assert_eq!(
+            plan.outcome(&rules, &rules.state.inputs, WatchMode::Shallow),
+            if worktree {
+                WatchSetupOutcome::WorktreeSubdirsSkipped { dir_count: 2 }
+            } else {
+                WatchSetupOutcome::Watching { failed_dirs: 1 }
+            },
+        );
+        let outcome = plan.outcome(&rules, &rules.state.inputs, WatchMode::Recursive);
+        assert_eq!(outcome, WatchSetupOutcome::Watching { failed_dirs: 0 });
+        assert!(watch_degraded_reason(outcome).is_none());
+
+        // A successful recursive root watch is required: real registration
+        // failures and incomplete root discovery must still trigger recovery.
+        plan.failures = 1;
+        assert_eq!(
+            plan.outcome(&rules, &rules.state.inputs, WatchMode::Recursive),
+            WatchSetupOutcome::Watching { failed_dirs: 1 },
+        );
+        plan.failures = 0;
+        rules.state.inputs.info.discovery_incomplete = true;
+        assert_eq!(
+            plan.outcome(&rules, &rules.state.inputs, WatchMode::Recursive),
+            WatchSetupOutcome::Watching { failed_dirs: 1 },
+        );
+        rules.failed = true;
+        assert_eq!(
+            plan.outcome(&rules, &rules.state.inputs, WatchMode::Recursive),
+            WatchSetupOutcome::PolicyFailed,
+        );
+    }
+}
+
+#[test]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn recursive_monitor_over_budget_keeps_coverage_without_recovery_rebuilds() {
+    let (_temp, root) = repository();
+    let file = root.join("source/child/file.txt");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "before").unwrap();
+    let builds = Arc::new(AtomicU64::new(0));
+    let count = builds.clone();
+    let monitor = RunningMonitor::start_custom(
+        &root,
+        Arc::new(gitcomet_git_gix::GixBackend),
+        MonitorConfig {
+            dir_limit: 1,
+            idle_tick: Duration::from_millis(100),
+            recovery_interval: Duration::from_millis(100),
+            before_registration: Some(Box::new(move || {
+                count.fetch_add(1, Ordering::Relaxed);
+            })),
+            ..Default::default()
+        },
+    );
+    monitor.settle();
+    monitor.quiet();
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
+    fs::write(file, "after").unwrap();
+    monitor.refresh();
+    assert_eq!(builds.load(Ordering::Relaxed), 1);
+}
 
 #[test]
 fn unborn_repository_watches_subfolders_without_creating_index() {

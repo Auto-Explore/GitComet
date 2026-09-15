@@ -1,4 +1,5 @@
 //! Register parents before enumerating children; each stable setup walks once.
+use super::native_watcher::WatchMode;
 use super::*;
 use std::collections::VecDeque;
 
@@ -8,6 +9,7 @@ pub(super) struct WatchPlan {
     pub worktree_dirs: FxHashSet<PathBuf>,
     pub boundaries: Vec<PathBuf>,
     pub skipped: Option<usize>,
+    pub git_dirs_skipped: bool,
     pub failures: usize,
 }
 impl WatchPlan {
@@ -55,7 +57,7 @@ impl WatchPlan {
                 if worktree {
                     self.skipped = Some(count + 1);
                 } else {
-                    self.failures += 1;
+                    self.git_dirs_skipped = true;
                 }
                 break;
             }
@@ -94,14 +96,25 @@ impl WatchPlan {
         }
     }
 
-    pub fn outcome(&self, rules: &IgnoreRules, inputs: &WatchInputs) -> WatchSetupOutcome {
+    pub fn outcome(
+        &self,
+        rules: &IgnoreRules,
+        inputs: &WatchInputs,
+        mode: WatchMode,
+    ) -> WatchSetupOutcome {
         if rules.failed {
             WatchSetupOutcome::PolicyFailed
-        } else if let Some(dir_count) = self.skipped {
+        } else if mode == WatchMode::Shallow
+            && let Some(dir_count) = self.skipped
+        {
             WatchSetupOutcome::WorktreeSubdirsSkipped { dir_count }
         } else {
+            // Recursive root watches cover directories beyond the discovery
+            // budget. Only per-directory watches lose coverage at that limit.
             WatchSetupOutcome::Watching {
-                failed_dirs: self.failures + usize::from(inputs.info.discovery_incomplete),
+                failed_dirs: self.failures
+                    + usize::from(mode == WatchMode::Shallow && self.git_dirs_skipped)
+                    + usize::from(inputs.info.discovery_incomplete),
             }
         }
     }

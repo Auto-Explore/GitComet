@@ -402,8 +402,8 @@ fn directory_budget_and_renames_rebuild_coverage_without_stale_counts() {
         assert!(plan.dirs.contains(&root.join("moved/child")));
         assert!(!plan.dirs.contains(&root.join("source")));
     }
-    // Exactly one directory over the cap must also degrade, even when there
-    // are no more pending traversal entries to trigger another iteration.
+    // Exactly one directory over the cap must also mark traversal incomplete,
+    // even with no more pending entries to trigger another iteration.
     let plan = TestPlan::build_with_limit(&root, Some(&root.join(".git")), &mut rules, 2);
     assert_eq!(plan.skipped, Some(3));
     assert_eq!(plan.worktree_dirs.len(), 2);
