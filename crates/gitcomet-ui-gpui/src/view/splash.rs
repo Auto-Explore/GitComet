@@ -1,5 +1,4 @@
 use super::*;
-use palette::IntoColor;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -387,7 +386,7 @@ impl GitCometView {
                         } else {
                             0x171a3b14
                         })
-                        .into_color(),
+                        .into(),
                         offset: point(px(0.0), px(22.0)),
                         blur_radius: px(52.0),
                         spread_radius: px(0.0),
@@ -561,7 +560,7 @@ impl GitCometView {
                                 } else {
                                     0x171a3b14
                                 })
-                                .into_color(),
+                                .into(),
                                 offset: point(px(0.0), px(22.0)),
                                 blur_radius: px(52.0),
                                 spread_radius: px(0.0),
