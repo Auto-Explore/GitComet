@@ -1776,8 +1776,7 @@ impl MainPaneView {
                         let scrollbar = components::Scrollbar::horizontal(
                             "file_editor_hscrollbar",
                             editor_scroll.clone(),
-                        )
-                        .always_visible();
+                        );
                         #[cfg(test)]
                         let scrollbar = scrollbar.debug_selector("file_editor_hscrollbar");
                         container.child(

@@ -1,5 +1,7 @@
 use super::state::*;
+use super::wrap::*;
 use super::*;
+use crate::test_support::refresh_and_draw as draw_frame;
 
 struct WrappedInputView {
     input: Entity<TextInput>,
@@ -47,13 +49,6 @@ impl Render for WrappedInputView {
     }
 }
 
-fn draw_frame(cx: &mut gpui::VisualTestContext) {
-    cx.update(|window, app| {
-        window.refresh();
-        let _ = window.draw(app);
-    });
-}
-
 fn seed_wrapped_input(
     view: &Entity<WrappedInputView>,
     cx: &mut gpui::VisualTestContext,
@@ -72,6 +67,256 @@ fn seed_wrapped_input(
         draw_frame(cx);
     }
     input
+}
+
+#[gpui::test]
+fn reversed_ime_ranges_keep_multiline_text_and_row_caches_in_step(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let original = "first é😀\nsecond\nthird\nfourth";
+    for content_width in [false, true] {
+        for composing in [false, true] {
+            for end in [original.find("third").unwrap(), original.len()] {
+                let input = seed_wrapped_input(&view, cx, original);
+                cx.update(|window, app| {
+                    input.update(app, |input, cx| {
+                        input.set_content_width_layout(content_width);
+                        let start = original.find('é').unwrap();
+                        let reversed = input.offset_to_utf16(end)..input.offset_to_utf16(start);
+                        input.drain_recent_utf8_edit_deltas();
+                        if composing {
+                            input.replace_and_mark_text_in_range(
+                                Some(reversed),
+                                "new 😀\ntext",
+                                None,
+                                window,
+                                cx,
+                            );
+                        } else {
+                            input.replace_text_in_range(Some(reversed), "new 😀\ntext", window, cx);
+                        }
+                        let mut expected = original.to_owned();
+                        expected.replace_range(start..end, "new 😀\ntext");
+                        assert_eq!(input.text(), expected);
+                        assert_eq!(
+                            input.wrap.row_counts.len(),
+                            input.text_snapshot().line_count()
+                        );
+                        assert_eq!(
+                            input.drain_recent_utf8_edit_deltas(),
+                            vec![(start..end, start..start + "new 😀\ntext".len())]
+                        );
+                        if content_width {
+                            assert_eq!(
+                                input.content_width_cache.as_ref().unwrap().line_units.len(),
+                                input.text_snapshot().line_count()
+                            );
+                        }
+                        input.unmark_text(window, cx);
+                    });
+                });
+                draw_frame(cx);
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn shrinking_wrap_estimates_fill_the_viewport_in_the_same_frame(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let input = seed_wrapped_input(&view, cx, &"short line\n".repeat(300));
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        input.update(app, |input, _| {
+            // Model a pessimistic estimate before these lines have been shaped.
+            // Each pass exposes another line as the previous one shrinks.
+            input.wrap.row_counts.fill(40);
+            input.wrap.row_counts_current.fill(false);
+            input.wrap.recompute_requested = false;
+            input.wrap.pending_job = None;
+            let rows = total_wrap_rows(&input.wrap.row_counts);
+            input.wrap.cache.as_mut().unwrap().rows = rows;
+            input.wrap.last_rows = Some(rows);
+            input.interaction.pending_cursor_autoscroll = false;
+        });
+    });
+    draw_frame(cx);
+    cx.update(|_window, app| {
+        let input = input.read(app);
+        let viewport = view.read(app).scroll.bounds();
+        let origin = input.layout.bounds.unwrap().top();
+        let TextInputLayout::Wrapped {
+            lines,
+            y_offsets,
+            row_counts,
+        } = input.layout.last.as_ref().unwrap()
+        else {
+            panic!("wrapped layout")
+        };
+        let visible = visible_wrapped_line_range(
+            y_offsets,
+            row_counts,
+            input.layout.line_height,
+            viewport.top() - origin,
+            viewport.bottom() - origin,
+            0,
+        );
+        assert!(
+            visible.len() > 2,
+            "fixture must expose more lines than the old two passes"
+        );
+        for line in visible {
+            assert!(
+                lines[line].len() > 0,
+                "visible line {line} was left blank for this frame"
+            );
+        }
+    });
+}
+
+#[gpui::test]
+fn offscreen_wrapped_edits_keep_measured_height_until_current_text_is_shaped(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let paragraph = format!("{}\n", "aaaaaaa bbbbbbb ccccccc ".repeat(12));
+    let input = seed_wrapped_input(&view, cx, &paragraph.repeat(60));
+    let measured = cx.update(|_window, app| input.read(app).wrap.row_counts[0]);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            let (font, size) = input.wrap.row_counts_font.as_ref().unwrap();
+            let _ = font;
+            let estimate = estimate_wrap_rows_for_line(
+                &paragraph,
+                wrap_columns_for_width(input.wrap.row_counts_width.unwrap(), *size),
+            );
+            assert_ne!(
+                estimate, measured,
+                "fixture must distinguish shaping from estimation"
+            );
+            let at = input.text_snapshot().line_range(30).start;
+            input.set_selected_range(at..at, true, window, cx);
+        });
+    });
+    for _ in 0..8 {
+        draw_frame(cx);
+    }
+    let baseline = cx.update(|_window, app| view.read(app).scroll.offset());
+    for step in 0..4 {
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.replace_utf8_range_preserving_view(
+                    0..1,
+                    if step % 2 == 0 { "b" } else { "a" },
+                    cx,
+                );
+            });
+        });
+        for frame in 0..3 {
+            draw_frame(cx);
+            cx.update(|_window, app| {
+                assert_eq!(
+                    input.read(app).wrap.row_counts[0],
+                    measured,
+                    "offscreen edit {step}, frame {frame}"
+                );
+                assert_eq!(view.read(app).scroll.offset(), baseline);
+            });
+        }
+    }
+}
+
+#[gpui::test]
+fn wrapped_reveals_survive_multiple_destination_layout_corrections(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let paragraph = format!("{}\n", "aaaaaaa bbbbbbb ccccccc ".repeat(12));
+    for eof in [true, false] {
+        let input = seed_wrapped_input(&view, cx, &paragraph.repeat(300));
+        cx.run_until_parked();
+        cx.update(|_window, app| {
+            view.read(app).scroll.set_offset(point(px(0.0), px(-400.0)));
+            input.update(app, |input, _| {
+                // A foreground estimate may stop before reaching the target.
+                input.wrap.row_counts.fill(1);
+                input.wrap.row_counts_current.fill(false);
+                input.wrap.recompute_requested = false;
+                input.wrap.pending_job = None;
+                let rows = input.wrap.row_counts.len();
+                input.wrap.cache.as_mut().unwrap().rows = rows;
+                input.wrap.last_rows = Some(rows);
+            });
+        });
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                if eof {
+                    input.document_end(&DocumentEnd, window, cx);
+                } else {
+                    let at = input.text_snapshot().line_range(260).start + 30;
+                    input.set_selected_range(at..at + 5, true, window, cx);
+                }
+            });
+        });
+        for _ in 0..16 {
+            draw_frame(cx);
+        }
+        cx.update(|_window, app| {
+            let input = input.read(app);
+            let viewport = view.read(app).scroll.bounds();
+            let origin = input.layout.bounds.unwrap().top();
+            let (top, bottom) = input.cursor_vertical_span(input.cursor_offset()).unwrap();
+            assert!(
+                origin + top >= viewport.top() - px(1.0)
+                    && origin + bottom <= viewport.bottom() + px(1.0),
+                "eof={eof}: caret {:?}..{:?}, viewport {viewport:?}",
+                origin + top,
+                origin + bottom
+            );
+            assert!(
+                !input.interaction.pending_cursor_autoscroll,
+                "reveal must settle"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn waiting_for_wrap_layout_does_not_exhaust_destination_reveals(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(WrappedInputView::new);
+    let paragraph = format!("{}\n", "aaaaaaa bbbbbbb ccccccc ".repeat(12));
+    let input = seed_wrapped_input(&view, cx, &paragraph.repeat(300));
+    cx.run_until_parked();
+    cx.update(|_window, app| view.read(app).scroll.set_offset(point(px(0.0), px(-800.0))));
+    for _ in 0..3 {
+        draw_frame(cx);
+    }
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.document_end(&DocumentEnd, window, cx);
+            // Exercise the state after shaping updates the height, while the
+            // parent still reports its earlier scroll extent. Waiting here
+            // must not spend the attempts needed after scrolling to EOF.
+            input.layout.bounds.as_mut().unwrap().size.height -= input.layout.line_height;
+            for _ in 0..TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES {
+                input.ensure_cursor_visible_in_vertical_scroll(cx);
+            }
+        });
+    });
+    for _ in 0..12 {
+        draw_frame(cx);
+    }
+    cx.update(|_window, app| {
+        let input = input.read(app);
+        let viewport = view.read(app).scroll.bounds();
+        let origin = input.layout.bounds.unwrap().top();
+        let (top, bottom) = input.cursor_vertical_span(input.cursor_offset()).unwrap();
+        assert!(
+            origin + top >= viewport.top() - px(1.0)
+                && origin + bottom <= viewport.bottom() + px(1.0),
+            "caret {:?}..{:?}, viewport {viewport:?}",
+            origin + top,
+            origin + bottom
+        );
+        assert!(!input.interaction.pending_cursor_autoscroll);
+    });
 }
 
 #[gpui::test]

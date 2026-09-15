@@ -1,13 +1,7 @@
 use super::*;
+use crate::test_support::refresh_and_draw as draw_editor_frame;
 use gpui::EntityInputHandler as _;
 use std::path::PathBuf;
-
-fn draw_editor_frame(cx: &mut gpui::VisualTestContext) {
-    cx.update(|window, app| {
-        window.refresh();
-        let _ = window.draw(app);
-    });
-}
 
 #[gpui::test]
 fn markdown_inline_colors_stay_stable_through_held_key_frames(test_cx: &mut gpui::TestAppContext) {

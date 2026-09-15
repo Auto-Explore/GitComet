@@ -950,6 +950,8 @@ impl TextInput {
     pub(super) fn queue_cursor_autoscroll(&mut self) {
         self.interaction.pending_cursor_autoscroll = true;
         self.interaction.cursor_autoscroll_retries_remaining = TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
+        self.interaction.cursor_autoscroll_layout_waits_remaining =
+            TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
     }
 
     pub(super) fn resolve_provider_highlights(
@@ -1206,57 +1208,6 @@ impl TextInput {
         // Protect even an unchanged count: a late estimator may disagree with
         // shaping, including on the very frame that launched its job.
         self.wrap.row_counts_current[line_ix] = true;
-        changed
-    }
-
-    pub(super) fn apply_pending_dirty_wrap_updates(
-        &mut self,
-        display_text: &str,
-        line_starts: &[usize],
-        rounded_wrap_width: Pixels,
-        font_size: Pixels,
-    ) -> bool {
-        if self.wrap.dirty_ranges.is_empty() {
-            return false;
-        }
-
-        let line_count = line_starts.len().max(1);
-        if line_count == 0 {
-            self.wrap.dirty_ranges.clear();
-            return false;
-        }
-
-        let mut ranges = self.take_normalized_wrap_dirty_ranges(line_count);
-        let dirty_line_count = ranges
-            .iter()
-            .map(|range| range.end.saturating_sub(range.start))
-            .sum::<usize>();
-        if dirty_line_count > TEXT_INPUT_WRAP_DIRTY_SYNC_LINE_LIMIT {
-            for range in ranges {
-                self.wrap.row_counts_current[range].fill(false);
-            }
-            self.request_wrap_recompute();
-            return false;
-        }
-
-        let wrap_columns = wrap_columns_for_width(rounded_wrap_width, font_size);
-        let mut changed = false;
-        for range in ranges.drain(..) {
-            for line_ix in range {
-                // Dirty wrap patches only need updated row counts here; the
-                // visible-row pass below shapes whichever lines enter view.
-                let new_rows = estimate_wrap_rows_for_line(
-                    line_text_for_index(display_text, line_starts, line_ix),
-                    wrap_columns,
-                )
-                .max(1);
-                let old_rows = self.wrap.row_counts[line_ix].max(1);
-                if old_rows != new_rows {
-                    self.wrap.row_counts[line_ix] = new_rows;
-                    changed = true;
-                }
-            }
-        }
         changed
     }
 
@@ -1893,7 +1844,7 @@ impl TextInput {
                 (self.layout.line_height * cache.rows as f32 - text_bounds.size.height).abs()
                     > px(1.0)
             })
-            && self.interaction.cursor_autoscroll_retries_remaining > 0;
+            && self.interaction.cursor_autoscroll_layout_waits_remaining > 0;
         let caret_margin =
             px(10.0).min(((viewport_height - self.layout.line_height) / 2.0).max(px(0.0)));
 
@@ -1925,6 +1876,8 @@ impl TextInput {
         let moved = current.y != -target_scroll;
         if moved {
             handle.set_offset(point(current.x, -target_scroll));
+            self.interaction.cursor_autoscroll_layout_waits_remaining =
+                TEXT_INPUT_CURSOR_AUTOSCROLL_RETRIES;
         }
         // Scrolling reveals lines that may still have estimated wrap counts.
         // Keep the reveal alive through their shaping and the following layout,
@@ -1932,7 +1885,12 @@ impl TextInput {
         // A fixed retry budget prevents notifications from continuing forever.
         let cursor_will_be_visible =
             cursor_top >= target_scroll && cursor_bottom <= target_scroll + viewport_height;
-        if (waiting_for_layout || (self.soft_wrap && moved) || !cursor_will_be_visible)
+        if waiting_for_layout {
+            // Waiting for the parent consumes a separate allowance: otherwise
+            // a slow layout can use every attempt before we reach the target.
+            self.interaction.cursor_autoscroll_layout_waits_remaining -= 1;
+            self.interaction.pending_cursor_autoscroll = true;
+        } else if ((self.soft_wrap && moved) || !cursor_will_be_visible)
             && self.interaction.cursor_autoscroll_retries_remaining > 0
         {
             self.interaction.pending_cursor_autoscroll = true;
@@ -3358,7 +3316,11 @@ impl TextInput {
     }
 
     pub(super) fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end)
+        // Normalize at the platform boundary, before row caches, highlight
+        // deltas and the text model can interpret the same IME edit differently.
+        self.normalized_utf8_range(
+            self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end),
+        )
     }
 }
 

@@ -771,6 +771,8 @@ pub(super) struct InteractionState {
     /// Bounds follow-up frames while the destination's wrapped rows and the
     /// parent scroll extent catch up with a caret reveal.
     pub(super) cursor_autoscroll_retries_remaining: u8,
+    /// Waiting for a new parent extent must not spend destination reveals.
+    pub(super) cursor_autoscroll_layout_waits_remaining: u8,
     pub(super) has_focus: bool,
     pub(super) cursor_blink_visible: bool,
     pub(super) cursor_blink_task: Option<gpui::Task<()>>,
@@ -802,6 +804,7 @@ impl InteractionState {
             content_width_layout: false,
             pending_cursor_autoscroll: false,
             cursor_autoscroll_retries_remaining: 0,
+            cursor_autoscroll_layout_waits_remaining: 0,
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,

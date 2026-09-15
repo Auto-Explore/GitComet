@@ -471,12 +471,23 @@ impl Element for TextElement {
             for rows in &mut input.wrap.row_counts {
                 *rows = (*rows).max(1);
             }
-            let mut row_counts_changed = input.apply_pending_dirty_wrap_updates(
-                display_text_str,
-                line_starts.as_ref(),
-                rounded_wrap_width,
-                font_size,
-            );
+            let dirty_ranges = input.take_normalized_wrap_dirty_ranges(line_count);
+            let dirty_line_count = dirty_ranges.iter().map(Range::len).sum::<usize>();
+            let mut pending_lines = Vec::new();
+            if dirty_line_count <= TEXT_INPUT_WRAP_DIRTY_SYNC_LINE_LIMIT {
+                // A normal edit keeps its last measured height until we shape
+                // its current text, even when the edited line is off-screen.
+                // Feeding a monospace estimate through here first made the
+                // same line shrink and grow again during a single keystroke.
+                pending_lines.extend(dirty_ranges.into_iter().flatten());
+            } else {
+                // Bulk replacements remain bounded; the visible portion is
+                // still measured below before this frame is painted.
+                for range in dirty_ranges {
+                    input.wrap.row_counts_current[range].fill(false);
+                }
+                input.request_wrap_recompute();
+            }
             input.maybe_recompute_wrap_rows(
                 display_text_str,
                 line_starts.as_ref(),
@@ -486,21 +497,9 @@ impl Element for TextElement {
                 cx,
             );
 
+            let cursor_line_ix = line_index_for_offset(line_starts.as_ref(), cursor, line_count);
+            pending_lines.push(cursor_line_ix);
             let mut y_offsets = vec![Pixels::ZERO; line_count];
-            let mut y = Pixels::ZERO;
-            for (ix, rows) in input.wrap.row_counts.iter().enumerate() {
-                y_offsets[ix] = y;
-                y += line_height * (*rows as f32).max(1.0);
-            }
-
-            let mut visible_line_range = visible_wrapped_line_range(
-                &y_offsets,
-                input.wrap.row_counts.as_slice(),
-                line_height,
-                visible_top,
-                visible_bottom,
-                TEXT_INPUT_GUARD_ROWS,
-            );
             let mut lines = (0..line_count)
                 .map(|_| WrappedLine::default())
                 .collect::<Vec<_>>();
@@ -509,134 +508,92 @@ impl Element for TextElement {
                 text: display_text_str,
                 starts: line_starts.as_ref(),
             };
-            let mut streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
-                &wrapped_line_source,
-                line_starts.as_ref(),
-                visible_line_range.clone(),
-                &shape_style,
-            );
-
-            for line_ix in visible_line_range.clone() {
-                let precomputed_runs = visible_window_runs_for_line_ix(
-                    streamed_line_runs.as_deref(),
-                    visible_line_range.start,
-                    line_ix,
-                );
-                let wrapped = shape_wrapped_line(
-                    LineShapeInput {
-                        line_ix,
-                        line_start: line_starts.get(line_ix).copied().unwrap_or(0),
-                        line_text: line_text_for_index(
-                            display_text_str,
-                            line_starts.as_ref(),
-                            line_ix,
-                        ),
-                    },
-                    wrap_width,
-                    precomputed_runs,
-                    &shape_style,
-                    window,
-                );
-                let rows = wrapped.wrap_boundaries().len().saturating_add(1).max(1);
-                row_counts_changed |= input.set_measured_wrap_rows(line_ix, rows);
-                if let Some(slot) = lines.get_mut(line_ix) {
-                    *slot = wrapped;
-                }
-                if let Some(mask) = shaped_mask.get_mut(line_ix) {
-                    *mask = true;
-                }
-            }
-
-            let cursor_line_ix = line_index_for_offset(line_starts.as_ref(), cursor, line_count);
-            if cursor_line_ix < line_count
-                && (cursor_line_ix < visible_line_range.start
-                    || cursor_line_ix >= visible_line_range.end)
-            {
-                let wrapped = shape_wrapped_line(
-                    LineShapeInput {
-                        line_ix: cursor_line_ix,
-                        line_start: line_starts.get(cursor_line_ix).copied().unwrap_or(0),
-                        line_text: line_text_for_index(
-                            display_text_str,
-                            line_starts.as_ref(),
-                            cursor_line_ix,
-                        ),
-                    },
-                    wrap_width,
-                    None,
-                    &shape_style,
-                    window,
-                );
-                let rows = wrapped.wrap_boundaries().len().saturating_add(1).max(1);
-                row_counts_changed |= input.set_measured_wrap_rows(cursor_line_ix, rows);
-                if let Some(slot) = lines.get_mut(cursor_line_ix) {
-                    *slot = wrapped;
-                }
-                if let Some(mask) = shaped_mask.get_mut(cursor_line_ix) {
-                    *mask = true;
-                }
-            }
-
-            if row_counts_changed {
-                y = Pixels::ZERO;
+            let mut visible_line_range;
+            loop {
+                let mut y = Pixels::ZERO;
                 for (ix, rows) in input.wrap.row_counts.iter().enumerate() {
                     y_offsets[ix] = y;
-                    y += line_height * (*rows as f32).max(1.0);
+                    y += line_height * *rows as f32;
                 }
                 visible_line_range = visible_wrapped_line_range(
                     &y_offsets,
-                    input.wrap.row_counts.as_slice(),
+                    &input.wrap.row_counts,
                     line_height,
                     visible_top,
                     visible_bottom,
                     TEXT_INPUT_GUARD_ROWS,
                 );
-                streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
+                let streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
                     &wrapped_line_source,
                     line_starts.as_ref(),
                     visible_line_range.clone(),
                     &shape_style,
                 );
-                for line_ix in visible_line_range.clone() {
-                    if shaped_mask.get(line_ix).copied().unwrap_or(false) {
+                pending_lines.extend(visible_line_range.clone());
+                let mut rows_changed = false;
+                for line_ix in pending_lines.drain(..) {
+                    if shaped_mask[line_ix] {
                         continue;
                     }
-                    let precomputed_runs = visible_window_runs_for_line_ix(
-                        streamed_line_runs.as_deref(),
-                        visible_line_range.start,
-                        line_ix,
-                    );
+                    let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
+                    let line_text = line_text_for_index(display_text_str, &line_starts, line_ix);
+                    let precomputed_runs = visible_line_range
+                        .contains(&line_ix)
+                        .then(|| {
+                            visible_window_runs_for_line_ix(
+                                streamed_line_runs.as_deref(),
+                                visible_line_range.start,
+                                line_ix,
+                            )
+                        })
+                        .flatten();
+                    // Off-screen edits need the same font runs they would use
+                    // on-screen; a provider's visible-window result need not
+                    // include those bytes (bold text can also change wrapping).
+                    let offscreen_highlights = (!visible_line_range.contains(&line_ix)
+                        && input.highlight.provider.is_some())
+                    .then(|| {
+                        input.effective_highlights_for_window(
+                            line_start..line_start + line_text.len(),
+                        )
+                    });
+                    if offscreen_highlights
+                        .as_ref()
+                        .is_some_and(|resolved| resolved.pending)
+                    {
+                        input.ensure_highlight_provider_poll(cx);
+                    }
+                    let line_style = TextShapeStyle {
+                        highlights: offscreen_highlights
+                            .as_ref()
+                            .map(|resolved| resolved.highlights.as_slice())
+                            .or(shape_style.highlights),
+                        ..shape_style
+                    };
                     let wrapped = shape_wrapped_line(
                         LineShapeInput {
                             line_ix,
-                            line_start: line_starts.get(line_ix).copied().unwrap_or(0),
-                            line_text: line_text_for_index(
-                                display_text_str,
-                                line_starts.as_ref(),
-                                line_ix,
-                            ),
+                            line_start,
+                            line_text,
                         },
                         wrap_width,
                         precomputed_runs,
-                        &shape_style,
+                        &line_style,
                         window,
                     );
-                    let rows = wrapped.wrap_boundaries().len().saturating_add(1).max(1);
-                    input.set_measured_wrap_rows(line_ix, rows);
-                    if let Some(slot) = lines.get_mut(line_ix) {
-                        *slot = wrapped;
-                    }
-                    if let Some(mask) = shaped_mask.get_mut(line_ix) {
-                        *mask = true;
-                    }
+                    rows_changed |= input.set_measured_wrap_rows(
+                        line_ix,
+                        wrapped.wrap_boundaries().len().saturating_add(1),
+                    );
+                    lines[line_ix] = wrapped;
+                    shaped_mask[line_ix] = true;
                 }
-                // The additional visible lines may also differ from their
-                // estimates. Paint and hit testing must share the final rows.
-                y = Pixels::ZERO;
-                for (ix, rows) in input.wrap.row_counts.iter().enumerate() {
-                    y_offsets[ix] = y;
-                    y += line_height * *rows as f32;
+                if !rows_changed {
+                    break;
                 }
+                // Shorter measurements can bring more lines into view. Keep
+                // shaping until the final visible range is covered, with each
+                // logical line shaped at most once in this frame.
             }
 
             let total_rows = total_wrap_rows(input.wrap.row_counts.as_slice());
