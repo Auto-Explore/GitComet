@@ -1541,7 +1541,7 @@ impl GitCometView {
             submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
             startup_repo_bootstrap_pending,
-            splash_backdrop_image: splash::load_splash_backdrop_image(),
+            splash_backdrop_image: splash::load_splash_backdrop_image(initial_theme.is_dark),
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             synced_repo_paths: std::sync::Arc::from(Vec::new()),
@@ -1660,6 +1660,7 @@ impl GitCometView {
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         let theme = theme.with_appearance(crate::appearance::current(cx));
+        self.splash_backdrop_image = splash::load_splash_backdrop_image(theme.is_dark);
         self.theme = theme;
         for session in self.terminal_sessions.values() {
             for instance in &session.instances {
