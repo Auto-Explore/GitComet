@@ -1,7 +1,6 @@
 use crate::theme::{AppTheme, composite_over};
 use gpui::prelude::*;
 use gpui::{CursorStyle, Div, Rgba, Stateful, px};
-use palette::IntoColor;
 
 /// Semantic state for an interactive list/tree row.
 ///
@@ -105,7 +104,7 @@ impl InteractiveRowStyle {
         // An inset shadow paints the focus ring without introducing border
         // width into layout when a row gains focus.
         gpui::BoxShadow {
-            color: self.focus_ring.into_color(),
+            color: self.focus_ring.into(),
             offset: gpui::point(px(0.0), px(0.0)),
             blur_radius: px(0.0),
             spread_radius: px(self.focus_spread),
@@ -151,7 +150,7 @@ impl InteractiveRowStyle {
 /// [`InteractiveRowExt`] draw the same ring rather than inventing one.
 fn selection_outline_shadow(color: Rgba) -> gpui::BoxShadow {
     gpui::BoxShadow {
-        color: color.into_color(),
+        color: color.into(),
         offset: gpui::point(px(0.0), px(0.0)),
         blur_radius: px(0.0),
         spread_radius: px(1.0),
@@ -245,7 +244,7 @@ mod tests {
         assert_eq!(outline.spread_radius, px(1.0));
         assert_eq!(
             outline.color,
-            theme.colors.interaction.selected_indicator.into_color()
+            theme.colors.interaction.selected_indicator.into()
         );
     }
 
