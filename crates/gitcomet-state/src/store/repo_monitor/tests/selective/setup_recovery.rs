@@ -137,6 +137,79 @@ fn corrupt_index_is_not_treated_as_an_empty_repository() {
     assert!(load_gitignore_rules(&root).failed);
 }
 
+#[test]
+fn root_replacement_during_failed_discovery_retries_with_the_new_repository() {
+    struct ReplacingBackend {
+        replacement: std::sync::Mutex<Option<PathBuf>>,
+    }
+    impl GitBackend for ReplacingBackend {
+        fn open(
+            &self,
+            root: &Path,
+        ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>>
+        {
+            gitcomet_git_gix::GixBackend.open(root)
+        }
+
+        fn repository_watch_info(
+            &self,
+            root: &Path,
+        ) -> gitcomet_core::services::Result<Option<gitcomet_core::services::RepositoryWatchInfo>>
+        {
+            let result = gitcomet_git_gix::GixBackend.repository_watch_info(root);
+            if let Some(replacement) = self.replacement.lock().unwrap().take() {
+                assert!(result.is_err(), "discovery must observe the missing root");
+                // Finish the rename between the failed read and its caller's
+                // error handling, without relying on thread scheduling.
+                fs::rename(replacement, root).unwrap();
+            }
+            result
+        }
+
+        fn worktree_ignore_matcher(
+            &self,
+            root: &Path,
+        ) -> gitcomet_core::services::Result<Option<Box<dyn WorktreeIgnoreMatcher>>> {
+            gitcomet_git_gix::GixBackend.worktree_ignore_matcher(root)
+        }
+    }
+
+    let temp = unique_temp_dir("gitcomet-replaced-root-discovery");
+    let base = normalized(&temp.path().canonicalize().unwrap());
+    let root = base.join("repository");
+    let replacement = base.join("replacement");
+    for checkout in [&root, &replacement] {
+        init_repo_for_ignore_tests(checkout);
+        fs::create_dir_all(checkout.join("generated/nested")).unwrap();
+    }
+    fs::write(root.join(".gitignore"), "generated/\n").unwrap();
+    let backend = Arc::new(ReplacingBackend {
+        replacement: std::sync::Mutex::new(None),
+    });
+    let mut rules = TestRules::load(&root, backend.clone());
+    assert!(rules.is_ignored_rel(Path::new("generated"), Some(true)));
+
+    fs::rename(&root, base.join("retired")).unwrap();
+    *backend.replacement.lock().unwrap() = Some(replacement);
+    rules.reload(&root);
+    assert!(
+        rules.failed,
+        "the first discovery must fail in the rename gap"
+    );
+
+    let (_watcher, outcome, _rx) = rules.start_watcher(&root);
+    assert_eq!(outcome, WatchSetupOutcome::Watching { failed_dirs: 0 });
+    assert!(!rules.failed);
+    assert!(!rules.is_ignored_rel(Path::new("generated"), Some(true)));
+    assert!(
+        rules
+            .state
+            .plan
+            .worktree_dirs
+            .contains(&root.join("generated/nested"))
+    );
+}
+
 fn changed_snapshot_during_replacement(index: bool) {
     let (_temp, root) = repository();
     fs::create_dir_all(root.join("vendor/pkg")).unwrap();

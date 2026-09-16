@@ -66,8 +66,37 @@ fn replacing_repository_root_detaches_old_tree_and_watches_replacement() {
     for (cycle, replacement) in replacements.iter().enumerate() {
         let retired = temp.path().join(format!("retired-{cycle}"));
         fs::rename(&root, &retired).unwrap();
+        if cycle == 1 {
+            // Force one revalidation inside the non-atomic rename gap. The
+            // missing root legitimately degrades coverage; its replacement
+            // must recover on input revalidation, before the 120-second retry.
+            monitor.revalidate();
+            assert!(matches!(
+                monitor.rx.recv_timeout(Duration::from_secs(10)),
+                Ok(Msg::RepoWatchDegraded { .. })
+            ));
+        }
         fs::rename(replacement, &root).unwrap();
-        monitor.refresh();
+        // Even back-to-back renames can straddle an idle tick on a busy runner.
+        // Allow the transient warning, then require a refresh and settled,
+        // working coverage of the replacement below.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match monitor
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                Ok(Msg::RepoWatchDegraded {
+                    reason:
+                        RepoWatchDegradedReason::IgnorePolicyFailed
+                        | RepoWatchDegradedReason::WatchLimitReached { .. },
+                    ..
+                }) => {}
+                Ok(Msg::RepoExternallyChanged { .. }) => break,
+                other => panic!("root replacement did not refresh: {other:?}"),
+            }
+        }
+        monitor.settle();
         let before = monitor.native_events.load(Ordering::Relaxed);
         fs::write(retired.join("source/nested/stale.txt"), "old tree").unwrap();
         monitor.quiet();
