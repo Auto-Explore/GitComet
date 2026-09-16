@@ -855,6 +855,8 @@ pub struct TextInput {
     pub(super) multiline: bool,
     pub(super) read_only: bool,
     pub(super) chromeless: bool,
+    /// Read-only labels inherit surrounding typography and size to their text.
+    pub(super) display_text: bool,
     pub(super) soft_wrap: bool,
     pub(super) min_lines: u32,
     pub(super) display_truncation: Option<TextTruncationProfile>,

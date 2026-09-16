@@ -87,6 +87,7 @@ impl TextInput {
             multiline: options.multiline,
             read_only: options.read_only,
             chromeless: options.chromeless,
+            display_text: false,
             soft_wrap: options.soft_wrap,
             min_lines: options.min_lines,
             display_truncation: None,
@@ -449,26 +450,62 @@ impl TextInput {
         self.style.text
     }
 
+    #[cfg(test)]
+    pub(crate) fn debug_displayed_single_line(&self) -> Option<&str> {
+        match self.layout.last.as_ref()? {
+            TextInputLayout::TruncatedSingleLine(line) => Some(line.display_text.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Opt into label typography without changing the defaults for form inputs.
+    pub(crate) fn set_display_text(&mut self, cx: &mut Context<Self>) {
+        assert!(self.read_only && self.chromeless);
+        self.display_text = true;
+        cx.notify();
+    }
+
+    pub(crate) fn has_selection_or_drag(&self) -> bool {
+        !self.selection.range.is_empty() || self.interaction.is_selecting
+    }
+
+    /// A live read-only log may append while a user is selecting earlier text.
+    /// Replacements (including front truncation) deliberately reset selection.
+    pub(crate) fn set_text_preserving_selection_on_append(
+        &mut self,
+        text: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        assert!(self.read_only);
+        self.update_text(text.into(), true, cx);
+    }
+
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        let text = text.into();
+        self.update_text(text.into(), false, cx);
+    }
+
+    fn update_text(&mut self, text: SharedString, preserve_append: bool, cx: &mut Context<Self>) {
         if self.content.as_ref() == text.as_ref() {
             return;
         }
+        let preserve_selection = preserve_append && text.starts_with(self.content.as_ref());
         // Computed before the overwrite so highlights already on screen can ride
         // along; the equality check above keeps this O(n) scan off the hot path.
         let text_edit_delta = utf8_edit_delta_between_texts(self.content.as_ref(), text.as_ref());
         self.content.set_text(text.as_ref());
         self.protected_ranges = Arc::from([]);
         self.rebuild_content_width_cache_if_present();
-        self.selection.range = self.content.len()..self.content.len();
-        self.selection.reversed = false;
+        if !preserve_selection {
+            self.selection.range = self.content.len()..self.content.len();
+            self.selection.reversed = false;
+            self.interaction.is_selecting = false;
+            self.interaction.mouse_selection_anchor = None;
+            self.interaction.pending_mouse_selection_anchor = None;
+            self.layout.scroll_x = px(0.0);
+        }
         self.selection.undo_stack.clear();
         self.selection.redo_stack.clear();
-        self.interaction.is_selecting = false;
-        self.interaction.mouse_selection_anchor = None;
-        self.interaction.pending_mouse_selection_anchor = None;
         self.interaction.cursor_blink_visible = true;
-        self.layout.scroll_x = px(0.0);
         self.invalidate_layout_caches();
         if self.multiline && self.soft_wrap {
             self.request_wrap_recompute();
@@ -640,6 +677,9 @@ impl TextInput {
     }
 
     pub(super) fn effective_line_height(&self, window: &Window) -> Pixels {
+        if self.display_text {
+            return window.line_height();
+        }
         if self.editor_font {
             return self.editor_line_height;
         }

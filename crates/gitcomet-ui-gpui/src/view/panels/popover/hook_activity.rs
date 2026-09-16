@@ -2,6 +2,131 @@ use super::*;
 use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::terminal_alacritty::{terminal_default_background, terminal_default_foreground};
 
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum TextSection {
+    Header,
+    History,
+    Detail,
+    Hooks,
+    Output,
+}
+
+struct TextField {
+    input: Entity<components::TextInput>,
+    section: TextSection,
+    seen: bool,
+}
+
+/// Entities survive streaming updates, but only the current dialog's fields
+/// are retained. History fields also survive switching the detail run.
+#[derive(Default)]
+pub(super) struct TextState {
+    repo_id: Option<RepoId>,
+    fields: rustc_hash::FxHashMap<String, TextField>,
+    run_clicks:
+        rustc_hash::FxHashMap<GitOperationId, crate::kit::click::SubtargetClick<GitOperationId>>,
+}
+
+impl TextState {
+    #[cfg(test)]
+    pub(super) fn input_for_test(&self, key: &str) -> Entity<components::TextInput> {
+        self.fields
+            .get(key)
+            .expect("hook activity text field")
+            .input
+            .clone()
+    }
+
+    pub(super) fn is_interacting(&self, section: TextSection, cx: &App) -> bool {
+        self.fields
+            .values()
+            .any(|field| field.section == section && field.input.read(cx).has_selection_or_drag())
+    }
+
+    fn clear_detail(&mut self) {
+        self.fields
+            .retain(|_, field| matches!(field.section, TextSection::Header | TextSection::History));
+    }
+}
+
+fn text(
+    this: &mut PopoverHost,
+    key: impl Into<String>,
+    value: impl Into<SharedString>,
+    section: TextSection,
+    cx: &mut gpui::Context<PopoverHost>,
+) -> gpui::Stateful<gpui::Div> {
+    let key = key.into();
+    let value = value.into();
+    let field = this
+        .hook_activity_text
+        .fields
+        .entry(key.clone())
+        .or_insert_with(|| {
+            let input = cx.new(|cx| {
+                let mut input = components::TextInput::new_inert(
+                    components::TextInputOptions {
+                        read_only: true,
+                        chromeless: true,
+                        multiline: section == TextSection::Output,
+                        soft_wrap: section == TextSection::Output,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                input.set_display_text(cx);
+                if section != TextSection::Output {
+                    input.set_display_truncation(Some(components::TextTruncationProfile::End), cx);
+                }
+                input
+            });
+            TextField {
+                input,
+                section,
+                seen: true,
+            }
+        });
+    field.seen = true;
+    field.input.update(cx, |input, cx| {
+        input.set_theme(this.theme, cx);
+        if section == TextSection::Output {
+            input.set_vertical_scroll_handle(Some(this.hook_activity_output_scroll.clone()));
+            input.set_text_preserving_selection_on_append(value, cx);
+        } else {
+            input.set_text(value, cx);
+            input.set_vertical_scroll_handle(match section {
+                TextSection::History => Some(this.hook_activity_history_scroll.clone()),
+                TextSection::Hooks => Some(this.hook_activity_hooks_scroll.clone()),
+                _ => None,
+            });
+        }
+    });
+    let selector = format!("hook_activity_text_{key}");
+    div()
+        .id(SharedString::from(selector.clone()))
+        .debug_selector(move || selector.clone())
+        .min_w(px(0.0))
+        .max_w_full()
+        .child(field.input.clone())
+}
+
+fn select_run(
+    this: &mut PopoverHost,
+    operation_id: GitOperationId,
+    cx: &mut gpui::Context<PopoverHost>,
+) {
+    if this.hook_activity_selected == Some(operation_id) {
+        return;
+    }
+    this.hook_activity_selected = Some(operation_id);
+    this.hook_activity_text.clear_detail();
+    this.hook_activity_hooks_scroll = ScrollHandle::new();
+    this.hook_activity_hooks_scroll.scroll_to_bottom();
+    this.hook_activity_output_scroll = ScrollHandle::new();
+    this.hook_activity_output_scroll.scroll_to_bottom();
+    cx.notify();
+}
+
 /// One side of the dialog.
 fn hook_activity_dialog_extent(
     available: Pixels,
@@ -121,6 +246,9 @@ fn history_row(
     let timestamp = operation_timestamp_label(this, operation);
     let selector = format!("hook_activity_run_{}", operation_id.0);
     let timestamp_selector = format!("hook_activity_run_timestamp_{}", operation_id.0);
+    let press_view = cx.entity();
+    let move_view = cx.entity();
+    let release_view = cx.entity();
 
     div()
         .id(("hook_activity_run", operation_id.0))
@@ -136,6 +264,50 @@ fn history_row(
         .items_center()
         .gap_2()
         .rounded(px(theme.radii.row))
+        .on_mouse_down_all(move |event, phase, hitbox, window, cx| {
+            if phase == gpui::DispatchPhase::Capture {
+                press_view.update(cx, |this, _| {
+                    this.hook_activity_text
+                        .run_clicks
+                        .entry(operation_id)
+                        .or_default()
+                        .press(hitbox.is_hovered(window).then_some(operation_id), event);
+                });
+            }
+        })
+        .on_mouse_move_all(move |event, phase, _, _, cx| {
+            if phase == gpui::DispatchPhase::Capture {
+                move_view.update(cx, |this, _| {
+                    if let Some(click) = this.hook_activity_text.run_clicks.get_mut(&operation_id) {
+                        click.moved(event);
+                    }
+                });
+            }
+        })
+        .on_mouse_up_all(move |event, phase, hitbox, window, cx| {
+            let hovered = hitbox.is_hovered(window);
+            if (phase == gpui::DispatchPhase::Capture && !hovered)
+                || (phase == gpui::DispatchPhase::Bubble && hovered)
+            {
+                release_view.update(cx, |this, cx| {
+                    let completed = this
+                        .hook_activity_text
+                        .run_clicks
+                        .get_mut(&operation_id)
+                        .and_then(|click| click.release(hovered.then_some(&operation_id), event))
+                        .is_some();
+                    let prefix = format!("run_{}_", operation_id.0);
+                    let selected_text =
+                        this.hook_activity_text.fields.iter().any(|(key, field)| {
+                            key.starts_with(&prefix)
+                                && !field.input.read(cx).selected_range().is_empty()
+                        });
+                    if completed && event.click_count == 1 && !selected_text {
+                        select_run(this, operation_id, cx);
+                    }
+                });
+            }
+        })
         .control_interaction(
             controls::InteractionStyle::new(theme),
             controls::InteractionState::default()
@@ -175,7 +347,13 @@ fn history_row(
                                 .whitespace_nowrap()
                                 .overflow_hidden()
                                 .when(selected, |label| label.font_weight(FontWeight::MEDIUM))
-                                .child(operation.label.clone()),
+                                .child(text(
+                                    this,
+                                    format!("run_{}_label", operation_id.0),
+                                    operation.label.clone(),
+                                    TextSection::History,
+                                    cx,
+                                )),
                         )
                         .child(
                             div()
@@ -183,7 +361,13 @@ fn history_row(
                                 .text_size(theme.ui_text(12.0))
                                 .text_color(color)
                                 .whitespace_nowrap()
-                                .child(status),
+                                .child(text(
+                                    this,
+                                    format!("run_{}_status", operation_id.0),
+                                    status,
+                                    TextSection::History,
+                                    cx,
+                                )),
                         ),
                 )
                 .child(
@@ -195,22 +379,20 @@ fn history_row(
                         .line_clamp(1)
                         .whitespace_nowrap()
                         .overflow_hidden()
-                        .child(timestamp),
+                        .child(text(
+                            this,
+                            format!("run_{}_timestamp", operation_id.0),
+                            timestamp,
+                            TextSection::History,
+                            cx,
+                        )),
                 ),
         )
         .on_activate(
             false,
             controls::ControlActivation::Action,
             cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                if this.hook_activity_selected == Some(operation_id) {
-                    return;
-                }
-                this.hook_activity_selected = Some(operation_id);
-                this.hook_activity_hooks_scroll = ScrollHandle::new();
-                this.hook_activity_hooks_scroll.scroll_to_bottom();
-                this.hook_activity_output_scroll = ScrollHandle::new();
-                this.hook_activity_output_scroll.scroll_to_bottom();
-                cx.notify();
+                select_run(this, operation_id, cx);
             }),
         )
 }
@@ -298,7 +480,7 @@ fn history_rail(
                 .text_size(theme.ui_text(12.0))
                 .font_weight(FontWeight::BOLD)
                 .text_color(theme.colors.foreground.secondary)
-                .child("RUNS"),
+                .child(text(this, "runs_heading", "RUNS", TextSection::Header, cx)),
         )
         .child(div().flex_1().min_h(px(0.0)).child(visible_scroll_surface(
             theme,
@@ -336,6 +518,10 @@ fn operation_detail(
         .flex_col()
         .gap_1()
         .children(operation.hooks.iter().enumerate().map(|(index, hook)| {
+            let key = format!(
+                "hook_{}_{}_{}",
+                operation_id.0, hook.id.sid, hook.id.child_id
+            );
             let hook_color = match hook.status {
                 GitHookRunStatus::Succeeded => theme.colors.status.success.foreground,
                 GitHookRunStatus::Failed => theme.colors.status.danger.foreground,
@@ -356,7 +542,13 @@ fn operation_detail(
                     div()
                         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                         .text_color(theme.colors.foreground.primary)
-                        .child(hook.name.clone()),
+                        .child(text(
+                            this,
+                            format!("{key}_name"),
+                            hook.name.clone(),
+                            TextSection::Hooks,
+                            cx,
+                        )),
                 )
                 .child(
                     div()
@@ -364,8 +556,20 @@ fn operation_detail(
                         .items_center()
                         .gap_2()
                         .text_color(hook_color)
-                        .child(hook_status_label(hook))
-                        .child(duration_label(hook.duration)),
+                        .child(text(
+                            this,
+                            format!("{key}_status"),
+                            hook_status_label(hook),
+                            TextSection::Hooks,
+                            cx,
+                        ))
+                        .child(text(
+                            this,
+                            format!("{key}_duration"),
+                            duration_label(hook.duration),
+                            TextSection::Hooks,
+                            cx,
+                        )),
                 )
         }));
     let hooks_scroll = this.hook_activity_hooks_scroll.clone();
@@ -413,14 +617,26 @@ fn operation_detail(
                 div()
                     .pb_2()
                     .text_color(theme.colors.status.warning.foreground)
-                    .child("Earlier hook output was truncated."),
+                    .child(text(
+                        this,
+                        "output_truncation",
+                        "Earlier hook output was truncated.",
+                        TextSection::Output,
+                        cx,
+                    )),
             )
         })
-        .child(if output.is_empty() {
-            "This hook did not write any output.".to_string()
-        } else {
-            output
-        });
+        .child(text(
+            this,
+            format!("output_{}", operation_id.0),
+            if output.is_empty() {
+                "This hook did not write any output.".to_string()
+            } else {
+                output
+            },
+            TextSection::Output,
+            cx,
+        ));
     let output_scroll = this.hook_activity_output_scroll.clone();
     let output_surface = visible_scroll_surface(
         theme,
@@ -454,7 +670,13 @@ fn operation_detail(
                 .text_size(theme.ui_text(12.0))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.colors.foreground.secondary)
-                .child("Hook output"),
+                .child(text(
+                    this,
+                    "output_heading",
+                    "Hook output",
+                    TextSection::Detail,
+                    cx,
+                )),
         );
     let mut output_view = div()
         .id("hook_activity_output_container")
@@ -574,21 +796,39 @@ fn operation_detail(
                                     div()
                                         .text_size(theme.ui_text(18.0))
                                         .font_weight(FontWeight::BOLD)
-                                        .child(operation.label.clone()),
+                                        .child(text(
+                                            this,
+                                            format!("detail_{}_label", operation_id.0),
+                                            operation.label.clone(),
+                                            TextSection::Detail,
+                                            cx,
+                                        )),
                                 )
                                 .child(
                                     div()
                                         .text_size(theme.ui_text(14.0))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(color)
-                                        .child(status_label(operation.status)),
+                                        .child(text(
+                                            this,
+                                            format!("detail_{}_status", operation_id.0),
+                                            status_label(operation.status),
+                                            TextSection::Detail,
+                                            cx,
+                                        )),
                                 ),
                         )
                         .child(
                             div()
                                 .text_size(theme.ui_text(14.0))
                                 .text_color(theme.colors.foreground.secondary)
-                                .child(duration_label(operation.duration)),
+                                .child(text(
+                                    this,
+                                    format!("detail_{}_duration", operation_id.0),
+                                    duration_label(operation.duration),
+                                    TextSection::Detail,
+                                    cx,
+                                )),
                         ),
                 )
                 .when_some(operation.context.clone(), |header, context| {
@@ -602,7 +842,13 @@ fn operation_detail(
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
-                            .child(context),
+                            .child(text(
+                                this,
+                                format!("detail_{}_context", operation_id.0),
+                                context,
+                                TextSection::Detail,
+                                cx,
+                            )),
                     )
                 }),
         )
@@ -619,6 +865,15 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    if this.hook_activity_text.repo_id != Some(repo_id) {
+        this.hook_activity_text = TextState {
+            repo_id: Some(repo_id),
+            ..Default::default()
+        };
+    }
+    for field in this.hook_activity_text.fields.values_mut() {
+        field.seen = false;
+    }
     let ui_scale = popover_ui_scale(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale);
     let window_size = window.window_bounds().get_bounds().size;
@@ -672,8 +927,10 @@ pub(super) fn panel(
     let selected_is_available = this
         .hook_activity_selected
         .is_some_and(|selected| operations.iter().any(|operation| operation.id == selected));
-    if !selected_is_available {
-        this.hook_activity_selected = operations.first().map(|operation| operation.id);
+    let fallback_selection = operations.first().map(|operation| operation.id);
+    if !selected_is_available && this.hook_activity_selected != fallback_selection {
+        this.hook_activity_selected = fallback_selection;
+        this.hook_activity_text.clear_detail();
         this.hook_activity_hooks_scroll = ScrollHandle::new();
         this.hook_activity_hooks_scroll.scroll_to_bottom();
         this.hook_activity_output_scroll = ScrollHandle::new();
@@ -766,7 +1023,13 @@ pub(super) fn panel(
             .text_size(theme.ui_text(14.0))
             .text_color(theme.colors.foreground.secondary)
             .bg(theme.colors.surface.canvas)
-            .child("No Git hooks have run in this repository during this session.")
+            .child(text(
+                this,
+                "empty",
+                "No Git hooks have run in this repository during this session.",
+                TextSection::Detail,
+                cx,
+            ))
             .into_any_element()
     } else {
         let detail = selected.map_or_else(
@@ -783,7 +1046,7 @@ pub(super) fn panel(
             .into_any_element()
     };
 
-    div()
+    let panel = div()
         .debug_selector(|| "hook_activity_panel".to_string())
         .w(width)
         .h(height)
@@ -827,7 +1090,13 @@ pub(super) fn panel(
                                         .line_clamp(1)
                                         .whitespace_nowrap()
                                         .overflow_hidden()
-                                        .child(header_title),
+                                        .child(text(
+                                            this,
+                                            "title",
+                                            header_title,
+                                            TextSection::Header,
+                                            cx,
+                                        )),
                                 )
                                 .child(
                                     div()
@@ -840,14 +1109,25 @@ pub(super) fn panel(
                                         .line_clamp(1)
                                         .whitespace_nowrap()
                                         .overflow_hidden()
-                                        .child(repository_path),
+                                        .child(text(
+                                            this,
+                                            "repository",
+                                            repository_path,
+                                            TextSection::Header,
+                                            cx,
+                                        )),
                                 ),
                         ),
                 )
                 .child(header_actions),
         )
         .child(super::popover_rule(theme))
-        .child(body)
+        .child(body);
+    this.hook_activity_text.fields.retain(|_, field| field.seen);
+    this.hook_activity_text
+        .run_clicks
+        .retain(|id, _| operations.iter().any(|operation| operation.id == *id));
+    panel
 }
 
 #[cfg(test)]

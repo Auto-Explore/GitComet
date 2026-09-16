@@ -209,8 +209,14 @@ impl PopoverHost {
                     .map(|repo| repo.feedback.hook_activity_rev)
             });
             let follow_hook_output = hook_activity_repo_id.is_some()
+                && !this
+                    .hook_activity_text
+                    .is_interacting(hook_activity::TextSection::Output, cx)
                 && scroll_is_near_bottom(&this.hook_activity_output_scroll, px(24.0));
             let follow_hook_list = hook_activity_repo_id.is_some()
+                && !this
+                    .hook_activity_text
+                    .is_interacting(hook_activity::TextSection::Hooks, cx)
                 && scroll_is_near_bottom(&this.hook_activity_hooks_scroll, px(24.0));
 
             let selected_action = this
@@ -855,6 +861,7 @@ impl PopoverHost {
             popover: None,
             popover_anchor: None,
             hook_activity_selected: None,
+            hook_activity_text: Default::default(),
             hook_activity_history_scroll: ScrollHandle::new(),
             hook_activity_hooks_scroll: ScrollHandle::new(),
             hook_activity_output_scroll: ScrollHandle::new(),
@@ -1049,6 +1056,19 @@ impl PopoverHost {
     }
 
     #[cfg(test)]
+    pub(in crate::view) fn hook_activity_text_for_test(
+        &self,
+        key: &str,
+    ) -> Entity<components::TextInput> {
+        self.hook_activity_text.input_for_test(key)
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn hook_activity_output_offset_for_test(&self) -> Point<Pixels> {
+        self.hook_activity_output_scroll.offset()
+    }
+
+    #[cfg(test)]
     pub(in crate::view) fn hook_activity_output_is_near_bottom_for_test(&self) -> bool {
         scroll_is_near_bottom(&self.hook_activity_output_scroll, px(24.0))
     }
@@ -1216,6 +1236,9 @@ impl PopoverHost {
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         let dismissing_unsaved_prompt = self.showing_unsaved_file_edits_prompt();
         let dismissing_hook_activity = self.is_hook_activity_workflow_open();
+        if dismissing_hook_activity {
+            self.hook_activity_text = Default::default();
+        }
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
@@ -2622,6 +2645,7 @@ impl PopoverHost {
                                 .map(|operation| operation.id)
                         });
                     self.hook_activity_selected = selected;
+                    self.hook_activity_text = Default::default();
                     self.hook_activity_history_scroll = ScrollHandle::new();
                     self.hook_activity_hooks_scroll = ScrollHandle::new();
                     self.hook_activity_hooks_scroll.scroll_to_bottom();

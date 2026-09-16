@@ -287,6 +287,7 @@ impl GitCometView {
             .retain(|chain| active_hook_chains.contains(chain));
         self.minimized_hook_activity_repos
             .retain(|repo_id| next.repos.iter().any(|repo| repo.id == *repo_id));
+        self.sync_minimized_hook_activity_indicator(cx);
 
         let newly_started_hook_chains = next_hook_progress
             .iter()

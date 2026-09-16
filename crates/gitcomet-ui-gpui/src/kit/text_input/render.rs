@@ -10,6 +10,24 @@ impl Render for TextInput {
         let entity_id = cx.entity().entity_id();
         let chromeless = self.chromeless;
         let multiline = self.multiline;
+        let display_width = (self.display_text && !multiline).then(|| {
+            let style = window.text_style();
+            let text: SharedString = self.text().to_owned().into();
+            let run = style.to_run(text.len());
+            let width = window
+                .text_system()
+                .shape_line(
+                    text,
+                    style.font_size.to_pixels(window.rem_size()),
+                    &[run],
+                    None,
+                )
+                .width;
+            // Explicit layout widths snap to the nearest device pixel. Round
+            // intrinsic text widths up first so a fractional glyph advance
+            // cannot shrink the label enough to trigger an ellipsis.
+            (width * window.scale_factor()).ceil() / window.scale_factor()
+        });
         self.appearance_metrics = crate::appearance::current(cx);
         self.editor_line_height = crate::ui_scale::design_px_from_window(
             crate::appearance::current(cx).editor_line_height(),
@@ -184,13 +202,15 @@ impl Render for TextInput {
                 input.on_pointer_click(MouseButton::Right, cx.listener(Self::on_right_click))
             })
             .line_height(self.effective_line_height(window))
-            .text_size(if self.editor_font {
-                crate::appearance::editor_size(window, cx)
-            } else {
-                crate::ui_scale::design_px_from_window(
-                    crate::appearance::current(cx).ui_text(13.0),
-                    window,
-                )
+            .when(!self.display_text, |d| {
+                d.text_size(if self.editor_font {
+                    crate::appearance::editor_size(window, cx)
+                } else {
+                    crate::ui_scale::design_px_from_window(
+                        crate::appearance::current(cx).ui_text(13.0),
+                        window,
+                    )
+                })
             })
             .when(!multiline && !chromeless, |d| {
                 d.h(crate::ui_scale::design_px_from_window(
@@ -247,6 +267,7 @@ impl Render for TextInput {
             outer = outer.w_full().min_w(px(0.0));
         }
         let mut outer = outer
+            .when_some(display_width, |d, width| d.w(width).max_w_full())
             .flex()
             .flex_col()
             // The outer field fills a multiline viewport while the inner field

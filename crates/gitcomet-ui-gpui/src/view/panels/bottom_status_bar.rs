@@ -80,6 +80,7 @@ pub(in super::super) struct BottomStatusBarView {
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     active_context_menu_invoker: Option<SharedString>,
+    minimized_hook_activity_repos: rustc_hash::FxHashSet<RepoId>,
     pro_launch_label: SharedString,
 }
 
@@ -106,6 +107,7 @@ impl BottomStatusBarView {
             _ui_model_subscription: subscription,
             root_view,
             active_context_menu_invoker: None,
+            minimized_hook_activity_repos: Default::default(),
             // Use local calendar days and keep the startup label for this window.
             pro_launch_label: pro_launch_label(jiff::Zoned::now().date()),
         }
@@ -134,6 +136,17 @@ impl BottomStatusBarView {
             })
             .unwrap_or((0, false));
         (repo_id, active, warning)
+    }
+
+    pub(in super::super) fn set_minimized_hook_activity_repos(
+        &mut self,
+        repos: &rustc_hash::FxHashSet<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.minimized_hook_activity_repos != *repos {
+            self.minimized_hook_activity_repos.clone_from(repos);
+            cx.notify();
+        }
     }
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -288,6 +301,8 @@ impl Render for BottomStatusBarView {
 
         let (active_repo_id, active_hook_count, has_hook_warning) =
             Self::hook_activity_summary(&self.state);
+        let keep_minimized =
+            active_repo_id.is_some_and(|id| self.minimized_hook_activity_repos.contains(&id));
         let activity_icon_color = if active_hook_count > 0 {
             theme.colors.accent.foreground
         } else if has_hook_warning {
@@ -333,6 +348,7 @@ impl Render for BottomStatusBarView {
                 icon.debug_selector(|| "bottom_hook_activity_warning".to_string())
             });
         let hook_activity_button = components::Button::new("bottom_hook_activity", "")
+            .selected(keep_minimized)
             .start_slot(activity_icon)
             .style(components::ButtonStyle::Subtle)
             .borderless()
@@ -350,7 +366,14 @@ impl Render for BottomStatusBarView {
                     cx,
                 );
             })
-            .gitcomet_tooltip(theme, "Git hook activity".into())
+            .gitcomet_tooltip(
+                theme,
+                if keep_minimized {
+                    "Git hook activity — keep minimized enabled".into()
+                } else {
+                    "Git hook activity".into()
+                },
+            )
             .debug_selector(|| "bottom_hook_activity".to_string());
 
         // Branding strip: the edition badge moved down here from the title bar,

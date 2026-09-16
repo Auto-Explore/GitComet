@@ -36,6 +36,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.minimized_hook_activity_repos.insert(repo_id);
+        self.sync_minimized_hook_activity_indicator(cx);
         self.minimize_hook_activity_chains(chains, cx);
     }
 
@@ -45,9 +46,16 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.minimized_hook_activity_repos.remove(&repo_id);
+        self.sync_minimized_hook_activity_indicator(cx);
         self.minimized_hook_activity_chains
             .retain(|(minimized_repo_id, _)| *minimized_repo_id != repo_id);
         cx.notify();
+    }
+
+    pub(super) fn sync_minimized_hook_activity_indicator(&mut self, cx: &mut gpui::Context<Self>) {
+        self.bottom_status_bar.update(cx, |bar, cx| {
+            bar.set_minimized_hook_activity_repos(&self.minimized_hook_activity_repos, cx);
+        });
     }
 
     pub(in crate::view) fn hook_activity_workflow_is_open(&self, cx: &App) -> bool {

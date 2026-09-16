@@ -218,6 +218,7 @@ pub(in super::super) struct PopoverHost {
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
     hook_activity_selected: Option<GitOperationId>,
+    hook_activity_text: hook_activity::TextState,
     hook_activity_history_scroll: ScrollHandle,
     hook_activity_hooks_scroll: ScrollHandle,
     hook_activity_output_scroll: ScrollHandle,
