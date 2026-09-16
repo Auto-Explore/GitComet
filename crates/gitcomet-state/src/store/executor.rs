@@ -63,6 +63,9 @@ pub(super) struct TaskExecutor {
 /// process survived it — unchanged by this recovery, which only decides whether
 /// the worker thread lives.
 fn worker_loop(rx: Arc<std::sync::Mutex<mpsc::Receiver<Task>>>) {
+    // These long-lived workers run unrelated jobs across repositories. Mark
+    // each worker once, before its first task, for mimalloc's locality heuristics.
+    rustfs_mimalloc::set_current_thread_in_threadpool();
     loop {
         let task = {
             let rx = rx.lock().unwrap_or_else(|e| e.into_inner());
