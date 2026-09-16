@@ -865,7 +865,6 @@ fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirma
         effects.as_slice(),
         [Effect::FetchAll {
             repo_id: RepoId(1),
-            prune: _,
             ..
         }]
     ));
@@ -1004,7 +1003,6 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         fetch_effects.as_slice(),
         [Effect::FetchAll {
             repo_id: RepoId(1),
-            prune: _,
             ..
         }]
     ));

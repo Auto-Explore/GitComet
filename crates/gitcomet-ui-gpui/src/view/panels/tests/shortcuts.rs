@@ -2767,7 +2767,6 @@ fn commit_message_text_input_f2_prefers_previous_diff_search_match(cx: &mut gpui
 #[gpui::test]
 fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2806,29 +2805,18 @@ fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpu
         let _ = window.draw(app);
     });
 
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
     cx.simulate_keystrokes("secondary-enter");
     draw_and_drain_test_window(cx);
 
-    wait_until(cx, "commit to be dispatched to store", |_cx| {
-        let snapshot = store_for_assert.snapshot();
-        snapshot
-            .repos
-            .iter()
-            .any(|repo| repo.id == repo_id && repo.commit_in_flight > 0)
-    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id) > ops_rev_before,
+        "expected secondary-enter from the commit message input to dispatch a commit"
+    );
 
     cx.update(|window, app| {
         let root = view.read(app);
-        let snapshot = root.store.snapshot();
-        let repo = snapshot
-            .repos
-            .iter()
-            .find(|repo| repo.id == repo_id)
-            .expect("expected repo in store snapshot");
-        assert_eq!(
-            repo.commit_in_flight, 1,
-            "expected secondary-enter from the commit message input to dispatch a commit"
-        );
         let focus = root
             .details_pane
             .read(app)

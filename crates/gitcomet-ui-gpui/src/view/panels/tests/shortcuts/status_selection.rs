@@ -568,12 +568,23 @@ fn diff_stage_and_advance_clears_only_the_consumed_singleton_selection(
                 assert!(selected(cx, &view, section.diff_area()).is_empty());
             }
             focus_diff_panel(cx, &view);
+            let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, REPO);
             cx.simulate_keystrokes(shortcut);
             wait_until_store_diff_target_path(cx, &view, Path::new(next));
+            // Against this backend the action completes at once with a
+            // missing-handle error, and that completion re-requests the status
+            // loads. Wait for it so the modeled refresh below is not reset.
+            wait_until(cx, "the stage action to complete", |cx| {
+                crate::view::test_support::repo_ops_rev(&view, cx, REPO) >= ops_rev_before + 2
+            });
             sync_store_snapshot(cx, &view);
-            // Model the status refresh that removes the file just acted on.
+            // Model the status refresh that removes the file just acted on,
+            // starting from the fixture's lists: the store's are reloading.
             let mut repo =
                 cx.update(|_window, app| view.read(app).store.snapshot().repos[0].clone());
+            let fixture = status_repo();
+            repo.worktree_status = fixture.worktree_status;
+            repo.staged_status = fixture.staged_status;
             let status = match section.diff_area() {
                 DiffArea::Unstaged => &mut repo.worktree_status,
                 DiffArea::Staged => &mut repo.staged_status,

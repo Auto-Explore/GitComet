@@ -1112,7 +1112,7 @@ fn unstage_all_leaves_conflicted_paths_and_the_merge_alone() {
         status
             .unstaged
             .iter()
-            .any(|entry| entry.path == PathBuf::from("c.txt") && entry.conflict.is_some()),
+            .any(|entry| entry.path == Path::new("c.txt") && entry.conflict.is_some()),
         "c.txt must still be reported as conflicted: {:?}",
         status.unstaged
     );

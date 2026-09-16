@@ -3834,10 +3834,11 @@ fn a_selection_on_a_worktree_that_went_clean_is_dropped() {
         line_stats: Default::default(),
     };
 
-    for (label, result) in [(
-        "a scan that no longer lists it",
-        Ok(vec![dirty("/tmp/wt/other")]),
-    )] {
+    {
+        let (label, result) = (
+            "a scan that no longer lists it",
+            Ok(vec![dirty("/tmp/wt/other")]),
+        );
         let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(2);
         let mut state = AppState::default();

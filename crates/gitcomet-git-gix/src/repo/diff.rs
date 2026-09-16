@@ -51,6 +51,9 @@ impl GixRepo {
 
         match target {
             DiffTarget::WorkingTree { path, area } => {
+                cmd.arg("--no-optional-locks")
+                    .arg("-c")
+                    .arg("diff.autoRefreshIndex=false");
                 cmd.arg("diff").arg("--no-ext-diff");
                 if matches!(area, DiffArea::Unstaged) {
                     // Match the staged view on Windows by suppressing CR-at-EOL-only
@@ -1669,6 +1672,44 @@ mod tests {
     }
 
     #[test]
+    fn worktree_diff_does_not_write_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        init_test_repo(root);
+        let file = root.join("file.txt");
+        std::fs::write(&file, "unchanged content\n").unwrap();
+        run_git(root, &["add", "file.txt"]);
+        run_git(root, &["commit", "-m", "Initial"]);
+        run_git(root, &["config", "diff.autoRefreshIndex", "true"]);
+        let index = root.join(".git/index");
+        let before = std::fs::read(&index).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new().set_modified(
+                    std::time::SystemTime::now() - std::time::Duration::from_secs(120),
+                ),
+            )
+            .unwrap();
+        let output = open_repo(root)
+            .build_unified_diff_command(&DiffTarget::WorkingTree {
+                path: "file.txt".into(),
+                area: DiffArea::Unstaged,
+            })
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            std::fs::read(index).unwrap(),
+            before,
+            "read-only diff refreshed index stat metadata"
+        );
+    }
+
+    #[test]
     fn read_worktree_image_file_bytes_rejects_oversized_file_before_reading() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("large.png");
@@ -1874,6 +1915,8 @@ mod tests {
         #[cfg(windows)]
         {
             let mut permissions = metadata.permissions();
+            // Windows-only cleanup; this never changes Unix permission bits.
+            #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             std::fs::set_permissions(&second, permissions)
                 .expect("restore writable cache for cleanup");
@@ -1965,6 +2008,8 @@ mod tests {
         #[cfg(windows)]
         {
             let mut permissions = metadata.permissions();
+            // Windows-only cleanup; this never changes Unix permission bits.
+            #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             std::fs::set_permissions(&cache_path, permissions)
                 .expect("restore writable cache for cleanup");
@@ -2016,6 +2061,8 @@ mod tests {
         #[cfg(windows)]
         {
             let mut permissions = metadata.permissions();
+            // Windows-only cleanup; this never changes Unix permission bits.
+            #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             std::fs::set_permissions(&second.path, permissions)
                 .expect("restore writable cache for cleanup");
