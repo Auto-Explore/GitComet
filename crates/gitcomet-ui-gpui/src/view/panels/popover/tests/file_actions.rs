@@ -917,7 +917,7 @@ fn commit_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
-fn commit_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestAppContext) {
+fn commit_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::TestAppContext) {
     let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
@@ -992,6 +992,22 @@ fn commit_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
         click_count: 1,
     });
 
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("initial".into()),
+        "a release without an entry press must not copy"
+    );
+    cx.simulate_mouse_down(
+        copy_center,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        copy_center,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+
     let mut expected = workdir.clone();
     expected.push("crates");
     expected.push("gitcomet-ui-gpui");
@@ -1005,7 +1021,7 @@ fn commit_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
 }
 
 #[gpui::test]
-fn status_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestAppContext) {
+fn status_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::TestAppContext) {
     let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
@@ -1089,6 +1105,22 @@ fn status_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
         button: gpui::MouseButton::Right,
         click_count: 1,
     });
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("initial".into()),
+        "a release without an entry press must not copy"
+    );
+    cx.simulate_mouse_down(
+        copy_center,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        copy_center,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
 
     let mut expected = workdir.clone();
     expected.push("crates");

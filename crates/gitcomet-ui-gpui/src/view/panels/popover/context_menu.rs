@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::ControlInteractionExt as _;
 
 mod branch;
 mod branch_group;
@@ -2328,8 +2329,7 @@ impl PopoverHost {
                         let tooltip_host_for_move = tooltip_host.clone();
                         let tooltip_text_for_move = tooltip_text.clone();
                         let tooltip_host_for_hover = tooltip_host.clone();
-                        let activate_on_left_release = model_for_mouse.clone();
-                        let activate_on_right_release = model_for_mouse.clone();
+                        let activate_on_release = model_for_mouse.clone();
                         let icon_slot = match icon {
                             Some(icon) => components::ContextMenuIconSlot::Icon(icon),
                             None if reserve_icon_column => {
@@ -2374,32 +2374,17 @@ impl PopoverHost {
                                 });
                             }
                         }))
-                        .when(!disabled, |row| {
-                            row.on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    this.context_menu_activate_model_entry(
-                                        &activate_on_left_release,
-                                        ix,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )
-                            .on_mouse_up(
-                                MouseButton::Right,
-                                cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    this.context_menu_activate_model_entry(
-                                        &activate_on_right_release,
-                                        ix,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )
-                        })
+                        .on_menu_activate(
+                            disabled,
+                            cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                                this.context_menu_activate_model_entry(
+                                    &activate_on_release,
+                                    ix,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
                         .into_any_element()
                     }
                 }

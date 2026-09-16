@@ -318,11 +318,12 @@ impl ActionBarView {
 
     fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_at(kind, anchor, window, cx);
         });
@@ -330,23 +331,14 @@ impl ActionBarView {
 
     fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
-        });
-    }
-
-    fn activate_context_menu_invoker(
-        &mut self,
-        invoker: SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, move |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 
@@ -420,10 +412,7 @@ impl Render for ActionBarView {
 
         // Workspace, branch and historical badges all light up while their own
         // picker is open, so they need the active invoker before any of them.
-        let menu_selected_bg = with_alpha(
-            theme.colors.accent.foreground,
-            if theme.is_dark { 0.26 } else { 0.20 },
-        );
+        let menu_selected_bg = components::control_open_background(theme);
         let active_invoker = self.active_context_menu_invoker.clone();
 
         // Keep the exit control visible throughout file browsing, including
@@ -445,12 +434,12 @@ impl Render for ActionBarView {
                     .text_color(purple)
                     .bg(with_alpha(purple, 0.12))
                     .hover_bg(with_alpha(purple, if theme.is_dark { 0.22 } else { 0.18 }))
-                    .selected(is_active)
+                    .open(is_active)
                     .selected_bg(with_alpha(purple, if theme.is_dark { 0.30 } else { 0.24 }))
                     .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                        this.activate_context_menu_invoker(invoker.clone(), cx);
                         this.open_popover_for_bounds(
-                            PopoverKind::BrowseHistoryMenu { repo_id },
+                            (PopoverKind::BrowseHistoryMenu { repo_id })
+                                .invoked_by(invoker.clone()),
                             bounds,
                             window,
                             cx,
@@ -590,12 +579,12 @@ impl Render for ActionBarView {
             components::Button::new("workspace_badge", label.clone())
                 .start_slot(icon("icons/git_worktree.svg", icon_primary))
                 .style(components::ButtonStyle::Subtle)
-                .selected(is_active)
+                .open(is_active)
                 .selected_bg(menu_selected_bg)
                 .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                    this.activate_context_menu_invoker(invoker.clone(), cx);
                     this.open_popover_for_bounds(
-                        PopoverKind::worktree(repo_id, WorktreePopoverKind::BadgePicker),
+                        (PopoverKind::worktree(repo_id, WorktreePopoverKind::BadgePicker))
+                            .invoked_by(invoker.clone()),
                         bounds,
                         window,
                         cx,
@@ -630,14 +619,14 @@ impl Render for ActionBarView {
                 components::Button::new("branch_badge", label)
                     .start_slot(icon("icons/git_branch.svg", icon_primary))
                     .style(components::ButtonStyle::Subtle)
-                    .selected(is_active)
+                    .open(is_active)
                     .selected_bg(menu_selected_bg)
                     .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                        this.activate_context_menu_invoker(invoker.clone(), cx);
                         this.open_popover_for_bounds(
-                            PopoverKind::BranchPicker {
+                            (PopoverKind::BranchPicker {
                                 purpose: BranchPickerPurpose::Checkout,
-                            },
+                            })
+                            .invoked_by(invoker.clone()),
                             bounds,
                             window,
                             cx,
@@ -681,15 +670,15 @@ impl Render for ActionBarView {
                     } else {
                         theme.colors.foreground.secondary
                     })
-                    .selected(is_active)
+                    .open(is_active)
                     .selected_bg(menu_selected_bg)
                     .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                        this.activate_context_menu_invoker(invoker.clone(), cx);
                         this.open_popover_for_bounds(
-                            PopoverKind::UpstreamPicker {
+                            (PopoverKind::UpstreamPicker {
                                 repo_id,
                                 branch: local_branch.clone(),
-                            },
+                            })
+                            .invoked_by(invoker.clone()),
                             bounds,
                             window,
                             cx,
@@ -717,7 +706,7 @@ impl Render for ActionBarView {
             icon_muted
         };
         let mut pull_main = components::Button::new("pull_main", "Pull")
-            .rounded_left()
+            .busy(pull_loading)
             .start_slot(if pull_loading {
                 spinner(("pull_spinner", active_repo_key), pull_color).into_any_element()
             } else {
@@ -742,50 +731,46 @@ impl Render for ActionBarView {
             icon_muted
         };
         let pull_menu = components::Button::new("pull_menu", "")
-            .rounded_right()
             .start_slot(icon("icons/chevron_down.svg", pull_menu_icon_color))
             .style(components::ButtonStyle::Subtle)
-            .selected(pull_picker_active)
+            .open(pull_picker_active)
             .selected_bg(menu_selected_bg);
 
         let pull = div()
             .id("pull")
             .debug_selector(|| "pull".to_string())
             .child(
-                components::SplitButton::new(
-                    pull_main
-                        .disabled(!pull_default_enabled || !pull_request_enabled)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            let Some(repo) = this.active_repo() else {
-                                return;
-                            };
-                            let repo_id = repo.id;
-                            match pull_request(repo) {
-                                PullRequest::Pull => this.store.dispatch(Msg::Pull {
-                                    repo_id,
-                                    mode: PullMode::Default,
-                                }),
-                                PullRequest::NoRemotes => this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Cannot pull: no remotes configured".to_string(),
-                                    cx,
-                                ),
-                                PullRequest::NotReady => {}
-                            }
-                        }),
-                    pull_menu.on_click_with_bounds(
-                        theme,
-                        cx,
-                        move |this, _e, bounds, window, cx| {
-                            this.activate_context_menu_invoker(pull_picker_invoker.clone(), cx);
-                            this.open_popover_for_bounds(
-                                PopoverKind::PullPicker,
-                                bounds,
-                                window,
+                components::SplitButton::action_menu(
+                    pull_main.disabled(!pull_default_enabled || !pull_request_enabled),
+                    pull_menu,
+                    theme,
+                    cx,
+                    |this, _e, _w, cx| {
+                        let Some(repo) = this.active_repo() else {
+                            return;
+                        };
+                        let repo_id = repo.id;
+                        match pull_request(repo) {
+                            PullRequest::Pull => this.store.dispatch(Msg::Pull {
+                                repo_id,
+                                mode: PullMode::Default,
+                            }),
+                            PullRequest::NoRemotes => this.push_toast(
+                                components::ToastKind::Error,
+                                "Cannot pull: no remotes configured".to_string(),
                                 cx,
-                            );
-                        },
-                    ),
+                            ),
+                            PullRequest::NotReady => {}
+                        }
+                    },
+                    move |this, _e, bounds, window, cx| {
+                        this.open_popover_for_bounds(
+                            PopoverKind::PullPicker.invoked_by(pull_picker_invoker.clone()),
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    },
                 )
                 .style(components::SplitButtonStyle::Borderless)
                 .render(theme, ui_scale_percent),
@@ -828,7 +813,7 @@ impl Render for ActionBarView {
                 .gitcomet_tooltip(theme, terminal_tooltip),
         );
         let mut push_main = components::Button::new("push_main", "Push")
-            .rounded_left()
+            .busy(push_loading)
             .start_slot(if push_loading {
                 spinner(("push_spinner", active_repo_key), push_color).into_any_element()
             } else {
@@ -853,61 +838,55 @@ impl Render for ActionBarView {
             icon_muted
         };
         let push_menu = components::Button::new("push_menu", "")
-            .rounded_right()
             .start_slot(icon("icons/chevron_down.svg", push_menu_icon_color))
             .style(components::ButtonStyle::Subtle)
-            .selected(push_picker_active)
+            .open(push_picker_active)
             .selected_bg(menu_selected_bg);
 
         let push = div()
             .id("push")
             .debug_selector(|| "push".to_string())
             .child(
-                components::SplitButton::new(
-                    push_main.disabled(!push_request_ready).on_click(
-                        theme,
-                        cx,
-                        |this, e, window, cx| {
-                            let Some(repo) = this.active_repo() else {
-                                return;
-                            };
-                            let repo_id = repo.id;
-                            match push_request(repo) {
-                                PushRequest::Push => this.store.dispatch(Msg::Push { repo_id }),
-                                PushRequest::SetUpstream { remote } => this.open_popover_at(
-                                    PopoverKind::PushSetUpstreamPrompt {
-                                        repo_id,
-                                        remote,
-                                        configure_only_for: None,
-                                    },
-                                    e.position(),
-                                    window,
-                                    cx,
-                                ),
-                                PushRequest::NoRemotes => {
-                                    this.push_toast(
-                                        components::ToastKind::Error,
-                                        "Cannot push: no remotes configured".to_string(),
-                                        cx,
-                                    );
-                                }
-                                PushRequest::NotReady => {}
-                            }
-                        },
-                    ),
-                    push_menu.on_click_with_bounds(
-                        theme,
-                        cx,
-                        move |this, _e, bounds, window, cx| {
-                            this.activate_context_menu_invoker(push_picker_invoker.clone(), cx);
-                            this.open_popover_for_bounds(
-                                PopoverKind::PushPicker,
-                                bounds,
+                components::SplitButton::action_menu(
+                    push_main.disabled(!push_request_ready),
+                    push_menu,
+                    theme,
+                    cx,
+                    |this, e, window, cx| {
+                        let Some(repo) = this.active_repo() else {
+                            return;
+                        };
+                        let repo_id = repo.id;
+                        match push_request(repo) {
+                            PushRequest::Push => this.store.dispatch(Msg::Push { repo_id }),
+                            PushRequest::SetUpstream { remote } => this.open_popover_at(
+                                PopoverKind::PushSetUpstreamPrompt {
+                                    repo_id,
+                                    remote,
+                                    configure_only_for: None,
+                                },
+                                e.position(),
                                 window,
                                 cx,
-                            );
-                        },
-                    ),
+                            ),
+                            PushRequest::NoRemotes => {
+                                this.push_toast(
+                                    components::ToastKind::Error,
+                                    "Cannot push: no remotes configured".to_string(),
+                                    cx,
+                                );
+                            }
+                            PushRequest::NotReady => {}
+                        }
+                    },
+                    move |this, _e, bounds, window, cx| {
+                        this.open_popover_for_bounds(
+                            PopoverKind::PushPicker.invoked_by(push_picker_invoker.clone()),
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    },
                 )
                 .style(components::SplitButtonStyle::Borderless)
                 .render(theme, ui_scale_percent),
@@ -926,12 +905,16 @@ impl Render for ActionBarView {
             components::Button::new("stash", action_label("Stash"))
                 .start_slot(icon(crate::view::icons::STASH_ICON_PATH, icon_primary))
                 .style(components::ButtonStyle::Subtle)
-                .selected(stash_prompt_active)
+                .open(stash_prompt_active)
                 .selected_bg(menu_selected_bg)
                 .disabled(!can_stash)
                 .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                    this.activate_context_menu_invoker(stash_prompt_invoker.clone(), cx);
-                    this.open_popover_for_bounds(PopoverKind::StashPrompt, bounds, window, cx);
+                    this.open_popover_for_bounds(
+                        PopoverKind::StashPrompt.invoked_by(stash_prompt_invoker.clone()),
+                        bounds,
+                        window,
+                        cx,
+                    );
                 })
                 .gitcomet_tooltip(
                     theme,
@@ -952,10 +935,9 @@ impl Render for ActionBarView {
             components::Button::new("create_branch", action_label("Branch"))
                 .start_slot(icon("icons/git_branch.svg", icon_primary))
                 .style(components::ButtonStyle::Subtle)
-                .selected(create_branch_active)
+                .open(create_branch_active)
                 .selected_bg(menu_selected_bg)
                 .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                    this.activate_context_menu_invoker(create_branch_invoker.clone(), cx);
                     if let Some(repo_id) = this.state.active_repo {
                         let target = this
                             .active_repo()
@@ -968,12 +950,13 @@ impl Render for ActionBarView {
                             })
                             .unwrap_or_else(|| "HEAD".to_string());
                         this.open_popover_for_bounds(
-                            PopoverKind::CreateBranchFromRefPrompt {
+                            (PopoverKind::CreateBranchFromRefPrompt {
                                 repo_id,
                                 target,
                                 source_selectable: true,
                                 name_prefix: String::new(),
-                            },
+                            })
+                            .invoked_by(create_branch_invoker.clone()),
                             bounds,
                             window,
                             cx,

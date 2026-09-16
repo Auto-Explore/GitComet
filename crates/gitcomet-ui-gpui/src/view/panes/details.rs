@@ -2311,11 +2311,12 @@ impl DetailsPaneView {
 
     pub(in super::super) fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
@@ -2329,11 +2330,12 @@ impl DetailsPaneView {
 
     pub(in super::super) fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
@@ -2342,16 +2344,6 @@ impl DetailsPaneView {
                     root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
                 });
             });
-        });
-    }
-
-    pub(in super::super) fn activate_context_menu_invoker(
-        &mut self,
-        invoker: SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, move |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 

@@ -1,3 +1,7 @@
+pub(crate) mod click;
+pub(crate) mod interaction;
+pub(crate) mod interaction_paint;
+pub(crate) mod menu;
 mod minimap;
 pub(crate) mod rope;
 mod scrollbar;

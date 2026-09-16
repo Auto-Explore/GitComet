@@ -895,6 +895,12 @@ impl MainPaneView {
             return false;
         };
 
+        // A row can contain several links: pairing the row alone is not enough.
+        if self.markdown_preview_link_span_at(visible_ix, region, window.mouse_position())
+            != Some((url.clone(), span.clone()))
+        {
+            return false;
+        }
         // Anchor on the link's own box, so the menu opens flush under the words
         // it describes rather than under the row that happens to hold them.
         let anchor = self
@@ -2895,9 +2901,8 @@ impl MainPaneView {
                 (0, None, 0, None, None)
             };
 
-        self.activate_context_menu_invoker("diff_editor_menu".into(), cx);
         self.open_popover_at(
-            PopoverKind::DiffEditorMenu {
+            (PopoverKind::DiffEditorMenu {
                 repo_id,
                 area,
                 path,
@@ -2908,7 +2913,8 @@ impl MainPaneView {
                 lines_count,
                 copy_text,
                 copy_target,
-            },
+            })
+            .invoked_by("diff_editor_menu".into()),
             anchor,
             window,
             cx,

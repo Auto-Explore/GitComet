@@ -1,4 +1,6 @@
 use super::super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::ui_scale::UiScale;
 use crate::view::date_time::{DateTimeFormat, Timezone};
 use crate::view::perf::{self, ViewPerfRenderLane};
@@ -429,12 +431,6 @@ impl ReflogPaneView {
         let target_for_menu = entry.new_id.clone();
         let selector_for_menu = selector.clone();
 
-        let row_bg = if is_selected {
-            theme.colors.interaction.selected_background
-        } else {
-            theme.colors.surface.canvas
-        };
-
         div()
             .id(("reflog_row", entry.index))
             .flex()
@@ -444,15 +440,12 @@ impl ReflogPaneView {
             .flex_none()
             .px(ui_scale.px(8.0))
             .gap(ui_scale.px(8.0))
-            .bg(row_bg)
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |s| {
-                if is_selected {
-                    s
-                } else {
-                    s.bg(theme.colors.interaction.hover_background)
-                }
-            })
+            .control_interaction(
+                controls::InteractionStyle::new(theme)
+                    .resting_background(theme.colors.surface.canvas),
+                controls::InteractionState::default()
+                    .selected(is_selected, theme.colors.interaction.selected_background),
+            )
             .child({
                 let marker = div()
                     .id(("reflog_row_marker", entry.index))
@@ -512,9 +505,10 @@ impl ReflogPaneView {
                     .text_size(theme.ui_text(12.0))
                     .child(message),
             )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+            .on_activate(
+                false,
+                controls::ControlActivation::Composite,
+                cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                     if let Some(panel) = this.panels.get_mut(&repo_id) {
                         panel.selected = Some(target.clone());
                     }
@@ -525,7 +519,7 @@ impl ReflogPaneView {
                     cx.notify();
                 }),
             )
-            .on_mouse_down(
+            .on_pointer_click(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
@@ -552,11 +546,12 @@ impl ReflogPaneView {
     /// here panics on the root→pane→root path, so hop through `cx.defer`.
     fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
@@ -586,16 +581,14 @@ impl ReflogPaneView {
             .map(|panel| panel.query_input.clone());
         let text_color = theme.colors.interaction.selected_foreground;
 
-        let close =
+        let close = components::on_nested_control_click(
             components::panel_tab_close("reflog_panel_tab_close", theme, ui_scale, text_color)
-                .gitcomet_tooltip(theme, "Close reflog".into())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                        cx.stop_propagation();
-                        this.close(repo_id, cx);
-                    }),
-                );
+                .gitcomet_tooltip(theme, "Close reflog".into()),
+            cx,
+            move |this, _e: &gpui::ClickEvent, _window, cx| {
+                this.close(repo_id, cx);
+            },
+        );
 
         let tab = components::panel_tab(
             "reflog_panel_tab",
@@ -603,8 +596,7 @@ impl ReflogPaneView {
             ui_scale,
             "icons/history.svg",
             "Reflog",
-            theme.colors.interaction.selected_background,
-            text_color,
+            true,
         )
         .debug_selector(|| "reflog_panel_tab".to_string())
         .child(close);

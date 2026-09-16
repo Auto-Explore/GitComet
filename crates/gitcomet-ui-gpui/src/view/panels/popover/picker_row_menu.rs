@@ -13,6 +13,7 @@
 //! of actions to keep in step.
 
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 /// The row whose menu is open, and where to draw it.
 #[derive(Clone)]
@@ -418,14 +419,10 @@ pub(super) fn layer(
                     entry
                         .disabled(disabled)
                         .selected(selected)
-                        .render(theme, ui_scale_percent, cx)
-                        .debug_selector(move || format!("picker_row_action_{ix}"))
-                        .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
-                            if disabled {
-                                return;
-                            }
+                        .on_select(theme, ui_scale_percent, cx, move |this, _e, window, cx| {
                             activate(this, (*action).clone(), window, cx);
-                        })),
+                        })
+                        .debug_selector(move || format!("picker_row_action_{ix}")),
                 );
             }
             // Clicked rather than keyboard-selected, and no row menu has one.
@@ -485,7 +482,7 @@ pub(super) fn layer(
                     // tooltip from the picker underneath stays painted wherever
                     // the pointer was when the menu opened.
                     .on_mouse_move(cx.listener(track_pointer_for_tooltips))
-                    .on_any_mouse_down(dismiss_menu),
+                    .on_any_pointer_click(dismiss_menu),
             )
             .child(
                 anchored().position(menu.position).child(

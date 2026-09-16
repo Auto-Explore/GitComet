@@ -295,6 +295,21 @@ impl ContextMenuEntry {
     ) -> Stateful<Div> {
         context_menu_entry(self, theme, ui_scale, cx)
     }
+
+    /// All menu entries share completed-click activation, focus preservation and the
+    /// same disabled gate, including menus embedded in pickers and prompts.
+    pub fn on_select<V: 'static>(
+        self,
+        theme: AppTheme,
+        ui_scale: impl Into<UiScale>,
+        cx: &gpui::Context<V>,
+        handler: impl Fn(&mut V, &gpui::ClickEvent, &mut gpui::Window, &mut gpui::Context<V>) + 'static,
+    ) -> Stateful<Div> {
+        use crate::kit::interaction::ControlInteractionExt as _;
+        let disabled = self.disabled;
+        self.render(theme, ui_scale, cx)
+            .on_menu_activate(disabled, cx.listener(handler))
+    }
 }
 
 fn context_menu_entry<V: 'static>(
@@ -322,28 +337,8 @@ fn context_menu_entry<V: 'static>(
     };
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
     let text_color = context_menu_entry_text_color(theme, disabled, icon_color);
-    // Text-alpha overlays stay visible on the elevated popover surface, where
-    // the `hover` token (tuned for the darker canvas) has no contrast.
-    let hover_overlay = theme.hover_overlay();
-    let active_overlay = theme.active_overlay();
-
-    let mut row = div()
-        .id(id)
-        .min_h(control_height_md(ui_scale))
-        .py(scaled_px(4.0))
-        .px(scaled_px(8.0))
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(scaled_px(20.0))
-        .rounded(px(theme.radii.row))
+    let mut row = crate::kit::menu::menu_item(id, theme, ui_scale, selected, disabled)
         .text_color(text_color)
-        .when(selected, |s| s.bg(hover_overlay))
-        .when(!disabled, |s| {
-            s.cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(hover_overlay))
-                .active(move |s| s.bg(active_overlay))
-        })
         .child(
             div()
                 .flex()

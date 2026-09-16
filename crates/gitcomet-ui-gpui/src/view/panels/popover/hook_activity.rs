@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::terminal_alacritty::{terminal_default_background, terminal_default_foreground};
 
 /// One side of the dialog.
@@ -135,14 +136,11 @@ fn history_row(
         .items_center()
         .gap_2()
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
-        .when(selected, |row| {
-            row.bg(theme.colors.interaction.pressed_background)
-        })
-        .when(!selected, |row| {
-            row.hover(move |style| style.bg(theme.colors.interaction.hover_background))
-                .active(move |style| style.bg(theme.colors.interaction.pressed_background))
-        })
+        .control_interaction(
+            controls::InteractionStyle::new(theme),
+            controls::InteractionState::default()
+                .selected(selected, theme.colors.interaction.selected_background),
+        )
         .child(
             div()
                 .when(selected, |dot| {
@@ -200,17 +198,21 @@ fn history_row(
                         .child(timestamp),
                 ),
         )
-        .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-            if this.hook_activity_selected == Some(operation_id) {
-                return;
-            }
-            this.hook_activity_selected = Some(operation_id);
-            this.hook_activity_hooks_scroll = ScrollHandle::new();
-            this.hook_activity_hooks_scroll.scroll_to_bottom();
-            this.hook_activity_output_scroll = ScrollHandle::new();
-            this.hook_activity_output_scroll.scroll_to_bottom();
-            cx.notify();
-        }))
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                if this.hook_activity_selected == Some(operation_id) {
+                    return;
+                }
+                this.hook_activity_selected = Some(operation_id);
+                this.hook_activity_hooks_scroll = ScrollHandle::new();
+                this.hook_activity_hooks_scroll.scroll_to_bottom();
+                this.hook_activity_output_scroll = ScrollHandle::new();
+                this.hook_activity_output_scroll.scroll_to_bottom();
+                cx.notify();
+            }),
+        )
 }
 
 fn visible_scroll_surface(

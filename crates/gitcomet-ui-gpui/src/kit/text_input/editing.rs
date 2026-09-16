@@ -3,11 +3,7 @@ use super::shaping::*;
 use super::state::*;
 use super::wrap::*;
 use super::*;
-
-/// Rows in the input's own context menu. It is a menu like any other, so its
-/// rows take the density ramp.
-const TEXT_INPUT_MENU_ROW_HEIGHT_PX: f32 = 24.0;
-const TEXT_INPUT_MENU_ROW_COMFORTABLE_HEIGHT_PX: f32 = 32.0;
+use crate::kit::interaction::ControlInteractionExt as _;
 
 /// The single replaced span between two texts, as `(old_range, new_range)`.
 ///
@@ -2892,6 +2888,18 @@ impl TextInput {
             self.move_to(index, cx);
         }
 
+        cx.notify();
+    }
+
+    pub(super) fn on_right_click(
+        &mut self,
+        event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.interaction.suppress_right_click {
+            return;
+        }
         self.interaction.context_menu = Some(TextInputContextMenuState {
             can_paste: crate::clipboard::read_text(cx).is_some(),
             anchor: event.position,
@@ -2904,47 +2912,26 @@ impl TextInput {
         label: &'static str,
         shortcut: SharedString,
         disabled: bool,
+        cx: &mut App,
     ) -> gpui::Stateful<Div> {
-        let mut row = div()
-            // The label is unique among the menu's rows, and the id is what
-            // makes the hover fill below actually repaint. Taken straight from
-            // the `'static` label -- ids are scoped to the input's own stateful
-            // root, and building one per render with `format!` would allocate a
-            // string that never changes.
-            .id(ElementId::from(label))
-            .h(px(self.appearance_metrics.row_height(
-                TEXT_INPUT_MENU_ROW_HEIGHT_PX,
-                TEXT_INPUT_MENU_ROW_COMFORTABLE_HEIGHT_PX,
-            )))
-            .w_full()
-            .px_2()
-            .rounded(px(2.0))
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .text_size(gpui::rems(self.appearance_metrics.ui_text(14.0) / 16.0))
-            .child(label)
-            .child(
-                div()
-                    .text_size(gpui::rems(self.appearance_metrics.ui_text(12.0) / 16.0))
-                    .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                    .text_color(self.style.placeholder)
-                    .child(shortcut),
-            );
-
-        if disabled {
-            row = row
-                .text_color(self.style.placeholder)
-                .cursor(CursorStyle::Arrow);
-        } else {
-            let hover = self.style.selection;
-            row = row
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(hover));
-        }
-
-        row
+        let mut menu_theme = self.style.menu_theme;
+        menu_theme.metrics = self.appearance_metrics;
+        crate::kit::menu::menu_item(
+            label,
+            menu_theme,
+            crate::ui_scale::UiScale::current(cx),
+            false,
+            disabled,
+        )
+        .w_full()
+        .child(label)
+        .child(
+            div()
+                .text_size(gpui::rems(self.appearance_metrics.ui_text(12.0) / 16.0))
+                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                .text_color(self.style.menu_theme.colors.foreground.secondary)
+                .child(shortcut),
+        )
     }
 
     pub(super) fn render_context_menu(
@@ -2962,119 +2949,88 @@ impl TextInput {
         let delete_disabled = self.read_only || self.selection.range.is_empty();
         let select_all_disabled = self.content.is_empty();
 
-        let mut undo_row =
-            self.context_menu_entry_row("Undo", format!("{primary}+Z").into(), undo_disabled);
-        if !undo_disabled {
-            undo_row = undo_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    this.undo(&Undo, window, cx);
-                    cx.notify();
-                }),
-            );
-        }
-
-        let mut redo_row =
-            self.context_menu_entry_row("Redo", format!("{primary}+Shift+Z").into(), redo_disabled);
-        if !redo_disabled {
-            redo_row = redo_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    this.redo(&Redo, window, cx);
-                    cx.notify();
-                }),
-            );
-        }
-
-        let mut cut_row =
-            self.context_menu_entry_row("Cut", format!("{primary}+X").into(), cut_disabled);
-        if !cut_disabled {
-            cut_row = cut_row
-                .debug_selector(|| "text_input_context_cut".to_string())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                        cx.stop_propagation();
+        // Closing, focus preservation and release activation are common to
+        // every entry. Each action supplies only its operation.
+        let item = |label: &'static str,
+                    shortcut: SharedString,
+                    disabled: bool,
+                    action: fn(&mut Self, &mut Window, &mut Context<Self>),
+                    cx: &mut Context<Self>| {
+            self.context_menu_entry_row(label, shortcut, disabled, cx)
+                .on_menu_activate(
+                    disabled,
+                    cx.listener(move |this, _, window, cx| {
                         this.interaction.context_menu = None;
-                        this.cut_with_source(
-                            crate::clipboard::CopySource::TextInputContextMenu,
-                            window,
-                            cx,
-                        );
+                        action(this, window, cx);
                         cx.notify();
                     }),
-                );
-        } else {
-            cut_row = cut_row.debug_selector(|| "text_input_context_cut".to_string());
-        }
-
-        let mut copy_row = self
-            .context_menu_entry_row("Copy", format!("{primary}+C").into(), copy_disabled)
-            .debug_selector(|| "text_input_context_copy".to_string());
-        if !copy_disabled {
-            copy_row = copy_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    this.copy_with_source(crate::clipboard::CopySource::TextInputContextMenu, cx);
-                    cx.notify();
-                }),
-            );
-        }
-
-        let mut paste_row = self
-            .context_menu_entry_row("Paste", format!("{primary}+V").into(), paste_disabled)
-            .debug_selector(|| "text_input_context_paste".to_string());
-        if !paste_disabled {
-            paste_row = paste_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    this.paste(&Paste, window, cx);
-                    cx.notify();
-                }),
-            );
-        }
-
-        let mut delete_row = self.context_menu_entry_row("Delete", "Del".into(), delete_disabled);
-        if !delete_disabled {
-            delete_row = delete_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    if !this.selection.range.is_empty() && !this.read_only {
-                        this.replace_text_in_range(None, "", window, cx);
-                    }
-                    cx.notify();
-                }),
-            );
-        }
-
-        let mut select_all_row = self
-            .context_menu_entry_row(
-                "Select all",
-                format!("{primary}+A").into(),
-                select_all_disabled,
-            )
-            .debug_selector(|| "text_input_context_select_all".to_string());
-        if !select_all_disabled {
-            select_all_row = select_all_row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.interaction.context_menu = None;
-                    this.select_all(&SelectAll, window, cx);
-                    cx.notify();
-                }),
-            );
-        }
+                )
+        };
+        let undo_row = item(
+            "Undo",
+            format!("{primary}+Z").into(),
+            undo_disabled,
+            |this, window, cx| this.undo(&Undo, window, cx),
+            cx,
+        );
+        let redo_row = item(
+            "Redo",
+            format!("{primary}+Shift+Z").into(),
+            redo_disabled,
+            |this, window, cx| this.redo(&Redo, window, cx),
+            cx,
+        );
+        let cut_row = item(
+            "Cut",
+            format!("{primary}+X").into(),
+            cut_disabled,
+            |this, window, cx| {
+                this.cut_with_source(
+                    crate::clipboard::CopySource::TextInputContextMenu,
+                    window,
+                    cx,
+                )
+            },
+            cx,
+        )
+        .debug_selector(|| "text_input_context_cut".to_string());
+        let copy_row = item(
+            "Copy",
+            format!("{primary}+C").into(),
+            copy_disabled,
+            |this, _, cx| {
+                this.copy_with_source(crate::clipboard::CopySource::TextInputContextMenu, cx)
+            },
+            cx,
+        )
+        .debug_selector(|| "text_input_context_copy".to_string());
+        let paste_row = item(
+            "Paste",
+            format!("{primary}+V").into(),
+            paste_disabled,
+            |this, window, cx| this.paste(&Paste, window, cx),
+            cx,
+        )
+        .debug_selector(|| "text_input_context_paste".to_string());
+        let delete_row = item(
+            "Delete",
+            "Del".into(),
+            delete_disabled,
+            |this, window, cx| {
+                if !this.selection.range.is_empty() && !this.read_only {
+                    this.replace_text_in_range(None, "", window, cx);
+                }
+            },
+            cx,
+        );
+        let select_all_row = item(
+            "Select all",
+            format!("{primary}+A").into(),
+            select_all_disabled,
+            |this, window, cx| this.select_all(&SelectAll, window, cx),
+            cx,
+        )
+        .debug_selector(|| "text_input_context_select_all".to_string());
 
         div()
             .w(crate::ui_scale::design_px_from_percent(
@@ -3085,10 +3041,10 @@ impl TextInput {
             .flex()
             .flex_col()
             .gap_0p5()
-            .bg(with_alpha(self.style.background, 0.98))
+            .bg(self.style.menu_theme.colors.surface.raised)
             .border_1()
-            .border_color(self.style.hover_border)
-            .rounded(px(10.0))
+            .border_color(self.style.menu_theme.colors.stroke.default)
+            .rounded(px(self.style.menu_theme.radii.popover))
             .shadow_lg()
             .on_mouse_down(
                 MouseButton::Left,

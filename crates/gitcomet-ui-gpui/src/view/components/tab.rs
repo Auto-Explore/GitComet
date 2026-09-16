@@ -1,3 +1,4 @@
+use super::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{AnyElement, Div, ElementId, IntoElement, Pixels, Stateful, Window, div, point, px};
@@ -166,12 +167,6 @@ impl Tab {
     pub const CONTENT_HEIGHT_PX: f32 =
         TAB_HEIGHT_PX - Self::TAB_TOP_PADDING_PX - Self::TAB_BOTTOM_FUSE_PAD_PX - 1.0;
 
-    /// Overlay an idle tab picks up on hover. Exposed so anything painted on
-    /// top of a tab (the label fade) can flatten it into a matching color.
-    pub fn hover_overlay(theme: AppTheme) -> gpui::Rgba {
-        theme.hover_overlay()
-    }
-
     /// Stronger shared rule for the active tab outline and the workspace edge
     /// it joins. Pulling the theme border toward its text color increases
     /// contrast in the correct direction for both dark and light themes.
@@ -315,10 +310,14 @@ impl Tab {
             base = base.flex_1().max_w(width);
         }
 
-        if !self.selected {
-            let hover_text = theme.colors.foreground.primary;
-            base = base.hover(move |s| s.text_color(hover_text));
-        }
+        let feedback = gpui::StyleRefinement::default().text_color(theme.colors.foreground.primary);
+        base = base.control_interaction(
+            InteractionStyle::new(theme)
+                .hover(feedback.clone())
+                .pressed(feedback)
+                .selection_outline(false),
+            InteractionState::default().selected(self.selected, gpui::rgba(0x00000000)),
+        );
 
         base
     }

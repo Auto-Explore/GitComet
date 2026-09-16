@@ -412,6 +412,7 @@ fn file_history_ignores_a_page_for_a_different_file(cx: &mut gpui::TestAppContex
 fn right_click_history_row(cx: &mut gpui::VisualTestContext) {
     let center = cx.debug_bounds("picker_prompt_item_1").unwrap().center();
     cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Right, gpui::Modifiers::default());
     draw_picker(cx);
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::components::ControlInteractionExt;
 use gitcomet_core::services::InteractiveRebaseAction;
 
 mod add_repo_menu;
@@ -224,9 +225,9 @@ pub(in super::super) struct PopoverHost {
     /// cherry-pick or revert confirmation. Reset every time either opens.
     commit_mainline: Option<usize>,
     context_menu_focus_handle: FocusHandle,
-    /// Focus held by the App/Add Repository menu or staging confirmation invoker,
-    /// restored when dismissed without replacing it with another prompt.
+    /// Focus held by the menu or confirmation's invoker, restored on dismissal.
     menu_invoker_focus: Option<FocusHandle>,
+    active_invoker: Option<SharedString>,
     /// Whether the open popover was invoked from inside the diff panel.
     ///
     /// Some menus — the web link menu above all — can be raised from either the
@@ -444,8 +445,6 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
     cx: &mut gpui::Context<V>,
 ) -> gpui::Stateful<gpui::Div> {
     let focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
-    let hover_bg = theme.hover_overlay();
-    let active_bg = theme.active_overlay();
     div()
         .id(id)
         .debug_selector(move || debug_selector.to_string())
@@ -460,12 +459,10 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
         .border_color(gpui::transparent_black())
         .track_focus(&focus_handle)
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(hover_bg))
-        .active(move |s| s.bg(active_bg))
-        .focus(move |s| {
-            s.bg(theme.colors.interaction.focus_background)
-                .border_color(theme.colors.interaction.focus_ring)
-        })
+        .control_interaction(
+            components::InteractionStyle::new(theme),
+            components::InteractionState::default(),
+        )
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |_this, _e: &MouseDownEvent, window, cx| {

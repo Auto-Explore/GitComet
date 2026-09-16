@@ -913,6 +913,7 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
         click_count: 1,
         first_mouse: false,
     });
+    cx.simulate_mouse_up(anchor, gpui::MouseButton::Right, gpui::Modifiers::default());
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -933,7 +934,7 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
         "the picker stays open underneath its row menu"
     );
 
-    // A press outside the menu dismisses it — and only it.
+    // A completed click outside the menu dismisses it — and only it.
     let outside = gpui::point(
         menu.origin.x - gpui::px(20.0),
         menu.origin.y - gpui::px(20.0),
@@ -946,6 +947,8 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
         click_count: 1,
         first_mouse: false,
     });
+    assert!(cx.debug_bounds("picker_row_menu").is_some());
+    cx.simulate_mouse_up(outside, MouseButton::Left, gpui::Modifiers::default());
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);

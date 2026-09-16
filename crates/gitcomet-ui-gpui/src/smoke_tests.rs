@@ -894,6 +894,8 @@ fn text_input_context_menu_does_not_resize_input_container(cx: &mut gpui::TestAp
         click_count: 1,
     });
 
+    crate::test_support::refresh_and_draw(cx);
+
     let _ = cx
         .debug_bounds("text_input_context_select_all")
         .expect("expected text-input context menu to be open");
@@ -2330,6 +2332,7 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
     // the trailing area holds the worktree badge, which opens its own menu.
     let row_label_point = gpui::point(row_bounds.left() + px(48.0), row_center.y);
     cx.simulate_mouse_down(row_label_point, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(row_label_point, MouseButton::Right, Modifiers::default());
     cx.run_until_parked();
     sync_view_for_tests(cx, &view);
 

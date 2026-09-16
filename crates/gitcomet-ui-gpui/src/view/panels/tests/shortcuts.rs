@@ -541,8 +541,9 @@ fn focus_detached_window_focus(cx: &mut gpui::VisualTestContext) {
 fn open_popover_for_test(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
-    kind: PopoverKind,
+    kind: impl Into<PopoverRequest>,
 ) {
+    let kind: PopoverRequest = kind.into();
     cx.update(|window, app| {
         let kind = kind.clone();
         view.update(app, |this, cx| {
@@ -573,7 +574,7 @@ fn assert_context_menu_entry_fills_popover_width(
     );
 }
 
-fn shortcut_fixture_repo(
+pub(super) fn shortcut_fixture_repo(
     repo_id: RepoId,
     workdir: &std::path::Path,
     commit_id: &CommitId,
@@ -1163,12 +1164,11 @@ fn history_author_filter_keeps_its_header_highlighted(cx: &mut gpui::TestAppCont
     );
 
     let invoker: SharedString = "history_author_filter_header".into();
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some(invoker.clone()), cx);
-        });
-    });
-    open_popover_for_test(cx, &view, PopoverKind::HistoryAuthorFilter { repo_id });
+    open_popover_for_test(
+        cx,
+        &view,
+        (PopoverKind::HistoryAuthorFilter { repo_id }).invoked_by(invoker),
+    );
     draw_and_drain_test_window(cx);
 
     let active = cx.update(|_window, app| view.read(app).active_context_menu_invoker.clone());

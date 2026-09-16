@@ -6830,3 +6830,65 @@ fn commit_details_signature_icon_follows_ui_scale(cx: &mut gpui::TestAppContext)
     assert_eq!(enlarged.width, normal.width * 2.0);
     assert_eq!(enlarged.height, normal.height * 2.0);
 }
+
+#[gpui::test]
+fn commit_links_cancel_cross_link_and_outside_releases(cx: &mut gpui::TestAppContext) {
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let first_url = "https://example.com/a";
+    let second_url = "https://example.com/b";
+    show_commit_details_message(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(174),
+        "/tmp/commit_link_cancellation",
+        &format!("{first_url}\n{second_url}"),
+    );
+    let [first, second] = cx.update(|_, app| {
+        let input = view
+            .read(app)
+            .details_pane
+            .read(app)
+            .commit_details_message_input
+            .read(app);
+        let second_start = first_url.len() + 1;
+        [
+            0..first_url.len(),
+            second_start..second_start + second_url.len(),
+        ]
+        .map(|range| input.hotspot_bounds(&range).unwrap().center())
+    });
+    let bounds = cx
+        .debug_bounds("commit_details_message_scroll_surface")
+        .unwrap();
+    let outside = point(bounds.left() - px(8.0), bounds.top() + px(8.0));
+    for (from, to) in [(first, second), (first, outside), (outside, first)] {
+        cx.simulate_event(MouseDownEvent {
+            position: from,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        });
+        cx.simulate_event(MouseUpEvent {
+            position: to,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+        });
+        draw_and_drain_test_window(cx);
+        cx.update(|_, app| {
+            assert!(
+                !view.read(app).popover_host.read(app).is_open(),
+                "only a press and release on the same link can open its menu"
+            )
+        });
+    }
+    let menu = click_commit_details_link(cx, &view, first, 1);
+    assert!(
+        matches!(menu, Some(PopoverKind::WebLinkMenu { ref url, .. }) if url.as_ref() == first_url)
+    );
+}

@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction_paint::InteractionPaint;
 use crate::view::panes::HistoryRowHoverArea;
 use gitcomet_state::msg::CommitSelectMode;
 use gpui::{
@@ -1126,12 +1127,8 @@ pub(super) fn history_commit_row_canvas(
     commit_time: std::time::SystemTime,
     short_sha: HistoryTextVm,
     active_context_menu_invoker: Option<SharedString>,
-    // The background the row's own `div` carries (selection, HEAD, open context
-    // menu), and the one it swaps in while hovered. Mirrored rather than painted
-    // again: the graph's icon nodes knock their glyphs out in the row background,
-    // so the canvas has to know what the row is actually showing.
-    row_bg_overlay: Option<gpui::Rgba>,
-    hover_bg_overlay: gpui::Rgba,
+    // The same resolver paints the row and its graph-node cutouts.
+    row_paint: InteractionPaint,
 ) -> AnyElement {
     super::canvas::keyed_canvas(
         ("history_commit_row_canvas", row_id),
@@ -1140,19 +1137,7 @@ pub(super) fn history_commit_row_canvas(
             let Some(graph_row) = graph_rows.get(graph_row_ix) else {
                 return;
             };
-            // What the row is painted over, flattened as it is built up, so the
-            // graph's icon nodes can knock their glyphs out in it. The row's own
-            // `div` already paints the hover tint (or `row_bg_overlay` when not
-            // hovered) behind this canvas, so that one is only accounted for
-            // here, never painted a second time.
-            let mut row_background = theme.colors.surface.canvas;
-            if let Some(overlay) = if hitbox.is_hovered(window) {
-                Some(hover_bg_overlay)
-            } else {
-                row_bg_overlay
-            } {
-                row_background = crate::theme::composite_over(row_background, overlay);
-            }
+            let mut row_background = row_paint.background(theme.colors.surface.canvas, window);
             // Purple highlight on the commit being browsed historically, unless
             // it is the selected row: its selection highlight already says so.
             if view.read(cx).active_repo().is_some_and(|repo| {
@@ -1784,22 +1769,29 @@ pub(super) fn history_commit_row_canvas(
 
             window.on_mouse_event({
                 let view = view.clone();
-                let commit_id = commit_id.clone();
-                move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble {
-                        return;
+                move |_: &gpui::MouseDownEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Bubble {
+                        view.update(cx, |this, _| this.reset_history_row_hover());
                     }
-                    // The window root clears the shared host on any mouse-down,
-                    // so drop our mirror of it too; otherwise the equality gate
-                    // suppresses re-showing the tooltip the click just hid.
-                    view.update(cx, |this, _cx| this.reset_history_row_hover());
-                    // Hitbox, not bounds: see the hover listener above. Without
-                    // this, right-clicking an overlay that happens to sit over
-                    // the history opens this commit's menu through it.
-                    if event.button != MouseButton::Right || !hitbox.is_hovered(window) {
-                        return;
-                    }
-
+                }
+            });
+            let target = gpui::ElementId::from((
+                gpui::ElementId::View(view.entity_id()),
+                gpui::SharedString::from(format!(
+                    "history-menu:{}:{}",
+                    repo_id.0,
+                    commit_id.as_ref()
+                )),
+            ));
+            let view = view.clone();
+            let commit_id = commit_id.clone();
+            crate::kit::click::on_canvas_click(
+                window,
+                target,
+                &hitbox,
+                MouseButton::Right,
+                true,
+                move |event, window, cx| {
                     view.update(cx, |this, cx| {
                         // Right-clicking inside an active multi-selection must
                         // not collapse it — the menu acts on the whole set — but
@@ -1816,16 +1808,21 @@ pub(super) fn history_commit_row_canvas(
                         let context_menu_invoker =
                             format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
                                 .into();
-                        this.activate_context_menu_invoker(context_menu_invoker, cx);
+
                         let kind = PopoverKind::CommitMenu {
                             repo_id,
                             commit_id: commit_id.clone(),
                         };
-                        this.open_popover_at(kind, event.position, window, cx);
+                        this.open_popover_at(
+                            kind.invoked_by(context_menu_invoker),
+                            event.position(),
+                            window,
+                            cx,
+                        );
                         cx.notify();
                     });
-                }
-            });
+                },
+            );
         },
     )
     .h_full()

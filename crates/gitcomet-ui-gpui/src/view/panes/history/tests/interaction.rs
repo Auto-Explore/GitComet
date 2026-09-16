@@ -1506,13 +1506,8 @@ fn history_refs_hover_lists_refs_and_opens_item_menus_in_mode(
     });
 }
 
-/// Commit rows open their hover and context menu from window-level mouse
-/// listeners, which run for every event no matter what is painted over the
-/// history. They must therefore defer to the hit test: a click that landed
-/// on the collapsed sidebar's popover — or on the scrim that dismisses it —
-/// belongs to that popover, not to the row it happens to cover.
 #[gpui::test]
-fn history_row_selection_follows_the_press_not_the_release(cx: &mut gpui::TestAppContext) {
+fn history_row_selection_requires_a_completed_click(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(BlockingBackend));
     let store_for_assert = store.clone();
@@ -1521,7 +1516,7 @@ fn history_row_selection_follows_the_press_not_the_release(cx: &mut gpui::TestAp
 
     let repo_id = RepoId(1);
     let repo_path = PathBuf::from(format!(
-        "/tmp/history-press-selects-{}-{}",
+        "/tmp/history-click-selects-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -1606,7 +1601,7 @@ fn history_row_selection_follows_the_press_not_the_release(cx: &mut gpui::TestAp
         selected(&store_for_assert) == Some(CommitId("c03".into()))
     });
 
-    // Press on one row, release on another: the press decides.
+    // Press on one row, release on another: neither row receives a click.
     let row_1 = row(cx, "history_row_1");
     let row_5 = row(cx, "history_row_5");
     cx.simulate_mouse_move(row_1, None, gpui::Modifiers::default());
@@ -1614,22 +1609,24 @@ fn history_row_selection_follows_the_press_not_the_release(cx: &mut gpui::TestAp
     cx.simulate_mouse_move(row_5, gpui::MouseButton::Left, gpui::Modifiers::default());
     cx.simulate_mouse_up(row_5, gpui::MouseButton::Left, gpui::Modifiers::default());
 
-    wait_until(cx, "row 1 selected by the press", |_cx| {
-        selected(&store_for_assert) == Some(CommitId("c01".into()))
-    });
-    // A release-driven selection would have been queued before this point,
-    // so a short settle is enough to prove none was.
+    // Any selection would have been queued before this point, so settle the
+    // store's reducer and prove the canceled click kept the existing selection.
     for _ in 0..15 {
         std::thread::sleep(Duration::from_millis(10));
         cx.run_until_parked();
         assert_eq!(
             selected(&store_for_assert),
-            Some(CommitId("c01".into())),
-            "releasing over another row must not move the selection"
+            Some(CommitId("c03".into())),
+            "a canceled click must not move the selection"
         );
     }
 }
 
+/// Commit rows open their hover and context menu from window-level mouse
+/// listeners, which run for every event no matter what is painted over the
+/// history. They must therefore defer to the hit test: a click that landed
+/// on the collapsed sidebar's popover — or on the scrim that dismisses it —
+/// belongs to that popover, not to the row it happens to cover.
 #[gpui::test]
 fn history_rows_ignore_clicks_that_landed_on_the_collapsed_sidebar_popover(
     cx: &mut gpui::TestAppContext,

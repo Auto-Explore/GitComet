@@ -1010,11 +1010,10 @@ impl Render for ToastHost {
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
-                    .render(theme, ui_scale_percent)
-                    .gitcomet_tooltip(theme, "Dismiss notification".into())
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                    .on_click(theme, cx, move |this, _e: &ClickEvent, _w, cx| {
                         this.dismiss_toast(toast_id, dismiss_behavior.clone(), cx);
-                    }));
+                    })
+                    .gitcomet_tooltip(theme, "Dismiss notification".into());
 
                 let message_scroll = div()
                     .id(("toast_message_scroll", t.id))

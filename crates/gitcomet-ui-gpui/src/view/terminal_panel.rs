@@ -1,5 +1,8 @@
 use super::terminal_alacritty::*;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction as controls;
+use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
 use std::path::PathBuf;
@@ -1160,6 +1163,7 @@ impl GitCometView {
             cx,
         );
         let viewport_element = div()
+            .id("terminal_context_surface")
             .flex_1()
             .min_h(px(0.0))
             // Breathing room so the first/last column doesn't touch the panel
@@ -1169,7 +1173,7 @@ impl GitCometView {
                 self.ui_scale_percent,
             ))
             .key_context("Terminal")
-            .on_mouse_down(
+            .on_pointer_click(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     // When the running program has requested mouse reporting
@@ -1185,12 +1189,13 @@ impl GitCometView {
                         connected,
                     };
                     let invoker: SharedString = format!("terminal_menu_{}", active_repo.0).into();
-                    this.set_active_context_menu_invoker(Some(invoker), cx);
+
                     this.open_popover_at(
-                        PopoverKind::TerminalMenu {
+                        (PopoverKind::TerminalMenu {
                             repo_id: active_repo,
                             context,
-                        },
+                        })
+                        .invoked_by(invoker),
                         e.position,
                         window,
                         cx,
@@ -1247,7 +1252,7 @@ impl GitCometView {
                 .size(control_height)
                 .rounded(px(theme.radii.row))
                 .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+                .control_interaction(InteractionStyle::new(theme), InteractionState::default())
                 .child(svg_icon(
                     icon,
                     theme.colors.foreground.primary,
@@ -1269,26 +1274,15 @@ impl GitCometView {
 
         for (i, title) in tabs.iter().enumerate() {
             let is_active = i == active_index;
-            let tab_bg = if is_active {
-                theme.colors.interaction.selected_background
-            } else {
-                theme.colors.surface.panel
-            };
-            let text_color = if is_active {
-                theme.colors.interaction.selected_foreground
-            } else {
-                theme.colors.foreground.secondary
-            };
+            let text_color = components::panel_tab_text_color(theme, is_active);
 
-            let close =
-                components::panel_tab_close(("terminal_tab_close", i), theme, ui_scale, text_color)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
-                            cx.stop_propagation();
-                            this.request_close_terminal_tab(repo_id, i, window, cx);
-                        }),
-                    );
+            let close = components::on_nested_control_click(
+                components::panel_tab_close(("terminal_tab_close", i), theme, ui_scale, text_color),
+                cx,
+                move |this, _e: &gpui::ClickEvent, window, cx| {
+                    this.request_close_terminal_tab(repo_id, i, window, cx);
+                },
+            );
 
             let tab = components::panel_tab(
                 ("terminal_tab", i),
@@ -1296,17 +1290,14 @@ impl GitCometView {
                 ui_scale,
                 "icons/terminal.svg",
                 title.clone(),
-                tab_bg,
-                text_color,
+                is_active,
             )
-            .when(!is_active, |d| {
-                d.hover(move |s| s.bg(theme.colors.interaction.hover_background))
-            })
             .child(close)
             .gitcomet_tooltip(theme, title.clone())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |this, _e: &gpui::ClickEvent, window, cx| {
                     this.select_terminal_tab(repo_id, i, window, cx);
                 }),
             );
@@ -1323,16 +1314,17 @@ impl GitCometView {
             .size(control_height)
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+            .control_interaction(InteractionStyle::new(theme), InteractionState::default())
             .child(svg_icon(
                 "icons/plus.svg",
                 theme.colors.foreground.primary,
                 ui_scale.px(12.0),
             ))
             .gitcomet_tooltip(theme, "New terminal".into())
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |this, _e: &gpui::ClickEvent, window, cx| {
                     this.add_terminal_tab_for_repo(repo_id, window, cx);
                 }),
             );
@@ -1398,9 +1390,10 @@ impl GitCometView {
                             "icons/open_external.svg",
                             "Open in external terminal",
                         )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                                 this.open_external_terminal_for_repo(external_repo, cx);
                             }),
                         ),
@@ -1411,9 +1404,10 @@ impl GitCometView {
                             "icons/broom.svg",
                             "Clear terminal (Ctrl+L)",
                         )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, _e: &gpui::ClickEvent, window, cx| {
                                 this.clear_terminal_for_repo(clear_repo, window, cx);
                             }),
                         ),
@@ -1424,9 +1418,10 @@ impl GitCometView {
                             "icons/generic_close.svg",
                             "Close terminal",
                         )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                                 cx.stop_propagation();
                                 if !this.request_close_terminal_for_repo(close_repo, cx) {
                                     this.close_terminal_for_repo(close_repo, cx);

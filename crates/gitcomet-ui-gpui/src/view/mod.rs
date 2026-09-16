@@ -48,6 +48,36 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::time::{Duration, Instant};
 
+/// An invoker travels with the surface it opens, so opening and highlighting
+/// are one operation. Root requests start a new workflow; host-local requests
+/// can continue the current one.
+#[derive(Clone)]
+pub(in crate::view) struct PopoverRequest {
+    kind: PopoverKind,
+    invoker: Option<SharedString>,
+    new_source: bool,
+}
+
+impl From<PopoverKind> for PopoverRequest {
+    fn from(kind: PopoverKind) -> Self {
+        Self {
+            kind,
+            invoker: None,
+            new_source: false,
+        }
+    }
+}
+
+impl PopoverKind {
+    pub(in crate::view) fn invoked_by(self, invoker: SharedString) -> PopoverRequest {
+        PopoverRequest {
+            kind: self,
+            invoker: Some(invoker),
+            new_source: true,
+        }
+    }
+}
+
 const REPO_ACTIVATION_THROTTLE: Duration = Duration::from_secs(5);
 
 /// How long after requesting an interactive move/resize grab a deactivation is

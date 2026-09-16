@@ -627,3 +627,41 @@ fn releasing_a_stage_gutter_press_does_not_click_the_row(cx: &mut gpui::TestAppC
         "a release that belongs to the gutter button must not select a row"
     );
 }
+
+#[gpui::test]
+fn stage_gutter_cancels_presses_released_on_another_button(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    for area in [DiffArea::Unstaged, DiffArea::Staged] {
+        for mode in [DiffViewMode::Inline, DiffViewMode::Split] {
+            let (view, cx) = open_stage_gutter_view(cx, worktree_target(area), mode);
+            let slot = if mode == DiffViewMode::Inline {
+                DiffStageSlot::Inline
+            } else {
+                DiffStageSlot::SplitRight
+            };
+            let (_, first) = stage_gutter_cell(cx, &view, "+new one", slot);
+            let (_, second) = stage_gutter_cell(cx, &view, "+new two", slot);
+            let in_flight = |cx: &mut gpui::VisualTestContext| {
+                cx.update(|_, app| view.read(app).store.snapshot().repos[0].local_actions_in_flight)
+            };
+            assert_eq!(in_flight(cx), 0);
+            cx.simulate_mouse_down(first.center(), MouseButton::Left, Modifiers::default());
+            draw_and_drain_test_window(cx);
+            assert_eq!(in_flight(cx), 0, "pressing a gutter must not stage yet");
+            cx.simulate_mouse_move(
+                second.center(),
+                Some(MouseButton::Left),
+                Modifiers::default(),
+            );
+            cx.simulate_mouse_up(second.center(), MouseButton::Left, Modifiers::default());
+            draw_and_drain_test_window(cx);
+            assert_eq!(
+                in_flight(cx),
+                0,
+                "releasing on another gutter must activate neither"
+            );
+            simulate_counted_click(cx, second.center(), 1);
+            wait_until(cx, "completed staging click", |cx| in_flight(cx) > 0);
+        }
+    }
+}

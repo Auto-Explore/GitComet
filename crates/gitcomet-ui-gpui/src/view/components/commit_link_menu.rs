@@ -4,8 +4,7 @@ use gitcomet_core::domain::CommitId;
 use gitcomet_state::model::RepoId;
 use gpui::prelude::*;
 use gpui::{
-    ElementId, Entity, MouseButton, MouseUpEvent, Pixels, Point, SharedString, WeakEntity, Window,
-    div, px,
+    ElementId, Entity, MouseUpEvent, Pixels, Point, SharedString, WeakEntity, Window, div, px,
 };
 use std::ops::Range;
 use std::sync::Arc;
@@ -40,6 +39,7 @@ pub struct CommitLinkMenu {
     links: Arc<[MessageLink]>,
     id: SharedString,
     root_view: WeakEntity<GitCometView>,
+    click: crate::kit::click::SubtargetClick<MessageLink>,
 }
 
 impl CommitLinkMenu {
@@ -56,6 +56,7 @@ impl CommitLinkMenu {
             links,
             id: id.into(),
             root_view,
+            click: Default::default(),
         }
     }
 
@@ -67,6 +68,9 @@ impl CommitLinkMenu {
         id: impl Into<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.input != input || self.links != links || self.repo_id != repo_id {
+            self.click = Default::default();
+        }
         self.input = input;
         self.repo_id = repo_id;
         self.links = links;
@@ -116,6 +120,10 @@ impl CommitLinkMenu {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let link = self.link_at(event.position, cx).cloned();
+        if self.click.release(link.as_ref(), event).is_none() {
+            return;
+        }
         // A double or triple click is still a text selection, and so is a drag
         // that ended on the link — only a plain click follows it, so selecting
         // the words of a link keeps working.
@@ -162,6 +170,9 @@ impl CommitLinkMenu {
 
 impl Render for CommitLinkMenu {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let press_view = cx.entity();
+        let move_view = cx.entity();
+        let release_view = cx.entity();
         div()
             .id((ElementId::from("commit_link_menu_root"), self.id.clone()))
             .debug_selector({
@@ -171,7 +182,31 @@ impl Render for CommitLinkMenu {
             .relative()
             .w_full()
             .min_w(px(0.0))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+            .on_mouse_down_all(move |event, phase, hitbox, window, cx| {
+                if phase == gpui::DispatchPhase::Capture {
+                    press_view.update(cx, |this, cx| {
+                        let target = hitbox
+                            .is_hovered(window)
+                            .then(|| this.link_at(event.position, cx).cloned())
+                            .flatten();
+                        this.click.press(target, event);
+                    });
+                }
+            })
+            .on_mouse_move_all(move |event, phase, _, _, cx| {
+                if phase == gpui::DispatchPhase::Capture {
+                    move_view.update(cx, |this, _| this.click.moved(event));
+                }
+            })
+            .on_mouse_up_all(move |event, phase, hitbox, window, cx| {
+                if phase == gpui::DispatchPhase::Capture && !hitbox.is_hovered(window) {
+                    release_view.update(cx, |this, _| {
+                        this.click.release(None, event);
+                    });
+                } else if phase == gpui::DispatchPhase::Bubble && hitbox.is_hovered(window) {
+                    release_view.update(cx, |this, cx| this.on_mouse_up(event, window, cx));
+                }
+            })
             .child(self.input.clone())
     }
 }

@@ -1,4 +1,6 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -404,9 +406,8 @@ impl HistoryRefsHoverHost {
         self.set_item_menu_open(true, cx);
         let root_view = self.root_view.clone();
         let _ = root_view.update(cx, |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
             root.popover_host.update(cx, |host, cx| {
-                host.open_popover_at(kind, position, window, cx)
+                host.open_popover_at(kind.invoked_by(invoker), position, window, cx)
             });
             cx.notify();
         });
@@ -521,36 +522,11 @@ impl Render for HistoryRefsHoverHost {
                 } else {
                     theme.colors.foreground.secondary
                 })
-                .cursor(if actionable && !frozen {
-                    CursorStyle::PointingHand
-                } else {
-                    CursorStyle::Arrow
-                })
-                .when(pinned, |row| {
-                    row.bg(theme.colors.interaction.pressed_background)
-                })
-                .hover(move |row| {
-                    if pinned {
-                        row.bg(theme.colors.interaction.pressed_background)
-                    } else if frozen {
-                        row
-                    } else {
-                        // `theme.colors.interaction.hover_background` is nearly identical to the
-                        // elevated popover surface; use a text-tinted overlay
-                        // that reads clearly.
-                        row.bg(with_alpha(
-                            theme.colors.foreground.primary,
-                            if theme.is_dark { 0.08 } else { 0.05 },
-                        ))
-                    }
-                })
-                .active(move |row| {
-                    if pinned || !frozen {
-                        row.bg(theme.colors.interaction.pressed_background)
-                    } else {
-                        row
-                    }
-                })
+                .control_interaction(
+                    controls::InteractionStyle::new(theme).pointer_feedback(!frozen),
+                    controls::InteractionState::default()
+                        .selected(pinned, theme.colors.interaction.selected_background),
+                )
                 .child(svg_icon(icon, icon_color, ui_scale.px(12.0)))
                 .child(
                     div()
@@ -565,33 +541,37 @@ impl Render for HistoryRefsHoverHost {
                 // shows on hover, so it can slide under a button that is
                 // already held, and gpui only fires these when the press
                 // landed on this row too.
-                .on_click(cx.listener({
-                    let commit_id = state.commit_id.clone();
-                    let item_for_left = item.clone();
-                    move |this, e: &ClickEvent, window, cx| {
-                        if !e.standard_click() {
-                            return;
-                        }
-                        cx.stop_propagation();
-                        if actionable {
-                            this.open_item_menu(
-                                state.repo_id,
-                                commit_id.clone(),
-                                ix,
-                                &item_for_left,
-                                e.position(),
-                                window,
-                                cx,
-                            );
-                        } else {
-                            if this.item_menu_open {
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Composite,
+                    cx.listener({
+                        let commit_id = state.commit_id.clone();
+                        let item_for_left = item.clone();
+                        move |this, e: &ClickEvent, window, cx| {
+                            if !e.standard_click() {
                                 return;
                             }
-                            this.select_commit(state.repo_id, commit_id.clone(), cx);
-                            this.close(cx);
+                            cx.stop_propagation();
+                            if actionable {
+                                this.open_item_menu(
+                                    state.repo_id,
+                                    commit_id.clone(),
+                                    ix,
+                                    &item_for_left,
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
+                            } else {
+                                if this.item_menu_open {
+                                    return;
+                                }
+                                this.select_commit(state.repo_id, commit_id.clone(), cx);
+                                this.close(cx);
+                            }
                         }
-                    }
-                }))
+                    }),
+                )
                 .when(actionable, |row| {
                     row.on_aux_click(cx.listener({
                         let commit_id = state.commit_id.clone();
@@ -613,7 +593,7 @@ impl Render for HistoryRefsHoverHost {
                     }))
                 })
                 .when(!actionable, |row| {
-                    row.on_mouse_down(
+                    row.on_pointer_click(
                         MouseButton::Right,
                         cx.listener(|_this, _e: &MouseDownEvent, _window, cx| {
                             cx.stop_propagation();

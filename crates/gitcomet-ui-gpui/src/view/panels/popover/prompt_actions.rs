@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 impl PopoverHost {
     pub(in crate::view) fn popover_view(
@@ -630,14 +631,12 @@ impl PopoverHost {
                                         "Esc",
                                     ))
                                     .style(components::ButtonStyle::Outlined)
-                                    .render(theme, ui_scale_percent)
-                                    .on_click(cancel),
+                                    .on_click_handler(theme, ui_scale_percent, cancel),
                             )
                             .child(
                                 components::Button::new(submit_button_id, "Save message")
                                     .style(components::ButtonStyle::Filled)
-                                    .render(theme, ui_scale_percent)
-                                    .on_click(submit),
+                                    .on_click_handler(theme, ui_scale_percent, submit),
                             ),
                     )
             }
@@ -788,7 +787,11 @@ impl PopoverHost {
                 .top_0()
                 .left_0()
                 .size_full()
-                .child(components::modal_scrim(theme).on_mouse_down(MouseButton::Left, scrim_close))
+                .child(
+                    components::modal_scrim(theme)
+                        .id("prompt_scrim")
+                        .on_pointer_click(MouseButton::Left, scrim_close),
+                )
                 .child(placement)
                 .into_any_element()
         } else {

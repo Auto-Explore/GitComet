@@ -60,12 +60,14 @@ impl GitCometView {
 
     pub(in crate::view) fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
+        let mut kind: PopoverRequest = kind.into();
+        kind.new_source = true;
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
@@ -92,16 +94,18 @@ impl GitCometView {
 
     pub(in crate::view) fn open_popover_centered(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let PopoverKind::HookActivity { repo_id, .. } = &kind {
+        let mut kind: PopoverRequest = kind.into();
+        kind.new_source = true;
+        if let PopoverKind::HookActivity { repo_id, .. } = &kind.kind {
             self.pending_hook_activity_open = None;
             self.minimized_hook_activity_chains
                 .retain(|(suppressed_repo_id, _)| suppressed_repo_id != repo_id);
         }
-        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host
@@ -119,12 +123,14 @@ impl GitCometView {
 
     pub(in crate::view) fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
+        let mut kind: PopoverRequest = kind.into();
+        kind.new_source = true;
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind.kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {

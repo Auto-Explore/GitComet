@@ -22,6 +22,7 @@ use super::history::{
 };
 use super::markdown_flow_text::MarkdownFlowText;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 use crate::view::markdown_preview::{
     MAX_FLOWING_PREVIEW_ROWS, MarkdownBlock, MarkdownInlineImage, MarkdownInlineStyle,
     MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
@@ -231,7 +232,7 @@ fn render_block_gap(
                 cx.notify();
             });
         })
-        .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+        .on_pointer_click(gpui::MouseButton::Right, move |event, window, cx| {
             crate::press_gesture::claim_press(cx);
             cx.stop_propagation();
             let focus = right_view.read(cx).diff_panel_focus_handle.clone();
@@ -465,28 +466,35 @@ fn row_shell(
                 let click_count = event.click_count;
                 let position = event.position;
                 view.update(cx, |this, cx| {
-                    if !this.handle_markdown_preview_link_click(
+                    this.handle_markdown_preview_row_mouse_down(
                         row_ix,
                         text_region,
                         position,
                         click_count,
                         window,
                         cx,
-                    ) {
-                        this.handle_markdown_preview_row_mouse_down(
-                            row_ix,
-                            text_region,
-                            position,
-                            click_count,
-                            window,
-                            cx,
-                        );
-                    }
+                    );
                     cx.notify();
                 });
             }
         })
-        .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+        .on_pointer_click(gpui::MouseButton::Left, {
+            let view = view.clone();
+            move |event, window, cx| {
+                view.update(cx, |this, cx| {
+                    this.handle_markdown_preview_link_click(
+                        row_ix,
+                        text_region,
+                        event.position,
+                        event.click_count,
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                });
+            }
+        })
+        .on_pointer_click(gpui::MouseButton::Right, move |event, window, cx| {
             view.update(cx, |this, cx| {
                 this.open_diff_editor_context_menu(row_ix, text_region, event.position, window, cx);
                 cx.notify();
@@ -578,8 +586,9 @@ fn render_inline_image(
         .child(
             image
                 .id(("markdown_preview_inline_image_link", inline.source_byte))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .cursor(gpui::CursorStyle::PointingHand)
-                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+                .on_pointer_click(gpui::MouseButton::Left, move |event, window, cx| {
                     // The row underneath would otherwise also treat this as a
                     // click on its text and arm a drag-selection behind the menu.
                     cx.stop_propagation();
@@ -867,7 +876,7 @@ fn render_code_padding(
                 cx.notify();
             });
         })
-        .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+        .on_pointer_click(gpui::MouseButton::Right, move |event, window, cx| {
             crate::press_gesture::claim_press(cx);
             cx.stop_propagation();
             let focus = view.read(cx).diff_panel_focus_handle.clone();

@@ -1,6 +1,7 @@
 //! Mainline-parent picker shared by the cherry-pick and revert confirmations.
 
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MainlineChoice {
@@ -152,10 +153,6 @@ pub(super) fn mainline_section(
                 theme.colors.foreground.secondary,
                 if theme.is_dark { 0.38 } else { 0.28 },
             );
-            let hover_overlay = crate::theme::with_alpha(
-                theme.colors.foreground.primary,
-                if theme.is_dark { 0.07 } else { 0.05 },
-            );
             let top_line = div()
                 .flex()
                 .items_center()
@@ -194,20 +191,19 @@ pub(super) fn mainline_section(
                 } else {
                     outlined_border
                 })
-                .when(is_selected, |row| {
-                    row.bg(crate::theme::with_alpha(
-                        theme.colors.accent.foreground,
-                        if theme.is_dark { 0.12 } else { 0.08 },
-                    ))
-                })
-                .when(!is_selected, |row| {
-                    row.hover(move |style| style.bg(hover_overlay))
-                })
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
-                    this.commit_mainline = Some(number);
-                    cx.notify();
-                }))
+                .control_interaction(
+                    controls::InteractionStyle::accent(theme),
+                    controls::InteractionState::default()
+                        .selected(is_selected, theme.active_overlay()),
+                )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Action,
+                    cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
+                        this.commit_mainline = Some(number);
+                        cx.notify();
+                    }),
+                )
                 .child(top_line)
                 .when_some(choice.summary, |row, summary| {
                     row.child(

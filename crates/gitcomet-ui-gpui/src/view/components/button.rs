@@ -2,13 +2,16 @@ use crate::theme::{AppTheme, composite_over};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Bounds, ClickEvent, CursorStyle, Div, FocusHandle, IntoElement, Pixels,
-    SharedString, Stateful, Window, div, px,
+    AnyElement, Bounds, ClickEvent, Div, FocusHandle, IntoElement, Pixels, SharedString, Stateful,
+    StyleRefinement, Window, div, px,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::{control_height, control_pad_x, control_pad_y, icon_pad_x};
+use super::{
+    ControlActivation, ControlInteractionExt, InteractionState, InteractionStyle, control_height,
+    control_pad_x, control_pad_y, icon_pad_x,
+};
 
 /// Gap between a button's icon and its label.
 const CONTENT_GAP_PX: f32 = 4.0;
@@ -38,6 +41,8 @@ pub struct Button {
     style: ButtonStyle,
     disabled: bool,
     selected: bool,
+    open: bool,
+    busy: bool,
     selected_bg: Option<gpui::Rgba>,
     bg: Option<gpui::Rgba>,
     hover_bg: Option<gpui::Rgba>,
@@ -63,6 +68,8 @@ impl Button {
             style: ButtonStyle::Subtle,
             disabled: false,
             selected: false,
+            open: false,
+            busy: false,
             selected_bg: None,
             bg: None,
             hover_bg: None,
@@ -81,6 +88,18 @@ impl Button {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Persistent state belongs to the surface opened by this control.
+    pub fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    /// Shares the operation's lifetime with its spinner; does not change eligibility.
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.busy = busy;
         self
     }
 
@@ -182,11 +201,21 @@ impl Button {
         cx: &mut gpui::Context<V>,
         f: impl Fn(&mut V, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
-        let disabled = self.disabled;
         let ui_scale = self.scale.unwrap_or_else(|| UiScale::current(cx));
+        self.on_click_handler(theme, ui_scale, cx.listener(f))
+    }
 
+    /// Attach an already constructed listener through the same eligibility gate.
+    pub fn on_click_handler(
+        self,
+        theme: AppTheme,
+        ui_scale: impl Into<UiScale>,
+        f: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> Stateful<Div> {
+        let disabled = self.disabled;
         self.render(theme, ui_scale)
-            .when(!disabled, |this| this.on_click(cx.listener(f)))
+            // Render already resolves explicit/default/no-focus behavior.
+            .on_activate(disabled, ControlActivation::ManagedFocus, f)
     }
 
     pub fn on_click_with_bounds<V: 'static>(
@@ -195,7 +224,6 @@ impl Button {
         cx: &mut gpui::Context<V>,
         f: impl Fn(&mut V, &ClickEvent, Bounds<Pixels>, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
-        let disabled = self.disabled;
         let ui_scale = self.scale.unwrap_or_else(|| UiScale::current(cx));
 
         let last_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
@@ -203,13 +231,15 @@ impl Button {
         let last_bounds_for_click = Rc::clone(&last_bounds);
         let wrapper_id: SharedString = format!("{}_bounds_wrapper", self.id).into();
 
-        let button = self.render(theme, ui_scale).when(!disabled, |this| {
-            this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+        let button = self.on_click_handler(
+            theme,
+            ui_scale,
+            cx.listener(move |this, e: &ClickEvent, window, cx| {
                 let bounds = (*last_bounds_for_click.borrow())
                     .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
                 f(this, e, bounds, window, cx);
-            }))
-        });
+            }),
+        );
 
         div()
             .on_children_prepainted(move |children_bounds, _window, _cx| {
@@ -228,6 +258,8 @@ impl Button {
             style,
             disabled,
             selected,
+            open,
+            busy,
             selected_bg,
             bg: bg_override,
             hover_bg: hover_bg_override,
@@ -424,6 +456,7 @@ impl Button {
         let control_radius = px(theme.radii.control);
         let mut base = div()
             .id(id.clone())
+            .debug_selector(move || id.to_string())
             .h(control_height)
             .when(icon_only, |d| d.min_w(control_height))
             .px(if icon_only { icon_pad_x } else { control_pad_x })
@@ -443,55 +476,41 @@ impl Button {
             .bg(bg)
             .text_size(ui_scale.ui_text(14.0))
             .text_color(text)
-            .cursor(CursorStyle::PointingHand)
             .child(inner);
 
         if let Some(focus_handle) = focus_handle {
             let focus_handle = focus_handle.tab_stop(!disabled);
             base = base.track_focus(&focus_handle);
         } else if !no_focus {
-            base = base.tab_index(0);
+            base = base.tab_index(0).tab_stop(!disabled);
         }
 
         if !borderless {
             base = base.border_1().border_color(border);
         }
-        base = base.focus(move |s| {
-            if borderless {
-                s.bg(theme.colors.interaction.focus_background)
-            } else {
-                s.border_color(theme.colors.interaction.focus_ring)
-                    .bg(theme.colors.interaction.focus_background)
-            }
-        });
-
-        if disabled {
-            base = base.opacity(0.5).cursor(CursorStyle::Arrow);
-        } else if selected {
-            let selected_bg =
-                selected_bg_override.unwrap_or(theme.colors.interaction.pressed_background);
-            base = base
-                .bg(selected_bg)
-                .hover(move |s| s.bg(selected_bg))
-                .active(move |s| s.bg(selected_bg));
-            if !theme.is_dark {
-                base = base.shadow(vec![gpui::BoxShadow {
-                    color: theme.colors.interaction.selected_indicator.into(),
-                    offset: gpui::point(px(0.0), px(0.0)),
-                    blur_radius: px(0.0),
-                    spread_radius: px(1.0),
-                    inset: true,
-                }]);
-            }
-        } else if suppress_hover_border {
-            base = base
-                .hover(move |s| s.bg(hover_bg))
-                .active(move |s| s.bg(active_bg));
-        } else {
-            base = base
-                .hover(move |s| s.bg(hover_bg).border_color(hover_border))
-                .active(move |s| s.bg(active_bg).border_color(active_border));
+        let selected_bg =
+            selected_bg_override.unwrap_or(theme.colors.interaction.pressed_background);
+        let mut hover = StyleRefinement::default().bg(hover_bg);
+        let mut pressed = StyleRefinement::default().bg(active_bg);
+        if !suppress_hover_border {
+            hover = hover.border_color(hover_border);
+            pressed = pressed.border_color(active_border);
         }
+        base = InteractionStyle::accent(theme)
+            .persistent_background(
+                selected_bg_override.unwrap_or(super::control_open_background(theme)),
+            )
+            .hover(hover)
+            .pressed(pressed)
+            .disabled_opacity(0.5)
+            .apply(
+                base,
+                InteractionState::default()
+                    .selected(selected, selected_bg)
+                    .open(open)
+                    .busy(busy)
+                    .disabled(disabled),
+            );
 
         base
     }
@@ -501,6 +520,31 @@ fn looks_like_icon_button(label: &str) -> bool {
     let trimmed = label.trim();
     trimmed.is_empty()
         || (trimmed.chars().count() <= 2 && !trimmed.chars().any(|c| c.is_alphanumeric()))
+}
+
+/// Small actions embedded in editor rows share geometry and eligibility;
+/// callers supply only their icon, size and action.
+pub fn inline_icon_button(
+    id: impl Into<gpui::ElementId>,
+    theme: AppTheme,
+    size: Pixels,
+    icon: &'static str,
+    icon_size: Pixels,
+    icon_color: gpui::Rgba,
+    enabled: bool,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .size(size)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme.radii.row))
+        .control_interaction(
+            InteractionStyle::header(theme),
+            InteractionState::default().disabled(!enabled),
+        )
+        .child(crate::view::icons::svg_icon(icon, icon_color, icon_size))
 }
 
 use crate::theme::with_alpha;

@@ -692,6 +692,69 @@ mod worktree_uncommitted {
     }
 
     #[gpui::test]
+    fn worktree_filters_activate_on_key_release_like_other_controls(cx: &mut gpui::TestAppContext) {
+        use crate::view::rows::{CommitFileFilter, FileListId};
+        let _guard = crate::test_support::lock_visual_test();
+        let cx = draw_worktree(
+            cx,
+            RepoId(103),
+            vec![file("gone.txt", FileStatusKind::Deleted)],
+            vec![file("edited.rs", FileStatusKind::Modified)],
+            true,
+        );
+        let view = cx.update(|window, _| {
+            window
+                .root::<crate::view::GitCometView>()
+                .flatten()
+                .unwrap()
+        });
+        for key in ["enter", "space"] {
+            // Focus the filter with a click, then change selection without
+            // changing focus so that its keyboard action is observable.
+            let position = cx
+                .debug_bounds("worktree_file_filter_tab_1")
+                .unwrap()
+                .center();
+            cx.simulate_click(position, gpui::Modifiers::default());
+            cx.update(|_, app| {
+                view.read(app).details_pane.clone().update(app, |pane, cx| {
+                    pane.set_file_list_filter(FileListId::WorktreeFiles, CommitFileFilter::All, cx);
+                });
+            });
+            draw_and_drain_test_window(cx);
+            cx.simulate_keystrokes(key);
+            cx.update(|_, app| {
+                assert_eq!(
+                    view.read(app)
+                        .details_pane
+                        .read(app)
+                        .file_list_filter_for(FileListId::WorktreeFiles),
+                    CommitFileFilter::All,
+                    "holding the key must not activate the filter",
+                );
+            });
+            cx.update(|window, app| {
+                window.dispatch_event(
+                    gpui::PlatformInput::KeyUp(gpui::KeyUpEvent {
+                        keystroke: gpui::Keystroke::parse(key).unwrap(),
+                    }),
+                    app,
+                );
+            });
+            draw_and_drain_test_window(cx);
+            cx.update(|_, app| {
+                assert_eq!(
+                    view.read(app)
+                        .details_pane
+                        .read(app)
+                        .file_list_filter_for(FileListId::WorktreeFiles),
+                    CommitFileFilter::Modified,
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
     fn worktree_filters_fit_the_measured_width(cx: &mut gpui::TestAppContext) {
         let cx = draw_worktree(
             cx,

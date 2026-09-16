@@ -609,15 +609,15 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some("create_branch_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranchFromRefPrompt {
+                    (PopoverKind::CreateBranchFromRefPrompt {
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: false,
                         name_prefix: String::new(),
-                    },
+                    })
+                    .invoked_by("create_branch_btn".into()),
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -674,7 +674,9 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn create_branch_source_picker_selects_items_on_mouse_down(cx: &mut gpui::TestAppContext) {
+fn create_branch_source_picker_preserves_focus_and_selects_on_completed_click(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events, _repo, _workdir) = create_tracking_store("create-branch-source-click");
     let repo_id = store.snapshot().active_repo.expect("expected active repo");
     let store_for_view = store.clone();
@@ -714,6 +716,48 @@ fn create_branch_source_picker_selects_items_on_mouse_down(cx: &mut gpui::TestAp
     });
     cx.update(|window, app| {
         let _ = window.draw(app);
+    });
+
+    let target = cx.debug_bounds("picker_prompt_item_1").unwrap().center();
+    cx.simulate_mouse_move(target, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(target, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let host = view.read(app).popover_host.read(app);
+        assert_eq!(host.create_branch_source_target, "HEAD");
+        assert_window_focus(
+            window,
+            app,
+            host.branch_picker_search_input
+                .as_ref()
+                .unwrap()
+                .read(app)
+                .focus_handle(),
+            "a suggestion press must retain input focus until release",
+        );
+    });
+    assert!(cx.debug_bounds("picker_prompt_item_1").is_some());
+    let other_row = cx.debug_bounds("picker_prompt_item_0").unwrap().center();
+    cx.simulate_mouse_move(
+        other_row,
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        other_row,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|_, app| {
+        assert_eq!(
+            view.read(app)
+                .popover_host
+                .read(app)
+                .create_branch_source_target,
+            "HEAD"
+        );
     });
 
     click_debug_selector(cx, "picker_prompt_item_1");
@@ -1149,15 +1193,15 @@ fn create_branch_popover_enter_creates_and_closes(cx: &mut gpui::TestAppContext)
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some("create_branch_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranchFromRefPrompt {
+                    (PopoverKind::CreateBranchFromRefPrompt {
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: false,
                         name_prefix: String::new(),
-                    },
+                    })
+                    .invoked_by("create_branch_btn".into()),
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -1590,15 +1634,15 @@ fn create_branch_popover_enter_with_empty_input_does_not_close_or_create(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some("create_branch_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranchFromRefPrompt {
+                    (PopoverKind::CreateBranchFromRefPrompt {
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: false,
                         name_prefix: String::new(),
-                    },
+                    })
+                    .invoked_by("create_branch_btn".into()),
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -2424,6 +2468,7 @@ mod checkout_picker {
             click_count: 1,
             first_mouse: false,
         });
+        cx.simulate_mouse_up(at, gpui::MouseButton::Right, gpui::Modifiers::default());
         cx.run_until_parked();
         redraw(cx);
 

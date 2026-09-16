@@ -32,7 +32,7 @@ pub(super) fn set_tooltips_suppressed_by_overlay(open: bool, cx: &mut App) {
     }
 }
 
-fn tooltips_suppressed_by_overlay(cx: &App) -> bool {
+pub(super) fn tooltips_suppressed_by_overlay(cx: &App) -> bool {
     cx.try_global::<TooltipOverlaySuppression>()
         .is_some_and(|state| state.0)
 }
