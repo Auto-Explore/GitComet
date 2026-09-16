@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    GitOperationTask, RepoMap, message_subject, send_or_log, short_commit_id, single_line_context,
-    spawn_with_repo,
+    GitOperationTask, RepoMap, message_subject, missing_repo_error, send_or_log, short_commit_id,
+    single_line_context, spawn_with_repo, spawn_with_repo_or_else,
 };
 
 const GITIGNORE_FILE_NAME: &str = gitcomet_core::gitignore::FILE_NAME;
@@ -193,22 +193,41 @@ fn schedule_repo_command_with_context<F>(
 {
     let label = command.hook_activity_label();
     let context = context_override.or_else(|| repo_command_context(&command));
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
-        let result = {
-            let _scope = operation.attach();
-            run(repo)
-        };
-        let outcome = GitOperationTask::outcome(&result);
-        operation.finish(
-            outcome,
-            InternalMsg::RepoCommandFinished {
-                repo_id,
-                command,
-                result,
-            },
-        );
-    });
+    // The reducer counted the command in flight and only its completion
+    // releases that count, so a missing handle must still finish it.
+    let missing = command.clone();
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let operation = GitOperationTask::start(repo_id, label, context, &msg_tx);
+            let result = {
+                let _scope = operation.attach();
+                run(repo)
+            };
+            let outcome = GitOperationTask::outcome(&result);
+            operation.finish(
+                outcome,
+                InternalMsg::RepoCommandFinished {
+                    repo_id,
+                    command,
+                    result,
+                },
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(InternalMsg::RepoCommandFinished {
+                    repo_id,
+                    command: missing,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
 }
 
 fn schedule_repo_command<F>(

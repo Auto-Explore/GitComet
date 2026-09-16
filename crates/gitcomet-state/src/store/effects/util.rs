@@ -14,6 +14,13 @@ use super::super::{
 
 pub(super) type RepoMap = FxHashMap<RepoId, Arc<dyn GitRepository>>;
 
+pub(super) fn missing_repo_error(repo_id: RepoId) -> Error {
+    Error::new(ErrorKind::Backend(format!(
+        "Repository handle not found for repo_id {}",
+        repo_id.0
+    )))
+}
+
 /// Keeps operation context safe for a one-line UI subtitle. Git permits odd
 /// characters in paths and user-authored messages, so never let those create
 /// extra layout rows or carry terminal controls into the activity view.

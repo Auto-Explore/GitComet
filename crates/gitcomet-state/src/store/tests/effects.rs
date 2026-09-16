@@ -6885,3 +6885,49 @@ fn branch_action_in_other_worktree_fails_when_backend_opens_own_workdir() {
     assert!(fixture.origin_calls.lock().unwrap().is_empty());
     assert!(fixture.worktree_calls.lock().unwrap().is_empty());
 }
+
+/// A repo action dispatched while the worker holds no handle for the repo (the
+/// tab is still opening, or the open failed) must still complete, or the
+/// in-flight counter that disables the stage/unstage controls never releases.
+#[test]
+fn repo_action_without_open_handle_releases_in_flight_counter() {
+    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+    let (store, _event_rx) = AppStore::new(backend);
+    let repo_id = RepoId(1);
+    let spec = RepoSpec {
+        workdir: PathBuf::from("/tmp/gitcomet-missing-handle"),
+    };
+    let mut state = AppState {
+        active_repo: Some(repo_id),
+        ..Default::default()
+    };
+    state.repos.push(RepoState::new_opening(repo_id, spec));
+    store.replace_snapshot_for_test(Arc::new(state));
+
+    store.dispatch(Msg::StagePaths {
+        repo_id,
+        paths: vec![PathBuf::from("a.txt")].into(),
+    });
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let repo = loop {
+        let snapshot = store.snapshot();
+        let repo = snapshot.repos.first().expect("the injected repo");
+        // The begin bumps `ops_rev` once; the completion bumps it again.
+        if repo.ops_rev >= 2 {
+            break repo.clone();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the action never completed: in flight = {}, ops_rev = {}",
+            repo.local_actions_in_flight,
+            repo.ops_rev
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert_eq!(repo.local_actions_in_flight, 0);
+    assert!(
+        repo.feedback.last_error.is_some(),
+        "the missing handle must surface as an action failure"
+    );
+}

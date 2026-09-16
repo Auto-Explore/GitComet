@@ -287,6 +287,10 @@ pub(super) fn summarize(
     let structural = structural_event(event);
     for path in &event.paths {
         let class = snapshot.classify(path);
+        // One stat per path, taken lazily: only structural events describe an
+        // entry whose kind matters, and every reader below must see the same
+        // entry, not whatever replaced it between two calls.
+        let mut lstat: Option<Option<fs::Metadata>> = None;
         if class == PathClass::Cache || snapshot.is_git_directory_modify(path, event) {
             continue;
         }
@@ -361,6 +365,15 @@ pub(super) fn summarize(
                 // A removal describes the old entry, not a directory that may
                 // already have replaced a previously visible file at this path.
                 // So can a rename source; FSEvents never says which side it was.
+                // The ignore matcher treats an unknown kind like a file, so a
+                // plain modification needs no stat: its hint is `None` either way.
+                let metadata = if structural {
+                    lstat
+                        .get_or_insert_with(|| fs::symlink_metadata(path).ok())
+                        .as_ref()
+                } else {
+                    None
+                };
                 let directory = structural
                     && !matches!(
                         event.kind,
@@ -372,15 +385,18 @@ pub(super) fn summarize(
                             ))
                     )
                     && path_dir_hint(event) != Some(false)
-                    && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir());
-                if rules.is_ignored_rel(
-                    relative,
-                    if directory {
-                        Some(true)
-                    } else {
-                        path_dir_hint(event)
-                    },
-                ) {
+                    && metadata.is_some_and(|metadata| metadata.is_dir());
+                // Backends may type a new entry by following its link (Windows
+                // reports a directory symlink as a created folder), but Git
+                // sees the link itself, which a directory-only rule never hides.
+                let dir_hint = if directory {
+                    Some(true)
+                } else if metadata.is_some_and(|metadata| metadata.file_type().is_symlink()) {
+                    Some(false)
+                } else {
+                    path_dir_hint(event)
+                };
+                if rules.is_ignored_rel(relative, dir_hint) {
                     if directory {
                         effect.new_ignored_dirs.push(path.clone());
                     }
@@ -392,7 +408,10 @@ pub(super) fn summarize(
         }
         if structural
             && path_dir_hint(event) != Some(false)
-            && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
+            && lstat
+                .get_or_insert_with(|| fs::symlink_metadata(path).ok())
+                .as_ref()
+                .is_some_and(|metadata| metadata.is_dir())
         {
             effect
                 .dir_added

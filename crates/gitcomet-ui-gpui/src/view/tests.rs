@@ -1113,6 +1113,7 @@ fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
     store.replace_snapshot_for_test(Arc::new(state));
     sync_view_snapshot(cx, &view);
 
+    let ops_rev_before = test_support::repo_ops_rev(&view, cx, RepoId(1));
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.execute_command("stage-all", Some(window), cx)
@@ -1133,16 +1134,10 @@ fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
     });
 
     // The stage itself must wait for the user's answer.
-    assert!(
-        cx.update(|_window, app| {
-            view.read(app)
-                .store
-                .snapshot()
-                .repos
-                .iter()
-                .find(|repo| repo.id == RepoId(1))
-                .is_some_and(|repo| repo.local_actions_in_flight == 0)
-        }),
+    test_support::drain_store_worker(&view, cx);
+    assert_eq!(
+        test_support::repo_ops_rev(&view, cx, RepoId(1)),
+        ops_rev_before,
         "nothing may be staged until the confirmation is answered"
     );
 

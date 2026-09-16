@@ -292,15 +292,15 @@ impl GixWorktreeIgnoreMatcher {
         })
     }
 
-    fn path_is_tracked(&self, relative_path: &Path, kind: WorktreePathKind) -> bool {
+    /// Git never ignores a path with tracked content at or beneath it, whatever
+    /// the watcher reported the path as: a file or symlink that replaced a
+    /// tracked directory has just deleted every entry under it, so the caller's
+    /// kind must not skip the lookup beneath the path.
+    fn path_is_tracked(&self, relative_path: &Path) -> bool {
         let relative_path =
             gix::path::to_unix_separators_on_windows(gix::path::into_bstr(relative_path));
-        if self.index.entry_by_path(relative_path.as_ref()).is_some() {
-            return true;
-        }
-
-        kind == WorktreePathKind::Directory
-            && self
+        self.index.entry_by_path(relative_path.as_ref()).is_some()
+            || self
                 .index
                 .entry_closest_to_directory_or_directory(relative_path.as_ref())
                 .is_some()
@@ -309,7 +309,7 @@ impl GixWorktreeIgnoreMatcher {
 
 impl WorktreeIgnoreMatcher for GixWorktreeIgnoreMatcher {
     fn is_ignored(&mut self, relative_path: &Path, kind: WorktreePathKind) -> Result<bool> {
-        if self.path_is_tracked(relative_path, kind) {
+        if self.path_is_tracked(relative_path) {
             return Ok(false);
         }
 

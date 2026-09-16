@@ -5036,7 +5036,6 @@ fn split_unstaged_scroll_viewport_updates_after_outer_resize_shrink(cx: &mut gpu
 #[gpui::test]
 fn stage_all_asks_before_staging_unresolved_conflicts(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let store_for_assertions = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -5087,6 +5086,7 @@ fn stage_all_asks_before_staging_unresolved_conflicts(cx: &mut gpui::TestAppCont
     draw_and_drain_test_window(cx);
 
     // The split view's "Stage all": the tracked-changes section by name.
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
     let split_paths = vec![conflicted.clone(), clean.clone()];
     cx.update(|window, app| {
         let details_pane = view.read(app).details_pane.clone();
@@ -5135,13 +5135,10 @@ fn stage_all_asks_before_staging_unresolved_conflicts(cx: &mut gpui::TestAppCont
         "the combined view's Stage all must warn about the conflicted file, got {kind:?}"
     );
 
-    assert!(
-        store_for_assertions
-            .snapshot()
-            .repos
-            .iter()
-            .find(|repo| repo.id == repo_id)
-            .is_some_and(|repo| repo.local_actions_in_flight == 0),
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert_eq!(
+        crate::view::test_support::repo_ops_rev(&view, cx, repo_id),
+        ops_rev_before,
         "nothing may be staged until the confirmation is answered"
     );
 
@@ -6124,7 +6121,8 @@ fn status_shift_click_drops_an_anchor_invalidated_by_a_sort_change(cx: &mut gpui
 }
 
 /// Drives the folder Stage button on a tree-layout Unstaged section and reports
-/// whether the store accepted a staging command.
+/// whether the click dispatched a repo action to the store, read through
+/// `drain_store_worker` so the answer does not race the worker thread.
 fn folder_stage_button_stages(
     cx: &mut gpui::TestAppContext,
     repo_id: gitcomet_state::model::RepoId,
@@ -6168,19 +6166,20 @@ fn folder_stage_button_stages(
             repo_id.0
         )))
         .expect("expected the folder action");
+    // The reducer drops stage messages outright without git, which would read
+    // as "not dispatched" and pass the negative control for the wrong reason.
+    assert!(
+        cx.update(|_window, app| view.read(app).store.snapshot().git_runtime.is_available()),
+        "this test needs a git executable on PATH"
+    );
+    let before = crate::view::test_support::repo_ops_rev(&view, cx, repo_id);
     let at = action.center();
     cx.simulate_mouse_down(at, button, gpui::Modifiers::default());
     cx.simulate_mouse_up(at, button, gpui::Modifiers::default());
     draw_and_drain_test_window(cx);
 
-    cx.update(|_window, app| {
-        view.read(app)
-            .store
-            .snapshot()
-            .repos
-            .first()
-            .is_some_and(|repo| repo.local_actions_in_flight > 0)
-    })
+    crate::view::test_support::drain_store_worker(&view, cx);
+    crate::view::test_support::repo_ops_rev(&view, cx, repo_id) > before
 }
 
 /// A left click stages the folder — the positive control, so the right-click

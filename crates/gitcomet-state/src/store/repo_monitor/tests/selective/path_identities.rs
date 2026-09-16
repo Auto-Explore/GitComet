@@ -1,28 +1,82 @@
 use super::*;
 
+/// A symlink is a blob to Git, so a directory-only rule never hides it, whatever
+/// kind the backend reported. Windows types a created entry by following the
+/// link, so a moved-in directory symlink arrives as a created folder; a delayed
+/// removal can find a link already at the path; edits carry no kind at all.
 #[test]
-fn directory_symlink_rename_is_not_hidden_by_directory_only_ignore() {
-    let (_temp, root) = repository();
-    let target = unique_temp_dir("gitcomet-directory-symlink-target");
-    fs::write(root.join(".gitignore"), "build/\n").unwrap();
-    let link = root.join("build");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target.path(), &link).unwrap();
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(target.path(), &link).unwrap();
-    let mut rules = load_gitignore_rules(&root);
-    let event = notify::Event::new(EventKind::Modify(ModifyKind::Name(
-        notify::event::RenameMode::To,
-    )))
-    .add_path(link);
-    assert_eq!(path_dir_hint(&event), None);
-    let effect = summarize_event(&root, Some(&root.join(".git")), &mut rules, &event);
-    assert!(
-        effect.change.is_some_and(|change| change.worktree),
-        "a symlink to a directory is visible to Git: {effect:?}"
-    );
-    assert!(effect.new_ignored_dirs.is_empty());
-    assert!(effect.dir_added.is_empty());
+fn directory_symlink_is_not_hidden_by_directory_only_ignore_for_any_event_kind() {
+    let cases = [
+        (
+            EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::To)),
+            None,
+        ),
+        (
+            EventKind::Create(notify::event::CreateKind::Folder),
+            Some(true),
+        ),
+        (
+            EventKind::Remove(notify::event::RemoveKind::Folder),
+            Some(true),
+        ),
+        (
+            EventKind::Modify(ModifyKind::Data(notify::event::DataChange::Any)),
+            None,
+        ),
+    ];
+    for (kind, expected_hint) in cases {
+        let (_temp, root) = repository();
+        let target = unique_temp_dir("gitcomet-directory-symlink-target");
+        fs::write(root.join(".gitignore"), "build/\n").unwrap();
+        let link = root.join("build");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target.path(), &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(target.path(), &link).unwrap();
+        let mut rules = load_gitignore_rules(&root);
+        let event = notify::Event::new(kind).add_path(link);
+        assert_eq!(path_dir_hint(&event), expected_hint, "{kind:?}");
+        let effect = summarize_event(&root, Some(&root.join(".git")), &mut rules, &event);
+        assert!(
+            effect.change.is_some_and(|change| change.worktree),
+            "a symlink to a directory is visible to Git after {kind:?}: {effect:?}"
+        );
+        assert!(effect.new_ignored_dirs.is_empty(), "{kind:?}");
+        assert!(effect.dir_added.is_empty(), "{kind:?}");
+    }
+}
+
+/// Git never ignores a path with tracked content beneath it, so replacing a
+/// tracked directory with a symlink must still refresh: its files are now
+/// deleted. The bare `vendor` rule would otherwise match the link.
+#[test]
+fn symlink_over_tracked_directory_is_never_ignored() {
+    let cases = [
+        EventKind::Create(notify::event::CreateKind::Folder),
+        EventKind::Create(notify::event::CreateKind::Any),
+        EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::To)),
+    ];
+    for kind in cases {
+        let (_temp, root) = repository();
+        fs::create_dir(root.join("vendor")).unwrap();
+        fs::write(root.join("vendor/lib.rs"), "tracked").unwrap();
+        run_git(&root, &["add", "vendor/lib.rs"]);
+        fs::write(root.join(".gitignore"), "vendor\n").unwrap();
+        let target = unique_temp_dir("gitcomet-tracked-directory-symlink-target");
+        fs::remove_dir_all(root.join("vendor")).unwrap();
+        let link = root.join("vendor");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target.path(), &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(target.path(), &link).unwrap();
+        let mut rules = load_gitignore_rules(&root);
+        let event = notify::Event::new(kind).add_path(link);
+        let effect = summarize_event(&root, Some(&root.join(".git")), &mut rules, &event);
+        assert!(
+            effect.change.is_some_and(|change| change.worktree),
+            "tracked files vanished behind the link after {kind:?}: {effect:?}"
+        );
+    }
 }
 
 #[test]
