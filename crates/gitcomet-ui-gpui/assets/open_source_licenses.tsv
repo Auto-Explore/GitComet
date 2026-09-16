@@ -139,7 +139,6 @@ crossbeam-utils	0.8.23	MIT OR Apache-2.0
 crunchy	0.2.4	MIT
 crypto-common	0.1.7	MIT OR Apache-2.0
 ctor	1.0.13	Apache-2.0 OR MIT
-cty	0.2.2	MIT OR Apache-2.0
 cursor-icon	1.2.0	MIT OR Apache-2.0 OR Zlib
 dashmap	6.2.1	MIT
 data-url	0.3.2	MIT OR Apache-2.0
@@ -371,7 +370,6 @@ libc	0.2.189	MIT OR Apache-2.0
 libfuzzer-sys	0.4.13	(MIT OR Apache-2.0) AND NCSA
 libloading	0.8.9	ISC
 libm	0.2.16	MIT
-libmimalloc-sys	0.1.49	MIT
 libredox	0.1.24	MIT
 libz-sys	1.1.29	MIT OR Apache-2.0
 linebender_resource_handle	0.1.1	Apache-2.0 OR MIT
@@ -399,7 +397,6 @@ memfd	0.6.6	MIT OR Apache-2.0
 memmap2	0.9.11	MIT OR Apache-2.0
 memoffset	0.9.1	MIT
 metal	0.33.0	MIT OR Apache-2.0
-mimalloc	0.1.52	MIT
 minimal-lexical	0.2.1	MIT/Apache-2.0
 miniz_oxide	0.8.9	MIT OR Zlib OR Apache-2.0
 miniz_oxide	0.9.1	MIT OR Zlib OR Apache-2.0
@@ -558,6 +555,8 @@ rustc-demangle	0.1.28	MIT/Apache-2.0
 rustc-hash	1.1.0	Apache-2.0/MIT
 rustc-hash	2.1.3	Apache-2.0 OR MIT
 rustc_version	0.4.1	MIT OR Apache-2.0
+rustfs-mimalloc	0.5.3	Apache-2.0
+rustfs-mimalloc-sys	0.5.3	Apache-2.0
 rustix	1.1.4	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 rustix-openpty	0.2.0	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 rustls	0.23.45	Apache-2.0 OR ISC OR MIT

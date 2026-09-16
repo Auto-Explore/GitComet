@@ -27,7 +27,7 @@ use git_root::is_git_root_marker;
 use gitcomet_core::process::install_git_executable_path;
 #[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
 use linux_wayland_fallback::maybe_relaunch_with_linux_x11_fallback;
-use mimalloc::MiMalloc;
+use rustfs_mimalloc::MiMalloc;
 
 pub(crate) use gitcomet_core::hex::encode as hex_encode;
 
