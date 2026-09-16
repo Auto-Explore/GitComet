@@ -1108,7 +1108,7 @@ impl Render for RepoTabsBarView {
 
             let sliding_tab = RepoTabSlide::new(("repo_tab_slide", repo_id.0), tab, drag_left);
             if drag_left.is_some() {
-                bar = bar.tab(gpui::deferred(sliding_tab).with_priority(1));
+                bar = bar.tab(gpui::deferred(sliding_tab).priority(1));
             } else {
                 bar = bar.tab(sliding_tab);
             }

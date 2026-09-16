@@ -5,7 +5,6 @@ use gpui::{
     AnyElement, Bounds, ClickEvent, CursorStyle, Div, FocusHandle, IntoElement, Pixels,
     SharedString, Stateful, Window, div, px,
 };
-use palette::IntoColor;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -477,7 +476,7 @@ impl Button {
                 .active(move |s| s.bg(selected_bg));
             if !theme.is_dark {
                 base = base.shadow(vec![gpui::BoxShadow {
-                    color: theme.colors.interaction.selected_indicator.into_color(),
+                    color: theme.colors.interaction.selected_indicator.into(),
                     offset: gpui::point(px(0.0), px(0.0)),
                     blur_radius: px(0.0),
                     spread_radius: px(1.0),
