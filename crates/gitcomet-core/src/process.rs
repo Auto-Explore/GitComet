@@ -349,7 +349,13 @@ mod tests {
 
     fn git_runtime_probe_count(probe_log: &Path) -> usize {
         fs::read_to_string(probe_log)
-            .unwrap_or_default()
+            .unwrap_or_else(|err| {
+                panic!(
+                    "read probe log {}: {err}; runtime: {:?}",
+                    probe_log.display(),
+                    current_git_runtime()
+                )
+            })
             .lines()
             .count()
     }
@@ -368,6 +374,35 @@ mod tests {
 
         write_git_probe_script(&script, stdout, stderr, exit_code, probe_log);
         (dir, script)
+    }
+
+    #[cfg(unix)]
+    fn write_executable_script(script_path: &Path, script: &str) {
+        // A concurrent test can fork while fs::write holds the script open,
+        // inheriting the writable fd until exec even though it is CLOEXEC.
+        // Probing the script in that window fails with ETXTBSY. Write in a
+        // child instead so the test runner never owns that writable fd, and
+        // wait for the writer to exit before making the script executable.
+        // https://github.com/rust-lang/rust/issues/114554
+        let output = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "umask 077; printf '%s' \"$2\" > \"$1\"",
+                "write-git-fixture",
+            ])
+            .arg(script_path)
+            .arg(script)
+            .output()
+            .expect("run git fixture writer");
+        assert!(
+            output.status.success(),
+            "write git fixture {} failed ({}): {}",
+            script_path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::set_permissions(script_path, fs::Permissions::from_mode(0o700))
+            .expect("set git fixture permissions");
     }
 
     #[cfg(unix)]
@@ -390,12 +425,7 @@ mod tests {
         }
         script.push_str(&format!("exit {exit_code}\n"));
 
-        fs::write(script_path, script).expect("write git probe script");
-        let mut permissions = fs::metadata(script_path)
-            .expect("git probe metadata")
-            .permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(script_path, permissions).expect("set git probe permissions");
+        write_executable_script(script_path, &script);
     }
 
     #[cfg(windows)]
@@ -673,13 +703,8 @@ mod tests {
         let git = dir.path().join("git");
         let gpg = dir.path().join("gpg");
 
-        fs::write(&git, "#!/bin/sh\ngpg --version\n").expect("write git script");
-        fs::write(&gpg, "#!/bin/sh\nprintf 'sibling gpg 1.0\\n'\n").expect("write gpg script");
-        for path in [&git, &gpg] {
-            let mut permissions = fs::metadata(path).expect("script metadata").permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(path, permissions).expect("set script permissions");
-        }
+        write_executable_script(&git, "#!/bin/sh\ngpg --version\n");
+        write_executable_script(&gpg, "#!/bin/sh\nprintf 'sibling gpg 1.0\\n'\n");
 
         let _restore =
             GitRuntimePreferenceResetGuard::install(GitExecutablePreference::Custom(git));
