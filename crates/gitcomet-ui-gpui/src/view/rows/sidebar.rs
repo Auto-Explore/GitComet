@@ -3918,6 +3918,15 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = crate::test_support::lock_visual_test();
+        // OpenRepo normalizes paths. Give it and the worktree list the same
+        // native absolute paths, including on Windows and symlinked temp dirs.
+        let worktrees_dir = tempfile::tempdir().expect("worktree fixture directory");
+        let worktrees_path =
+            gitcomet_core::path_utils::canonicalize_or_original(worktrees_dir.path().to_path_buf());
+        let repo_path = worktrees_path.join("repo");
+        let feature_path = worktrees_path.join("repo-feature");
+        std::fs::create_dir(&repo_path).expect("main worktree directory");
+        std::fs::create_dir(&feature_path).expect("feature worktree directory");
         let (store, events) = AppStore::new(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
@@ -3925,7 +3934,7 @@ mod tests {
 
         let repo_id = RepoId(1);
         crate::view::test_support::redraw(cx);
-        store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/repo")));
+        store_for_assert.dispatch(Msg::OpenRepo(repo_path.clone()));
         wait_until(cx, "opened repo placeholder", |_cx| {
             let snapshot = store_for_assert.snapshot();
             snapshot.active_repo == Some(repo_id)
@@ -3982,13 +3991,13 @@ mod tests {
             repo_id,
             result: Ok(vec![
                 Worktree {
-                    path: PathBuf::from("/tmp/repo"),
+                    path: repo_path,
                     head: None,
                     branch: Some("main".to_string()),
                     detached: false,
                 },
                 Worktree {
-                    path: PathBuf::from("/tmp/repo-feature"),
+                    path: feature_path.clone(),
                     head: None,
                     branch: Some("feature".to_string()),
                     detached: false,
@@ -4223,7 +4232,7 @@ mod tests {
                         branch: Some(ref branch),
                     }),
                 }) if opened_repo_id == repo_id
-                    && path == &PathBuf::from("/tmp/repo-feature")
+                    && path == &feature_path
                     && branch == "feature"
             ),
             "expected worktree badge click to open the worktree menu"
@@ -4264,7 +4273,7 @@ mod tests {
                         branch: Some(ref branch),
                     }),
                 }) if opened_repo_id == repo_id
-                    && path == &PathBuf::from("/tmp/repo-feature")
+                    && path == &feature_path
                     && branch == "feature"
             ),
             "expected worktree badge right-click to open the worktree menu"

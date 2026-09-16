@@ -708,38 +708,43 @@ fn discrete_control_styles_and_activation_are_owned_by_the_interaction_kit() {
             if raw_click.is_match(&source) {
                 violations.push(format!("{}: raw click activation", relative.display()));
             }
-            let relative = relative.to_string_lossy();
             // These releases end continuous gestures. Text links observe a
             // shared SubtargetClick because their input owns pointer selection.
-            let release_gesture = matches!(
-                relative.as_ref(),
-                "kit/text_input/render.rs"
-                    | "view/components/commit_link_menu.rs"
-                    | "view/gitcomet_view.rs"
-                    | "view/chrome.rs"
-                    | "view/settings_window/render.rs"
-                    | "view/terminal_panel.rs"
-                    | "view/terminal_panel/viewport.rs"
-                    | "view/panels/layout.rs"
-                    | "view/panels/repo_tabs_bar.rs"
-                    | "view/panes/history/history_panel.rs"
-                    | "view/rows/diff_text/build.rs"
-                    | "view/panels/main/conflict_resolver_view.rs"
-                    | "view/panels/main/diff.rs"
-                    | "view/panels/main/diff_view.rs"
-            );
+            // Compare paths as paths so Windows separators match the allowlist.
+            let release_gesture = [
+                "kit/text_input/render.rs",
+                "view/components/commit_link_menu.rs",
+                "view/gitcomet_view.rs",
+                "view/chrome.rs",
+                "view/settings_window/render.rs",
+                "view/terminal_panel.rs",
+                "view/terminal_panel/viewport.rs",
+                "view/panels/layout.rs",
+                "view/panels/repo_tabs_bar.rs",
+                "view/panes/history/history_panel.rs",
+                "view/rows/diff_text/build.rs",
+                "view/panels/main/conflict_resolver_view.rs",
+                "view/panels/main/diff.rs",
+                "view/panels/main/diff_view.rs",
+            ]
+            .iter()
+            .any(|allowed| relative == std::path::Path::new(allowed));
             if raw_release.is_match(&source) && !release_gesture {
-                violations.push(format!("{relative}: release without the shared click gate"));
+                violations.push(format!(
+                    "{}: release without the shared click gate",
+                    relative.display()
+                ));
             }
             if context_press.is_match(&source)
-                && !matches!(
-                    relative.as_ref(),
-                    "kit/text_input/editing.rs"
-                        | "kit/text_input/render.rs"
-                        | "view/terminal_panel/viewport.rs"
-                )
+                && ![
+                    "kit/text_input/editing.rs",
+                    "kit/text_input/render.rs",
+                    "view/terminal_panel/viewport.rs",
+                ]
+                .iter()
+                .any(|allowed| relative == std::path::Path::new(allowed))
             {
-                violations.push(format!("{relative}: context action on press"));
+                violations.push(format!("{}: context action on press", relative.display()));
             }
         }
     }
