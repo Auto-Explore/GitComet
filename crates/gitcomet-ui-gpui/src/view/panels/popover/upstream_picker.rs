@@ -431,11 +431,10 @@ pub(super) fn panel(
         ))
         .selected(selected_index == Some(0))
         .tooltip_host(this.tooltip_host.clone())
-        .render(theme, ui_scale, cx)
-        .debug_selector(|| "upstream_unlink".to_string())
-        .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+        .on_select(theme, ui_scale, cx, move |this, _e, _window, cx| {
             unlink(this, repo_id, &unlink_branch, cx);
-        }));
+        })
+        .debug_selector(|| "upstream_unlink".to_string());
         content = content.child(unlink_entry);
     } else if can_create_new_branch {
         let create_branch = branch.clone();
@@ -448,11 +447,10 @@ pub(super) fn panel(
         ))
         .selected(selected_index == Some(0))
         .tooltip_host(this.tooltip_host.clone())
-        .render(theme, ui_scale, cx)
-        .debug_selector(|| "upstream_create_new".to_string())
-        .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
+        .on_select(theme, ui_scale, cx, move |this, _e, window, cx| {
             create_new(this, repo_id, &create_branch, window, cx);
-        }));
+        })
+        .debug_selector(|| "upstream_create_new".to_string());
         content = content.child(create_entry);
     }
     if leading_action_count > 0 {

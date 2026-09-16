@@ -20,11 +20,15 @@ mod toast;
 mod tokens;
 mod truncated_text;
 
+pub use crate::kit::interaction::{
+    ControlActivation, ControlInteractionExt, InteractionState, InteractionStyle,
+    control_open_background,
+};
 pub use avatar::{
     AVATAR_DIAMETER_PX, AVATAR_FONT_PX, author_avatar, author_color, author_initials,
     initials_paint_origin_y,
 };
-pub use button::{Button, ButtonStyle};
+pub use button::{Button, ButtonStyle, inline_icon_button};
 pub use commit_link_menu::{CommitLinkMenu, LinkTarget, MessageLink};
 pub use containers::{
     ScrollContainer, content_header_bar, empty_state, empty_state_message, split_columns_header,
@@ -36,11 +40,9 @@ pub use context_menu::{
     context_menu_header, context_menu_label, context_menu_separator,
 };
 pub use diff_stat::{diff_stat, diff_stat_optional};
-pub use interactive_row::{
-    InteractiveRowExt, InteractiveRowState, InteractiveRowStyle, light_theme_selection_outline,
-};
+pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
 pub use modal::{modal_scrim, modal_surface, popover_surface};
-pub use panel_tab::{panel_tab, panel_tab_close};
+pub use panel_tab::{on_nested_control_click, panel_tab, panel_tab_close, panel_tab_text_color};
 /// Public field type of [`PickerPromptLayout::headers`], carried out of the
 /// private module with it so a caller can name what that field hands them
 /// instead of only ever binding it through an inferred closure argument.

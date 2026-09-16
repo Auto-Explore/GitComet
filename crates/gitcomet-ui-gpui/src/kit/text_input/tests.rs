@@ -2213,6 +2213,41 @@ fn multiline_input(
 }
 
 #[gpui::test]
+fn read_only_appends_preserve_selection_direction_and_drag(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_read_only(true, cx);
+            input.set_text("héllo\nworld", cx);
+            input.set_selected_range(1..6, false, window, cx);
+            input.selection.reversed = true;
+            input.interaction.is_selecting = true;
+            input.interaction.mouse_selection_anchor = Some(6);
+            input.layout.scroll_x = px(12.0);
+            input.set_text_preserving_selection_on_append("héllo\nworld\nnext", cx);
+            assert_eq!(input.selected_text().as_deref(), Some("éllo"));
+            assert!(input.selection.reversed);
+            assert!(input.interaction.is_selecting);
+            assert_eq!(input.interaction.mouse_selection_anchor, Some(6));
+            assert_eq!(input.layout.scroll_x, px(12.0));
+            assert!(!input.selection_owner.is_stale(cx));
+
+            input.set_text_preserving_selection_on_append("world\nnext", cx);
+            assert!(input.selected_range().is_empty());
+            assert!(!input.interaction.is_selecting);
+            assert_eq!(input.interaction.mouse_selection_anchor, None);
+
+            input.set_selected_range(0..5, false, window, cx);
+            input.set_text("world\nnext\nordinary setter", cx);
+            assert!(
+                input.selected_range().is_empty(),
+                "ordinary setters retain their behavior"
+            );
+        });
+    });
+}
+
+#[gpui::test]
 fn typing_keeps_provider_highlights_aligned(cx: &mut gpui::TestAppContext) {
     let (input, cx) = multiline_input(cx);
 

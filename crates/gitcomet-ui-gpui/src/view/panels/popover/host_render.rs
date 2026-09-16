@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 impl Render for PopoverHost {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -34,7 +35,7 @@ impl Render for PopoverHost {
                 .size_full()
                 .bg(gpui::rgba(0x00000000))
                 .occlude()
-                .on_any_mouse_down(close);
+                .on_any_pointer_click(close);
             layer = layer.child(scrim);
         }
         layer = layer.child(popover);

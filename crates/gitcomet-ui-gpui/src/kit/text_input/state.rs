@@ -480,6 +480,7 @@ pub(super) struct UndoSnapshot {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct TextInputStyle {
+    pub(super) menu_theme: AppTheme,
     pub(super) background: Rgba,
     pub(super) border: Rgba,
     pub(super) hover_border: Rgba,
@@ -512,6 +513,7 @@ impl TextInputStyle {
             theme.colors.interaction.focus_ring
         };
         Self {
+            menu_theme: theme,
             background: theme.colors.surface.input,
             border: theme.colors.stroke.control,
             hover_border,
@@ -853,6 +855,8 @@ pub struct TextInput {
     pub(super) multiline: bool,
     pub(super) read_only: bool,
     pub(super) chromeless: bool,
+    /// Read-only labels inherit surrounding typography and size to their text.
+    pub(super) display_text: bool,
     pub(super) soft_wrap: bool,
     pub(super) min_lines: u32,
     pub(super) display_truncation: Option<TextTruncationProfile>,

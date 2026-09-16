@@ -198,9 +198,8 @@ impl TerminalViewportView {
         Self::with_backend(theme, focus_handle, Some(term_lock), Some(pty_sender), cx)
     }
 
-    /// Shared constructor. Tests use it to build a viewport over a real `Term`
-    /// but with no PTY, since a `PtySender` can only come from a spawned event
-    /// loop.
+    /// Shared constructor. Tests use a real `Term` with either no PTY or a
+    /// sender that records messages without spawning a process.
     pub(super) fn with_backend(
         theme: AppTheme,
         focus_handle: FocusHandle,
@@ -428,7 +427,12 @@ impl TerminalViewportView {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         if let Some(action) = terminal_clipboard_shortcut_action(keystroke) {
-            self.perform_clipboard_action(action, window, cx);
+            self.perform_command(
+                action,
+                crate::clipboard::CopySource::TerminalShortcut,
+                window,
+                cx,
+            );
             cx.stop_propagation();
             return true;
         }
@@ -455,43 +459,53 @@ impl TerminalViewportView {
         false
     }
 
-    pub(super) fn perform_clipboard_action(
+    pub(super) fn perform_command(
         &mut self,
-        action: TerminalShortcutAction,
+        action: TerminalCommand,
+        copy_source: crate::clipboard::CopySource,
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
         match action {
-            TerminalShortcutAction::Copy => {
-                let text = if self.select_all_active {
-                    self.copy_entire_buffer()
-                } else if let Some((start, end)) = self.selection_start.zip(self.selection_end) {
-                    self.copy_grid_range(start, end)
-                } else {
-                    // Fallback: copy visible screen content when no selection
-                    self.copy_visible_screen()
-                };
+            TerminalCommand::Copy => {
+                let text = self.selected_text().unwrap_or_else(|| {
+                    // Keyboard Copy also works without a selection.
+                    if copy_source == crate::clipboard::CopySource::TerminalShortcut
+                        && !self.has_selection()
+                    {
+                        self.copy_visible_screen()
+                    } else {
+                        String::new()
+                    }
+                });
                 if !text.is_empty() {
-                    crate::clipboard::write_text(
-                        cx,
-                        text,
-                        crate::clipboard::CopySource::TerminalShortcut,
-                    );
+                    crate::clipboard::write_text(cx, text, copy_source);
                 }
             }
-            TerminalShortcutAction::Paste => {
-                let bracketed = self
-                    .last_content
-                    .as_ref()
-                    .map(|c| c.mode.contains(TerminalModes::BRACKETED_PASTE))
-                    .unwrap_or(false);
+            TerminalCommand::Paste => {
                 if let Some(text) = crate::clipboard::read_text(cx) {
-                    let bytes = terminal_paste_bytes(&text, bracketed);
-                    self.queue_input(bytes, cx);
+                    self.paste_text(&text, cx);
                 }
             }
-            TerminalShortcutAction::SelectAll => self.select_all(window, cx),
+            TerminalCommand::SelectAll => self.select_all(window, cx),
+            TerminalCommand::ClearScreenAndScrollback => self.clear_screen_and_scrollback(cx),
         }
+    }
+
+    pub(super) fn clear_screen_and_scrollback(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(term_lock) = &self.term_lock else {
+            return;
+        };
+        {
+            let mut term = term_lock.lock();
+            clear_terminal_screen_and_scrollback(&mut term);
+            self.last_content = Some(make_terminal_content(&term));
+        }
+        self.clear_selection();
+        self.content_epoch = self.content_epoch.wrapping_add(1);
+        self.render_cache = TerminalRenderCache::default();
+        self.reset_cursor_blink(cx);
+        cx.notify();
     }
 
     pub(super) fn copy_grid_range(

@@ -637,13 +637,20 @@ fn paint_stage_gutter(
         // The chip is opaque so it masks any line-number digits it covers. Over
         // the row it stays quiet; under the pointer it takes a tint of the
         // action it performs.
-        let (chip, icon) = if hover.on_button {
-            (
-                crate::theme::composite_over(row_bg, with_alpha(color, 0.22)),
-                color,
-            )
+        let chip = crate::kit::interaction::InteractionStyle::tinted(theme, color)
+            .resolved_background(
+                row_bg,
+                crate::kit::interaction::InteractionState::default(),
+                if hover.on_button {
+                    crate::kit::interaction::InteractionFeedback::Hovered
+                } else {
+                    crate::kit::interaction::InteractionFeedback::Resting
+                },
+            );
+        let icon = if hover.on_button {
+            color
         } else {
-            (row_bg, with_alpha(color, 0.75))
+            with_alpha(color, 0.75)
         };
         window.paint_quad(fill(prepaint.cell, chip).corner_radii(px(theme.radii.control)));
         paint_centered_svg_icon(
@@ -731,6 +738,7 @@ fn install_stage_gutter_hover_handler(
 fn install_blame_annotation_mouse_handler(
     window: &mut Window,
     view: &Entity<MainPaneView>,
+    scope: gpui::ElementId,
     message_hitbox: &Hitbox,
     prior_icon_hitbox: &Hitbox,
     browse_icon_hitbox: &Hitbox,
@@ -742,68 +750,81 @@ fn install_blame_annotation_mouse_handler(
     prior_enabled: bool,
     browse_enabled: bool,
 ) {
-    window.on_mouse_event({
-        let view = view.clone();
-        let message_hitbox = message_hitbox.clone();
-        let prior_icon_hitbox = prior_icon_hitbox.clone();
-        let browse_icon_hitbox = browse_icon_hitbox.clone();
-        move |event: &gpui::MouseDownEvent, phase, window, cx| {
-            if phase != DispatchPhase::Bubble || event.button != gpui::MouseButton::Left {
-                return;
-            }
-            let commit_id = commit_id.clone();
-            let path = path.clone();
-            // For renamed files, navigate to the historical name at this commit
-            // rather than the current path (which may not exist in that tree).
-            let historical_path = source_path
-                .as_deref()
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or_else(|| path.to_path_buf());
-            // `is_hovered`, not `contains`: this is a window-level listener, so
-            // it runs even for clicks that landed on something painted over the
-            // diff. Only the hit test knows what actually owns the pointer.
-            let action = if browse_enabled && browse_icon_hitbox.is_hovered(window) {
-                BlameClickAction::Browse
-            } else if prior_enabled && prior_icon_hitbox.is_hovered(window) {
-                BlameClickAction::PriorRevision
-            } else if message_enabled && message_hitbox.is_hovered(window) {
-                BlameClickAction::OpenDetails
-            } else {
-                return;
-            };
-            let prior_commit = prior_commit.clone();
-            view.update(cx, |this, cx| {
-                let Some(repo_id) = this.active_repo_id() else {
-                    return;
-                };
-                let msg = match action {
-                    BlameClickAction::Browse => Msg::OpenFileAtCommit {
-                        repo_id,
-                        commit_id,
-                        path: historical_path,
-                    },
-                    // An uncommitted ("Now") line's prior is the base revision it
-                    // was edited from: open that commit directly. A committed line
-                    // resolves and opens its commit's parent.
-                    BlameClickAction::PriorRevision => match prior_commit {
-                        Some(base) => Msg::OpenFileAtCommit {
-                            repo_id,
-                            commit_id: base,
-                            path: historical_path,
-                        },
-                        None => Msg::OpenFileAtCommitParent {
-                            repo_id,
-                            commit_id,
-                            path: historical_path,
-                        },
-                    },
-                    BlameClickAction::OpenDetails => Msg::SelectCommit { repo_id, commit_id },
-                };
-                this.store.dispatch(msg);
-                cx.notify();
-            });
+    for (name, hitbox, enabled, action) in [
+        (
+            "details",
+            message_hitbox,
+            message_enabled,
+            BlameClickAction::OpenDetails,
+        ),
+        (
+            "prior",
+            prior_icon_hitbox,
+            prior_enabled,
+            BlameClickAction::PriorRevision,
+        ),
+        (
+            "browse",
+            browse_icon_hitbox,
+            browse_enabled,
+            BlameClickAction::Browse,
+        ),
+    ] {
+        if !enabled {
+            continue;
         }
-    });
+        let target = gpui::ElementId::from((
+            scope.clone(),
+            gpui::SharedString::from(format!(
+                "blame:{name}:{}:{}",
+                commit_id.as_ref(),
+                path.display()
+            )),
+        ));
+        let view = view.clone();
+        let commit_id = commit_id.clone();
+        let historical_path = source_path.as_deref().unwrap_or(&path).to_path_buf();
+        let prior_commit = prior_commit.clone();
+        crate::kit::click::on_canvas_click(
+            window,
+            target,
+            hitbox,
+            gpui::MouseButton::Left,
+            true,
+            move |_, _, cx| {
+                view.update(cx, |this, cx| {
+                    let Some(repo_id) = this.active_repo_id() else {
+                        return;
+                    };
+                    let msg = match action {
+                        BlameClickAction::Browse => Msg::OpenFileAtCommit {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                            path: historical_path.clone(),
+                        },
+                        BlameClickAction::PriorRevision => match prior_commit.clone() {
+                            Some(base) => Msg::OpenFileAtCommit {
+                                repo_id,
+                                commit_id: base,
+                                path: historical_path.clone(),
+                            },
+                            None => Msg::OpenFileAtCommitParent {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                                path: historical_path.clone(),
+                            },
+                        },
+                        BlameClickAction::OpenDetails => Msg::SelectCommit {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                    };
+                    this.store.dispatch(msg);
+                    cx.notify();
+                });
+            },
+        );
+    }
 }
 
 enum BlameClickAction {
@@ -893,6 +914,7 @@ fn render_blame_column(
         install_blame_annotation_mouse_handler(
             window,
             view,
+            diff_canvas_click_target(view, visible_ix, "blame", cx),
             &hb.message,
             &hb.prior_icon,
             &hb.browse_icon,
@@ -2463,6 +2485,7 @@ pub(super) fn inline_diff_line_row_canvas(
                     mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
                     stage: stage_buttons,
                 },
+                cx,
             );
 
             if selected {
@@ -2821,6 +2844,7 @@ pub(super) fn split_diff_line_row_canvas(
                     mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
                     stage: stage_buttons,
                 },
+                cx,
             );
 
             if selected {
@@ -3067,6 +3091,7 @@ pub(super) fn patch_split_column_row_canvas(
                     mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
                     stage: stage_buttons,
                 },
+                cx,
             );
 
             if selected {
@@ -3342,20 +3367,30 @@ pub(super) fn worktree_preview_row_canvas(
                             );
                             cx.notify();
                         });
-                    } else if event.button == gpui::MouseButton::Right {
-                        view.update(cx, |this, cx| {
-                            this.open_diff_editor_context_menu(
-                                ix,
-                                DiffTextRegion::Inline,
-                                event.position,
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        });
                     }
                 }
             });
+            let target = diff_canvas_click_target(&view, ix, "preview-context", cx);
+            let view = view.clone();
+            crate::kit::click::on_canvas_click(
+                window,
+                target,
+                &prepaint.text_hitbox,
+                gpui::MouseButton::Right,
+                true,
+                move |event, window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.open_diff_editor_context_menu(
+                            ix,
+                            DiffTextRegion::Inline,
+                            event.position(),
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    })
+                },
+            );
         },
     )
     .h(theme.editor_row_height(ui_scale_percent))
@@ -3540,11 +3575,32 @@ fn should_handle_row_mouse_event(
     phase == DispatchPhase::Bubble && row_hitbox.is_hovered(window)
 }
 
+fn diff_canvas_click_target(
+    view: &Entity<MainPaneView>,
+    visible_ix: usize,
+    action: &str,
+    cx: &App,
+) -> gpui::ElementId {
+    let pane = view.read(cx);
+    (
+        gpui::ElementId::View(view.entity_id()),
+        gpui::SharedString::from(format!(
+            "diff:{:?}:{:?}:{}:{}:{visible_ix}:{action}",
+            pane.active_repo_id(),
+            pane.rendered_diff_target(),
+            pane.rendered_patch_diff_rev(),
+            pane.diff_visible_projection_rev
+        )),
+    )
+        .into()
+}
+
 fn install_diff_row_mouse_handlers(
     window: &mut Window,
     view: &Entity<MainPaneView>,
     visible_ix: usize,
     handlers: DiffRowMouseHandlers,
+    cx: &App,
 ) {
     let DiffRowMouseHandlers {
         row_hitbox,
@@ -3553,115 +3609,117 @@ fn install_diff_row_mouse_handlers(
         mouse_up,
         stage,
     } = handlers;
-    let row_hitbox_for_down = row_hitbox.clone();
-    let regions = regions.clone();
+    if mouse_up != DiffRowMouseUpBehavior::None {
+        let target = diff_canvas_click_target(view, visible_ix, "row", cx);
+        let view = view.clone();
+        let stage = stage.clone();
+        crate::kit::click::on_canvas_click(
+            window,
+            target,
+            &row_hitbox,
+            gpui::MouseButton::Left,
+            false,
+            move |event, window, cx| {
+                if StageGutterMouse::hovered(&stage, window).is_some() {
+                    return;
+                }
+                view.update(cx, |this, cx| {
+                    if !this.consume_suppress_click_after_drag() {
+                        this.handle_patch_row_click(
+                            visible_ix,
+                            DiffClickKind::Line,
+                            event.modifiers().shift,
+                        );
+                    }
+                    cx.notify();
+                });
+            },
+        );
+    }
+    let text_hitbox = row_hitbox.clone();
+    let text_regions = regions.clone();
     let stage_for_down = stage.clone();
     window.on_mouse_event({
         let view = view.clone();
         move |event: &gpui::MouseDownEvent, phase, window, cx| {
-            if !should_handle_row_mouse_event(phase, &row_hitbox_for_down, window) {
+            if event.button != gpui::MouseButton::Left
+                || !should_handle_row_mouse_event(phase, &text_hitbox, window)
+            {
                 return;
             }
-
-            let region = regions.region_at(event.position);
-
-            if event.button == gpui::MouseButton::Left {
-                let focus = view.read(cx).diff_panel_focus_handle.clone();
-                window.focus(&focus, cx);
-                // The gutter button owns the whole press: staging happens here,
-                // and neither text selection nor row selection may see it.
-                // Claiming the press is what stands the release handlers down —
-                // staging reloads the diff, so the release lands on a repainted
-                // row whose fresh handlers would otherwise read it as an
-                // ordinary click. The claim outlives the release and is cleared
-                // by the next press, so it cannot swallow a later click.
-                // A repeat click of a double-click stages nothing: the first one
-                // is still in flight, and window-activating clicks
-                // (`first_mouse`) must not act at all.
-                if let Some(kind) = StageGutterMouse::hovered(&stage_for_down, window) {
-                    crate::press_gesture::claim_press(cx);
-                    cx.stop_propagation();
-                    if event.click_count > 1 || event.first_mouse {
-                        return;
-                    }
-                    view.update(cx, |this, cx| {
-                        this.stage_or_unstage_diff_line(visible_ix, kind, cx);
-                        cx.notify();
-                    });
-                    return;
-                }
-                if let Some(region) = region {
-                    let click_count = event.click_count;
-                    let position = event.position;
-                    view.update(cx, |this, cx| {
-                        this.handle_diff_text_mouse_down(
-                            visible_ix,
-                            region,
-                            position,
-                            click_count,
-                            window,
-                            cx,
-                        );
-                        cx.notify();
-                    });
-                }
-            } else if event.button == gpui::MouseButton::Right
-                && let Some(region) = region
-            {
+            let focus = view.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus, cx);
+            if StageGutterMouse::hovered(&stage_for_down, window).is_some() {
+                return;
+            }
+            if let Some(region) = text_regions.region_at(event.position) {
+                view.update(cx, |this, cx| {
+                    this.handle_diff_text_mouse_down(
+                        visible_ix,
+                        region,
+                        event.position,
+                        event.click_count,
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                });
+            }
+        }
+    });
+    let target = diff_canvas_click_target(view, visible_ix, "context", cx);
+    let menu_view = view.clone();
+    crate::kit::click::on_canvas_click(
+        window,
+        target,
+        &row_hitbox,
+        gpui::MouseButton::Right,
+        true,
+        move |event, window, cx| {
+            if let Some(region) = regions.region_at(event.position()) {
                 match right_click {
                     DiffRowRightClickBehavior::OpenContextMenu => {
-                        view.update(cx, |this, cx| {
+                        menu_view.update(cx, |this, cx| {
                             this.open_diff_editor_context_menu(
                                 visible_ix,
                                 region,
-                                event.position,
+                                event.position(),
                                 window,
                                 cx,
                             );
                             cx.notify();
-                        });
+                        })
                     }
                 }
             }
-        }
-    });
-
-    if mouse_up == DiffRowMouseUpBehavior::None {
-        return;
-    }
-
-    window.on_mouse_event({
+        },
+    );
+    for (slot, button) in stage.into_iter().enumerate() {
+        let target = diff_canvas_click_target(
+            view,
+            visible_ix,
+            &format!("stage:{slot}:{:?}", button.kind),
+            cx,
+        );
         let view = view.clone();
-        move |event: &gpui::MouseUpEvent, phase, window, cx| {
-            if event.button != gpui::MouseButton::Left
-                || !should_handle_row_mouse_event(phase, &row_hitbox, window)
-            {
-                return;
-            }
-
-            // A canvas cannot lean on `on_click` to pair press and release, so
-            // it asks who owns the press instead.
-            if crate::press_gesture::is_press_claimed(cx) {
-                return;
-            }
-
-            // A release over a gutter button belongs to that button (it already
-            // staged on press): it must not also move the row selection.
-            if StageGutterMouse::hovered(&stage, window).is_some() {
-                return;
-            }
-
-            let shift = event.modifiers.shift;
-            view.update(cx, |this, cx| {
-                if this.consume_suppress_click_after_drag() {
-                    cx.notify();
+        crate::kit::click::on_canvas_click(
+            window,
+            target,
+            &button.hitbox,
+            gpui::MouseButton::Left,
+            true,
+            move |event, window, cx| {
+                if event.click_count() > 1 {
                     return;
                 }
-                this.handle_patch_row_click(visible_ix, DiffClickKind::Line, shift);
-                cx.notify();
-            });
-        }
-    });
+                view.update(cx, |this, cx| {
+                    window.focus(&this.diff_panel_focus_handle, cx);
+                    this.stage_or_unstage_diff_line(visible_ix, button.kind, cx);
+                    cx.notify();
+                });
+            },
+        );
+    }
 }
 
 /// Smaller font metrics for the "X ago" sub-column in the annotation panel.

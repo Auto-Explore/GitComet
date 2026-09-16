@@ -5,6 +5,8 @@ use super::super::sidebar_presentation::{
     SidebarPresentation, SidebarPresentationCache, SidebarRequestFingerprint,
 };
 use super::super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use gitcomet_core::domain::{FileEntry, FileEntryKind, LogScope};
 use gitcomet_state::model::{Loadable, SidebarDataRequest, SidebarMode};
 use gitcomet_state::msg::Msg;
@@ -1207,7 +1209,7 @@ impl SidebarPaneView {
                     components::Button::new("collapsed_popover_filter_toggle", "")
                         .borderless()
                         .style(components::ButtonStyle::Subtle)
-                        .selected(filter_open)
+                        .open(filter_open)
                         .selected_bg(with_alpha(
                             theme.colors.accent.foreground,
                             if theme.is_dark { 0.34 } else { 0.24 },
@@ -1242,7 +1244,7 @@ impl SidebarPaneView {
                     components::Button::new("collapsed_popover_section_menu", "")
                         .borderless()
                         .style(components::ButtonStyle::Subtle)
-                        .selected(section_menu_active)
+                        .open(section_menu_active)
                         .selected_bg(with_alpha(
                             theme.colors.accent.foreground,
                             if theme.is_dark { 0.34 } else { 0.24 },
@@ -1257,8 +1259,12 @@ impl SidebarPaneView {
                             scaled_px(15.0),
                         ))
                         .on_click(theme, cx, move |this, e, window, cx| {
-                            this.activate_context_menu_invoker(invoker.clone(), cx);
-                            this.open_popover_at(kind.clone(), e.position(), window, cx);
+                            this.open_popover_at(
+                                kind.clone().invoked_by(invoker.clone()),
+                                e.position(),
+                                window,
+                                cx,
+                            );
                         })
                         .w(components::control_height(ui_scale))
                         .h(components::control_height(ui_scale))
@@ -1726,136 +1732,43 @@ impl SidebarPaneView {
             theme.colors.surface.chrome
         };
 
-        let store_branches = Arc::clone(&self.store);
-        let store_files = Arc::clone(&self.store);
-        // `theme.colors.interaction.hover_background` is nearly identical to the sidebar chrome bg,
-        // so use the standard text-tinted overlay that reads on hover.
-        let tab_hover_bg = theme.hover_overlay();
-        // Lifts the active chip, which already carries `interaction.selected_background` and so
-        // cannot show the plain overlay the inactive one uses.
-        let tab_active_hover_bg = crate::theme::mix_colors(
-            theme.colors.interaction.selected_background,
-            theme.colors.foreground.primary,
-            if theme.is_dark { 0.08 } else { 0.05 },
-        );
-        // Same value as `ButtonStyle::Subtle`'s hover border, so the chips match
-        // the locate action sharing their strip.
-        let tab_hover_border = with_alpha(
-            theme.colors.foreground.secondary,
-            if theme.is_dark { 0.45 } else { 0.32 },
-        );
-        // On light themes `interaction.selected_background` lands almost on top
-        // of the chrome this strip paints, so a filled chip has no edge of its
-        // own and the selected tab does not read as selected at all. Give it
-        // the same selection indicator outline that selected rows and buttons
-        // already carry on light themes, at rest and on hover alike. Dark
-        // themes have the fill contrast already, so they stay borderless.
-        let tab_selected_border = if theme.is_dark {
-            gpui::rgba(0x00000000)
-        } else {
-            theme.colors.interaction.selected_indicator
-        };
-        // Hovering the selected chip must not trade its outline down for the
-        // weaker idle-hover one, so on light themes it keeps the indicator and
-        // only the fill lifts.
-        let tab_selected_hover_border = if theme.is_dark {
-            tab_hover_border
-        } else {
-            tab_selected_border
-        };
-
-        // The ids are load-bearing, not just for tests: gpui only allocates the
-        // element state that makes a `.hover()` repaint the view for *stateful*
-        // elements. On a bare `div()` the hover style is computed but nothing
-        // ever asks for a new frame, so it never reaches the screen.
-        let branches_tab = div()
-            .id("sidebar_tab_branches")
-            .debug_selector(|| "sidebar_tab_branches".to_string())
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(scaled_px(8.0))
-            .h(components::control_height(ui_scale))
-            .rounded(px(theme.radii.control))
-            .border_1()
-            .when(mode == SidebarMode::Branches, |d| {
-                d.bg(theme.colors.interaction.selected_background)
-                    .border_color(tab_selected_border)
-                    .text_color(theme.colors.interaction.selected_foreground)
-            })
-            .when(mode != SidebarMode::Branches, |d| {
-                d.bg(gpui::transparent_black())
-                    .border_color(gpui::transparent_black())
-                    .text_color(theme.colors.foreground.secondary)
-            })
-            .hover(move |d| {
-                if mode != SidebarMode::Branches {
-                    d.border_color(tab_hover_border).bg(tab_hover_bg)
+        let make_tab = |id: &'static str,
+                        label: &'static str,
+                        tab_mode: SidebarMode,
+                        cx: &mut gpui::Context<Self>| {
+            let selected = mode == tab_mode;
+            let selected_bg = if tab_mode == SidebarMode::Files && browsing_files {
+                crate::theme::historical_header_bg(
+                    theme,
+                    theme.colors.interaction.selected_background,
+                )
+            } else {
+                theme.colors.interaction.selected_background
+            };
+            let store = Arc::clone(&self.store);
+            components::Button::new(id, label)
+                .borderless()
+                .selected(selected)
+                .selected_bg(selected_bg)
+                .text_color(if selected {
+                    theme.colors.interaction.selected_foreground
                 } else {
-                    d.border_color(tab_selected_hover_border)
-                        .bg(tab_active_hover_bg)
-                }
-            })
-            .cursor(CursorStyle::PointingHand)
-            .text_size(theme.ui_text(12.0))
-            .child("Branches")
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_this, _e, _window, _cx| {
-                    store_branches.dispatch(Msg::SetSidebarMode {
-                        mode: SidebarMode::Branches,
-                    });
-                }),
-            );
-
-        let files_tab = div()
-            .id("sidebar_tab_files")
-            .debug_selector(|| "sidebar_tab_files".to_string())
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(scaled_px(8.0))
-            .h(components::control_height(ui_scale))
-            .rounded(px(theme.radii.control))
-            .border_1()
-            .when(mode == SidebarMode::Files, |d| {
-                // Carry the tint onto the active chip too, so it does not read
-                // as a neutral hole punched in a tinted bar.
-                d.bg(if browsing_files {
-                    crate::theme::historical_header_bg(
-                        theme,
-                        theme.colors.interaction.selected_background,
-                    )
-                } else {
-                    theme.colors.interaction.selected_background
+                    theme.colors.foreground.secondary
                 })
-                .border_color(tab_selected_border)
-                .text_color(theme.colors.interaction.selected_foreground)
-            })
-            .when(mode != SidebarMode::Files, |d| {
-                d.bg(gpui::transparent_black())
-                    .border_color(gpui::transparent_black())
-                    .text_color(theme.colors.foreground.secondary)
-            })
-            .hover(move |d| {
-                if mode != SidebarMode::Files {
-                    d.border_color(tab_hover_border).bg(tab_hover_bg)
-                } else {
-                    d.border_color(tab_selected_hover_border)
-                        .bg(tab_active_hover_bg)
-                }
-            })
-            .cursor(CursorStyle::PointingHand)
-            .text_size(theme.ui_text(12.0))
-            .child("Files")
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |_this, _e, _window, _cx| {
-                    store_files.dispatch(Msg::SetSidebarMode {
-                        mode: SidebarMode::Files,
-                    });
-                }),
-            );
+                .on_click(theme, cx, move |_, _, _, _| {
+                    store.dispatch(Msg::SetSidebarMode { mode: tab_mode });
+                })
+                .px(scaled_px(8.0))
+                .h(components::control_height(ui_scale))
+                .text_size(theme.ui_text(12.0))
+        };
+        let branches_tab = make_tab(
+            "sidebar_tab_branches",
+            "Branches",
+            SidebarMode::Branches,
+            cx,
+        );
+        let files_tab = make_tab("sidebar_tab_files", "Files", SidebarMode::Files, cx);
 
         // Each tab keeps its locate action in the same trailing slot for the
         // whole time its tree is visible. Unavailable actions grey out instead
@@ -2842,14 +2755,16 @@ impl SidebarPaneView {
                                     row_style,
                                     components::InteractiveRowState::default(),
                                 )
-                                .on_click(cx.listener(
-                                    move |this, _e: &gpui::ClickEvent, _window, cx| {
+                                .on_activate(
+                                    false,
+                                    controls::ControlActivation::Composite,
+                                    cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                                         this.toggle_active_repo_collapse_key(
                                             SharedString::from(FILE_BROWSER_UNSAVED_SECTION_KEY),
                                             cx,
                                         );
-                                    },
-                                ))
+                                    }),
+                                )
                                 .child(chevron_slot(true, !unsaved_collapsed))
                                 .child(icon_slot_tinted(
                                     "icons/pencil.svg",
@@ -2936,25 +2851,29 @@ impl SidebarPaneView {
                         let menu_path = path.clone();
                         row_div = row_div
                             .when(!expansion_frozen, |row| {
-                                row.on_click(cx.listener(
-                                    move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                                        store.dispatch(Msg::ToggleFileBrowserDir {
-                                            repo_id,
-                                            path: path.clone(),
-                                        });
-                                    },
-                                ))
+                                row.on_activate(
+                                    false,
+                                    controls::ControlActivation::Composite,
+                                    cx.listener(
+                                        move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                                            store.dispatch(Msg::ToggleFileBrowserDir {
+                                                repo_id,
+                                                path: path.clone(),
+                                            });
+                                        },
+                                    ),
+                                )
                             })
-                            .on_mouse_down(
+                            .on_pointer_click(
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
-                                    this.activate_context_menu_invoker(menu_invoker.clone(), cx);
                                     this.open_popover_at(
-                                        PopoverKind::FileBrowserFolderMenu {
+                                        (PopoverKind::FileBrowserFolderMenu {
                                             repo_id,
                                             path: menu_path.clone(),
-                                        },
+                                        })
+                                        .invoked_by(menu_invoker.clone()),
                                         e.position,
                                         window,
                                         cx,
@@ -2968,8 +2887,10 @@ impl SidebarPaneView {
                             .map(|r| r.file_browser.source.clone())
                             .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
                         row_div = row_div
-                            .on_click(cx.listener(
-                                move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
                                     // A file the editor is holding unsaved text for
                                     // opens straight back into the editor. Opening
                                     // the read-only view would show the text on
@@ -2986,18 +2907,18 @@ impl SidebarPaneView {
                                             path: path.clone(),
                                         });
                                     }
-                                },
-                            ))
-                            .on_mouse_down(
+                                }),
+                            )
+                            .on_pointer_click(
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
-                                    this.activate_context_menu_invoker(menu_invoker.clone(), cx);
                                     this.open_popover_at(
-                                        PopoverKind::FileBrowserFileMenu {
+                                        (PopoverKind::FileBrowserFileMenu {
                                             repo_id,
                                             path: menu_path.clone(),
-                                        },
+                                        })
+                                        .invoked_by(menu_invoker.clone()),
                                         e.position,
                                         window,
                                         cx,
@@ -3046,23 +2967,14 @@ impl SidebarPaneView {
 
     pub(in super::super) fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_at(kind, anchor, window, cx);
-        });
-    }
-
-    pub(in super::super) fn activate_context_menu_invoker(
-        &mut self,
-        invoker: SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, move |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 
@@ -3391,7 +3303,9 @@ fn unsaved_file_row(
         // Straight into the editor, not the read-only view: every row in this
         // section has unsaved text, and the read-only view would show the file
         // on disk instead of what the user was in the middle of writing.
-        .on_click(
+        .on_activate(
+            false,
+            controls::ControlActivation::Composite,
             cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
                 store.dispatch(Msg::OpenFileEditor {
                     repo_id,

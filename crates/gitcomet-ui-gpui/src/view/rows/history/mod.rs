@@ -2,6 +2,8 @@ use super::diff_canvas;
 use super::diff_text::*;
 use super::history_canvas;
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
+use crate::kit::interaction_paint::InteractionPaint;
 use crate::view::caches::HistoryListRow;
 use palette::IntoColor;
 
@@ -338,8 +340,13 @@ impl HistoryView {
             .text_color(self.theme.colors.foreground.secondary)
             .child("Could not load commits. Click to retry.")
             .when(failed, |row| {
-                row.cursor_pointer().on_mouse_down(
-                    MouseButton::Left,
+                row.control_interaction(
+                    controls::InteractionStyle::new(self.theme),
+                    controls::InteractionState::default(),
+                )
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Composite,
                     cx.listener(move |this, _, _, _| {
                         this.retry_indexed_window(repo_id, snapshot.clone(), block);
                     }),
@@ -508,22 +515,15 @@ fn history_table_row(
                 repo.parse::<u64>() == Ok(repo_id.0) && commit_id == commit.id.as_ref()
             })
     });
-    // The row's background as one value rather than three `.bg()` calls that
-    // overwrite each other, because the graph canvas needs to know it: its icon
-    // nodes knock their glyphs out in the colour the row is actually painted,
-    // and a knockout in the untinted surface leaves a visible patch inside a
-    // tinted row. The hover tint is the canvas's business -- it owns the hitbox
-    // -- so it is not folded in here.
-    let row_bg_overlay = if context_menu_active {
-        Some(theme.colors.interaction.pressed_background)
-    } else if selected {
-        Some(theme.colors.accent.subtle_background)
-    } else if is_head {
-        // A quiet tint keeps HEAD findable without competing with selection.
-        Some(with_alpha(theme.colors.accent.foreground, 0.06))
+    let row_state = controls::InteractionState::default()
+        .selected(selected, theme.colors.accent.subtle_background)
+        .open(context_menu_active);
+    let row_style = controls::InteractionStyle::new(theme).resting_background(if is_head {
+        with_alpha(theme.colors.accent.foreground, 0.06)
     } else {
-        None
-    };
+        gpui::rgba(0x00000000)
+    });
+    let row_paint = InteractionPaint::new(row_style, row_state);
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
         cx.entity(),
@@ -557,12 +557,7 @@ fn history_table_row(
         commit.time,
         short_sha,
         active_context_menu_invoker.cloned(),
-        row_bg_overlay,
-        if context_menu_active {
-            theme.colors.interaction.pressed_background
-        } else {
-            theme.colors.interaction.hover_background
-        },
+        row_paint.clone(),
     );
 
     let commit_id = commit.id.clone();
@@ -573,23 +568,15 @@ fn history_table_row(
         .relative()
         .h(row_height)
         .w_full()
-        .cursor(CursorStyle::PointingHand)
-        .hover(move |s| {
-            if context_menu_active {
-                s.bg(theme.colors.interaction.pressed_background)
-            } else {
-                s.bg(theme.colors.interaction.hover_background)
-            }
-        })
-        .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+        .map(|row| row_paint.apply(row))
         .child(commit_row)
-        // Selecting on press, like the sidebar rows: the row the gesture
-        // *starts* on owns it, so a release that merely drifted here — the end
-        // of a text-selection drag in the details pane, say — selects nothing.
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
-                let modifiers = e.modifiers;
+        // A completed click owns its press; a text-selection drag ending on
+        // the row must not select the commit.
+        .on_activate(
+            false,
+            controls::ControlActivation::Composite,
+            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                let modifiers = e.modifiers();
                 let mode = if modifiers.shift {
                     CommitSelectMode::Range
                 } else if modifiers.secondary() || modifiers.control || modifiers.platform {
@@ -614,17 +601,6 @@ fn history_table_row(
                 cx.notify();
             }),
         );
-
-    if let Some(overlay) = row_bg_overlay {
-        row = row.bg(overlay);
-    }
-
-    // On light themes the selection tint lands within a few percent of the list
-    // surface, so a selected row is a smudge rather than a marked row. Ring it
-    // the way selected sidebar rows already are.
-    if selected && let Some(outline) = components::light_theme_selection_outline(theme) {
-        row = row.shadow(vec![outline]);
-    }
 
     if is_head {
         row = row.child(
@@ -705,17 +681,15 @@ fn worktree_uncommitted_history_row(
     let band_lanes = graph_row.lanes_now.clone();
     // The node's middle is opaque, so it has to be filled in what the row is
     // painted over rather than in the list's bare surface.
-    let row_background = if selected {
-        crate::theme::composite_over(
-            theme.colors.surface.canvas,
-            theme.colors.accent.subtle_background,
-        )
-    } else {
-        theme.colors.surface.canvas
-    };
+    let row_state = controls::InteractionState::default()
+        .selected(selected, theme.colors.accent.subtle_background);
+    let row_style = controls::InteractionStyle::new(theme);
+    let row_paint = InteractionPaint::new(row_style, row_state);
+    let paint = row_paint.clone();
     let graph = gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, cx| {
+            let row_background = paint.background(theme.colors.surface.canvas, window);
             super::history_graph_paint::paint_history_graph_band(
                 theme,
                 &band_lanes,
@@ -776,7 +750,6 @@ fn worktree_uncommitted_history_row(
         ));
     }
 
-    let palette = super::sidebar::worktree_badge_palette(theme);
     let badge_label = super::sidebar::worktree_origin_label(
         summary.branch.as_deref(),
         summary.detached,
@@ -787,6 +760,7 @@ fn worktree_uncommitted_history_row(
         format!("Open this worktree\n{}", summary.path.display()).into();
 
     let badge = super::sidebar::worktree_origin_chip(
+        ("history_worktree_badge", list_ix),
         theme,
         badge_label,
         scaled_px(9.0),
@@ -794,30 +768,28 @@ fn worktree_uncommitted_history_row(
         scaled_px(HISTORY_WORKTREE_BADGE_MAX_W_PX),
         scaled_px(6.0),
     )
-    .id(("history_worktree_badge", list_ix))
-    .cursor(CursorStyle::PointingHand)
-    .hover(move |s| {
-        s.border_color(palette.hover_border)
-            .text_color(palette.hover_text)
-    })
     .gitcomet_tooltip(theme, badge_tooltip)
     // The badge is a control of its own: a right or middle click must not open
     // the repo, and a left click on it must not also select the row underneath
     // -- the row belongs to the repo we are navigating away from.
-    .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-        if !e.standard_click() {
-            return;
-        }
-        cx.stop_propagation();
-        this.store.dispatch(Msg::OpenRepo(open_path.clone()));
-        cx.notify();
-    }));
+    .on_activate(
+        false,
+        controls::ControlActivation::Nested,
+        cx.listener(move |this, e: &ClickEvent, _w, cx| {
+            if !e.standard_click() {
+                return;
+            }
+            cx.stop_propagation();
+            this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+            cx.notify();
+        }),
+    );
 
     let select_path = summary.path.clone();
     // These cells share the canvas graph's column offsets. Keep every fixed
     // column non-shrinking so a long worktree label can only clip its summary,
     // never move this row's graph lane away from the commit rows below it.
-    let mut row = div()
+    let row = div()
         .id(("history_worktree_uncommitted", list_ix))
         .h(history_row_height(ui_scale))
         .flex()
@@ -825,18 +797,21 @@ fn worktree_uncommitted_history_row(
         .items_center()
         .px_2()
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-        .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-            if !e.standard_click() {
-                return;
-            }
-            this.store.dispatch(Msg::SelectWorktreeUncommitted {
-                repo_id,
-                path: select_path.clone(),
-            });
-            cx.notify();
-        }))
+        .map(|row| row_paint.apply(row))
+        .on_activate(
+            false,
+            controls::ControlActivation::Composite,
+            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                if !e.standard_click() {
+                    return;
+                }
+                this.store.dispatch(Msg::SelectWorktreeUncommitted {
+                    repo_id,
+                    path: select_path.clone(),
+                });
+                cx.notify();
+            }),
+        )
         .child(
             div()
                 .w(col_branch)
@@ -900,14 +875,6 @@ fn worktree_uncommitted_history_row(
         })
         .when(show_date, |row| row.child(div().w(col_date).flex_none()))
         .when(show_sha, |row| row.child(div().w(col_sha).flex_none()));
-
-    if selected {
-        row = row.bg(theme.colors.accent.subtle_background);
-        // Same light-theme selection ring the commit rows wear.
-        if let Some(outline) = components::light_theme_selection_outline(theme) {
-            row = row.shadow(vec![outline]);
-        }
-    }
 
     place_history_row(row, row_top).into_any_element()
 }
@@ -984,19 +951,17 @@ fn working_tree_summary_history_row(
 
     // What the row is *actually* painted over, so the node's opaque middle hides
     // the lane running through its column without leaving an untinted disc
-    // punched into a selected row. Same compositing the linked-worktree band row
-    // does; the hover tint stays out of it, being the div's business here.
-    let node_background = if selected {
-        crate::theme::composite_over(
-            theme.colors.surface.canvas,
-            theme.colors.accent.subtle_background,
-        )
-    } else {
-        theme.colors.surface.canvas
-    };
+    // punched into a selected row. The shared tracker supplies the background
+    // during hover and press, including gestures over the sibling label.
+    let row_state = controls::InteractionState::default()
+        .selected(selected, theme.colors.accent.subtle_background);
+    let row_style = controls::InteractionStyle::new(theme);
+    let row_paint = InteractionPaint::new(row_style, row_state);
+    let paint = row_paint.clone();
     let circle = gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, cx| {
+            let node_background = paint.background(theme.colors.surface.canvas, window);
             use gpui::{PathBuilder, point};
             let scaled_px = ui_scale::scaler(ui_scale::UiScale::from_window(window));
             let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
@@ -1042,7 +1007,7 @@ fn working_tree_summary_history_row(
 
     // Match the same fixed column geometry used by commit and worktree rows;
     // the flexible summary is the only cell allowed to absorb width pressure.
-    let mut row = div()
+    let row = div()
         .id(("history_worktree_summary", repo_id.0))
         .h(history_row_height(ui_scale))
         .flex()
@@ -1050,8 +1015,7 @@ fn working_tree_summary_history_row(
         .items_center()
         .px_2()
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(theme.colors.interaction.hover_background))
-        .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+        .map(|row| row_paint.apply(row))
         .child(
             div()
                 .w(col_branch)
@@ -1127,17 +1091,13 @@ fn working_tree_summary_history_row(
             )
         })
         .when(show_sha, |row| row.child(div().w(col_sha).flex_none()))
-        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-            this.select_working_tree_summary_row(repo_id, cx);
-        }));
-
-    if selected {
-        row = row.bg(theme.colors.accent.subtle_background);
-        // Same light-theme selection ring the commit rows wear.
-        if let Some(outline) = components::light_theme_selection_outline(theme) {
-            row = row.shadow(vec![outline]);
-        }
-    }
+        .on_activate(
+            false,
+            controls::ControlActivation::Composite,
+            cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                this.select_working_tree_summary_row(repo_id, cx);
+            }),
+        );
 
     place_history_row(row, row_top).into_any_element()
 }

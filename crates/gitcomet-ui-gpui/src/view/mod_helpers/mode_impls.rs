@@ -36,6 +36,7 @@ pub(crate) struct ConflictResolverJoinTarget {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct TerminalMenuContext {
     pub(crate) has_session: bool,
+    pub(crate) has_buffer: bool,
     pub(crate) has_selection: bool,
     pub(crate) connected: bool,
 }
@@ -256,6 +257,7 @@ pub(crate) enum PopoverKind {
     UnsavedFileEditsConfirm(UnsavedFileEditsPrompt),
     TerminalMenu {
         repo_id: RepoId,
+        session_seq: u64,
         context: TerminalMenuContext,
     },
     DiffActionMenu,

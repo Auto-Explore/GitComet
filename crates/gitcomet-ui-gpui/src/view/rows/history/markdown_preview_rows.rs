@@ -1,4 +1,6 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction as controls;
 
 pub(in crate::view) const MARKDOWN_PREVIEW_ROW_HEIGHT_PX: f32 = 28.0;
 pub(in crate::view) const MARKDOWN_PREVIEW_BASE_FONT_PX: f32 = 13.0;
@@ -312,7 +314,7 @@ pub(in crate::view) fn markdown_preview_row_element(
                     cx.notify();
                 });
             })
-            .on_mouse_down(gpui::MouseButton::Right, move |event, window, cx| {
+            .on_pointer_click(gpui::MouseButton::Right, move |event, window, cx| {
                 crate::press_gesture::claim_press(cx);
                 cx.stop_propagation();
                 let focus = view.read(cx).diff_panel_focus_handle.clone();
@@ -761,28 +763,35 @@ pub(in crate::view) fn markdown_preview_row_element(
                     let click_count = event.click_count;
                     let position = event.position;
                     view.update(cx, |this, cx| {
-                        if !this.handle_markdown_preview_link_click(
+                        this.handle_markdown_preview_row_mouse_down(
                             row_ix,
                             text_region,
                             position,
                             click_count,
                             window,
                             cx,
-                        ) {
-                            this.handle_markdown_preview_row_mouse_down(
-                                row_ix,
-                                text_region,
-                                position,
-                                click_count,
-                                window,
-                                cx,
-                            );
-                        }
+                        );
                         cx.notify();
                     });
                 }
             })
-            .on_mouse_down(gpui::MouseButton::Right, {
+            .on_pointer_click(gpui::MouseButton::Left, {
+                let view = view.clone();
+                move |event, window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.handle_markdown_preview_link_click(
+                            row_ix,
+                            text_region,
+                            event.position,
+                            event.click_count,
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    });
+                }
+            })
+            .on_pointer_click(gpui::MouseButton::Right, {
                 let view = view.clone();
                 move |event, window, cx| {
                     view.update(cx, |this, cx| {
@@ -1379,6 +1388,7 @@ pub(in crate::view) fn markdown_preview_flow_image(
             markdown_preview_scaled_px(MARKDOWN_PREVIEW_BLOCKED_IMAGE_ICON_PX, ui_scale_percent),
             theme,
             remote_image_access,
+            false,
         );
         return div()
             .w_full()
@@ -1614,6 +1624,7 @@ pub(in crate::view) fn markdown_preview_inline_image(
                 ),
                 theme,
                 remote_image_access,
+                inline.link_url.is_some(),
             ))
             .into_any_element();
     }
@@ -1682,6 +1693,7 @@ fn markdown_preview_blocked_image(
     icon_size: Pixels,
     theme: AppTheme,
     access: &MarkdownRemoteImageAccess,
+    linked: bool,
 ) -> AnyElement {
     let danger = theme.colors.status.danger.foreground;
     let blocked_background = with_alpha(danger, if theme.is_dark { 0.08 } else { 0.05 });
@@ -1707,27 +1719,32 @@ fn markdown_preview_blocked_image(
         return base()
             .debug_selector(move || debug_selector.clone())
             .id(SharedString::from(control_id))
-            .cursor(gpui::CursorStyle::PointingHand)
-            .hover(move |style| {
-                style
-                    .bg(with_alpha(danger, if theme.is_dark { 0.16 } else { 0.10 }))
-                    .border_color(with_alpha(danger, 0.55))
-            })
-            .active(move |style| style.bg(with_alpha(danger, 0.22)))
+            .control_interaction(
+                controls::InteractionStyle::new(theme).resting_background(blocked_background),
+                controls::InteractionState::default().disabled(access.approval_view.is_none()),
+            )
             .child(
                 div()
                     .debug_selector(move || icon_selector.clone())
                     .child(svg_icon("icons/refresh.svg", danger, icon_size)),
             )
             .gitcomet_tooltip(theme, tooltip)
-            .when_some(access.approval_view.clone(), move |control, view| {
-                control.on_click(move |_event, _window, cx| {
-                    cx.stop_propagation();
-                    view.update(cx, |this, cx| {
-                        this.approve_remote_markdown_image(url.clone(), cx);
-                    });
-                })
-            })
+            .when_some(
+                access.approval_view.clone().filter(|_| !linked),
+                move |control, view| {
+                    control.on_activate(
+                        false,
+                        // Linked images route approval through their link menu.
+                        controls::ControlActivation::Nested,
+                        move |_event, _window, cx| {
+                            cx.stop_propagation();
+                            view.update(cx, |this, cx| {
+                                this.approve_remote_markdown_image(url.clone(), cx);
+                            });
+                        },
+                    )
+                },
+            )
             .into_any_element();
     }
 
@@ -1915,6 +1932,7 @@ pub(in crate::view) fn markdown_preview_image_row(
                     ),
                     context.theme,
                     &context.remote_image_access,
+                    false,
                 )))
                 .into_any_element();
         }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::ControlInteractionExt as _;
 
 mod branch;
 mod branch_group;
@@ -642,9 +643,11 @@ impl PopoverHost {
             PopoverKind::InteractiveRebaseAutosquashMenu => {
                 Some(interactive_rebase_autosquash_menu_model())
             }
-            PopoverKind::TerminalMenu { repo_id, context } => {
-                Some(terminal::model(*repo_id, *context, cx))
-            }
+            PopoverKind::TerminalMenu {
+                repo_id,
+                session_seq,
+                context,
+            } => Some(terminal::model(*repo_id, *session_seq, *context, cx)),
             _ => None,
         }
     }
@@ -1630,31 +1633,44 @@ impl PopoverHost {
                     pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
                 });
             }
-            ContextMenuAction::TerminalCopy { repo_id } => {
+            ContextMenuAction::TerminalCommand {
+                repo_id,
+                session_seq,
+                command,
+            } => {
                 window.activate_window();
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.copy_terminal_selection_for_repo(repo_id, window, cx);
-                });
+                let dispatched = self
+                    .root_view
+                    .update(cx, |root, cx| {
+                        root.dispatch_terminal_command(repo_id, session_seq, command, window, cx)
+                    })
+                    .unwrap_or(false);
+                if !dispatched {
+                    self.close_popover(cx);
+                    return;
+                }
             }
-            ContextMenuAction::TerminalPaste { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.paste_terminal_clipboard_for_repo(repo_id, window, cx);
-                });
-            }
-            ContextMenuAction::TerminalSelectAll { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.select_all_terminal_for_repo(repo_id, window, cx);
-                });
-            }
-            ContextMenuAction::TerminalClear { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.clear_terminal_for_repo(repo_id, window, cx);
-                });
-            }
-            ContextMenuAction::TerminalOpenExternal { repo_id } => {
-                let _ = self.root_view.update(cx, |root, cx| {
-                    root.open_external_terminal_from_menu(repo_id, window, cx);
-                });
+            ContextMenuAction::TerminalOpenExternal {
+                repo_id,
+                session_seq,
+            } => {
+                let dispatched = self
+                    .root_view
+                    .update(cx, |root, cx| {
+                        if root
+                            .terminal_viewport_for_session(repo_id, session_seq)
+                            .is_none()
+                        {
+                            return false;
+                        }
+                        root.open_external_terminal_from_menu(repo_id, window, cx);
+                        true
+                    })
+                    .unwrap_or(false);
+                if !dispatched {
+                    self.close_popover(cx);
+                    return;
+                }
             }
             ContextMenuAction::ApplyIndexPatch {
                 repo_id,
@@ -2328,8 +2344,7 @@ impl PopoverHost {
                         let tooltip_host_for_move = tooltip_host.clone();
                         let tooltip_text_for_move = tooltip_text.clone();
                         let tooltip_host_for_hover = tooltip_host.clone();
-                        let activate_on_left_release = model_for_mouse.clone();
-                        let activate_on_right_release = model_for_mouse.clone();
+                        let activate_on_release = model_for_mouse.clone();
                         let icon_slot = match icon {
                             Some(icon) => components::ContextMenuIconSlot::Icon(icon),
                             None if reserve_icon_column => {
@@ -2374,32 +2389,17 @@ impl PopoverHost {
                                 });
                             }
                         }))
-                        .when(!disabled, |row| {
-                            row.on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    this.context_menu_activate_model_entry(
-                                        &activate_on_left_release,
-                                        ix,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )
-                            .on_mouse_up(
-                                MouseButton::Right,
-                                cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    this.context_menu_activate_model_entry(
-                                        &activate_on_right_release,
-                                        ix,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )
-                        })
+                        .on_menu_activate(
+                            disabled,
+                            cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                                this.context_menu_activate_model_entry(
+                                    &activate_on_release,
+                                    ix,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
                         .into_any_element()
                     }
                 }

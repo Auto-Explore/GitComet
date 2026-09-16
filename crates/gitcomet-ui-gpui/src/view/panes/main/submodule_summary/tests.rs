@@ -331,6 +331,11 @@ fn submodule_summary_rows_keep_section_specific_navigation_and_menus(
         button: MouseButton::Right,
         ..Default::default()
     });
+    cx.simulate_mouse_up(
+        bounds.center(),
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
     test_support::redraw(cx);
     let menu = cx.update(|_window, app| test_support::popover_kind(view.read(app), app));
     assert!(

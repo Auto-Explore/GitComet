@@ -1,9 +1,11 @@
 use super::super::super::*;
+use crate::kit::interaction as controls;
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::HistoryView;
 use crate::view::caches::HistoryListRow;
+use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 
 /// The log's column-header bar and the chips inside it ("All branches", the
 /// author filter). Bar and chips lift together, so the targets track the row.
@@ -634,18 +636,13 @@ impl HistoryView {
                     ))
                     .line_height(scaled_px(HISTORY_HEADER_CHIP_HEIGHT_PX))
                     .rounded(px(theme.radii.row))
-                    .when(scope_active, |d| {
-                        d.bg(theme.colors.interaction.pressed_background)
-                    })
-                    .hover(move |s| {
-                        if scope_active {
-                            s.bg(theme.colors.interaction.pressed_background)
-                        } else {
-                            s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
-                        }
-                    })
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .cursor(CursorStyle::PointingHand)
+                    .tab_index(0)
+                    .control_interaction(
+                        InteractionStyle::header(theme).disabled_opacity(0.6),
+                        InteractionState::default()
+                            .open(scope_active)
+                            .disabled(scope_repo_id.is_none()),
+                    )
                     .when(scope_label_visible, |d| {
                         d.child(
                             div()
@@ -664,27 +661,19 @@ impl HistoryView {
                         let scope_invoker = scope_invoker.clone();
                         let scope_anchor_bounds_for_click =
                             Rc::clone(&scope_anchor_bounds_for_click);
-                        this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            this.activate_context_menu_invoker(scope_invoker.clone(), cx);
-                            if let Some(bounds) = *scope_anchor_bounds_for_click.borrow() {
-                                this.open_popover_for_bounds(
-                                    PopoverKind::HistoryBranchFilter { repo_id },
-                                    bounds,
-                                    window,
-                                    cx,
-                                );
-                            } else {
-                                this.open_popover_at(
-                                    PopoverKind::HistoryBranchFilter { repo_id },
-                                    e.position(),
-                                    window,
-                                    cx,
-                                );
-                            }
-                        }))
-                    })
-                    .when(scope_repo_id.is_none(), |this| {
-                        this.opacity(0.6).cursor(CursorStyle::Arrow)
+                        this.on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                let request = (PopoverKind::HistoryBranchFilter { repo_id })
+                                    .invoked_by(scope_invoker.clone());
+                                if let Some(bounds) = *scope_anchor_bounds_for_click.borrow() {
+                                    this.open_popover_for_bounds(request, bounds, window, cx);
+                                } else {
+                                    this.open_popover_at(request, e.position(), window, cx);
+                                }
+                            }),
+                        )
                     })
                     .gitcomet_tooltip(theme, format!("History mode: {}", scope_label).into()),
             );
@@ -751,7 +740,7 @@ impl HistoryView {
                             .font_weight(FontWeight::NORMAL)
                             .id("history_index_status")
                             .child(format!(" · {label}"))
-                            .when(index_error, |label| label.cursor_pointer().on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, _| {
+                            .when(index_error, |label| label.control_interaction(components::InteractionStyle::link(theme), components::InteractionState::default()).on_activate(false, components::ControlActivation::Action, cx.listener(move |this, _, _, _| {
                                 if let Some(repo_id) = scope_repo_id { this.store.dispatch(Msg::IndexedHistory(gitcomet_state::indexed_history::IndexedHistoryMsg::Retry { repo_id })); }
                             }))),
                     )),
@@ -793,23 +782,11 @@ impl HistoryView {
                                         ))
                                         .line_height(scaled_px(HISTORY_HEADER_CHIP_HEIGHT_PX))
                                         .rounded(px(theme.radii.row))
-                                        .when(author_active, |d| {
-                                            d.bg(theme.colors.interaction.pressed_background)
-                                        })
-                                        .hover(move |s| {
-                                            if author_active {
-                                                s.bg(theme.colors.interaction.pressed_background)
-                                            } else {
-                                                s.bg(with_alpha(
-                                                    theme.colors.interaction.hover_background,
-                                                    0.55,
-                                                ))
-                                            }
-                                        })
-                                        .active(move |s| {
-                                            s.bg(theme.colors.interaction.pressed_background)
-                                        })
-                                        .cursor(CursorStyle::PointingHand)
+                                        .tab_index(0)
+                                        .control_interaction(
+                                            InteractionStyle::header(theme).disabled_opacity(0.6),
+                                            InteractionState::default().open(author_active).disabled(scope_repo_id.is_none()),
+                                        )
                                         .child(
                                             div()
                                                 .min_w(px(0.0))
@@ -832,28 +809,22 @@ impl HistoryView {
                                             let author_invoker = author_invoker.clone();
                                             let author_anchor_bounds_for_click =
                                                 Rc::clone(&author_anchor_bounds_for_click);
-                                            this.on_click(cx.listener(
+                                            this.on_activate(false, controls::ControlActivation::Action, cx.listener(
                                                 move |this, e: &ClickEvent, window, cx| {
-                                                    this.activate_context_menu_invoker(
-                                                        author_invoker.clone(),
-                                                        cx,
-                                                    );
+                                                    let request = (PopoverKind::HistoryAuthorFilter { repo_id })
+                                                        .invoked_by(author_invoker.clone());
                                                     if let Some(bounds) =
                                                         *author_anchor_bounds_for_click.borrow()
                                                     {
                                                         this.open_popover_for_bounds(
-                                                            PopoverKind::HistoryAuthorFilter {
-                                                                repo_id,
-                                                            },
+                                                            request,
                                                             bounds,
                                                             window,
                                                             cx,
                                                         );
                                                     } else {
                                                         this.open_popover_at(
-                                                            PopoverKind::HistoryAuthorFilter {
-                                                                repo_id,
-                                                            },
+                                                            request,
                                                             e.position(),
                                                             window,
                                                             cx,
@@ -861,9 +832,6 @@ impl HistoryView {
                                                     }
                                                 },
                                             ))
-                                        })
-                                        .when(scope_repo_id.is_none(), |this| {
-                                            this.opacity(0.6).cursor(CursorStyle::Arrow)
                                         })
                                         .gitcomet_tooltip(theme, author_tooltip),
                                 ),

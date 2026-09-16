@@ -1536,11 +1536,12 @@ impl MainPaneView {
 impl MainPaneView {
     pub(in crate::view) fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
@@ -1554,11 +1555,12 @@ impl MainPaneView {
 
     pub(in crate::view) fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let root_view = self.root_view.clone();
         let window_handle = window.window_handle();
         cx.defer(move |cx| {
@@ -1567,16 +1569,6 @@ impl MainPaneView {
                     root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
                 });
             });
-        });
-    }
-
-    pub(in crate::view) fn activate_context_menu_invoker(
-        &mut self,
-        invoker: SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, move |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 
@@ -1592,14 +1584,14 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.activate_context_menu_invoker(invoker, cx);
         self.open_popover_at(
-            PopoverKind::ConflictResolverInputRowMenu {
+            (PopoverKind::ConflictResolverInputRowMenu {
                 line_label,
                 line_target,
                 chunk_label,
                 chunk_target,
-            },
+            })
+            .invoked_by(invoker),
             anchor,
             window,
             cx,
@@ -1621,7 +1613,6 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.activate_context_menu_invoker(invoker, cx);
         // Opening the chunk menu selects that conflict and brings the
         // *other* pane to it — the pane the user right-clicked is already in
         // view and must not jump under the open menu. Reveals are non-strict:
@@ -1653,7 +1644,7 @@ impl MainPaneView {
         let (join_previous_region, join_next_region) =
             self.conflict_resolver_join_region_targets(conflict_ix);
         self.open_popover_at(
-            PopoverKind::ConflictResolverChunkMenu {
+            (PopoverKind::ConflictResolverChunkMenu {
                 conflict_ix,
                 has_base,
                 is_three_way,
@@ -1665,7 +1656,8 @@ impl MainPaneView {
                 alignment_marked_columns: self.conflict_resolver_alignment_marked_columns(),
                 has_manual_alignments: self.conflict_resolver_has_manual_alignments(),
                 output_is_protected: self.conflict_resolver.output_is_protected,
-            },
+            })
+            .invoked_by(invoker),
             anchor,
             window,
             cx,

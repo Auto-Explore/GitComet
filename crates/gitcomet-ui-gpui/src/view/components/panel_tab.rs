@@ -1,26 +1,25 @@
 //! Shared shape for the bottom panels' tab strips: the terminal's per-instance
-//! tabs, the terminal/reflog switcher, and the reflog pane's header tab. Only
-//! the styling is shared; each caller attaches its own handlers and children.
-use crate::theme::{AppTheme, with_alpha};
+//! tabs, the terminal/reflog switcher, and the reflog pane's header tab. Callers
+//! attach actions through the common activation policy and supply their content.
+use super::{ControlActivation, ControlInteractionExt, InteractionState, InteractionStyle};
+use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
 use crate::view::icons::svg_icon;
 use gpui::prelude::*;
-use gpui::{CursorStyle, Div, ElementId, Stateful, div, px};
+use gpui::{Div, ElementId, Stateful, div, px};
 
 /// Close affordance on a panel tab: smaller than a control since it sits
 /// inside the tab, but on the same density ramp.
 const PANEL_TAB_CLOSE_SIZE_PX: f32 = 14.0;
 const PANEL_TAB_CLOSE_COMFORTABLE_SIZE_PX: f32 = 20.0;
 const PANEL_TAB_CLOSE_ICON_PX: f32 = 10.0;
-/// Danger tint the plate picks up on hover, matching the repository tab's `x`.
-const PANEL_TAB_CLOSE_HOVER_ALPHA: f32 = 0.18;
 
 const PANEL_TAB_GAP_PX: f32 = 6.0;
 const PANEL_TAB_PAD_X_PX: f32 = 8.0;
 const PANEL_TAB_ICON_PX: f32 = 12.0;
 
 /// The `x` on a panel tab. The caller adds the tooltip and the handler, which
-/// needs `stop_propagation` so closing never also selects.
+/// uses `on_nested_control_click` so closing never also selects.
 pub fn panel_tab_close(
     id: impl Into<ElementId>,
     theme: AppTheme,
@@ -39,13 +38,10 @@ pub fn panel_tab_close(
         .justify_center()
         .size(ui_scale.row_height(PANEL_TAB_CLOSE_SIZE_PX, PANEL_TAB_CLOSE_COMFORTABLE_SIZE_PX))
         .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
-        .hover(move |s| {
-            s.bg(with_alpha(
-                theme.colors.status.danger.foreground,
-                PANEL_TAB_CLOSE_HOVER_ALPHA,
-            ))
-        })
+        .control_interaction(
+            InteractionStyle::destructive(theme),
+            InteractionState::default(),
+        )
         .child(svg_icon(
             "icons/generic_close.svg",
             icon_color,
@@ -54,16 +50,16 @@ pub fn panel_tab_close(
 }
 
 /// A panel tab's box with its leading icon and label. The caller adds the
-/// close affordance, the click handler, and any selected-state styling.
+/// close affordance and the click handler. Selection is resolved here.
 pub fn panel_tab(
     id: impl Into<ElementId>,
     theme: AppTheme,
     ui_scale: impl Into<UiScale>,
     icon: &'static str,
     label: impl Into<gpui::SharedString>,
-    background: gpui::Rgba,
-    text_color: gpui::Rgba,
+    selected: bool,
 ) -> Stateful<Div> {
+    let text_color = panel_tab_text_color(theme, selected);
     let ui_scale = ui_scale.into().with_appearance(theme.metrics);
     let id = id.into();
     let selector = id.clone();
@@ -78,10 +74,33 @@ pub fn panel_tab(
         .px(ui_scale.px(PANEL_TAB_PAD_X_PX))
         .h(super::control_height(ui_scale))
         .rounded(px(theme.radii.row))
-        .bg(background)
+        .control_interaction(
+            InteractionStyle::new(theme)
+                .resting_background(theme.colors.surface.panel)
+                .selection_outline(false),
+            InteractionState::default()
+                .selected(selected, theme.colors.interaction.selected_background),
+        )
         .text_color(text_color)
         .text_size(theme.ui_text(12.0))
-        .cursor(CursorStyle::PointingHand)
         .child(svg_icon(icon, text_color, ui_scale.px(PANEL_TAB_ICON_PX)))
         .child(label.into())
+}
+
+/// Foreground shared by the tab label, leading icon and nested close control.
+pub fn panel_tab_text_color(theme: AppTheme, selected: bool) -> gpui::Rgba {
+    if selected {
+        theme.colors.interaction.selected_foreground
+    } else {
+        theme.colors.foreground.secondary
+    }
+}
+
+/// Nested actions consume their press and activate only on a completed click.
+pub fn on_nested_control_click<V: 'static>(
+    control: Stateful<Div>,
+    cx: &mut gpui::Context<V>,
+    handler: impl Fn(&mut V, &gpui::ClickEvent, &mut gpui::Window, &mut gpui::Context<V>) + 'static,
+) -> Stateful<Div> {
+    control.on_activate(false, ControlActivation::Nested, cx.listener(handler))
 }

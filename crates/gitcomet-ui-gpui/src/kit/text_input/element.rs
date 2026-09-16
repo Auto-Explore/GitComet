@@ -147,6 +147,8 @@ impl Element for TextElement {
             };
             let text_color = if content.is_empty() {
                 style_colors.placeholder
+            } else if input.display_text {
+                style.color
             } else {
                 style_colors.text
             };

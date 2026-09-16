@@ -1,5 +1,7 @@
 //! Virtualized submodule summary document. Every changed file is a list item;
 //! headers are separate items, so a large section never builds its whole body.
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 #[cfg(test)]
 mod tests;
 use super::*;
@@ -749,6 +751,10 @@ impl MainPaneView {
         let summary_for_click = Arc::clone(summary);
         let context_menu_path = change_path.clone();
 
+        let interaction = crate::view::rows::FileRowInteraction::new(theme, tint, false, false)
+            .disabled(target.is_none());
+        let badge_disc = interaction.badge_disc(row_group.clone());
+
         let mut row = div()
             .id(("submodule_change", row_ix))
             .debug_selector(move || format!("submodule_change_{row_ix}"))
@@ -760,12 +766,7 @@ impl MainPaneView {
             .px_2()
             .py_1()
             .rounded(px(theme.radii.row))
-            .when_some(tint, |row, tint| {
-                row.bg(crate::view::rows::tinted_row_bg(
-                    theme.colors.surface.canvas,
-                    Some(tint),
-                ))
-            })
+            .map(|row| interaction.apply(row))
             .flex()
             .items_center()
             .gap_2()
@@ -773,16 +774,7 @@ impl MainPaneView {
                 icon,
                 icon_color,
                 badge,
-                crate::view::rows::FileRowBadgeDisc {
-                    resting: crate::view::rows::tinted_row_bg(theme.colors.surface.canvas, tint),
-                    hover: Some((
-                        row_group.clone(),
-                        crate::view::rows::tinted_row_bg(
-                            theme.colors.interaction.hover_background,
-                            tint,
-                        ),
-                    )),
-                },
+                badge_disc,
                 12.0,
                 14.0,
                 ui_scale_percent,
@@ -812,44 +804,40 @@ impl MainPaneView {
 
         if let Some(target) = target {
             row = row
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |row| {
-                    row.bg(crate::view::rows::tinted_row_bg(
-                        theme.colors.interaction.hover_background,
-                        tint,
-                    ))
-                })
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
-                    let selected_ix = inline_selected_ix.unwrap_or(0);
-                    this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
-                        repo_id,
-                        origin: gitcomet_state::model::ForeignDiffOrigin::Submodule,
-                        submodule_repo_path: repo_path_for_click.as_ref().clone(),
-                        parent_submodule_path: summary_path_for_inline.clone(),
-                        entries: submodule_inline_diff_entries(&summary_for_click).into(),
-                        selected_ix,
-                    });
-                    cx.notify();
-                }))
-                .on_mouse_down(
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Composite,
+                    cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                        let selected_ix = inline_selected_ix.unwrap_or(0);
+                        this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
+                            repo_id,
+                            origin: gitcomet_state::model::ForeignDiffOrigin::Submodule,
+                            submodule_repo_path: repo_path_for_click.as_ref().clone(),
+                            parent_submodule_path: summary_path_for_inline.clone(),
+                            entries: submodule_inline_diff_entries(&summary_for_click).into(),
+                            selected_ix,
+                        });
+                        cx.notify();
+                    }),
+                )
+                .on_pointer_click(
                     MouseButton::Right,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        this.activate_context_menu_invoker(
-                            format!(
-                                "submodule_inner_diff_menu_{}_{}",
-                                repo_id.0,
-                                context_menu_path.display()
-                            )
-                            .into(),
-                            cx,
-                        );
                         this.open_popover_at(
-                            PopoverKind::SubmoduleInnerDiffMenu {
+                            (PopoverKind::SubmoduleInnerDiffMenu {
                                 repo_id,
                                 submodule_repo_path: repo_path_for_menu.as_ref().clone(),
                                 target: target.clone(),
-                            },
+                            })
+                            .invoked_by(
+                                format!(
+                                    "submodule_inner_diff_menu_{}_{}",
+                                    repo_id.0,
+                                    context_menu_path.display()
+                                )
+                                .into(),
+                            ),
                             e.position,
                             window,
                             cx,

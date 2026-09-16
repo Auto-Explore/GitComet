@@ -1,4 +1,6 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::ui_scale;
 use crate::view::components::InteractiveRowExt as _;
 use gitcomet_core::domain::LogScope;
@@ -238,12 +240,6 @@ pub(in crate::view) fn worktree_origin_label(
     }
 }
 
-/// The chip that marks content as belonging to another worktree. Shown on the
-/// history row, and again in the details and diff headers so it is never unclear
-/// whose changes are on screen.
-///
-/// Deliberately style-only: callers add the id, cursor, hover and click when the
-/// chip is an affordance rather than a label.
 /// Height of a worktree badge. Comfortable lifts it with the rows and title
 /// bars it sits in.
 const WORKTREE_BADGE_HEIGHT_PX: f32 = 18.0;
@@ -256,16 +252,25 @@ pub(in crate::view) fn worktree_badge_height(scale: impl Into<ui_scale::UiScale>
     )
 }
 
+/// Marks content belonging to another worktree in history, details and diff
+/// headers. Worktree chips share their interaction profile; callers supply the
+/// action.
 pub(in crate::view) fn worktree_origin_chip(
+    id: impl Into<gpui::ElementId>,
     theme: AppTheme,
     label: SharedString,
     icon_size: Pixels,
     height: Pixels,
     max_width: Pixels,
     pad_x: Pixels,
-) -> gpui::Div {
+) -> gpui::Stateful<gpui::Div> {
     let palette = worktree_badge_palette(theme);
     div()
+        .id(id)
+        .control_interaction(
+            worktree_badge_interaction(theme),
+            controls::InteractionState::default(),
+        )
         .flex()
         .items_center()
         .gap_1()
@@ -286,6 +291,24 @@ pub(in crate::view) fn worktree_origin_chip(
                 .whitespace_nowrap()
                 .child(label),
         )
+}
+
+pub(in crate::view) fn worktree_badge_interaction(theme: AppTheme) -> controls::InteractionStyle {
+    let palette = worktree_badge_palette(theme);
+    controls::InteractionStyle::accent(theme)
+        .hover(
+            gpui::StyleRefinement::default()
+                .bg(theme.hover_overlay())
+                .border_color(palette.hover_border)
+                .text_color(palette.hover_text),
+        )
+        .pressed(
+            gpui::StyleRefinement::default()
+                .bg(theme.active_overlay())
+                .border_color(palette.hover_border)
+                .text_color(palette.hover_text),
+        )
+        .resting_background(palette.bg)
 }
 
 /// Render a sidebar label, bold-accent highlighting the first case-insensitive
@@ -630,22 +653,24 @@ impl SidebarPaneView {
                                 .child(label.clone()),
                         )
                         .gitcomet_tooltip(theme, label)
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    menu_kind_for_right_click.clone(),
+                                    menu_kind_for_right_click
+                                        .clone()
+                                        .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -702,22 +727,23 @@ impl SidebarPaneView {
                                 .child(label),
                         )
                         .gitcomet_tooltip(theme, tooltip.clone())
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::BranchSectionMenu { repo_id, section },
+                                    (PopoverKind::BranchSectionMenu { repo_id, section })
+                                        .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -821,22 +847,23 @@ impl SidebarPaneView {
                             )
                         })
                         .gitcomet_tooltip(theme, "Stashes (Right-click for actions)".into())
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::StashPrompt,
+                                    PopoverKind::StashPrompt
+                                        .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -900,27 +927,28 @@ impl SidebarPaneView {
                             .render(ui_scale_percent)
                             .flex_1(),
                         )
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() < 2 {
-                                return;
-                            }
-                            this.store.dispatch(Msg::ApplyStash { repo_id, index });
-                            cx.notify();
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() < 2 {
+                                    return;
+                                }
+                                this.store.dispatch(Msg::ApplyStash { repo_id, index });
+                                cx.notify();
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::StashMenu {
+                                    (PopoverKind::StashMenu {
                                         repo_id,
                                         index,
                                         message: stash_message_for_right_click.clone(),
-                                    },
+                                    })
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -999,25 +1027,26 @@ impl SidebarPaneView {
                             )
                         })
                         .gitcomet_tooltip(theme, "Worktrees (Add / Refresh / Open / Remove)".into())
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::worktree(
+                                    (PopoverKind::worktree(
                                         repo_id,
                                         WorktreePopoverKind::SectionMenu,
-                                    ),
+                                    ))
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1176,42 +1205,43 @@ impl SidebarPaneView {
                                     )
                                 }),
                         )
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() {
-                                return;
-                            }
-                            if e.click_count() >= 2 {
-                                this.store.dispatch(Msg::OpenRepo(path_for_open.clone()));
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() {
+                                    return;
+                                }
+                                if e.click_count() >= 2 {
+                                    this.store.dispatch(Msg::OpenRepo(path_for_open.clone()));
+                                    cx.notify();
+                                    return;
+                                }
+                                // Single click mirrors a branch row: scroll the log
+                                // to this worktree and select its row, without
+                                // leaving the tab.
+                                this.reveal_worktree_in_history(
+                                    repo_id,
+                                    path_for_open.clone(),
+                                    is_active,
+                                    cx,
+                                );
                                 cx.notify();
-                                return;
-                            }
-                            // Single click mirrors a branch row: scroll the log
-                            // to this worktree and select its row, without
-                            // leaving the tab.
-                            this.reveal_worktree_in_history(
-                                repo_id,
-                                path_for_open.clone(),
-                                is_active,
-                                cx,
-                            );
-                            cx.notify();
-                        }))
-                        .on_mouse_down(
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::worktree(
+                                    (PopoverKind::worktree(
                                         repo_id,
                                         WorktreePopoverKind::Menu {
                                             path: path_for_menu.clone(),
                                             branch: branch_for_menu.clone(),
                                         },
-                                    ),
+                                    ))
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1275,25 +1305,26 @@ impl SidebarPaneView {
                             )
                         })
                         .gitcomet_tooltip(theme, "Submodules (Add / Update / Open / Remove)".into())
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::submodule(
+                                    (PopoverKind::submodule(
                                         repo_id,
                                         SubmodulePopoverKind::SectionMenu,
-                                    ),
+                                    ))
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1445,35 +1476,36 @@ impl SidebarPaneView {
                                     .child(badge_label),
                             )
                         })
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() < 2 {
-                                return;
-                            }
-                            if !can_open {
-                                return;
-                            }
-                            let Some(base) = repo_workdir_for_open.clone() else {
-                                return;
-                            };
-                            this.store
-                                .dispatch(Msg::OpenRepo(base.join(&path_for_open)));
-                            cx.notify();
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() < 2 {
+                                    return;
+                                }
+                                if !can_open {
+                                    return;
+                                }
+                                let Some(base) = repo_workdir_for_open.clone() else {
+                                    return;
+                                };
+                                this.store
+                                    .dispatch(Msg::OpenRepo(base.join(&path_for_open)));
+                                cx.notify();
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::submodule(
+                                    (PopoverKind::submodule(
                                         repo_id,
                                         SubmodulePopoverKind::Menu {
                                             path: path_for_menu.clone(),
                                         },
-                                    ),
+                                    ))
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1534,27 +1566,28 @@ impl SidebarPaneView {
                             .render(ui_scale_percent)
                             .flex_1(),
                         )
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::remote(
+                                    (PopoverKind::remote(
                                         repo_id,
                                         RemotePopoverKind::Menu {
                                             name: remote_name_for_right_click.clone(),
                                         },
-                                    ),
+                                    ))
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1640,22 +1673,24 @@ impl SidebarPaneView {
                             .render(ui_scale_percent)
                             .flex_1(),
                         )
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() != 1 {
-                                return;
-                            }
-                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                        }))
-                        .on_mouse_down(
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    menu_kind_for_right_click.clone(),
+                                    menu_kind_for_right_click
+                                        .clone()
+                                        .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -1800,8 +1835,14 @@ impl SidebarPaneView {
                         if theme.is_dark { 0.18 } else { 0.12 },
                     );
                     let row_state = components::InteractiveRowState::default()
-                        .selected(is_head, head_highlight)
-                        .selected(branch_selected, branch_selected_bg)
+                        .selected(
+                            is_head || branch_selected,
+                            if branch_selected {
+                                branch_selected_bg
+                            } else {
+                                head_highlight
+                            },
+                        )
                         .open(context_menu_active);
 
                     let mut row = div()
@@ -1953,42 +1994,51 @@ impl SidebarPaneView {
                                     .render(cx),
                                 ),
                             )
-                            .hover(move |s| {
-                                if workspace_menu_active {
-                                    s.border_color(worktree_badge_palette.active_border)
-                                } else {
-                                    s.border_color(badge_colors.hover_border)
-                                }
-                            })
-                            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                                if !e.standard_click() {
-                                    return;
-                                }
-                                cx.stop_propagation();
-                                if e.click_count() >= 2 {
-                                    this.store
-                                        .dispatch(Msg::OpenRepo(workspace_path_for_open.clone()));
-                                    cx.notify();
-                                    return;
-                                }
-                                let Some(invoker) = workspace_menu_invoker_for_click.clone() else {
-                                    return;
-                                };
-                                this.activate_context_menu_invoker(invoker, cx);
-                                this.open_popover_at(
-                                    PopoverKind::worktree(
-                                        repo_id,
-                                        WorktreePopoverKind::Menu {
-                                            path: workspace_path_for_menu.clone(),
-                                            branch: Some(branch_name_for_click.clone()),
-                                        },
-                                    ),
-                                    e.position(),
-                                    window,
-                                    cx,
-                                );
-                            }))
-                            .on_mouse_down(
+                            .control_interaction(
+                                worktree_badge_interaction(theme),
+                                controls::InteractionState::default()
+                                    .selected(
+                                        has_active_workspace,
+                                        worktree_badge_palette.active_bg,
+                                    )
+                                    .open(workspace_menu_active),
+                            )
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Nested,
+                                cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                    if !e.standard_click() {
+                                        return;
+                                    }
+                                    cx.stop_propagation();
+                                    if e.click_count() >= 2 {
+                                        this.store.dispatch(Msg::OpenRepo(
+                                            workspace_path_for_open.clone(),
+                                        ));
+                                        cx.notify();
+                                        return;
+                                    }
+                                    let Some(invoker) = workspace_menu_invoker_for_click.clone()
+                                    else {
+                                        return;
+                                    };
+
+                                    this.open_popover_at(
+                                        (PopoverKind::worktree(
+                                            repo_id,
+                                            WorktreePopoverKind::Menu {
+                                                path: workspace_path_for_menu.clone(),
+                                                branch: Some(branch_name_for_click.clone()),
+                                            },
+                                        ))
+                                        .invoked_by(invoker),
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                            .on_pointer_click(
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
@@ -1997,15 +2047,16 @@ impl SidebarPaneView {
                                     else {
                                         return;
                                     };
-                                    this.activate_context_menu_invoker(invoker, cx);
+
                                     this.open_popover_at(
-                                        PopoverKind::worktree(
+                                        (PopoverKind::worktree(
                                             repo_id,
                                             WorktreePopoverKind::Menu {
                                                 path: workspace_path_for_right_click.clone(),
                                                 branch: Some(branch_name_for_right_click.clone()),
                                             },
-                                        ),
+                                        ))
+                                        .invoked_by(invoker),
                                         e.position,
                                         window,
                                         cx,
@@ -2021,82 +2072,89 @@ impl SidebarPaneView {
                     }
 
                     row = row
-                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            if !e.standard_click() {
-                                return;
-                            }
-                            if e.click_count() == 1 {
-                                let Some(target) = this.active_repo().and_then(|repo| {
-                                    branch_click_history_reveal_target(
-                                        repo,
-                                        &target_for_reveal,
-                                        is_head,
-                                    )
-                                }) else {
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Composite,
+                            cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                if !e.standard_click() {
                                     return;
-                                };
-                                this.select_branch_and_reveal_tip(
-                                    repo_id,
-                                    target_for_reveal.clone(),
-                                    target.commit_id,
-                                    target.fallback_scope,
-                                    cx,
-                                );
-                                return;
-                            }
-                            if e.click_count() < 2 {
-                                return;
-                            }
-                            match section {
-                                BranchSection::Local => {
-                                    match local_branch_double_click_action(
-                                        full_name_for_checkout.as_ref(),
-                                        workspace_path.as_deref(),
-                                    ) {
-                                        LocalBranchDoubleClickAction::CheckoutBranch { name } => {
-                                            this.store
-                                                .dispatch(Msg::CheckoutBranch { repo_id, name });
-                                            this.rebuild_diff_cache(cx);
-                                            cx.notify();
+                                }
+                                if e.click_count() == 1 {
+                                    let Some(target) = this.active_repo().and_then(|repo| {
+                                        branch_click_history_reveal_target(
+                                            repo,
+                                            &target_for_reveal,
+                                            is_head,
+                                        )
+                                    }) else {
+                                        return;
+                                    };
+                                    this.select_branch_and_reveal_tip(
+                                        repo_id,
+                                        target_for_reveal.clone(),
+                                        target.commit_id,
+                                        target.fallback_scope,
+                                        cx,
+                                    );
+                                    return;
+                                }
+                                if e.click_count() < 2 {
+                                    return;
+                                }
+                                match section {
+                                    BranchSection::Local => {
+                                        match local_branch_double_click_action(
+                                            full_name_for_checkout.as_ref(),
+                                            workspace_path.as_deref(),
+                                        ) {
+                                            LocalBranchDoubleClickAction::CheckoutBranch {
+                                                name,
+                                            } => {
+                                                this.store.dispatch(Msg::CheckoutBranch {
+                                                    repo_id,
+                                                    name,
+                                                });
+                                                this.rebuild_diff_cache(cx);
+                                                cx.notify();
+                                            }
+                                            LocalBranchDoubleClickAction::OpenWorkspace {
+                                                path,
+                                            } => {
+                                                this.store.dispatch(Msg::OpenRepo(path));
+                                                cx.notify();
+                                            }
                                         }
-                                        LocalBranchDoubleClickAction::OpenWorkspace { path } => {
-                                            this.store.dispatch(Msg::OpenRepo(path));
+                                    }
+                                    BranchSection::Remote => {
+                                        if let Some((remote, branch)) =
+                                            target_for_checkout.remote_parts()
+                                        {
+                                            this.open_popover_at(
+                                                PopoverKind::CheckoutRemoteBranchPrompt {
+                                                    repo_id,
+                                                    remote: remote.to_string(),
+                                                    branch: branch.to_string(),
+                                                },
+                                                e.position(),
+                                                window,
+                                                cx,
+                                            );
                                             cx.notify();
                                         }
                                     }
                                 }
-                                BranchSection::Remote => {
-                                    if let Some((remote, branch)) =
-                                        target_for_checkout.remote_parts()
-                                    {
-                                        this.open_popover_at(
-                                            PopoverKind::CheckoutRemoteBranchPrompt {
-                                                repo_id,
-                                                remote: remote.to_string(),
-                                                branch: branch.to_string(),
-                                            },
-                                            e.position(),
-                                            window,
-                                            cx,
-                                        );
-                                        cx.notify();
-                                    }
-                                }
-                            }
-                        }))
-                        .on_mouse_down(
+                            }),
+                        )
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_right_click.clone(),
-                                    cx,
-                                );
                                 this.open_popover_at(
-                                    PopoverKind::BranchMenu {
+                                    (PopoverKind::BranchMenu {
                                         repo_id,
                                         target: target_for_menu.clone(),
-                                    },
+                                    })
+                                    .invoked_by(context_menu_invoker_for_right_click.clone()),
                                     e.position,
                                     window,
                                     cx,
@@ -2209,19 +2267,23 @@ impl DetailsPaneView {
                                 },
                             )
                             .debug_selector(move || format!("commit_file_dir_{}_{}", repo_id.0, ix))
-                            .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
-                                if !e.standard_click() {
-                                    return;
-                                }
-                                this.toggle_file_list_dir(
-                                    repo_id,
-                                    crate::view::rows::FileListId::CommitFiles,
-                                    Arc::clone(&key),
-                                    Arc::clone(&chain),
-                                    collapsed,
-                                    cx,
-                                );
-                            }))
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                    if !e.standard_click() {
+                                        return;
+                                    }
+                                    this.toggle_file_list_dir(
+                                        repo_id,
+                                        crate::view::rows::FileListId::CommitFiles,
+                                        Arc::clone(&key),
+                                        Arc::clone(&chain),
+                                        collapsed,
+                                        cx,
+                                    );
+                                }),
+                            )
                             .into_any_element(),
                         );
                     }
@@ -2272,34 +2334,15 @@ impl DetailsPaneView {
                         } => t_commit_id == &commit_id && t_path == &f.path,
                         _ => false,
                     });
-                // Mirrors the row's own `.bg()` ladder, so the badge disc is
-                // always the colour of the row it is punched out of.
-                let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
                 let row_group: SharedString = format!("commit_file_row_{ix}").into();
-                let badge_disc = crate::view::rows::FileRowBadgeDisc {
-                    resting: if context_menu_active {
-                        tinted(theme.colors.interaction.pressed_background)
-                    } else if selected {
-                        crate::view::rows::tinted_row_overlay_bg(
-                            theme.colors.surface.canvas,
-                            with_alpha(
-                                theme.colors.accent.foreground,
-                                if theme.is_dark { 0.16 } else { 0.10 },
-                            ),
-                            tint,
-                        )
-                    } else {
-                        tinted(theme.colors.surface.canvas)
-                    },
-                    hover: Some((
-                        row_group.clone(),
-                        tinted(if context_menu_active {
-                            theme.colors.interaction.pressed_background
-                        } else {
-                            theme.colors.interaction.hover_background
-                        }),
-                    )),
-                };
+                let interaction = crate::view::rows::FileRowInteraction::new(
+                    theme,
+                    tint,
+                    selected,
+                    context_menu_active,
+                );
+                let badge_disc = interaction.badge_disc(row_group.clone());
+
                 let commit_id_for_click = commit_id.clone();
                 let commit_id_for_menu = commit_id.clone();
                 // One owned copy shared by both handlers instead of one each.
@@ -2307,7 +2350,7 @@ impl DetailsPaneView {
                 let path_for_menu = Arc::clone(&path_for_click);
                 let tooltip = path_label.clone();
 
-                let mut row = div()
+                let row = div()
                     .id(("commit_file", ix))
                     // Only so the badge disc can follow the row's hover fill.
                     .group(row_group.clone())
@@ -2323,29 +2366,7 @@ impl DetailsPaneView {
                     })
                     .pr(scaled_px(8.0))
                     .w_full()
-                    .cursor(CursorStyle::PointingHand)
-                    .when_some(tint, |s, tint| {
-                        s.bg(crate::view::rows::tinted_row_bg(
-                            theme.colors.surface.canvas,
-                            Some(tint),
-                        ))
-                    })
-                    .hover(move |s| {
-                        s.bg(crate::view::rows::tinted_row_bg(
-                            if context_menu_active {
-                                theme.colors.interaction.pressed_background
-                            } else {
-                                theme.colors.interaction.hover_background
-                            },
-                            tint,
-                        ))
-                    })
-                    .active(move |s| {
-                        s.bg(crate::view::rows::tinted_row_bg(
-                            theme.colors.interaction.pressed_background,
-                            tint,
-                        ))
-                    })
+                    .map(|row| interaction.apply(row))
                     .child(crate::view::rows::file_row_icon_slot(
                         icon,
                         color,
@@ -2388,29 +2409,33 @@ impl DetailsPaneView {
                             f.deletions.unwrap_or(0) as usize,
                         )))
                     })
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        if !e.standard_click() {
-                            return;
-                        }
-                        let target = DiffTarget::Commit {
-                            commit_id: commit_id_for_click.clone(),
-                            path: Some((*path_for_click).clone()),
-                        };
-                        let selected = this.active_repo().is_some_and(|repo| {
-                            repo.id == repo_id
-                                && repo.diff_state.diff_target.as_ref() == Some(&target)
-                        });
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Composite,
+                        cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            if !e.standard_click() {
+                                return;
+                            }
+                            let target = DiffTarget::Commit {
+                                commit_id: commit_id_for_click.clone(),
+                                path: Some((*path_for_click).clone()),
+                            };
+                            let selected = this.active_repo().is_some_and(|repo| {
+                                repo.id == repo_id
+                                    && repo.diff_state.diff_target.as_ref() == Some(&target)
+                            });
 
-                        if selected {
-                            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                        } else {
-                            this.focus_diff_panel(window, cx);
-                            this.store.dispatch(Msg::SelectDiff { repo_id, target });
-                        }
-                        cx.notify();
-                    }))
+                            if selected {
+                                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                            } else {
+                                this.focus_diff_panel(window, cx);
+                                this.store.dispatch(Msg::SelectDiff { repo_id, target });
+                            }
+                            cx.notify();
+                        }),
+                    )
                     .gitcomet_tooltip(theme, tooltip.clone());
-                row = row.on_mouse_down(
+                let row = row.on_pointer_click(
                     MouseButton::Right,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
@@ -2421,13 +2446,13 @@ impl DetailsPaneView {
                             path_for_menu.display()
                         )
                         .into();
-                        this.activate_context_menu_invoker(invoker, cx);
                         this.open_popover_at(
-                            PopoverKind::CommitFileMenu {
+                            (PopoverKind::CommitFileMenu {
                                 repo_id,
                                 commit_id: commit_id_for_menu.clone(),
                                 path: (*path_for_menu).clone(),
-                            },
+                            })
+                            .invoked_by(invoker),
                             e.position,
                             window,
                             cx,
@@ -2435,23 +2460,6 @@ impl DetailsPaneView {
                         cx.notify();
                     }),
                 );
-
-                if selected {
-                    row = row.bg(crate::view::rows::tinted_row_overlay_bg(
-                        theme.colors.surface.canvas,
-                        with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.16 } else { 0.10 },
-                        ),
-                        tint,
-                    ));
-                }
-                if context_menu_active {
-                    row = row.bg(crate::view::rows::tinted_row_bg(
-                        theme.colors.interaction.pressed_background,
-                        tint,
-                    ));
-                }
 
                 Some(row.into_any_element())
             })
@@ -2564,19 +2572,23 @@ impl DetailsPaneView {
                             .debug_selector(move || {
                                 format!("worktree_file_dir_{}_{}", repo_id.0, ix)
                             })
-                            .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
-                                if !e.standard_click() {
-                                    return;
-                                }
-                                this.toggle_file_list_dir(
-                                    repo_id,
-                                    crate::view::rows::FileListId::WorktreeFiles,
-                                    Arc::clone(&key),
-                                    Arc::clone(&chain),
-                                    collapsed,
-                                    cx,
-                                );
-                            }))
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                    if !e.standard_click() {
+                                        return;
+                                    }
+                                    this.toggle_file_list_dir(
+                                        repo_id,
+                                        crate::view::rows::FileListId::WorktreeFiles,
+                                        Arc::clone(&key),
+                                        Arc::clone(&chain),
+                                        collapsed,
+                                        cx,
+                                    );
+                                }),
+                            )
                             .into_any_element(),
                         );
                     }
@@ -2613,28 +2625,12 @@ impl DetailsPaneView {
                 let worktree_path_for_click = worktree_path.clone();
                 let origin_for_click = origin.clone();
 
-                let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
                 let row_group: SharedString = format!("worktree_file_row_{ix}").into();
-                let badge_disc = crate::view::rows::FileRowBadgeDisc {
-                    resting: if selected {
-                        crate::view::rows::tinted_row_overlay_bg(
-                            theme.colors.surface.canvas,
-                            with_alpha(
-                                theme.colors.accent.foreground,
-                                if theme.is_dark { 0.16 } else { 0.10 },
-                            ),
-                            tint,
-                        )
-                    } else {
-                        tinted(theme.colors.surface.canvas)
-                    },
-                    hover: Some((
-                        row_group.clone(),
-                        tinted(theme.colors.interaction.hover_background),
-                    )),
-                };
+                let interaction =
+                    crate::view::rows::FileRowInteraction::new(theme, tint, selected, false);
+                let badge_disc = interaction.badge_disc(row_group.clone());
 
-                let mut row = div()
+                let row = div()
                     .id(("worktree_file", ix))
                     // Only so the badge disc can follow the row's hover fill.
                     .group(row_group.clone())
@@ -2650,25 +2646,7 @@ impl DetailsPaneView {
                     })
                     .pr(scaled_px(8.0))
                     .w_full()
-                    .cursor(CursorStyle::PointingHand)
-                    .when_some(tint, |s, tint| {
-                        s.bg(crate::view::rows::tinted_row_bg(
-                            theme.colors.surface.canvas,
-                            Some(tint),
-                        ))
-                    })
-                    .hover(move |s| {
-                        s.bg(crate::view::rows::tinted_row_bg(
-                            theme.colors.interaction.hover_background,
-                            tint,
-                        ))
-                    })
-                    .active(move |s| {
-                        s.bg(crate::view::rows::tinted_row_bg(
-                            theme.colors.interaction.pressed_background,
-                            tint,
-                        ))
-                    })
+                    .map(|row| interaction.apply(row))
                     .child(crate::view::rows::file_row_icon_slot(
                         icon,
                         color,
@@ -2703,33 +2681,26 @@ impl DetailsPaneView {
                                 .render(cx),
                             ),
                     )
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        if !e.standard_click() {
-                            return;
-                        }
-                        this.focus_diff_panel(window, cx);
-                        this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
-                            repo_id,
-                            origin: origin_for_click.clone(),
-                            submodule_repo_path: worktree_path_for_click.clone(),
-                            parent_submodule_path: worktree_path_for_click.clone(),
-                            entries: Arc::clone(&inputs_for_click.entries),
-                            selected_ix: ix_for_click,
-                        });
-                        cx.notify();
-                    }))
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Composite,
+                        cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            if !e.standard_click() {
+                                return;
+                            }
+                            this.focus_diff_panel(window, cx);
+                            this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
+                                repo_id,
+                                origin: origin_for_click.clone(),
+                                submodule_repo_path: worktree_path_for_click.clone(),
+                                parent_submodule_path: worktree_path_for_click.clone(),
+                                entries: Arc::clone(&inputs_for_click.entries),
+                                selected_ix: ix_for_click,
+                            });
+                            cx.notify();
+                        }),
+                    )
                     .gitcomet_tooltip(theme, tooltip.clone());
-
-                if selected {
-                    row = row.bg(crate::view::rows::tinted_row_overlay_bg(
-                        theme.colors.surface.canvas,
-                        with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.16 } else { 0.10 },
-                        ),
-                        tint,
-                    ));
-                }
 
                 Some(row.into_any_element())
             })
@@ -2819,19 +2790,23 @@ impl DetailsPaneView {
                                 },
                             )
                             .debug_selector(move || format!("range_file_dir_{}_{}", repo_id.0, ix))
-                            .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
-                                if !e.standard_click() {
-                                    return;
-                                }
-                                this.toggle_file_list_dir(
-                                    repo_id,
-                                    crate::view::rows::FileListId::RangeFiles,
-                                    Arc::clone(&key),
-                                    Arc::clone(&chain),
-                                    collapsed,
-                                    cx,
-                                );
-                            }))
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                                    if !e.standard_click() {
+                                        return;
+                                    }
+                                    this.toggle_file_list_dir(
+                                        repo_id,
+                                        crate::view::rows::FileListId::RangeFiles,
+                                        Arc::clone(&key),
+                                        Arc::clone(&chain),
+                                        collapsed,
+                                        cx,
+                                    );
+                                }),
+                            )
                             .into_any_element(),
                         );
                     }
@@ -2867,28 +2842,12 @@ impl DetailsPaneView {
                 let target_for_click = target.clone();
                 let tooltip = path_label.clone();
 
-                let tinted = |base| crate::view::rows::tinted_row_bg(base, tint);
                 let row_group: SharedString = format!("range_file_row_{ix}").into();
-                let badge_disc = crate::view::rows::FileRowBadgeDisc {
-                    resting: if selected {
-                        crate::view::rows::tinted_row_overlay_bg(
-                            theme.colors.surface.canvas,
-                            with_alpha(
-                                theme.colors.accent.foreground,
-                                if theme.is_dark { 0.16 } else { 0.10 },
-                            ),
-                            tint,
-                        )
-                    } else {
-                        tinted(theme.colors.surface.canvas)
-                    },
-                    hover: Some((
-                        row_group.clone(),
-                        tinted(theme.colors.interaction.hover_background),
-                    )),
-                };
+                let interaction =
+                    crate::view::rows::FileRowInteraction::new(theme, tint, selected, false);
+                let badge_disc = interaction.badge_disc(row_group.clone());
 
-                let mut row = div()
+                let row = div()
                     .id(("range_file", ix))
                     // Only so the badge disc can follow the row's hover fill.
                     .group(row_group.clone())
@@ -2904,25 +2863,7 @@ impl DetailsPaneView {
                     })
                     .pr(scaled_px(8.0))
                     .w_full()
-                    .cursor(CursorStyle::PointingHand)
-                    .when_some(tint, |s, tint| {
-                        s.bg(crate::view::rows::tinted_row_bg(
-                            theme.colors.surface.canvas,
-                            Some(tint),
-                        ))
-                    })
-                    .hover(move |s| {
-                        s.bg(crate::view::rows::tinted_row_bg(
-                            theme.colors.interaction.hover_background,
-                            tint,
-                        ))
-                    })
-                    .active(move |s| {
-                        s.bg(crate::view::rows::tinted_row_bg(
-                            theme.colors.interaction.pressed_background,
-                            tint,
-                        ))
-                    })
+                    .map(|row| interaction.apply(row))
                     .child(crate::view::rows::file_row_icon_slot(
                         icon,
                         color,
@@ -2965,37 +2906,31 @@ impl DetailsPaneView {
                             f.deletions.unwrap_or(0) as usize,
                         )))
                     })
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        if !e.standard_click() {
-                            return;
-                        }
-                        let selected = this.active_repo().is_some_and(|repo| {
-                            repo.id == repo_id
-                                && repo.diff_state.diff_target.as_ref() == Some(&target_for_click)
-                        });
-                        if selected {
-                            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                        } else {
-                            this.focus_diff_panel(window, cx);
-                            this.store.dispatch(Msg::SelectDiff {
-                                repo_id,
-                                target: target_for_click.clone(),
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Composite,
+                        cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            if !e.standard_click() {
+                                return;
+                            }
+                            let selected = this.active_repo().is_some_and(|repo| {
+                                repo.id == repo_id
+                                    && repo.diff_state.diff_target.as_ref()
+                                        == Some(&target_for_click)
                             });
-                        }
-                        cx.notify();
-                    }))
+                            if selected {
+                                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                            } else {
+                                this.focus_diff_panel(window, cx);
+                                this.store.dispatch(Msg::SelectDiff {
+                                    repo_id,
+                                    target: target_for_click.clone(),
+                                });
+                            }
+                            cx.notify();
+                        }),
+                    )
                     .gitcomet_tooltip(theme, tooltip.clone());
-
-                if selected {
-                    row = row.bg(crate::view::rows::tinted_row_overlay_bg(
-                        theme.colors.surface.canvas,
-                        with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.16 } else { 0.10 },
-                        ),
-                        tint,
-                    ));
-                }
 
                 Some(row.into_any_element())
             })
@@ -3005,6 +2940,32 @@ impl DetailsPaneView {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn badge_feedback_remains_visible_on_transparent_controls() {
+        use crate::kit::interaction::{InteractionFeedback, InteractionState};
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let style = worktree_badge_interaction(theme);
+            for feedback in [InteractionFeedback::Hovered, InteractionFeedback::Pressed] {
+                assert!(
+                    style
+                        .fill(InteractionState::default(), feedback)
+                        .unwrap()
+                        .alpha
+                        > 0.0
+                );
+            }
+            assert!(
+                style
+                    .fill(
+                        InteractionState::default().open(true),
+                        InteractionFeedback::Resting
+                    )
+                    .unwrap()
+                    .alpha
+                    > 0.0
+            );
+        }
+    }
 
     /// Every worktree badge -- the branch row pill, the details chip, the log
     /// row badge -- goes through one height, so they cannot drift apart.
@@ -3957,6 +3918,15 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = crate::test_support::lock_visual_test();
+        // OpenRepo normalizes paths. Give it and the worktree list the same
+        // native absolute paths, including on Windows and symlinked temp dirs.
+        let worktrees_dir = tempfile::tempdir().expect("worktree fixture directory");
+        let worktrees_path =
+            gitcomet_core::path_utils::canonicalize_or_original(worktrees_dir.path().to_path_buf());
+        let repo_path = worktrees_path.join("repo");
+        let feature_path = worktrees_path.join("repo-feature");
+        std::fs::create_dir(&repo_path).expect("main worktree directory");
+        std::fs::create_dir(&feature_path).expect("feature worktree directory");
         let (store, events) = AppStore::new(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
@@ -3964,7 +3934,7 @@ mod tests {
 
         let repo_id = RepoId(1);
         crate::view::test_support::redraw(cx);
-        store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/repo")));
+        store_for_assert.dispatch(Msg::OpenRepo(repo_path.clone()));
         wait_until(cx, "opened repo placeholder", |_cx| {
             let snapshot = store_for_assert.snapshot();
             snapshot.active_repo == Some(repo_id)
@@ -4021,13 +3991,13 @@ mod tests {
             repo_id,
             result: Ok(vec![
                 Worktree {
-                    path: PathBuf::from("/tmp/repo"),
+                    path: repo_path,
                     head: None,
                     branch: Some("main".to_string()),
                     detached: false,
                 },
                 Worktree {
-                    path: PathBuf::from("/tmp/repo-feature"),
+                    path: feature_path.clone(),
                     head: None,
                     branch: Some("feature".to_string()),
                     detached: false,
@@ -4053,6 +4023,65 @@ mod tests {
         let feature_row_selector =
             leak_selector(format!("branch_row_{}_{}", repo_id.0, feature_ix));
         let feature_badge_selector = leak_selector(format!("branch_workspace_badge_{feature_ix}"));
+        let main_ix = branch_row_index_for_name(cx, &view, BranchSection::Local, "main");
+        let main_badge = leak_selector(format!("branch_workspace_badge_{main_ix}"));
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            cx.update(|_, app| view.update(app, |this, cx| this.set_theme(theme, cx)));
+            cx.simulate_mouse_move(
+                point(px(600.0), px(400.0)),
+                None,
+                gpui::Modifiers::default(),
+            );
+            crate::view::test_support::redraw(cx);
+            let main_resting = crate::test_support::painted_control_quads(cx, main_badge);
+            assert!(
+                main_resting.iter().any(|(bg, _)| bg.as_solid()
+                    == Some(palette::IntoColor::into_color(
+                        worktree_badge_palette(theme).active_bg
+                    ))),
+                "open workspace must retain its resting fill"
+            );
+            let closed_resting =
+                crate::test_support::painted_control_quads(cx, feature_badge_selector);
+            let position = cx.debug_bounds(feature_badge_selector).unwrap().center();
+            cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+            crate::view::test_support::redraw(cx);
+            assert_ne!(
+                crate::test_support::painted_control_quads(cx, feature_badge_selector),
+                closed_resting,
+                "hover must be visible"
+            );
+            cx.simulate_mouse_down(
+                position,
+                gpui::MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            crate::view::test_support::redraw(cx);
+            assert_ne!(
+                crate::test_support::painted_control_quads(cx, feature_badge_selector),
+                closed_resting,
+                "press must be visible"
+            );
+            cx.simulate_mouse_up(
+                point(px(600.0), px(400.0)),
+                gpui::MouseButton::Left,
+                gpui::Modifiers::default(),
+            );
+            cx.simulate_mouse_move(
+                point(px(600.0), px(400.0)),
+                None,
+                gpui::Modifiers::default(),
+            );
+            crate::view::test_support::redraw(cx);
+            assert_eq!(
+                crate::test_support::painted_control_quads(cx, feature_badge_selector),
+                closed_resting
+            );
+            assert_eq!(
+                crate::test_support::painted_control_quads(cx, main_badge),
+                main_resting
+            );
+        }
         let feature_pull_badge_selector = leak_selector(format!("branch_pull_badge_{feature_ix}"));
         let feature_push_badge_selector = leak_selector(format!("branch_push_badge_{feature_ix}"));
         let feature_menu_selector = leak_selector(format!(
@@ -4137,6 +4166,12 @@ mod tests {
             gpui::MouseButton::Right,
             gpui::Modifiers::default(),
         );
+        assert!(!cx.update(|_, app| view.read(app).popover_host.read(app).is_open()));
+        cx.simulate_mouse_up(
+            feature_row_label_point,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
         crate::view::test_support::redraw(cx);
         let popover_kind = cx.update(|_window, app| {
             view.read(app)
@@ -4197,7 +4232,7 @@ mod tests {
                         branch: Some(ref branch),
                     }),
                 }) if opened_repo_id == repo_id
-                    && path == &PathBuf::from("/tmp/repo-feature")
+                    && path == &feature_path
                     && branch == "feature"
             ),
             "expected worktree badge click to open the worktree menu"
@@ -4212,6 +4247,11 @@ mod tests {
         cx.run_until_parked();
 
         cx.simulate_mouse_down(
+            feature_badge_center,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
             feature_badge_center,
             gpui::MouseButton::Right,
             gpui::Modifiers::default(),
@@ -4233,7 +4273,7 @@ mod tests {
                         branch: Some(ref branch),
                     }),
                 }) if opened_repo_id == repo_id
-                    && path == &PathBuf::from("/tmp/repo-feature")
+                    && path == &feature_path
                     && branch == "feature"
             ),
             "expected worktree badge right-click to open the worktree menu"

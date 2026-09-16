@@ -11,7 +11,9 @@
 //! pointer target on the window edge rather than something in the bar, and
 //! deliberately still follows the UI scale.
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 use crate::ui_scale;
+use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -490,11 +492,12 @@ impl TitleBarView {
 
     fn open_popover_at(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_at(kind, anchor, window, cx);
         });
@@ -502,11 +505,12 @@ impl TitleBarView {
 
     fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
         });
@@ -528,10 +532,6 @@ impl Render for TitleBarView {
             theme.colors.accent.foreground,
             if theme.is_dark { 0.30 } else { 0.24 },
         );
-        let app_menu_open_active_bg = with_alpha(
-            theme.colors.accent.foreground,
-            if theme.is_dark { 0.48 } else { 0.38 },
-        );
         let app_menu_hover_bg = theme.titlebar_hover_overlay();
         let app_menu_active_bg = theme.titlebar_active_overlay();
         // Matches `ButtonStyle::Transparent`'s hover border exactly, so the
@@ -552,12 +552,11 @@ impl Render for TitleBarView {
                     px(TITLE_BAR_ICON_SIZE_PX),
                 ))
                 .style(components::ButtonStyle::Transparent)
-                .selected(app_menu_open)
+                .open(app_menu_open)
                 .selected_bg(app_menu_open_bg)
                 .focus_handle(app_menu_focus_handle)
                 .unscaled()
                 .on_click(theme, cx, |this, _e, window, cx| {
-                    this.set_app_menu_open(true, cx);
                     let anchor = window_top_left_corner(window);
                     this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
                 })
@@ -601,41 +600,41 @@ impl Render for TitleBarView {
                     .border_color(gpui::transparent_black())
                     // Stay lit in the pressed/open color while the picker popover
                     // is open, mirroring the app-menu button.
-                    .when(repo_picker_open, move |s| s.bg(app_menu_open_bg))
-                    .hover(move |s| {
-                        let s = s.border_color(titlebar_hover_border);
-                        if repo_picker_open {
-                            s.bg(app_menu_open_bg)
-                        } else {
-                            s.bg(app_menu_hover_bg)
-                        }
-                    })
-                    .active(move |s| {
-                        if repo_picker_open {
-                            s.bg(app_menu_open_active_bg)
-                        } else {
-                            s.bg(app_menu_active_bg)
-                        }
-                    })
+                    .tab_index(0)
+                    .control_interaction(
+                        InteractionStyle::new(theme)
+                            .persistent_background(app_menu_open_bg)
+                            .hover(
+                                StyleRefinement::default()
+                                    .bg(app_menu_hover_bg)
+                                    .border_color(titlebar_hover_border),
+                            )
+                            .pressed(StyleRefinement::default().bg(app_menu_active_bg)),
+                        InteractionState::default().open(repo_picker_open),
+                    )
                     .child(svg_icon(
                         "icons/chevron_down.svg",
                         theme.colors.foreground.primary,
                         px(TITLE_BAR_ICON_SIZE_PX),
                     ))
                     .block_mouse_except_scroll()
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        let anchor_bounds = repo_picker_toggle_bounds_for_click
-                            .get()
-                            .unwrap_or_else(|| {
-                                Bounds::new(e.position(), gpui::size(px(0.0), px(0.0)))
-                            });
-                        this.open_popover_for_bounds(
-                            PopoverKind::RepoPicker,
-                            anchor_bounds,
-                            window,
-                            cx,
-                        );
-                    }))
+                    .on_activate(
+                        false,
+                        components::ControlActivation::Action,
+                        cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            let anchor_bounds = repo_picker_toggle_bounds_for_click
+                                .get()
+                                .unwrap_or_else(|| {
+                                    Bounds::new(e.position(), gpui::size(px(0.0), px(0.0)))
+                                });
+                            this.open_popover_for_bounds(
+                                PopoverKind::RepoPicker,
+                                anchor_bounds,
+                                window,
+                                cx,
+                            );
+                        }),
+                    )
                     .gitcomet_tooltip(theme, "Switch repository".into()),
             );
 
@@ -660,23 +659,23 @@ impl Render for TitleBarView {
             .debug_selector(|| "titlebar_drag".to_string())
             .absolute()
             .inset_0()
-            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                if !should_handle_titlebar_double_click(e.click_count(), e.standard_click()) {
-                    return;
-                }
-                this.title_drag_state.clear();
-                cx.stop_propagation();
-                handle_titlebar_double_click(window);
-                cx.notify();
-            }))
-            // GPUI synthesizes ClickEvent only from the left mouse button, so use mouse-up
-            // directly for the Windows title bar system menu.
-            .on_mouse_up(
-                MouseButton::Right,
-                cx.listener(|_this, e: &MouseUpEvent, window, cx| {
-                    if crate::press_gesture::is_press_claimed(cx) {
+            .on_activate(
+                false,
+                components::ControlActivation::Composite,
+                cx.listener(|this, e: &ClickEvent, window, cx| {
+                    this.title_drag_state.clear();
+                    cx.notify();
+                    if !should_handle_titlebar_double_click(e.click_count(), e.standard_click()) {
                         return;
                     }
+                    cx.stop_propagation();
+                    handle_titlebar_double_click(window);
+                }),
+            )
+            // The system menu follows the same completed-click rule as controls.
+            .on_pointer_click(
+                MouseButton::Right,
+                cx.listener(|_this, e: &MouseDownEvent, window, cx| {
                     show_titlebar_secondary_menu(e.position, window, cx);
                 }),
             )
@@ -720,10 +719,14 @@ impl Render for TitleBarView {
         .debug_selector(|| "titlebar_win_min".to_string())
         .window_control_area(WindowControlArea::Min)
         .gitcomet_tooltip(theme, min_tooltip)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            window.minimize_window();
-        }));
+        .on_activate(
+            false,
+            components::ControlActivation::Action,
+            cx.listener(|_this, _e: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                window.minimize_window();
+            }),
+        );
 
         let max_icon = if window.is_maximized() {
             "icons/generic_restore.svg"
@@ -745,11 +748,15 @@ impl Render for TitleBarView {
         .debug_selector(|| "titlebar_win_max".to_string())
         .window_control_area(WindowControlArea::Max)
         .gitcomet_tooltip(theme, max_tooltip)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            crate::app::toggle_window_zoom(window);
-            cx.notify();
-        }));
+        .on_activate(
+            false,
+            components::ControlActivation::Action,
+            cx.listener(|_this, _e: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                crate::app::toggle_window_zoom(window);
+                cx.notify();
+            }),
+        );
 
         let close_tooltip: SharedString = "Close window".into();
         let close = titlebar_control_button(
@@ -762,10 +769,14 @@ impl Render for TitleBarView {
         .debug_selector(|| "titlebar_win_close".to_string())
         .window_control_area(WindowControlArea::Close)
         .gitcomet_tooltip(theme, close_tooltip)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            crate::app::close_window_or_warn(window, cx);
-        }));
+        .on_activate(
+            false,
+            components::ControlActivation::Action,
+            cx.listener(|_this, _e: &ClickEvent, window, cx| {
+                cx.stop_propagation();
+                crate::app::close_window_or_warn(window, cx);
+            }),
+        );
 
         // Leading and trailing clusters center on the full bar height; tab
         // labels compensate for their bottom fusion (see `Tab::render`) so

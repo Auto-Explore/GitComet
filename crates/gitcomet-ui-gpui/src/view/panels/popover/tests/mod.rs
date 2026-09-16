@@ -50,6 +50,7 @@ mod context_shortcuts;
 mod dialog;
 mod file_actions;
 mod file_history;
+mod interaction;
 mod layout;
 mod mergetool_settings;
 mod picker;
