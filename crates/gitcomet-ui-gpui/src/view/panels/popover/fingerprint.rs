@@ -914,9 +914,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             97u8.hash(hasher);
             repo_id.hash(hasher);
         }
-        PopoverKind::TerminalMenu { repo_id, context } => {
+        PopoverKind::TerminalMenu {
+            repo_id,
+            session_seq,
+            context,
+        } => {
             72u8.hash(hasher);
             repo_id.hash(hasher);
+            session_seq.hash(hasher);
             context.hash(hasher);
         }
         PopoverKind::MergeAbortConfirm { repo_id } => {

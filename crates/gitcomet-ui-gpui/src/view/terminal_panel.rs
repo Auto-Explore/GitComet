@@ -50,10 +50,11 @@ const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TerminalShortcutAction {
+pub(in crate::view) enum TerminalCommand {
     Copy,
     Paste,
     SelectAll,
+    ClearScreenAndScrollback,
 }
 
 /// Which surviving terminal receives focus after a stable-sequence close.
@@ -257,11 +258,13 @@ impl GitCometView {
             .collect::<FxHashSet<RepoId>>();
         let repo_tabs_bar = self.repo_tabs_bar.clone();
         let action_bar = self.action_bar.clone();
+        let popover_host = self.popover_host.clone();
         cx.defer(move |cx| {
             repo_tabs_bar.update(cx, |bar, cx| {
                 bar.set_open_terminal_repo_ids(repo_ids.clone(), cx)
             });
             action_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(repo_ids, cx));
+            popover_host.update(cx, |host, cx| host.dismiss_stale_terminal_menu(cx));
         });
     }
 
@@ -1029,82 +1032,37 @@ impl GitCometView {
         }
     }
 
-    pub(super) fn send_terminal_bytes_for_repo(&mut self, repo_id: RepoId, bytes: Vec<u8>) {
-        if let Some(pty) = self
-            .terminal_sessions
+    pub(in crate::view) fn terminal_viewport_for_session(
+        &self,
+        repo_id: RepoId,
+        session_seq: u64,
+    ) -> Option<Entity<TerminalViewportView>> {
+        self.terminal_sessions
             .get(&repo_id)
-            .and_then(|s| s.active_instance())
-            .and_then(|i| i.pty_sender.as_ref())
-        {
-            pty.write(bytes);
-        }
+            .and_then(|s| s.instance_by_seq(session_seq))
+            .map(|i| i.viewport.clone())
     }
 
-    pub(super) fn copy_terminal_selection_for_repo(
+    pub(in crate::view) fn dispatch_terminal_command(
         &mut self,
         repo_id: RepoId,
-        _window: &mut Window,
+        session_seq: u64,
+        command: TerminalCommand,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(viewport) = self
-            .terminal_sessions
-            .get(&repo_id)
-            .and_then(|s| s.active_instance())
-            .map(|i| i.viewport.clone())
-        else {
+        let Some(viewport) = self.terminal_viewport_for_session(repo_id, session_seq) else {
             return false;
         };
-        let Some(text) = viewport.read(cx).selected_text() else {
-            return false;
-        };
-        crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::TerminalContextMenu);
+        viewport.update(cx, |v, cx| {
+            v.perform_command(
+                command,
+                crate::clipboard::CopySource::TerminalContextMenu,
+                window,
+                cx,
+            )
+        });
         true
-    }
-
-    pub(super) fn paste_terminal_clipboard_for_repo(
-        &mut self,
-        repo_id: RepoId,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let Some(text) = crate::clipboard::read_text(cx) else {
-            return false;
-        };
-        let Some(viewport) = self
-            .terminal_sessions
-            .get(&repo_id)
-            .and_then(|s| s.active_instance())
-            .map(|i| i.viewport.clone())
-        else {
-            return false;
-        };
-        viewport.update(cx, |v, cx| v.paste_text(&text, cx));
-        true
-    }
-
-    pub(super) fn select_all_terminal_for_repo(
-        &mut self,
-        repo_id: RepoId,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if let Some(viewport) = self
-            .terminal_sessions
-            .get(&repo_id)
-            .and_then(|s| s.active_instance())
-            .map(|i| i.viewport.clone())
-        {
-            viewport.update(cx, |v, cx| v.select_all(window, cx));
-        }
-    }
-
-    pub(super) fn clear_terminal_for_repo(
-        &mut self,
-        repo_id: RepoId,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
-    ) {
-        self.send_terminal_bytes_for_repo(repo_id, vec![0x0c]);
     }
 
     pub(in crate::view) fn terminal_launch_context_for_active_repo(
@@ -1127,7 +1085,7 @@ impl GitCometView {
     ) -> Option<AnyElement> {
         let active_repo = self.active_repo_id()?;
 
-        let (viewport_entity, connected, tabs, active_index) = {
+        let (viewport_entity, session_seq, tabs, active_index) = {
             let session = self.terminal_sessions.get(&active_repo)?;
             let active = session.active_instance()?;
             let tabs: Vec<SharedString> = session
@@ -1137,18 +1095,11 @@ impl GitCometView {
                 .collect();
             (
                 active.viewport.clone(),
-                active.connected,
+                active.session_seq,
                 tabs,
                 session.active_index,
             )
         };
-        let has_selection = viewport_entity.read(cx).has_selection();
-        let mouse_mode = viewport_entity
-            .read(cx)
-            .last_content
-            .as_ref()
-            .map(|c| c.mode.mouse_mode())
-            .unwrap_or(false);
         // When the terminal holds keyboard focus, app shortcuts are routed to
         // the embedded TUI instead of the app. Surface that state so the user
         // understands why their usual shortcuts behave differently.
@@ -1164,6 +1115,7 @@ impl GitCometView {
         );
         let viewport_element = div()
             .id("terminal_context_surface")
+            .debug_selector(|| "terminal_context_surface".to_string())
             .flex_1()
             .min_h(px(0.0))
             // Breathing room so the first/last column doesn't touch the panel
@@ -1176,26 +1128,38 @@ impl GitCometView {
             .on_pointer_click(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    let Some(instance) = this
+                        .terminal_sessions
+                        .get(&active_repo)
+                        .and_then(|session| session.instance_by_seq(session_seq))
+                    else {
+                        return;
+                    };
+                    let viewport = instance.viewport.read(cx);
                     // When the running program has requested mouse reporting
                     // (e.g. a full-screen TUI), forward the click instead of
                     // showing our context menu.
-                    if mouse_mode {
+                    if viewport.live_modes().mouse_mode() {
                         return;
                     }
-                    cx.stop_propagation();
                     let context = TerminalMenuContext {
                         has_session: true,
-                        has_selection,
-                        connected,
+                        has_buffer: viewport.term_lock.is_some(),
+                        has_selection: viewport.has_selection(),
+                        connected: instance.connected,
                     };
+                    let focus_return = viewport.focus_handle.clone();
+                    cx.stop_propagation();
                     let invoker: SharedString = format!("terminal_menu_{}", active_repo.0).into();
 
                     this.open_popover_at(
                         (PopoverKind::TerminalMenu {
                             repo_id: active_repo,
+                            session_seq,
                             context,
                         })
-                        .invoked_by(invoker),
+                        .invoked_by(invoker)
+                        .returning_focus_to(focus_return),
                         e.position,
                         window,
                         cx,
@@ -1238,28 +1202,38 @@ impl GitCometView {
     ) -> AnyElement {
         let external_repo = active_repo;
         let clear_repo = active_repo;
+        let clear_session = self
+            .terminal_sessions
+            .get(&active_repo)
+            .and_then(|s| s.active_instance())
+            .filter(|instance| instance.viewport.read(cx).term_lock.is_some())
+            .map(|instance| instance.session_seq);
         let close_repo = active_repo;
         let repo_id = active_repo;
         let ui_scale = crate::ui_scale::UiScale::current(cx);
         let control_height = components::control_height(ui_scale);
 
-        let icon_btn = move |id: &'static str, icon: &'static str, tip: &'static str| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(control_height)
-                .rounded(px(theme.radii.row))
-                .cursor(CursorStyle::PointingHand)
-                .control_interaction(InteractionStyle::new(theme), InteractionState::default())
-                .child(svg_icon(
-                    icon,
-                    theme.colors.foreground.primary,
-                    ui_scale.px(14.0),
-                ))
-                .gitcomet_tooltip(theme, tip.into())
-        };
+        let icon_btn =
+            move |id: &'static str, icon: &'static str, tip: &'static str, disabled: bool| {
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(control_height)
+                    .rounded(px(theme.radii.row))
+                    .cursor(CursorStyle::PointingHand)
+                    .control_interaction(
+                        InteractionStyle::new(theme),
+                        InteractionState::default().disabled(disabled),
+                    )
+                    .child(svg_icon(
+                        icon,
+                        theme.colors.foreground.primary,
+                        ui_scale.px(14.0),
+                    ))
+                    .gitcomet_tooltip(theme, tip.into())
+            };
 
         let mut tabs_row = div()
             .id("terminal_tabs_scroll")
@@ -1389,6 +1363,7 @@ impl GitCometView {
                             "terminal_open_external",
                             "icons/open_external.svg",
                             "Open in external terminal",
+                            false,
                         )
                         .on_activate(
                             false,
@@ -1402,13 +1377,28 @@ impl GitCometView {
                         icon_btn(
                             "terminal_clear",
                             "icons/broom.svg",
-                            "Clear terminal (Ctrl+L)",
+                            "Clear Screen and Scrollback",
+                            clear_session.is_none(),
                         )
+                        .debug_selector(|| "terminal_clear".to_string())
                         .on_activate(
-                            false,
+                            clear_session.is_none(),
                             controls::ControlActivation::Action,
                             cx.listener(move |this, _e: &gpui::ClickEvent, window, cx| {
-                                this.clear_terminal_for_repo(clear_repo, window, cx);
+                                let Some(viewport) = clear_session.and_then(|seq| {
+                                    this.terminal_viewport_for_session(clear_repo, seq)
+                                }) else {
+                                    return;
+                                };
+                                viewport.update(cx, |v, cx| {
+                                    v.perform_command(
+                                        TerminalCommand::ClearScreenAndScrollback,
+                                        crate::clipboard::CopySource::TerminalContextMenu,
+                                        window,
+                                        cx,
+                                    );
+                                    window.focus(&v.focus_handle, cx);
+                                });
                             }),
                         ),
                     )
@@ -1417,6 +1407,7 @@ impl GitCometView {
                             "terminal_close",
                             "icons/generic_close.svg",
                             "Close terminal",
+                            false,
                         )
                         .on_activate(
                             false,
@@ -1757,13 +1748,11 @@ fn terminate_terminal_process_group(child_pid: Option<u32>) {
 #[cfg(not(unix))]
 fn terminate_terminal_process_group(_child_pid: Option<u32>) {}
 
-fn terminal_clipboard_shortcut_action(
-    keystroke: &gpui::Keystroke,
-) -> Option<TerminalShortcutAction> {
+fn terminal_clipboard_shortcut_action(keystroke: &gpui::Keystroke) -> Option<TerminalCommand> {
     let action = match keystroke.key.as_str() {
-        "c" | "C" => TerminalShortcutAction::Copy,
-        "v" | "V" => TerminalShortcutAction::Paste,
-        "a" | "A" => TerminalShortcutAction::SelectAll,
+        "c" | "C" => TerminalCommand::Copy,
+        "v" | "V" => TerminalCommand::Paste,
+        "a" | "A" => TerminalCommand::SelectAll,
         _ => return None,
     };
     let mods = keystroke.modifiers;

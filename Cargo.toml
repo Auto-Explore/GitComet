@@ -76,7 +76,7 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 # External crates
 alacritty_terminal = "0.26"
 anyhow = "1"
-clap = { version = "4.6.6", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 criterion = "0.8.2"
 # Runs the tree-sitter allocator install before `main` in every binary that
 # links gitcomet-tree-sitter-alloc, tests included, so no process ever switches

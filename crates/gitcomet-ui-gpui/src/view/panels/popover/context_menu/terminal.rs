@@ -2,10 +2,18 @@ use super::*;
 
 pub(super) fn model(
     repo_id: RepoId,
+    session_seq: u64,
     context: TerminalMenuContext,
     cx: &gpui::Context<PopoverHost>,
 ) -> ContextMenuModel {
     let clipboard_has_text = crate::clipboard::read_text(cx).is_some_and(|text| !text.is_empty());
+    let command = |command| {
+        Box::new(ContextMenuAction::TerminalCommand {
+            repo_id,
+            session_seq,
+            command,
+        })
+    };
 
     ContextMenuModel::new(vec![
         ContextMenuItem::Entry {
@@ -13,36 +21,39 @@ pub(super) fn model(
             icon: None,
             shortcut: Some(terminal_copy_shortcut().into()),
             disabled: !context.has_selection,
-            action: Box::new(ContextMenuAction::TerminalCopy { repo_id }),
+            action: command(terminal_panel::TerminalCommand::Copy),
         },
         ContextMenuItem::Entry {
             label: "Paste".into(),
             icon: None,
             shortcut: Some(terminal_paste_shortcut().into()),
             disabled: !context.connected || !clipboard_has_text,
-            action: Box::new(ContextMenuAction::TerminalPaste { repo_id }),
+            action: command(terminal_panel::TerminalCommand::Paste),
         },
         ContextMenuItem::Entry {
             label: "Select All".into(),
             icon: None,
             shortcut: Some(terminal_select_all_shortcut().into()),
-            disabled: !context.has_session,
-            action: Box::new(ContextMenuAction::TerminalSelectAll { repo_id }),
+            disabled: !context.has_buffer,
+            action: command(terminal_panel::TerminalCommand::SelectAll),
         },
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
-            label: "Clear".into(),
+            label: "Clear Screen and Scrollback".into(),
             icon: None,
             shortcut: None,
-            disabled: !context.connected,
-            action: Box::new(ContextMenuAction::TerminalClear { repo_id }),
+            disabled: !context.has_buffer,
+            action: command(terminal_panel::TerminalCommand::ClearScreenAndScrollback),
         },
         ContextMenuItem::Entry {
             label: "Open in External Terminal".into(),
             icon: None,
             shortcut: None,
             disabled: !context.has_session,
-            action: Box::new(ContextMenuAction::TerminalOpenExternal { repo_id }),
+            action: Box::new(ContextMenuAction::TerminalOpenExternal {
+                repo_id,
+                session_seq,
+            }),
         },
     ])
 }

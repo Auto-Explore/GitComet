@@ -266,9 +266,18 @@ impl PopoverHost {
             PopoverKind::MergetoolSettingsMenu => {
                 self.context_menu_view(PopoverKind::MergetoolSettingsMenu, cx)
             }
-            PopoverKind::TerminalMenu { repo_id, context } => {
-                self.context_menu_view(PopoverKind::TerminalMenu { repo_id, context }, cx)
-            }
+            PopoverKind::TerminalMenu {
+                repo_id,
+                session_seq,
+                context,
+            } => self.context_menu_view(
+                PopoverKind::TerminalMenu {
+                    repo_id,
+                    session_seq,
+                    context,
+                },
+                cx,
+            ),
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 self.context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
             }

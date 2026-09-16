@@ -191,15 +191,14 @@ pub(crate) fn on_click<E: Element + InteractiveElement>(
             }
         });
     let listener = move |event: &ClickEvent, window: &mut Window, cx: &mut App| {
-        if let ClickEvent::Mouse(mouse) = event {
-            if mouse.down.button != button
+        if let ClickEvent::Mouse(mouse) = event
+            && (mouse.down.button != button
                 || target
                     .borrow()
                     .as_ref()
-                    .is_none_or(|target| complete(target, &mouse.up, window, cx).is_none())
-            {
-                return;
-            }
+                    .is_none_or(|target| complete(target, &mouse.up, window, cx).is_none()))
+        {
+            return;
         }
         cx.stop_propagation();
         handler(event, window, cx);

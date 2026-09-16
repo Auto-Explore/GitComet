@@ -227,6 +227,7 @@ pub(in super::super) struct PopoverHost {
     context_menu_focus_handle: FocusHandle,
     /// Focus held by the menu or confirmation's invoker, restored on dismissal.
     menu_invoker_focus: Option<FocusHandle>,
+    focus_return: Option<FocusHandle>,
     active_invoker: Option<SharedString>,
     /// Whether the open popover was invoked from inside the diff panel.
     ///

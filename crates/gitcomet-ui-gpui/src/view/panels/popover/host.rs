@@ -861,6 +861,7 @@ impl PopoverHost {
             commit_mainline: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
+            focus_return: None,
             active_invoker: None,
             popover_opened_from_diff_panel: false,
             prompt_tab_group_focus_handle,
@@ -1228,6 +1229,7 @@ impl PopoverHost {
         self.expanded_history_ref = None;
         self.picker_row_menu = None;
         self.menu_invoker_focus = None;
+        self.focus_return = None;
         self.notify_fingerprint = 0;
         self.sync_titlebar_app_menu_state(cx);
         self.clear_active_context_menu_invoker(cx);
@@ -1244,6 +1246,22 @@ impl PopoverHost {
             });
         });
         cx.notify();
+    }
+
+    pub(in crate::view) fn dismiss_stale_terminal_menu(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(PopoverKind::TerminalMenu {
+            repo_id,
+            session_seq,
+            ..
+        }) = self.popover
+            && self.root_view.upgrade().is_none_or(|root| {
+                root.read(cx)
+                    .terminal_viewport_for_session(repo_id, session_seq)
+                    .is_none()
+            })
+        {
+            self.close_popover(cx);
+        }
     }
 
     /// Validates the repo's current multi-selection against its loaded log and
@@ -1348,6 +1366,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) {
         let menu_invoker_focus = self.menu_invoker_focus.take();
+        let focus_return = self.focus_return.take();
         let restore_diff_panel_focus = matches!(
             self.popover,
             Some(
@@ -1363,7 +1382,9 @@ impl PopoverHost {
               // move the keyboard somewhere the user never was.
         ) && self.popover_opened_from_diff_panel;
         self.close_popover(cx);
-        if restore_diff_panel_focus {
+        if let Some(focus) = focus_return {
+            window.focus(&focus, cx);
+        } else if restore_diff_panel_focus {
             let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
             window.focus(&focus, cx);
         } else if let Some(focus) = menu_invoker_focus {
@@ -2440,8 +2461,10 @@ impl PopoverHost {
         let PopoverRequest {
             kind,
             invoker,
+            focus_return,
             new_source,
         } = kind.into();
+        self.focus_return = focus_return;
         // Branch-collision prompts are also held in shared state. Replacing one
         // without resolving it leaves that state occupied, so the same
         // collision cannot emit a fresh prompt later.

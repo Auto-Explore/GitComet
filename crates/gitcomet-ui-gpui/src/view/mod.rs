@@ -55,6 +55,7 @@ use std::time::{Duration, Instant};
 pub(in crate::view) struct PopoverRequest {
     kind: PopoverKind,
     invoker: Option<SharedString>,
+    focus_return: Option<FocusHandle>,
     new_source: bool,
 }
 
@@ -63,8 +64,16 @@ impl From<PopoverKind> for PopoverRequest {
         Self {
             kind,
             invoker: None,
+            focus_return: None,
             new_source: false,
         }
+    }
+}
+
+impl PopoverRequest {
+    pub(in crate::view) fn returning_focus_to(mut self, focus: FocusHandle) -> Self {
+        self.focus_return = Some(focus);
+        self
     }
 }
 
@@ -73,6 +82,7 @@ impl PopoverKind {
         PopoverRequest {
             kind: self,
             invoker: Some(invoker),
+            focus_return: None,
             new_source: true,
         }
     }

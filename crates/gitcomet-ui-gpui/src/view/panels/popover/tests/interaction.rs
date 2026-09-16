@@ -127,3 +127,44 @@ fn inline_prompt_dismissal_releases_tooltip_suppression(cx: &mut gpui::TestAppCo
         );
     });
 }
+
+#[gpui::test]
+fn explicit_popover_focus_return_overrides_the_previously_focused_input(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _guard = crate::test_support::lock_visual_test();
+    for escape in [false, true] {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let target = cx.update(|window, app| {
+            let source = app.focus_handle();
+            let target = app.focus_handle();
+            window.focus(&source, app);
+            view.update(app, |view, cx| {
+                view.open_popover_at(
+                    PopoverKind::PushPicker
+                        .invoked_by("explicit_focus_menu".into())
+                        .returning_focus_to(target.clone()),
+                    point(px(72.0), px(72.0)),
+                    window,
+                    cx,
+                )
+            });
+            target
+        });
+        cx.run_until_parked();
+        crate::test_support::refresh_and_draw(cx);
+        if escape {
+            cx.simulate_keystrokes("escape");
+        } else {
+            cx.simulate_click(point(px(2.0), px(2.0)), gpui::Modifiers::default());
+        }
+        cx.run_until_parked();
+        crate::test_support::refresh_and_draw(cx);
+        cx.update(|window, app| {
+            assert!(!view.read(app).popover_host.read(app).is_open());
+            assert!(target.is_focused(window));
+        });
+    }
+}
