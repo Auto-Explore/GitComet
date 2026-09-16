@@ -1249,7 +1249,7 @@ fn resolve_syntax_colors(
 
 fn shadow_layer(base: Rgba, alpha: f32, y: f32, blur: f32) -> gpui::BoxShadow {
     gpui::BoxShadow {
-        color: with_alpha(base, alpha).into_color(),
+        color: with_alpha(base, alpha).into(),
         offset: gpui::point(gpui::px(0.0), gpui::px(y)),
         blur_radius: gpui::px(blur),
         spread_radius: gpui::px(0.0),
