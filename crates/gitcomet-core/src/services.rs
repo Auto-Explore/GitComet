@@ -723,8 +723,9 @@ pub trait GitRepository: Send + Sync {
     /// Added/removed line counts for every uncommitted change, both lanes.
     ///
     /// Separate from `status`, which decides most entries from stat data alone
-    /// and never reads content. Counting reads both sides of every changed
-    /// file, so keeping them apart leaves status latency untouched.
+    /// when possible; stale stat data can require content reads and clean
+    /// filters. Counting reads both sides of changed files. Callers that have
+    /// just loaded status should reuse it through the supplied-status method.
     fn uncommitted_line_stats(&self) -> Result<UncommittedLineStats> {
         Err(Error::new(ErrorKind::Unsupported(
             "uncommitted line stats are not implemented for this backend",

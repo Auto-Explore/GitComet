@@ -368,6 +368,8 @@ pub(super) fn schedule_load_uncommitted_line_stats(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    generation: crate::model::LineStatsGeneration,
+    status: std::sync::Arc<gitcomet_core::domain::RepoStatus>,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
@@ -381,9 +383,11 @@ pub(super) fn schedule_load_uncommitted_line_stats(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
                     repo_id,
+                    generation,
                     // Cancellable: this reads every changed file, so a
                     // superseded scan must not hold the repo-load worker.
-                    result: repo.uncommitted_line_stats_cancellable(&cancellation),
+                    result: repo
+                        .uncommitted_line_stats_for_status_cancellable(&status, &cancellation),
                 }),
             );
         },
@@ -392,6 +396,7 @@ pub(super) fn schedule_load_uncommitted_line_stats(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
                     repo_id,
+                    generation,
                     result: Err(missing_repo_error(repo_id)),
                 }),
             );

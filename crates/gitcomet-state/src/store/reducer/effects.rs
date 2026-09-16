@@ -2406,13 +2406,9 @@ pub(super) fn status_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         match result {
             Ok(next) => {
-                let status_unchanged = matches!(
-                    &repo_state.status,
-                    Loadable::Ready(prev) if prev.as_ref() == &next
-                );
-                if !status_unchanged {
-                    repo_state.set_status(Loadable::Ready(Arc::new(next)));
-                }
+                // Also restore individual lanes after a partial-load error.
+                // The setter preserves revisions for unchanged payloads.
+                repo_state.set_status(Loadable::Ready(Arc::new(next)));
                 clear_resolved_conflict_context(repo_state);
             }
             Err(e) => {
@@ -2469,21 +2465,25 @@ pub(super) fn worktree_status_loaded(
 pub(super) fn uncommitted_line_stats_loaded(
     state: &mut AppState,
     repo_id: RepoId,
+    generation: crate::model::LineStatsGeneration,
     result: std::result::Result<gitcomet_core::domain::UncommittedLineStats, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         // Previous numbers stand: a cosmetic column that re-fires on every fs
         // event should not raise a banner.
-        if let Ok(next) = result {
+        let current = repo_state.loads_in_flight.finish_line_stats(generation);
+        crate::store::repo_load_trace::trace!(
+            "line_stats_finish repo_id={:?} generation={} current={} success={}",
+            repo_id,
+            generation,
+            current,
+            result.is_ok()
+        );
+        if current && let Ok(next) = result {
             repo_state.set_uncommitted_line_stats(Loadable::Ready(std::sync::Arc::new(next)));
         }
-        finish_status_lane_replay(
-            repo_state,
-            RepoLoadsInFlight::UNCOMMITTED_LINE_STATS,
-            Effect::LoadUncommittedLineStats { repo_id },
-            &mut effects,
-        );
+        super::util::append_ready_line_stats_effect(repo_state, &mut effects);
     }
     effects
 }
@@ -2537,6 +2537,7 @@ fn finish_status_lane_replay(
     if repo_state.loads_in_flight.finish(flag) {
         effects.push(replay_effect);
     }
+    super::util::append_ready_line_stats_effect(repo_state, effects);
 }
 
 /// Clear conflict-file/session state when the tracked conflict path is no longer

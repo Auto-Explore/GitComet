@@ -332,9 +332,14 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
-        Effect::LoadUncommittedLineStats { repo_id } => send(Msg::Internal(
+        Effect::LoadUncommittedLineStats {
+            repo_id,
+            generation,
+            ..
+        } => send(Msg::Internal(
             crate::msg::InternalMsg::UncommittedLineStatsLoaded {
                 repo_id,
+                generation,
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -1676,7 +1681,11 @@ pub(super) fn schedule_effect(
                 );
             }
         }
-        Effect::LoadUncommittedLineStats { repo_id } => {
+        Effect::LoadUncommittedLineStats {
+            repo_id,
+            generation,
+            status,
+        } => {
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
@@ -1685,6 +1694,8 @@ pub(super) fn schedule_effect(
                     repos,
                     msg_tx,
                     repo_id,
+                    generation,
+                    status,
                     cancellation,
                 );
             }

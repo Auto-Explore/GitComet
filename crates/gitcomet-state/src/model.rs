@@ -121,6 +121,9 @@ pub struct RepoLoadsInFlight {
     /// request superseded can be told apart from the current one.
     active_log: Option<(LogLoadSeq, PendingLogLoad)>,
     last_log_seq: LogLoadSeq,
+    line_stats_generation: LineStatsGeneration,
+    active_line_stats: Option<LineStatsGeneration>,
+    line_stats_requested: bool,
 }
 
 /// Identifies one dispatched log walk. Handed out by
@@ -132,6 +135,9 @@ pub struct RepoLoadsInFlight {
 /// first walk's reply would then be taken for the second's — clearing the
 /// bookkeeping while the walk it belongs to is still running.
 pub type LogLoadSeq = u64;
+
+/// Advances on invalidation, even when the set of changed paths is unchanged.
+pub type LineStatsGeneration = u64;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingLogLoad {
@@ -164,8 +170,10 @@ impl RepoLoadsInFlight {
     /// worktree walk, far costlier than the other loads.
     pub const FILE_BROWSER: u32 = 1 << 18;
     /// Also outside `PRIMARY_REFRESH_FLAGS`: counting reads both sides of every
-    /// changed file, which the status walk avoids. Kept separate so status
+    /// changed file, which a stat-only status walk avoids. Kept separate so status
     /// latency is unchanged and the numbers arrive after the list.
+    /// Managed by `invalidate_line_stats`/`start_line_stats`/`finish_line_stats`,
+    /// not generic `request`/`finish`: replays need a fresh status snapshot.
     pub const UNCOMMITTED_LINE_STATS: u32 = 1 << 19;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
@@ -188,6 +196,41 @@ impl RepoLoadsInFlight {
         self.pending = 0;
         self.pending_log = None;
         self.active_log = None;
+        self.line_stats_generation = self.line_stats_generation.wrapping_add(1);
+        self.active_line_stats = None;
+        self.line_stats_requested = false;
+    }
+
+    pub(crate) fn invalidate_line_stats(&mut self) {
+        self.line_stats_generation = self.line_stats_generation.wrapping_add(1);
+        self.line_stats_requested = true;
+    }
+
+    /// Called only after both status lanes, including their replays, settle.
+    pub(crate) fn start_line_stats(&mut self, status_ready: bool) -> Option<LineStatsGeneration> {
+        if self.is_in_flight(Self::WORKTREE_STATUS | Self::STAGED_STATUS)
+            || self.active_line_stats.is_some()
+            || !self.line_stats_requested
+        {
+            return None;
+        }
+        self.line_stats_requested = false;
+        if !status_ready {
+            return None;
+        }
+        self.in_flight |= Self::UNCOMMITTED_LINE_STATS;
+        self.active_line_stats = Some(self.line_stats_generation);
+        Some(self.line_stats_generation)
+    }
+
+    /// Only the matching job may release the lane; invalidated results are discarded.
+    pub(crate) fn finish_line_stats(&mut self, generation: LineStatsGeneration) -> bool {
+        if self.active_line_stats != Some(generation) {
+            return false;
+        }
+        self.active_line_stats = None;
+        self.in_flight &= !Self::UNCOMMITTED_LINE_STATS;
+        generation == self.line_stats_generation
     }
 
     /// Starts the common primary-refresh batch immediately when no work is already queued or

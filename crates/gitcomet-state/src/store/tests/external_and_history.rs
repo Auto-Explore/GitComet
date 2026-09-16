@@ -966,6 +966,27 @@ fn external_worktree_refresh_replays_coalesced_change_then_settles() {
             .all(|e| !matches!(e, Effect::LoadWorktreeStatus { repo_id: rid } if *rid == repo_id)),
         "with no pending change the lane should stop replaying, got {effects:?}"
     );
+    let generation = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::LoadUncommittedLineStats { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .expect("settled worktree status should schedule counts");
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
+            repo_id,
+            generation,
+            result: Ok(Default::default()),
+        }),
+    );
+    assert!(
+        effects.is_empty(),
+        "counting must not start another status scan"
+    );
     assert!(
         !state.repos[0].loads_in_flight.any_in_flight(),
         "in-flight flags should settle once no refresh is pending"
@@ -4191,9 +4212,14 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
         },
     ));
     let flag = crate::model::RepoLoadsInFlight::UNCOMMITTED_LINE_STATS;
-    assert!(state.repos[0].loads_in_flight.request(flag));
-    assert!(!state.repos[0].loads_in_flight.request(flag));
-    assert!(!state.repos[0].loads_in_flight.request(flag));
+    state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
+    state.repos[0].loads_in_flight.invalidate_line_stats();
+    let mut generation = state.repos[0]
+        .loads_in_flight
+        .start_line_stats(true)
+        .unwrap();
+    state.repos[0].loads_in_flight.invalidate_line_stats();
+    state.repos[0].loads_in_flight.invalidate_line_stats();
     for expected_replays in [1, 0] {
         let effects = reduce(
             &mut repos,
@@ -4201,6 +4227,7 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
             &mut state,
             Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
                 repo_id,
+                generation,
                 result: Ok(Default::default()),
             }),
         );
@@ -4215,5 +4242,11 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
             state.repos[0].loads_in_flight.is_in_flight(flag),
             expected_replays == 1
         );
+        if let Some(Effect::LoadUncommittedLineStats {
+            generation: next, ..
+        }) = effects.first()
+        {
+            generation = *next;
+        }
     }
 }

@@ -701,21 +701,40 @@ pub(super) fn append_requested_status_refresh_effects(
         (false, true) => effects.push_effect(Effect::LoadStagedStatus { repo_id }),
         (false, false) => {}
     }
-    append_requested_line_stats_effect(repo_state, effects);
+    repo_state.loads_in_flight.invalidate_line_stats();
 }
 
-/// Same triggers as the status lanes, but its own effect so the lists render at
-/// today's speed and the numbers land after.
-pub(super) fn append_requested_line_stats_effect(
+/// Reuse the settled status lanes; never fall back to an older combined status.
+pub(super) fn append_ready_line_stats_effect(
     repo_state: &mut RepoState,
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::UNCOMMITTED_LINE_STATS)
-    {
-        effects.push_effect(Effect::LoadUncommittedLineStats { repo_id });
+    let ready = matches!(
+        (&repo_state.staged_status, &repo_state.worktree_status),
+        (Loadable::Ready(_), Loadable::Ready(_))
+    );
+    if let Some(generation) = repo_state.loads_in_flight.start_line_stats(ready) {
+        let (Loadable::Ready(staged), Loadable::Ready(unstaged)) =
+            (&repo_state.staged_status, &repo_state.worktree_status)
+        else {
+            unreachable!("start_line_stats requires ready status lanes");
+        };
+        crate::store::repo_load_trace::trace!(
+            "line_stats_start repo_id={:?} generation={} snapshot=reused staged={} unstaged={}",
+            repo_id,
+            generation,
+            staged.len(),
+            unstaged.len()
+        );
+        effects.push_effect(Effect::LoadUncommittedLineStats {
+            repo_id,
+            generation,
+            status: std::sync::Arc::new(gitcomet_core::domain::RepoStatus {
+                staged: std::sync::Arc::clone(staged),
+                unstaged: std::sync::Arc::clone(unstaged),
+            }),
+        });
     }
 }
 
@@ -819,7 +838,7 @@ pub(super) fn append_refresh_primary_effects(
         push_rebase_and_merge_refresh_effect(effects, repo_id);
         effects.push_effect(Effect::LoadStatus { repo_id });
         // This batch short-circuits the status-refresh funnel.
-        append_requested_line_stats_effect(repo_state, effects);
+        repo_state.loads_in_flight.invalidate_line_stats();
         effects.push_effect(Effect::LoadLog {
             repo_id,
             seq,
@@ -2060,7 +2079,7 @@ mod tests {
         let mut primary = repo_state(1);
         primary.set_log_loading_more(true);
         let primary_effects = refresh_primary_effects(&mut primary);
-        assert_eq!(primary_effects.len(), 6);
+        assert_eq!(primary_effects.len(), 5);
         assert!(!primary.log_loading_more);
         assert!(matches!(primary_effects[0], Effect::LoadHeadBranch { .. }));
         assert!(
@@ -2068,15 +2087,15 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
         );
-        // Guards that the batch path still asks for counts.
+        // Counts wait for the status snapshot, including on the batch path.
         assert!(
-            primary_effects
+            !primary_effects
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. })),
-            "the primary-refresh batch must request line stats too"
+            "counts must not launch a second worktree walk"
         );
         assert!(matches!(
-            primary_effects[5],
+            primary_effects[4],
             Effect::LoadLog {
                 limit: DEFAULT_LOG_PAGE_SIZE,
                 ..
@@ -2100,7 +2119,7 @@ mod tests {
         let mut full = repo_state(2);
         full.set_log_loading_more(true);
         let full_effects = refresh_full_effects(&mut full, GitLogSettings::default());
-        assert_eq!(full_effects.len(), 9);
+        assert_eq!(full_effects.len(), 8);
         assert!(!full.log_loading_more);
         assert!(
             full_effects
@@ -2108,7 +2127,7 @@ mod tests {
                 .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
         );
         assert!(
-            full_effects
+            !full_effects
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadUncommittedLineStats { .. }))
         );
