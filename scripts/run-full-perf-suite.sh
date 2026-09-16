@@ -706,7 +706,7 @@ if [[ -n "${summary_jsonl_path}" ]]; then
 fi
 
 if [[ -z "${MIMALLOC_PURGE_DELAY+x}" ]]; then
-  export MIMALLOC_PURGE_DELAY=0
+  export MIMALLOC_PURGE_DELAY=1000
 fi
 if [[ -z "${MIMALLOC_PURGE_DECOMMITS+x}" ]]; then
   export MIMALLOC_PURGE_DECOMMITS=1

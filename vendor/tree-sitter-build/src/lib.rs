@@ -182,12 +182,15 @@ fn grammar_dirs(manifest: &Path) -> Vec<PathBuf> {
 /// grammar that ships them.
 fn emit_query_cfgs(manifest: &Path) {
     let queries = manifest.join("queries");
-    // Without this, editing a query file does not re-run the build script, so the
-    // cfgs keep their previous values and the crate's query consts silently stay
-    // compiled out. Cargo tracks this path by mtime, which it cannot do while the
-    // directory does not exist -- so *creating* a `queries/` in a grammar that had
-    // none still needs a `cargo clean -p tree-sitter-<name>` to take effect.
-    println!("cargo:rerun-if-changed={}", queries.display());
+    // Cargo treats a missing watched path as dirty on every build. Watch the
+    // existing queries directory, or its parent while absent so adding queries
+    // later also refreshes the cfgs.
+    let query_watch_path = if queries.exists() {
+        queries.as_path()
+    } else {
+        manifest
+    };
+    println!("cargo:rerun-if-changed={}", query_watch_path.display());
 
     for name in [
         "highlights",
