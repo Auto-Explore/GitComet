@@ -281,7 +281,23 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<std::sync::Arc<[usize]>> {
         let repo = self.active_repo()?;
-        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
+        self.status_section_order_for_target(
+            repo_id,
+            repo.diff_state.diff_target.as_ref()?,
+            change_tracking_view,
+            cx,
+        )
+    }
+
+    fn status_section_order_for_target(
+        &self,
+        repo_id: RepoId,
+        target: &DiffTarget,
+        change_tracking_view: ChangeTrackingView,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<std::sync::Arc<[usize]>> {
+        let repo = self.active_repo().filter(|repo| repo.id == repo_id)?;
+        let DiffTarget::WorkingTree { path, area } = target else {
             return None;
         };
         let section = status_navigation_section(repo, path.as_path(), *area, change_tracking_view)?;
@@ -293,6 +309,132 @@ impl MainPaneView {
             })
             .ok()
             .flatten()
+    }
+
+    /// Space acts on the resolved singleton, which can differ from the preview
+    /// when a user edits the row selection with Ctrl-click.
+    pub(in crate::view) fn stage_or_unstage_single_status_path(
+        &mut self,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        area: DiffArea,
+        clear_selection: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let target = DiffTarget::WorkingTree {
+            path: path.clone(),
+            area,
+        };
+        let change_tracking_view = self.active_change_tracking_view(cx);
+        let order =
+            self.status_section_order_for_target(repo_id, &target, change_tracking_view, cx);
+        let Some(repo) = self.active_repo().filter(|repo| repo.id == repo_id) else {
+            return;
+        };
+        // An unavailable status is not evidence that this is the last file.
+        let navigation = repo.status_entries_for_area(area).map(|_| {
+            match adjacent_diff_file_target_for_repo(
+                repo,
+                &target,
+                change_tracking_view,
+                1,
+                None,
+                order.as_deref(),
+            ) {
+                Some(AdjacentDiffFileTarget::WorkingTree {
+                    section,
+                    path,
+                    is_conflicted,
+                    ..
+                }) => StatusStageNavigation::Select {
+                    section,
+                    path,
+                    is_conflicted,
+                },
+                _ => StatusStageNavigation::Clear,
+            }
+        });
+
+        if area == DiffArea::Unstaged
+            && let Some(mut confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                &self.store.snapshot(),
+                repo_id,
+                vec![path.clone()],
+                clear_selection,
+            )
+        {
+            if let PopoverKind::StageConflictMarkersConfirm {
+                navigation: pending,
+                ..
+            } = &mut confirm
+            {
+                *pending = navigation;
+            }
+            let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+            self.open_popover_at(confirm, anchor, window, cx);
+            return;
+        }
+
+        if clear_selection {
+            self.clear_status_selection_for_shortcut(repo_id, cx);
+        }
+        self.store.dispatch(match area {
+            DiffArea::Unstaged => Msg::StagePath { repo_id, path },
+            DiffArea::Staged => Msg::UnstagePath { repo_id, path },
+        });
+        if let Some(navigation) = navigation {
+            self.apply_status_stage_navigation(repo_id, navigation, window, cx);
+        }
+        self.rebuild_diff_cache(cx);
+    }
+
+    pub(in crate::view) fn apply_status_stage_navigation(
+        &mut self,
+        repo_id: RepoId,
+        navigation: StatusStageNavigation,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_repo_id() != Some(repo_id) {
+            return;
+        }
+        window.focus(&self.diff_panel_focus_handle, cx);
+        match navigation {
+            StatusStageNavigation::Clear => {
+                // Staging navigation must not cancel a focused mergetool while
+                // the stage operation is still pending.
+                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            }
+            StatusStageNavigation::Select {
+                section,
+                path,
+                is_conflicted,
+            } => self.select_status_diff_file(repo_id, section, path, is_conflicted, cx),
+        }
+    }
+
+    fn select_status_diff_file(
+        &mut self,
+        repo_id: RepoId,
+        section: StatusSection,
+        path: std::path::PathBuf,
+        is_conflicted: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.scroll_status_section_to_path(section, &path, cx);
+        if is_conflicted {
+            self.store
+                .dispatch(Msg::SelectConflictDiff { repo_id, path });
+        } else {
+            self.store.dispatch(Msg::SelectDiff {
+                repo_id,
+                target: DiffTarget::WorkingTree {
+                    path,
+                    area: section.diff_area(),
+                },
+            });
+        }
     }
 
     /// Both the toolbar and its actions use these neighbors in display order.
@@ -386,22 +528,12 @@ impl MainPaneView {
         match target {
             AdjacentDiffFileTarget::WorkingTree {
                 section,
-                area,
-                target_ix: _,
                 path,
                 is_conflicted,
+                ..
             } => {
                 self.clear_status_multi_selection(repo_id, cx);
-                self.scroll_status_section_to_path(section, &path, cx);
-                if is_conflicted {
-                    self.store
-                        .dispatch(Msg::SelectConflictDiff { repo_id, path });
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree { path, area },
-                    });
-                }
+                self.select_status_diff_file(repo_id, section, path, is_conflicted, cx);
             }
             AdjacentDiffFileTarget::Commit {
                 commit_id,

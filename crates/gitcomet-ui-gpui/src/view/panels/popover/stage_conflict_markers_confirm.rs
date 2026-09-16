@@ -9,6 +9,7 @@ pub(super) fn panel(
     paths: Vec<std::path::PathBuf>,
     unresolved: Vec<std::path::PathBuf>,
     clear_selection: bool,
+    navigation: Option<StatusStageNavigation>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
@@ -53,20 +54,31 @@ pub(super) fn panel(
             }),
             components::Button::new("stage_conflict_markers_go", "Stage anyway")
                 .style(components::ButtonStyle::Danger)
-                .on_click(theme, cx, move |this, _e, _w, cx| {
+                .on_click(theme, cx, move |this, _e, window, cx| {
                     // The stage is going ahead, so the row selection it came out
                     // of has been spent. Cancelling reaches none of this and
                     // leaves the selection exactly as the user built it.
                     if clear_selection {
                         this.clear_status_multi_selection(repo_id, cx);
                     }
-                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                    if navigation.is_none() {
+                        this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                    }
                     this.store.dispatch(Msg::StagePaths {
                         repo_id,
                         paths: paths.clone().into(),
                     });
                     this.close_popover(cx);
-                }),
+                    if let Some(navigation) = navigation.clone() {
+                        let main_pane = this.main_pane.clone();
+                        window.defer(cx, move |window, cx| {
+                            main_pane.update(cx, |pane, cx| {
+                                pane.apply_status_stage_navigation(repo_id, navigation, window, cx);
+                            });
+                        });
+                    }
+                })
+                .debug_selector(|| "stage_conflict_markers_go".to_string()),
             cx,
         )
 }

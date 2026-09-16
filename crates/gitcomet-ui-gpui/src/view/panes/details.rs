@@ -609,6 +609,32 @@ impl DetailsPaneView {
             .with_appearance(self.appearance_metrics)
     }
 
+    pub(in crate::view) fn stage_or_unstage_single_status_path(
+        &self,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        area: DiffArea,
+        clear_selection: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let main_pane = self.main_pane.clone();
+        // Navigation reads and scrolls this pane. Release its borrow before
+        // handing the action to the main pane.
+        window.defer(cx, move |window, cx| {
+            let _ = main_pane.update(cx, |pane, cx| {
+                pane.stage_or_unstage_single_status_path(
+                    repo_id,
+                    path,
+                    area,
+                    clear_selection,
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+
     /// The "Stage all" buttons: drop the row selection, then stage — but confirm
     /// first if any of what is about to be staged still has conflict markers in
     /// the worktree, since staging is what tells git the conflict is resolved.

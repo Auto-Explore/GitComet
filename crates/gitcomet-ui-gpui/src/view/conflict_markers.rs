@@ -87,6 +87,7 @@ pub(in crate::view) fn stage_confirm_popover(
         paths,
         unresolved,
         clear_selection,
+        navigation: None,
     })
 }
 

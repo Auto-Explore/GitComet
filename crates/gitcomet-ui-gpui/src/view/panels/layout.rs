@@ -601,9 +601,21 @@ impl DetailsPaneView {
         {
             return true;
         }
-        let paths = self.status_section_action_selection(repo_id, section).paths;
+        let selection = self.status_section_action_selection(repo_id, section);
+        let paths = selection.paths;
         // Empty path lists mean "all" to the backend, never "none".
         if paths.is_empty() {
+            return true;
+        }
+        if keystroke.key == "space" && paths.len() == 1 {
+            self.stage_or_unstage_single_status_path(
+                repo_id,
+                paths[0].clone(),
+                area,
+                selection.from_explicit_selection,
+                window,
+                cx,
+            );
             return true;
         }
         match area {

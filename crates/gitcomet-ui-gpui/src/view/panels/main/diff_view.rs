@@ -375,17 +375,6 @@ impl MainPaneView {
         {
             let path = path.clone();
             let area = *area;
-            let change_tracking_view = self.active_change_tracking_view(cx);
-            let status_section_order =
-                self.active_status_section_order(repo_id, change_tracking_view, cx);
-            let next_path_in_section = status_nav::status_navigation_context_for_repo(
-                repo,
-                &diff_target,
-                change_tracking_view,
-                status_section_order.as_deref(),
-            )
-            .and_then(|navigation| navigation.next_or_prev_path());
-            let status_ready = repo.status_entries_for_area(area).is_some();
 
             // A multi-file status selection wins over the single shown file, so
             // the shortcut matches what the status row button and context menu
@@ -409,69 +398,14 @@ impl MainPaneView {
 
             let consumes_selection =
                 self.status_single_selection_for_shortcut(repo_id, area, &path, cx);
-            if self.confirm_stage_conflict_markers(
+            self.stage_or_unstage_single_status_path(
                 repo_id,
+                path,
                 area,
-                vec![path.clone()],
                 consumes_selection,
                 window,
                 cx,
-            ) {
-                return true;
-            }
-
-            if consumes_selection {
-                self.clear_status_selection_for_shortcut(repo_id, cx);
-            }
-            match (status_ready, area) {
-                (true, DiffArea::Unstaged) => {
-                    self.store.dispatch(Msg::StagePath {
-                        repo_id,
-                        path: path.clone(),
-                    });
-                    if let Some(next_path) = next_path_in_section {
-                        self.store.dispatch(Msg::SelectDiff {
-                            repo_id,
-                            target: DiffTarget::WorkingTree {
-                                path: next_path,
-                                area: DiffArea::Unstaged,
-                            },
-                        });
-                    } else {
-                        self.clear_diff_selection_or_exit(repo_id, cx);
-                    }
-                }
-                (true, DiffArea::Staged) => {
-                    self.store.dispatch(Msg::UnstagePath {
-                        repo_id,
-                        path: path.clone(),
-                    });
-                    if let Some(next_path) = next_path_in_section {
-                        self.store.dispatch(Msg::SelectDiff {
-                            repo_id,
-                            target: DiffTarget::WorkingTree {
-                                path: next_path,
-                                area: DiffArea::Staged,
-                            },
-                        });
-                    } else {
-                        self.clear_diff_selection_or_exit(repo_id, cx);
-                    }
-                }
-                (false, DiffArea::Unstaged) => {
-                    self.store.dispatch(Msg::StagePath {
-                        repo_id,
-                        path: path.clone(),
-                    });
-                }
-                (false, DiffArea::Staged) => {
-                    self.store.dispatch(Msg::UnstagePath {
-                        repo_id,
-                        path: path.clone(),
-                    });
-                }
-            }
-            self.rebuild_diff_cache(cx);
+            );
             handled = true;
         }
 

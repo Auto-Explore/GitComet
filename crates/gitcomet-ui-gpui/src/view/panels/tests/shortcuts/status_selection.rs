@@ -1,5 +1,7 @@
 use super::*;
 
+mod space;
+
 const REPO: RepoId = RepoId(731);
 type View = gpui::Entity<crate::view::GitCometView>;
 

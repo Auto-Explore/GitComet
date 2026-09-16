@@ -711,12 +711,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             paths,
             unresolved,
             clear_selection,
+            navigation,
         } => {
             81u8.hash(hasher);
             repo_id.hash(hasher);
             paths.hash(hasher);
             unresolved.hash(hasher);
             clear_selection.hash(hasher);
+            navigation.hash(hasher);
         }
         PopoverKind::PullReconcilePrompt { repo_id } => {
             35u8.hash(hasher);

@@ -1,5 +1,17 @@
 use super::*;
 
+/// The single-file Space shortcut's destination, captured before staging moves
+/// the source row. A confirmation carries this through without navigating yet.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum StatusStageNavigation {
+    Clear,
+    Select {
+        section: StatusSection,
+        path: std::path::PathBuf,
+        is_conflicted: bool,
+    },
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ResolverPickTarget {
     /// Append a specific line from the 3-way resolver pane.
@@ -232,6 +244,7 @@ pub(crate) enum PopoverKind {
         paths: Vec<std::path::PathBuf>,
         unresolved: Vec<std::path::PathBuf>,
         clear_selection: bool,
+        navigation: Option<StatusStageNavigation>,
     },
     PullReconcilePrompt {
         repo_id: RepoId,
