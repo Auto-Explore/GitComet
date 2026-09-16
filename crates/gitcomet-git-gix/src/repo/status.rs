@@ -14,6 +14,8 @@ use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
+mod worker_limit;
+
 impl GixRepo {
     fn may_have_gitlink_status_supplement(
         &self,
@@ -118,6 +120,9 @@ impl GixRepo {
                 // `git status` parity, so skip gix's default submodule probing on the
                 // common no-submodule path.
                 .index_worktree_submodules(None)
+                .index_worktree_options_mut(|options| {
+                    options.thread_limit = worker_limit::for_repo(&repo);
+                })
                 .untracked_files(gix::status::UntrackedFiles::Files);
             let mut staged = Vec::new();
             let mut iter = platform
@@ -918,7 +923,7 @@ where
             fscache: false,
             tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
                 fs: fs_caps,
-                thread_limit: None,
+                thread_limit: worker_limit::for_repo(repo),
                 fscache: false,
                 stat: repo.stat_options().map_err(|e| {
                     Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))

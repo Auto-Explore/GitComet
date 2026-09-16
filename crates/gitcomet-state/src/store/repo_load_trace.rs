@@ -130,6 +130,7 @@ pub(super) fn internal_msg_name(msg: &InternalMsg) -> &'static str {
         InternalMsg::RemoteBranchesLoaded { .. } => "RemoteBranchesLoaded",
         InternalMsg::WorktreeStatusLoaded { .. } => "WorktreeStatusLoaded",
         InternalMsg::StagedStatusLoaded { .. } => "StagedStatusLoaded",
+        InternalMsg::UncommittedLineStatsLoaded { .. } => "UncommittedLineStatsLoaded",
         InternalMsg::StatusLoaded { .. } => "StatusLoaded",
         InternalMsg::HeadBranchLoaded { .. } => "HeadBranchLoaded",
         InternalMsg::UpstreamDivergenceLoaded { .. } => "UpstreamDivergenceLoaded",
@@ -188,7 +189,7 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         | Effect::LoadRemoteBranches { repo_id }
         | Effect::LoadWorktreeStatus { repo_id }
         | Effect::LoadStagedStatus { repo_id }
-        | Effect::LoadUncommittedLineStats { repo_id }
+        | Effect::LoadUncommittedLineStats { repo_id, .. }
         | Effect::LoadStatus { repo_id }
         | Effect::LoadHeadBranch { repo_id }
         | Effect::LoadUpstreamDivergence { repo_id }

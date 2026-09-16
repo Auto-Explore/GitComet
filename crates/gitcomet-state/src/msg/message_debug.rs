@@ -124,8 +124,13 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
-            InternalMsg::UncommittedLineStatsLoaded { repo_id, result } => f
+            InternalMsg::UncommittedLineStatsLoaded {
+                repo_id,
+                generation,
+                result,
+            } => f
                 .debug_struct("UncommittedLineStatsLoaded")
+                .field("generation", generation)
                 .field("repo_id", repo_id)
                 .field("ok", &result.is_ok())
                 .finish(),

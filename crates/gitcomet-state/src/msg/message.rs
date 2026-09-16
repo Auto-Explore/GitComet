@@ -1143,6 +1143,7 @@ pub enum InternalMsg {
     },
     UncommittedLineStatsLoaded {
         repo_id: RepoId,
+        generation: crate::model::LineStatsGeneration,
         result: Result<UncommittedLineStats, Error>,
     },
     StatusLoaded {

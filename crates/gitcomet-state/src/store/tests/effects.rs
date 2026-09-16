@@ -4027,18 +4027,14 @@ impl GitRepository for SelectedDiffSchedulingRepo {
         unsupported_repo_result()
     }
     fn uncommitted_line_stats(&self) -> Result<gitcomet_core::domain::UncommittedLineStats> {
-        // Deliberately blind to cancellation, like a backend's plain scan: the
-        // only way out is the test releasing it.
-        let _ = self.started_tx.send(self.started_repo_id);
-        if matches!(self.mode, SelectedDiffRepoMode::BlockingDiff) {
-            wait_for_release_signal(&self.release);
-        }
-        Ok(Default::default())
+        panic!("the executor must reuse the supplied status, not rescan");
     }
-    fn uncommitted_line_stats_cancellable(
+    fn uncommitted_line_stats_for_status_cancellable(
         &self,
+        status: &RepoStatus,
         cancellation: &CancellationToken,
     ) -> Result<gitcomet_core::domain::UncommittedLineStats> {
+        assert_eq!(status.unstaged[0].path, PathBuf::from("snapshot-only.txt"));
         let _ = self.started_tx.send(self.started_repo_id);
         if matches!(self.mode, SelectedDiffRepoMode::BlockingDiff) {
             while !cancellation.is_cancelled() {
@@ -5635,6 +5631,14 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
 /// will use.
 #[test]
 fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
+    let snapshot = Arc::new(RepoStatus {
+        staged: Default::default(),
+        unstaged: Arc::new(vec![gitcomet_core::domain::FileStatus {
+            path: PathBuf::from("snapshot-only.txt"),
+            kind: gitcomet_core::domain::FileStatusKind::Modified,
+            conflict: None,
+        }]),
+    });
     let repo_a = RepoId(530);
     let repo_b = RepoId(531);
     let release = Arc::new((Mutex::new(false), Condvar::new()));
@@ -5706,7 +5710,11 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         &repos,
         &mut repo_task_tokens,
         msg_tx.clone(),
-        Effect::LoadUncommittedLineStats { repo_id: repo_a },
+        Effect::LoadUncommittedLineStats {
+            repo_id: repo_a,
+            generation: 1,
+            status: Arc::clone(&snapshot),
+        },
     );
     assert_eq!(
         started_rx
@@ -5734,7 +5742,11 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
         &repos,
         &mut repo_task_tokens,
         msg_tx,
-        Effect::LoadUncommittedLineStats { repo_id: repo_b },
+        Effect::LoadUncommittedLineStats {
+            repo_id: repo_b,
+            generation: 1,
+            status: snapshot,
+        },
     );
 
     assert_eq!(

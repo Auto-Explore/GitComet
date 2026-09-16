@@ -64,6 +64,12 @@ impl MonitorState {
             if index_only { "index" } else { "all" },
             workdir.display()
         );
+        // Bracket failed discovery too. Capturing after an error can record a
+        // replacement that arrived during the failed read as already loaded,
+        // delaying its recovery until the throttled retry. An unchanged broken
+        // policy still waits for that retry instead of reloading on every tick.
+        self.inputs.stamps.recapture();
+        self.inputs.indexes.recapture();
         match WatchInputs::load(workdir, backend) {
             Ok(mut inputs) => {
                 // Retain discovered nested .gitignore inputs between index-only
@@ -87,10 +93,6 @@ impl MonitorState {
             }
             Err(error) => {
                 self.rules.failed = true;
-                // Remember the failed version too: an unchanged broken policy
-                // must wait for throttled recovery, not reload every idle tick.
-                self.inputs.stamps.recapture();
-                self.inputs.indexes.recapture();
                 record_monitor_failure(MonitorFailureKind::Start, "discover watch inputs", error);
                 false
             }

@@ -71,6 +71,8 @@ pub enum Effect {
     },
     LoadUncommittedLineStats {
         repo_id: RepoId,
+        generation: crate::model::LineStatsGeneration,
+        status: std::sync::Arc<RepoStatus>,
     },
     LoadStatus {
         repo_id: RepoId,

@@ -234,6 +234,83 @@ mod tests {
     use super::*;
     use crate::repo::status::tests::{git_success, init_test_repo, open_repo, write_file};
 
+    #[test]
+    fn supplied_status_counts_match_standalone_across_file_kinds() {
+        use gitcomet_core::services::GitRepository;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        let token = CancellationToken::new();
+        let check = || {
+            let repo = open_repo(dir);
+            let status = repo.status_cancellable(&token).unwrap();
+            assert_eq!(
+                repo.uncommitted_line_stats_for_status_cancellable(&status, &token)
+                    .unwrap(),
+                repo.uncommitted_line_stats_cancellable(&token).unwrap()
+            );
+        };
+        check(); // Empty, unborn repository.
+        write_file(dir, ".gitattributes", "*.txt text eol=crlf\n");
+        for name in ["edit.txt", "delete.txt", "rename.txt"] {
+            write_file(dir, name, &lines("base", 30));
+        }
+        std::fs::write(dir.join("binary.bin"), b"\0binary").unwrap();
+        git_success(dir, &["add", "."]);
+        check(); // Staged additions on an unborn HEAD.
+        git_success(dir, &["commit", "-m", "seed"]);
+        git_success(dir, &["mv", "rename.txt", "renamed.txt"]);
+        write_file(dir, "renamed.txt", &lines("base", 31));
+        write_file(dir, "edit.txt", "base\r\nstaged\r\n");
+        git_success(dir, &["add", "."]);
+        write_file(dir, "edit.txt", "base\r\nstaged\r\nunstaged\r\n");
+        std::fs::remove_file(dir.join("delete.txt")).unwrap();
+        std::fs::write(dir.join("binary.bin"), b"\0changed binary").unwrap();
+        write_file(dir, "untracked.txt", "new\n");
+        check(); // Mixed staged/unstaged, rename, deletion, binary, CRLF, untracked.
+    }
+
+    #[test]
+    fn empty_supplied_status_does_not_launch_clean_filter_or_rescan_worktree() {
+        use gitcomet_core::services::GitRepository;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        init_test_repo(dir);
+        write_file(dir, "asset.bin", "before\n");
+        git_success(dir, &["add", "."]);
+        git_success(dir, &["commit", "-m", "seed"]);
+        write_file(dir, ".gitattributes", "*.bin filter=broken\n");
+        git_success(
+            dir,
+            &[
+                "config",
+                "filter.broken.clean",
+                "gitcomet-intentionally-missing-filter",
+            ],
+        );
+        git_success(dir, &["config", "filter.broken.required", "true"]);
+        write_file(dir, "asset.bin", "after!\n");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.join("asset.bin"))
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new().set_modified(
+                    std::time::SystemTime::now() - std::time::Duration::from_secs(120),
+                ),
+            )
+            .unwrap();
+        let repo = open_repo(dir);
+        let token = CancellationToken::new();
+        let empty = gitcomet_core::domain::RepoStatus::default();
+        let counts = repo
+            .uncommitted_line_stats_for_status_cancellable(&empty, &token)
+            .unwrap();
+        assert!(counts.staged.is_empty() && counts.unstaged.is_empty());
+        // Control: a traversal actually needs the broken clean filter.
+        assert!(repo.worktree_status_cancellable(&token).is_err());
+    }
+
     #[cfg(unix)]
     #[test]
     fn unstaged_symlinks_have_counts() {

@@ -6,6 +6,8 @@ mod external_and_history;
 mod git_hook_activity;
 mod history_authors;
 mod indexed_history;
+#[cfg(test)]
+mod line_stats_tests;
 mod repo_management;
 mod util;
 
@@ -2423,9 +2425,11 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded { repo_id, result }) => {
             effects::staged_status_loaded(state, repo_id, result)
         }
-        Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded { repo_id, result }) => {
-            effects::uncommitted_line_stats_loaded(state, repo_id, result)
-        }
+        Msg::Internal(crate::msg::InternalMsg::UncommittedLineStatsLoaded {
+            repo_id,
+            generation,
+            result,
+        }) => effects::uncommitted_line_stats_loaded(state, repo_id, generation, result),
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
             effects::status_loaded(state, repo_id, result)
         }
