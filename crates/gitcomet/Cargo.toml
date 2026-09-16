@@ -28,8 +28,8 @@ gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
 log = { workspace = true }
-mimalloc = { workspace = true }
 rustc-hash = { workspace = true }
+rustfs-mimalloc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = { workspace = true, optional = true }

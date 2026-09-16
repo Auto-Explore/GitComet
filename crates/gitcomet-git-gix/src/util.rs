@@ -2707,33 +2707,42 @@ mod tests {
     fn process_group_liveness_ignores_unreaped_zombies() {
         use rustix::process::{Pid, Signal, kill_process_group, test_kill_process_group};
 
-        let mut cmd = shell_command("sleep 10");
+        // Replace the shell so waiting for the leader also waits for sleep.
+        // A separate sleep child could still be exiting after the shell is reaped.
+        let mut cmd = shell_command("exec sleep 10");
         configure_git_process_tree(&mut cmd);
         let mut leader = cmd.spawn().expect("synthetic process group should start");
         let group_id = leader.id();
         let pid = Pid::from_raw(group_id as i32).expect("group id should be a valid pid");
 
         let mut zombie = spawn_unreaped_zombie_in_group(group_id);
-        assert!(
-            process_group_has_live_member(pid),
-            "a running leader must count as a live group member"
-        );
+        let leader_was_live = process_group_has_live_member(pid);
 
-        let _ = kill_process_group(pid, Signal::KILL);
-        let _ = leader.wait();
+        let kill_result = kill_process_group(pid, Signal::KILL);
+        let leader_wait_result = leader.wait();
 
         // The zombie still answers the signal probe, which is exactly why the
         // probe alone cannot decide when a process group is finished.
+        let zombie_kept_group_addressable = test_kill_process_group(pid).is_ok();
+        let zombie_group_was_live = process_group_has_live_member(pid);
+
+        // Reap both owned children before assertions so failures do not leak them.
+        let zombie_wait_result = zombie.wait();
+        kill_result.expect("process group should receive KILL");
+        leader_wait_result.expect("process-group leader should be reaped");
+        zombie_wait_result.expect("unreaped zombie should be reaped after observation");
         assert!(
-            test_kill_process_group(pid).is_ok(),
+            leader_was_live,
+            "a running leader must count as a live group member"
+        );
+        assert!(
+            zombie_kept_group_addressable,
             "the unreaped zombie should keep the process group addressable"
         );
         assert!(
-            !process_group_has_live_member(pid),
+            !zombie_group_was_live,
             "a group holding only zombies has nothing left to terminate"
         );
-
-        let _ = zombie.wait();
     }
 
     #[cfg(target_os = "linux")]
@@ -2741,20 +2750,24 @@ mod tests {
     fn process_tree_termination_returns_promptly_past_unreaped_zombies() {
         use rustix::process::{Pid, Signal, kill_process_group};
 
-        let mut cmd = shell_command("sleep 10");
+        // Keep the leader as the only live member so this measures zombie handling.
+        let mut cmd = shell_command("exec sleep 10");
         configure_git_process_tree(&mut cmd);
         let mut child = cmd.spawn().expect("synthetic process group should start");
         let group_id = child.id();
+        let pid = Pid::from_raw(group_id as i32).expect("group id should be a valid pid");
         let mut zombie = spawn_unreaped_zombie_in_group(group_id);
 
         let started = Instant::now();
         let result = terminate_process_tree_and_wait(&mut child);
         let elapsed = started.elapsed();
 
-        if let Some(pid) = Pid::from_raw(group_id as i32) {
-            let _ = kill_process_group(pid, Signal::KILL);
-        }
-        let _ = zombie.wait();
+        let cleanup_result = kill_process_group(pid, Signal::KILL);
+        let leader_wait_result = child.wait();
+        let zombie_wait_result = zombie.wait();
+        cleanup_result.expect("process group should receive cleanup KILL");
+        leader_wait_result.expect("process-group leader should be reaped");
+        zombie_wait_result.expect("unreaped zombie should be reaped after observation");
         result.expect("process-group termination should reap the leader");
 
         assert!(

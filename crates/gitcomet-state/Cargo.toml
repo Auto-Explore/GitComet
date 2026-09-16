@@ -17,6 +17,7 @@ test-support = []
 [dependencies]
 gitcomet-core = { workspace = true }
 notify = { workspace = true }
+rustfs-mimalloc = { workspace = true }
 smol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

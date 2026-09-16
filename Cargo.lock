@@ -1380,12 +1380,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cty"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
-
-[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2208,8 +2202,8 @@ dependencies = [
  "gitcomet-ui-gpui",
  "gitcomet-win32-window-utils",
  "log",
- "mimalloc",
  "rustc-hash 2.1.3",
+ "rustfs-mimalloc",
  "serde",
  "serde_json",
  "signal-hook",
@@ -2254,6 +2248,7 @@ dependencies = [
  "gitcomet-git-gix",
  "notify",
  "rustc-hash 2.1.3",
+ "rustfs-mimalloc",
  "serde",
  "serde_json",
  "smallvec",
@@ -2266,7 +2261,7 @@ name = "gitcomet-tree-sitter-alloc"
 version = "0.2.4"
 dependencies = [
  "ctor",
- "libmimalloc-sys",
+ "rustfs-mimalloc-sys",
  "tree-sitter",
  "tree-sitter-json",
 ]
@@ -2293,13 +2288,13 @@ dependencies = [
  "lru",
  "memchr",
  "metal",
- "mimalloc",
  "palette",
  "pulldown-cmark",
  "raw-window-handle",
  "regex",
  "resvg",
  "rustc-hash 2.1.3",
+ "rustfs-mimalloc",
  "rustix",
  "schemars",
  "semver",
@@ -4418,16 +4413,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
-name = "libmimalloc-sys"
-version = "0.1.49"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
-dependencies = [
- "cc",
- "cty",
-]
-
-[[package]]
 name = "libredox"
 version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4668,15 +4653,6 @@ dependencies = [
  "log",
  "objc",
  "paste",
-]
-
-[[package]]
-name = "mimalloc"
-version = "0.1.52"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
-dependencies = [
- "libmimalloc-sys",
 ]
 
 [[package]]
@@ -6293,6 +6269,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
+]
+
+[[package]]
+name = "rustfs-mimalloc"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "919abb09b0840033e04ba62e261c105999403750e2d21f017501e06e60abc3a5"
+dependencies = [
+ "rustfs-mimalloc-sys",
+]
+
+[[package]]
+name = "rustfs-mimalloc-sys"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eedacb390c8e8b13e5dd62342b9678216ab0251645a68f1983e9368623a642f0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
