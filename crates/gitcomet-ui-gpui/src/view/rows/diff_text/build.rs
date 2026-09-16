@@ -247,16 +247,16 @@ pub(in super::super) fn selectable_cached_diff_text(
                 cx.notify();
             }),
         )
-        .on_pointer_click(
-            MouseButton::Right,
-            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                if double_click_kind == DiffClickKind::HunkHeader {
-                    return;
-                }
-                cx.stop_propagation();
-                this.open_diff_editor_context_menu(visible_ix, region, e.position, window, cx);
-            }),
-        )
+        // Hunk headers leave ownership of the click to the enclosing hunk row.
+        .when(double_click_kind != DiffClickKind::HunkHeader, |text| {
+            text.on_pointer_click(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_diff_editor_context_menu(visible_ix, region, e.position, window, cx);
+                }),
+            )
+        })
         .child(overlay)
         .child(content)
         .into_any_element()

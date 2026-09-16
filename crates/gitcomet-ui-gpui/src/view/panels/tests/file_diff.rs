@@ -5910,6 +5910,104 @@ fn collapsed_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::Test
 }
 
 #[gpui::test]
+fn inline_hunk_header_text_right_click_opens_hunk_menu(cx: &mut gpui::TestAppContext) {
+    assert_hunk_header_text_right_click_opens_hunk_menu(cx, DiffViewMode::Inline);
+}
+
+#[gpui::test]
+fn split_hunk_header_text_right_click_opens_hunk_menu(cx: &mut gpui::TestAppContext) {
+    assert_hunk_header_text_right_click_opens_hunk_menu(cx, DiffViewMode::Split);
+}
+
+fn assert_hunk_header_text_right_click_opens_hunk_menu(
+    cx: &mut gpui::TestAppContext,
+    diff_view: DiffViewMode,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(70721);
+    let (unified, old_text, new_text) = build_collapsed_diff_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        repo_id,
+        &format!("header_context_menu_{diff_view:?}"),
+        diff_view,
+        unified,
+        old_text,
+        new_text,
+    );
+    let (visible_ix, src_ix) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let visible_ix = pane.collapsed_diff_hunk_visible_indices[0];
+        (visible_ix, pane.collapsed_diff_hunks[0].src_ix)
+    });
+    let regions: &[DiffTextRegion] = match diff_view {
+        DiffViewMode::Inline => &[DiffTextRegion::Inline],
+        DiffViewMode::Split => &[DiffTextRegion::SplitLeft, DiffTextRegion::SplitRight],
+    };
+    for &region in regions {
+        let click = wait_for_diff_text_click_position_for_offset_range(
+            cx,
+            &view,
+            visible_ix,
+            region,
+            0..1,
+            "hunk header text right-click target",
+        );
+        cx.simulate_mouse_down(click, MouseButton::Right, Modifiers::default());
+        cx.update(|_window, app| {
+            assert!(
+                !view.read(app).popover_host.read(app).is_open(),
+                "menu waits for release"
+            );
+        });
+        cx.simulate_mouse_up(click, MouseButton::Right, Modifiers::default());
+        draw_and_drain_test_window(cx);
+        cx.update(|_window, app| {
+            assert!(
+                matches!(
+                    view.read(app).popover_host.read(app).popover_kind_for_tests(),
+                    Some(PopoverKind::DiffHunkMenu { repo_id: actual_repo, src_ix: actual_src })
+                        if actual_repo == repo_id && actual_src == src_ix
+                ),
+                "right-clicking {region:?} header text must open the parent hunk menu"
+            );
+        });
+        cx.simulate_keystrokes("escape");
+        draw_and_drain_test_window(cx);
+
+        let text_click = wait_for_diff_text_click_position_for_offset_range(
+            cx,
+            &view,
+            visible_ix + 1,
+            region,
+            0..1,
+            "ordinary diff text right-click target",
+        );
+        cx.simulate_mouse_down(text_click, MouseButton::Right, Modifiers::default());
+        cx.simulate_mouse_up(text_click, MouseButton::Right, Modifiers::default());
+        draw_and_drain_test_window(cx);
+        cx.update(|_window, app| {
+            assert!(
+                matches!(
+                    view.read(app)
+                        .popover_host
+                        .read(app)
+                        .popover_kind_for_tests(),
+                    Some(PopoverKind::DiffEditorMenu { .. })
+                ),
+                "ordinary {region:?} text must retain its editor menu"
+            );
+        });
+        cx.simulate_keystrokes("escape");
+        draw_and_drain_test_window(cx);
+    }
+}
+
+#[gpui::test]
 fn collapsed_diff_hunk_header_click_does_not_create_row_selection(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
