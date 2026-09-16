@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
 use palette::IntoColor;
 
@@ -197,6 +198,7 @@ pub(in super::super) fn selectable_cached_diff_text(
     };
 
     div()
+        .id("diff_text_selection_surface")
         .relative()
         .min_w(px(0.0))
         .overflow_hidden()
@@ -245,7 +247,7 @@ pub(in super::super) fn selectable_cached_diff_text(
                 cx.notify();
             }),
         )
-        .on_mouse_down(
+        .on_pointer_click(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 if double_click_kind == DiffClickKind::HunkHeader {

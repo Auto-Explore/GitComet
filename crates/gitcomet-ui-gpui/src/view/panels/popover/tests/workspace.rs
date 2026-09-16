@@ -744,6 +744,7 @@ mod badges {
             click_count: 1,
             first_mouse: false,
         });
+        cx.simulate_mouse_up(at, gpui::MouseButton::Right, gpui::Modifiers::default());
         cx.run_until_parked();
         cx.update(|window, app| {
             let _ = window.draw(app);

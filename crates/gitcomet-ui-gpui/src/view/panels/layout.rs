@@ -1,4 +1,6 @@
 use super::*;
+use crate::kit::interaction as controls;
+use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::view::panes::{ComparisonCardCache, ComparisonOrderCache};
 use crate::view::rows::CommitCard;
 use gpui::{AnyElement, Div, Stateful};
@@ -1597,8 +1599,9 @@ impl DetailsPaneView {
             .child(div().flex_1().min_w(px(0.0)))
             .child({
                 let open_path = worktree_path.clone();
-                let palette = crate::view::rows::sidebar::worktree_badge_palette(theme);
+
                 crate::view::rows::sidebar::worktree_origin_chip(
+                    "worktree_uncommitted_origin",
                     theme,
                     chip_label,
                     ui_scale.px(10.0),
@@ -1606,27 +1609,25 @@ impl DetailsPaneView {
                     ui_scale.px(220.0),
                     ui_scale.px(6.0),
                 )
-                .id("worktree_uncommitted_origin")
                 .debug_selector(|| "worktree_uncommitted_open".to_string())
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |s| {
-                    s.border_color(palette.hover_border)
-                        .text_color(palette.hover_text)
-                })
                 .gitcomet_tooltip(
                     theme,
                     format!("Open this worktree in a tab\n{}", worktree_path.display()).into(),
                 )
                 // A chip is a control of its own: a right or middle click must not
                 // open a repo tab, and a left click must not reach the row behind it.
-                .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                    if !e.standard_click() {
-                        return;
-                    }
-                    cx.stop_propagation();
-                    this.store.dispatch(Msg::OpenRepo(open_path.clone()));
-                    cx.notify();
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Nested,
+                    cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                        if !e.standard_click() {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+                        cx.notify();
+                    }),
+                )
             })
             .child(
                 components::Button::new("worktree_uncommitted_close", "")
@@ -2135,7 +2136,7 @@ impl DetailsPaneView {
             } else {
                 theme.colors.interaction.selected_indicator
             };
-            let mut tab = div()
+            let tab = div()
                 .id((SharedString::from(format!("{id_prefix}_filter_tab")), ix))
                 .debug_selector(move || format!("{id_prefix}_filter_tab_{ix}"))
                 .flex()
@@ -2159,9 +2160,15 @@ impl DetailsPaneView {
                 } else {
                     theme.colors.foreground.secondary
                 })
-                .when(selected, |tab| {
-                    tab.bg(theme.colors.interaction.selected_background)
-                })
+                .tab_index(0)
+                .control_interaction(
+                    InteractionStyle::new(theme)
+                        .selection_outline(false)
+                        .disabled_opacity(0.5),
+                    InteractionState::default()
+                        .selected(selected, theme.colors.interaction.selected_background)
+                        .disabled(disabled),
+                )
                 .child(svg_icon(
                     filter.icon(),
                     icon_color,
@@ -2170,32 +2177,15 @@ impl DetailsPaneView {
                 .child(display_label)
                 .gitcomet_tooltip(theme, tooltip.into());
 
-            if disabled {
-                tab = tab.opacity(0.5).cursor(CursorStyle::Arrow);
-            } else {
-                let hover_bg = theme.hover_overlay();
-                let active_bg = theme.active_overlay();
-                tab = tab
-                    .tab_index(0)
-                    .cursor(CursorStyle::PointingHand)
-                    .when(!selected, |tab| {
-                        tab.hover(move |style| style.bg(hover_bg))
-                            .active(move |style| style.bg(active_bg))
-                    })
-                    .on_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
-                        if event.standard_click() {
-                            this.set_file_list_filter(list, filter, cx);
-                        }
-                    }))
-                    .on_key_down(cx.listener(
-                        move |this, event: &gpui::KeyDownEvent, _window, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                cx.stop_propagation();
-                                this.set_file_list_filter(list, filter, cx);
-                            }
-                        },
-                    ));
-            }
+            let tab = tab.on_activate(
+                disabled,
+                components::ControlActivation::Action,
+                cx.listener(move |this, event: &ClickEvent, _window, cx| {
+                    if event.standard_click() {
+                        this.set_file_list_filter(list, filter, cx);
+                    }
+                }),
+            );
 
             tabs = tabs.child(tab);
         }
@@ -3470,18 +3460,11 @@ impl DetailsPaneView {
                         CHANGE_TRACKING_HEADER_CHIP_COMFORTABLE_HEIGHT_PX,
                     ))
                     .rounded(px(theme.radii.row))
-                    .when(change_tracking_active, |d| {
-                        d.bg(theme.colors.interaction.pressed_background)
-                    })
-                    .hover(move |s| {
-                        if change_tracking_active {
-                            s.bg(theme.colors.interaction.pressed_background)
-                        } else {
-                            s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
-                        }
-                    })
-                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                    .cursor(CursorStyle::PointingHand)
+                    .tab_index(0)
+                    .control_interaction(
+                        InteractionStyle::header(theme),
+                        InteractionState::default().open(change_tracking_active),
+                    )
                     .child(
                         div()
                             .text_size(theme.ui_text(14.0))
@@ -3491,16 +3474,20 @@ impl DetailsPaneView {
                             .child(label),
                     )
                     .child(svg_icon("icons/chevron_down.svg", icon_muted, px(12.0)))
-                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        this.activate_context_menu_invoker(change_tracking_invoker.clone(), cx);
-                        this.open_popover_at(
-                            PopoverKind::ChangeTrackingSettings,
-                            e.position(),
-                            window,
-                            cx,
-                        );
-                        cx.notify();
-                    }))
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            this.open_popover_at(
+                                PopoverKind::ChangeTrackingSettings
+                                    .invoked_by(change_tracking_invoker.clone()),
+                                e.position(),
+                                window,
+                                cx,
+                            );
+                            cx.notify();
+                        }),
+                    )
                     .into_any_element()
             };
 
@@ -4046,10 +4033,7 @@ impl DetailsPaneView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == previous_messages_invoker.as_ref());
-        let menu_selected_bg = with_alpha(
-            theme.colors.accent.foreground,
-            if theme.is_dark { 0.26 } else { 0.20 },
-        );
+        let menu_selected_bg = components::control_open_background(theme);
         let menu_icon_color = if commit_options_active {
             theme.colors.accent.foreground
         } else {
@@ -4069,43 +4053,55 @@ impl DetailsPaneView {
         .container_id(("commit_message_container", repo_key))
         .render(theme, self.commit_message_input.clone());
         let commit_main = components::Button::new("commit", commit_label)
-            .rounded_left()
             .start_slot(if commit_in_flight {
                 spinner(("commit_spinner", repo_key)).into_any_element()
             } else {
                 icon("icons/check.svg").into_any_element()
             })
             .style(components::ButtonStyle::Subtle)
-            .disabled(!can_submit_commit)
-            .on_click(theme, cx, |this, _e, _w, cx| {
-                let _ = this.submit_commit(cx);
-            })
-            .debug_selector(|| "commit_button".to_string())
-            .gitcomet_tooltip(theme, commit_tooltip.into());
+            .disabled(!can_submit_commit);
         let commit_menu = components::Button::new("commit_options", "")
-            .rounded_right()
             .start_slot(svg_icon(
                 "icons/chevron_down.svg",
                 menu_icon_color,
                 px(14.0),
             ))
             .style(components::ButtonStyle::Subtle)
-            .selected(commit_options_active)
+            .open(commit_options_active)
             .selected_bg(menu_selected_bg)
-            .disabled(self.active_repo_id().is_none())
-            .on_click(theme, cx, move |this, e, window, cx| {
-                let Some(repo_id) = this.active_repo_id() else {
-                    return;
-                };
-                this.activate_context_menu_invoker(commit_options_invoker.clone(), cx);
-                this.open_popover_at(
-                    PopoverKind::CommitOptionsMenu { repo_id },
-                    e.position(),
-                    window,
-                    cx,
-                );
-            })
-            .gitcomet_tooltip(theme, "Commit options".into());
+            .disabled(self.active_repo_id().is_none());
+        let commit = components::SplitButton::from_buttons(
+            commit_main,
+            commit_menu,
+            cx,
+            |button, cx| {
+                button
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        let _ = this.submit_commit(cx);
+                    })
+                    .debug_selector(|| "commit_button".to_string())
+                    .gitcomet_tooltip(theme, commit_tooltip.into())
+            },
+            |button, cx| {
+                button
+                    .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                        let Some(repo_id) = this.active_repo_id() else {
+                            return;
+                        };
+                        this.open_popover_for_bounds(
+                            (PopoverKind::CommitOptionsMenu { repo_id })
+                                .invoked_by(commit_options_invoker.clone()),
+                            bounds,
+                            window,
+                            cx,
+                        );
+                    })
+                    .gitcomet_tooltip(theme, "Commit options".into())
+            },
+        )
+        .style(components::SplitButtonStyle::Filled)
+        .render(theme, ui_scale_percent)
+        .debug_selector(|| "commit_split_button".to_string());
         let previous_messages_menu = components::Button::new("previous_commit_messages", "")
             .start_slot(svg_icon(
                 "icons/history.svg",
@@ -4113,16 +4109,17 @@ impl DetailsPaneView {
                 px(14.0),
             ))
             .style(components::ButtonStyle::Subtle)
-            .selected(previous_messages_active)
+            .open(previous_messages_active)
             .selected_bg(menu_selected_bg)
             .disabled(self.active_repo_id().is_none())
             .on_click(theme, cx, move |this, e, window, cx| {
                 let Some(repo_id) = this.active_repo_id() else {
                     return;
                 };
-                this.activate_context_menu_invoker(previous_messages_invoker.clone(), cx);
+
                 this.open_popover_at(
-                    PopoverKind::PreviousCommitMessagesMenu { repo_id },
+                    (PopoverKind::PreviousCommitMessagesMenu { repo_id })
+                        .invoked_by(previous_messages_invoker.clone()),
                     e.position(),
                     window,
                     cx,
@@ -4137,12 +4134,7 @@ impl DetailsPaneView {
                     .items_center()
                     .gap_2()
                     .child(previous_messages_menu)
-                    .child(
-                        components::SplitButton::new(commit_main, commit_menu)
-                            .style(components::SplitButtonStyle::Filled)
-                            .render(theme, ui_scale_percent)
-                            .debug_selector(|| "commit_split_button".to_string()),
-                    ),
+                    .child(commit),
             ),
         )
     }

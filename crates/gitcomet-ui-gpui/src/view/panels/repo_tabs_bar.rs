@@ -1,5 +1,7 @@
 use super::super::path_display;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use rustc_hash::FxHasher;
 use std::cell::Cell;
 use std::hash::{Hash, Hasher};
@@ -155,22 +157,21 @@ fn repo_tab_text_width(label: SharedString, font_size: Pixels, window: &mut Wind
 /// picker rows' remove button wears (`components::REMOVE_BUTTON_*`), except it
 /// is composited into an opaque fill: this button overlays repository text, so
 /// a translucent plate would let the label show through.
+#[cfg(test)]
 fn repo_tab_close_button_fill(
     theme: AppTheme,
     background: gpui::Rgba,
     pressed: bool,
 ) -> gpui::Rgba {
-    let amount = if pressed {
-        components::REMOVE_BUTTON_PRESSED_ALPHA
-    } else {
-        components::REMOVE_BUTTON_HOVER_ALPHA
-    };
-    let mut fill = crate::theme::composite_over(
+    controls::InteractionStyle::destructive(theme).resolved_background(
         background,
-        with_alpha(theme.colors.status.danger.foreground, amount),
-    );
-    fill.alpha = 1.0;
-    fill
+        controls::InteractionState::default(),
+        if pressed {
+            controls::InteractionFeedback::Pressed
+        } else {
+            controls::InteractionFeedback::Hovered
+        },
+    )
 }
 
 struct RepoTabSlide {
@@ -746,8 +747,6 @@ impl Render for RepoTabsBarView {
         // is actually behind it: the bar for an idle tab, the content strip
         // for the active one.
         let strip_bg = crate::view::chrome::title_bar_background(theme, window.is_window_active());
-        let hovered_tab_bg =
-            crate::theme::composite_over(strip_bg, components::Tab::hover_overlay(theme));
 
         // Reveal the active tab when the repository changes, then leave the
         // offset alone so manual scrolling sticks.
@@ -816,15 +815,20 @@ impl Render for RepoTabsBarView {
             let is_pressed = self.pressed_repo_tab == Some(repo_id);
             let label = repo_tab_labels[ix].clone();
             let initials: SharedString = components::repository_initials(label.as_ref()).into();
-            let label_bg = if is_active || context_menu_active {
-                theme.colors.surface.chrome
-            } else if is_pressed {
-                theme.colors.interaction.pressed_background
-            } else if is_hovered {
-                hovered_tab_bg
-            } else {
-                strip_bg
-            };
+            let label_bg = controls::InteractionStyle::new(theme).resolved_background(
+                strip_bg,
+                controls::InteractionState::default().selected(
+                    is_active || context_menu_active,
+                    theme.colors.surface.chrome,
+                ),
+                if is_pressed {
+                    controls::InteractionFeedback::Pressed
+                } else if is_hovered {
+                    controls::InteractionFeedback::Hovered
+                } else {
+                    controls::InteractionFeedback::Resting
+                },
+            );
             let drag_left = self
                 .repo_tab_drag_visual
                 .filter(|drag| drag.repo_id == repo_id)
@@ -832,8 +836,6 @@ impl Render for RepoTabsBarView {
 
             let tooltip = Self::repo_tab_tooltip(repo);
             let close_tooltip: SharedString = "Close repository".into();
-            let close_hover_bg = repo_tab_close_button_fill(theme, label_bg, false);
-            let close_pressed_bg = repo_tab_close_button_fill(theme, label_bg, true);
 
             let close_button = div()
                 .id(("repo_tab_close", repo_id.0))
@@ -847,17 +849,22 @@ impl Render for RepoTabsBarView {
                 // ramp transitions into this exact background.
                 .bg(label_bg)
                 .cursor_pointer()
-                .hover(move |s| s.bg(close_hover_bg))
-                .active(move |s| s.bg(close_pressed_bg))
+                .control_interaction(
+                    controls::InteractionStyle::destructive(theme).on_surface(label_bg),
+                    controls::InteractionState::default(),
+                )
                 .child(svg_icon(
                     components::REMOVE_BUTTON_ICON,
                     theme.colors.status.danger.foreground,
                     px(components::REMOVE_BUTTON_ICON_SIZE_PX),
                 ))
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                    cx.stop_propagation();
-                    this.close_repo_tab(repo_id, cx);
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Nested,
+                    cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.close_repo_tab(repo_id, cx);
+                    }),
+                )
                 .gitcomet_tooltip(theme, close_tooltip.clone());
             let close_overlay = div()
                 .flex()
@@ -1071,7 +1078,7 @@ impl Render for RepoTabsBarView {
                         cx.notify();
                     }),
                 )
-                .on_mouse_down(
+                .on_pointer_click(
                     MouseButton::Right,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
@@ -1079,9 +1086,8 @@ impl Render for RepoTabsBarView {
                         let invoker = context_menu_invoker_for_right_click.clone();
                         let anchor = e.position;
                         let _ = this.root_view.update(cx, move |root, cx| {
-                            root.set_active_context_menu_invoker(Some(invoker), cx);
                             root.open_popover_at(
-                                PopoverKind::RepoTabMenu { repo_id },
+                                (PopoverKind::RepoTabMenu { repo_id }).invoked_by(invoker),
                                 anchor,
                                 window,
                                 cx,
@@ -1091,12 +1097,17 @@ impl Render for RepoTabsBarView {
                     }),
                 )
                 .gitcomet_tooltip(theme, tooltip.clone())
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, _cx| {
-                    if let Some(msg) = Self::repo_tab_click_message(this.active_repo_id(), repo_id)
-                    {
-                        this.store.dispatch(msg);
-                    }
-                }))
+                .on_activate(
+                    false,
+                    controls::ControlActivation::Composite,
+                    cx.listener(move |this, _e: &ClickEvent, _w, _cx| {
+                        if let Some(msg) =
+                            Self::repo_tab_click_message(this.active_repo_id(), repo_id)
+                        {
+                            this.store.dispatch(msg);
+                        }
+                    }),
+                )
                 .on_aux_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                     if !e.is_middle_click() {
                         return;

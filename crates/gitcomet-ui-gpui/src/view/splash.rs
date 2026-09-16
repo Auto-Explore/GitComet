@@ -1,4 +1,7 @@
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction as controls;
+use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -288,11 +291,6 @@ impl GitCometView {
         ui_scale_percent: u32,
     ) -> gpui::Stateful<gpui::Div> {
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
-        let focus_ring = if theme.is_dark {
-            gpui::rgba(0x79d0ffeb)
-        } else {
-            gpui::rgba(0x171a3bff)
-        };
         let SplashCtaButtonColors {
             icon: icon_color,
             text: text_color,
@@ -337,9 +335,20 @@ impl GitCometView {
             .whitespace_nowrap()
             .child(svg_icon(icon_path, icon_color, scaled_px(14.0)))
             .child(label)
-            .focus(move |s| s.border_color(focus_ring))
-            .hover(move |s| s.bg(hover_bg).border_color(hover_border))
-            .active(move |s| s.bg(active_bg).border_color(active_border))
+            .control_interaction(
+                InteractionStyle::new(theme)
+                    .hover(
+                        StyleRefinement::default()
+                            .bg(hover_bg)
+                            .border_color(hover_border),
+                    )
+                    .pressed(
+                        StyleRefinement::default()
+                            .bg(active_bg)
+                            .border_color(active_border),
+                    ),
+                InteractionState::default(),
+            )
     }
 
     fn interstitial_shell(
@@ -430,11 +439,15 @@ impl GitCometView {
             self.ui_scale_percent,
         )
         .gitcomet_tooltip(self.theme, settings_tooltip)
-        .on_click(cx.listener(|this, _e, _window, cx| {
-            this.open_repo_panel = false;
-            cx.defer(crate::view::open_settings_window);
-            cx.notify();
-        }))
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(|this, _e, _window, cx| {
+                this.open_repo_panel = false;
+                cx.defer(crate::view::open_settings_window);
+                cx.notify();
+            }),
+        )
     }
 
     fn git_unavailable_panel_content(
@@ -680,9 +693,13 @@ impl GitCometView {
             self.ui_scale_percent,
         )
         .gitcomet_tooltip(self.theme, open_tooltip)
-        .on_click(cx.listener(|this, _e, window, cx| {
-            this.prompt_open_repo(window, cx);
-        }));
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(|this, _e, window, cx| {
+                this.prompt_open_repo(window, cx);
+            }),
+        );
 
         let clone_button = {
             let last_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
@@ -698,11 +715,15 @@ impl GitCometView {
                 self.ui_scale_percent,
             )
             .gitcomet_tooltip(self.theme, clone_tooltip)
-            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                let bounds = (*last_bounds_for_click.borrow())
-                    .unwrap_or_else(|| Bounds::new(e.position(), size(px(0.0), px(0.0))));
-                this.open_popover_for_bounds(PopoverKind::CloneRepo, bounds, window, cx);
-            }));
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    let bounds = (*last_bounds_for_click.borrow())
+                        .unwrap_or_else(|| Bounds::new(e.position(), size(px(0.0), px(0.0))));
+                    this.open_popover_for_bounds(PopoverKind::CloneRepo, bounds, window, cx);
+                }),
+            );
 
             div()
                 .on_children_prepainted(move |children_bounds, _window, _cx| {
@@ -840,8 +861,6 @@ impl GitCometView {
         let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
         let active = self.sidebar_collapsed_popover;
         let icon_muted = theme.colors.foreground.secondary;
-        let active_bg = theme.active_overlay();
-        let hover_bg = theme.hover_overlay();
         let slot = scaled_px(28.0);
 
         let icons = CollapsedSidebarSection::ALL.into_iter().map(|section| {
@@ -859,10 +878,12 @@ impl GitCometView {
                 .size(slot)
                 .rounded(px(theme.radii.control))
                 .cursor(CursorStyle::PointingHand)
-                .when(is_active, |d| d.bg(active_bg))
-                .hover(move |d| if is_active { d } else { d.bg(hover_bg) })
+                .control_interaction(
+                    InteractionStyle::new(theme),
+                    InteractionState::default().open(is_active),
+                )
                 .child(svg_icon(section.icon_path(), icon_color, scaled_px(16.0)))
-                .on_mouse_down(
+                .on_pointer_click(
                     MouseButton::Left,
                     cx.listener(move |this, _e, _window, cx| {
                         this.toggle_sidebar_collapsed_popover(section, cx);
@@ -900,7 +921,7 @@ impl GitCometView {
             .bottom_0()
             .right_0()
             .occlude()
-            .on_any_mouse_down(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+            .on_any_pointer_click(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
                 this.close_sidebar_collapsed_popover(cx);
             }))
             .into_any_element()
@@ -942,7 +963,7 @@ impl GitCometView {
             // which would otherwise open a commit menu through the popover. It
             // opens the section's own menu instead, which is the only way to
             // reach the worktree/stash/submodule section actions while collapsed.
-            .on_mouse_down(
+            .on_pointer_click(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
@@ -952,8 +973,8 @@ impl GitCometView {
                     else {
                         return;
                     };
-                    this.set_active_context_menu_invoker(Some(invoker), cx);
-                    this.open_popover_at(kind, e.position, window, cx);
+
+                    this.open_popover_at(kind.invoked_by(invoker), e.position, window, cx);
                 }),
             )
             .child(self.sidebar_pane.clone())

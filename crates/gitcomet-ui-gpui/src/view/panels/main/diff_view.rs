@@ -1,4 +1,6 @@
 use super::*;
+use crate::kit::interaction as controls;
+use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 use crate::view::panes::main::DiffHorizontalScrollColumn;
 use crate::view::panes::main::diff_search::DiffSearchOptions;
 use gpui::Focusable;
@@ -1894,18 +1896,11 @@ impl MainPaneView {
                                 .with_appearance(theme.metrics),
                         ))
                         .rounded(px(theme.radii.row))
-                        .when(diff_mode_active, |d| {
-                            d.bg(theme.colors.interaction.pressed_background)
-                        })
-                        .hover(move |s| {
-                            if diff_mode_active {
-                                s.bg(theme.colors.interaction.pressed_background)
-                            } else {
-                                s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
-                            }
-                        })
-                        .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-                        .cursor(CursorStyle::PointingHand)
+                        .tab_index(0)
+                        .control_interaction(
+                            InteractionStyle::header(theme),
+                            InteractionState::default().open(diff_mode_active),
+                        )
                         .child(
                             div()
                                 .min_w(px(0.0))
@@ -1919,15 +1914,19 @@ impl MainPaneView {
                             theme.colors.foreground.secondary,
                             px(12.0),
                         ))
-                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            this.activate_context_menu_invoker(diff_mode_invoker.clone(), cx);
-                            this.open_popover_at(
-                                PopoverKind::DiffContentModeSettings,
-                                e.position(),
-                                window,
-                                cx,
-                            );
-                        })),
+                        .on_activate(
+                            false,
+                            controls::ControlActivation::Action,
+                            cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                this.open_popover_at(
+                                    PopoverKind::DiffContentModeSettings
+                                        .invoked_by(diff_mode_invoker.clone()),
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        ),
                 );
             }
 
@@ -2209,11 +2208,15 @@ impl MainPaneView {
                         px(14.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
-                    .selected(diff_action_active)
+                    .open(diff_action_active)
                     .selected_bg(theme.colors.interaction.pressed_background)
                     .on_click(theme, cx, move |this, e, window, cx| {
-                        this.activate_context_menu_invoker(diff_action_invoker.clone(), cx);
-                        this.open_popover_at(cog_kind.clone(), e.position(), window, cx);
+                        this.open_popover_at(
+                            cog_kind.clone().invoked_by(diff_action_invoker.clone()),
+                            e.position(),
+                            window,
+                            cx,
+                        );
                     })
                     .debug_selector(move || cog_id.to_string())
                     .gitcomet_tooltip(theme, cog_tooltip.into()),

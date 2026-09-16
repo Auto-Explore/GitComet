@@ -45,6 +45,452 @@ fn hook_activity_state_for_two_repos(
     })
 }
 
+fn activity_text(
+    cx: &mut gpui::VisualTestContext,
+    view: &Entity<GitCometView>,
+    key: &str,
+) -> Entity<components::TextInput> {
+    cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .hook_activity_text_for_test(key)
+    })
+}
+
+fn drag_activity_text(cx: &mut gpui::VisualTestContext, key: &'static str) {
+    let bounds = cx.debug_bounds(key).expect("selectable text bounds");
+    assert!(
+        bounds.size.width > px(2.0) && bounds.size.height > px(0.0),
+        "{key}: {bounds:?}"
+    );
+    let start = point(bounds.left() + px(1.0), bounds.center().y);
+    let end = point(bounds.right() - px(1.0), bounds.center().y);
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    draw_and_drain_test_window(cx);
+}
+
+#[gpui::test]
+fn hook_activity_text_selects_copies_and_keeps_run_clicks(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    let repo_id = RepoId(720);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join("hook-selection"),
+        &CommitId("720".into()),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    let mut older = running_hook_activity(720);
+    older.status = GitHookOperationStatus::Succeeded;
+    older.duration = Some(Duration::from_secs(2));
+    let mut latest = running_hook_activity(721);
+    latest.context = Some("Check café and 日本語".into());
+    latest.duration = Some(Duration::from_secs(1));
+    latest.hooks[0].duration = Some(Duration::from_millis(50));
+    repo.feedback.hook_activity = vec![older, latest];
+    repo.feedback.hook_activity_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    draw_and_drain_test_window(cx);
+
+    for key in [
+        "hook_activity_text_title",
+        "hook_activity_text_repository",
+        "hook_activity_text_runs_heading",
+        "hook_activity_text_run_721_label",
+        "hook_activity_text_run_721_status",
+        "hook_activity_text_run_721_timestamp",
+        "hook_activity_text_detail_721_label",
+        "hook_activity_text_detail_721_status",
+        "hook_activity_text_detail_721_duration",
+        "hook_activity_text_detail_721_context",
+        "hook_activity_text_hook_721_ui-test_1_name",
+        "hook_activity_text_hook_721_ui-test_1_status",
+        "hook_activity_text_hook_721_ui-test_1_duration",
+        "hook_activity_text_output_heading",
+    ] {
+        let input = activity_text(cx, &view, key.strip_prefix("hook_activity_text_").unwrap());
+        let original = cx.update(|_, app| input.read(app).text().to_string());
+        drag_activity_text(cx, key);
+        let selected = cx.update(|_, app| input.read(app).selected_text());
+        assert!(
+            selected.as_ref().is_some_and(|text| !text.is_empty()),
+            "mouse selection in {key}"
+        );
+        cx.simulate_keystrokes("secondary-c");
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            selected,
+            "copy {key}"
+        );
+        cx.simulate_keystrokes("x backspace");
+        assert_eq!(
+            cx.update(|_, app| input.read(app).text().to_string()),
+            original,
+            "{key} stays read-only"
+        );
+    }
+
+    // Dragging a different run's label must not navigate or transfer the release.
+    drag_activity_text(cx, "hook_activity_text_run_720_label");
+    assert!(
+        cx.debug_bounds("hook_activity_text_detail_721_context")
+            .is_some()
+    );
+    let bounds = cx.debug_bounds("hook_activity_text_run_720_label").unwrap();
+    cx.simulate_click(bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("hook_activity_text_detail_720_context")
+            .is_some(),
+        "plain text click chooses the run"
+    );
+
+    let start = cx
+        .debug_bounds("hook_activity_text_detail_720_context")
+        .unwrap()
+        .center();
+    let end = cx.debug_bounds("hook_activity_close").unwrap().center();
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("hook_activity_panel").is_some(),
+        "selection release must not close the dialog"
+    );
+    cx.simulate_keystrokes("escape");
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("hook_activity_panel").is_none(),
+        "Escape still minimizes from a focused text field"
+    );
+    assert!(cx.update(|_, app| {
+        view.read(app)
+            .minimized_hook_activity_repos
+            .contains(&repo_id)
+    }));
+}
+
+#[gpui::test]
+fn hook_activity_live_output_preserves_selection_and_view(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
+    let repo_id = RepoId(722);
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &std::env::temp_dir().join("hook-stream"),
+        &CommitId("722".into()),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    repo.feedback.hook_activity.push(running_hook_activity(722));
+    repo.feedback.hook_activity_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    draw_and_drain_test_window(cx);
+    let input = activity_text(cx, &view, "output_722");
+    let viewport = cx.debug_bounds("hook_activity_output_scroll").unwrap();
+    let start = point(viewport.left() + px(15.0), viewport.top() + px(25.0));
+    let end = point(viewport.left() + px(90.0), viewport.top() + px(65.0));
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    let selected = cx.update(|_, app| {
+        input
+            .read(app)
+            .selected_text()
+            .expect("output drag selection")
+    });
+    assert!(selected.contains('\n'), "output selection spans lines");
+    let offset = cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .hook_activity_output_offset_for_test()
+    });
+    let more = "new café output\n".repeat(10);
+    Arc::make_mut(&mut repo.feedback.hook_activity[0].output).push_back(
+        gitcomet_state::model::GitHookOutputChunk {
+            stream: gitcomet_core::git_operation::GitOutputStream::Stdout,
+            text: Arc::from(more.as_str()),
+        },
+    );
+    repo.feedback.hook_activity[0].output_bytes += more.len();
+    repo.feedback.hook_activity_rev += 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        activity_text(cx, &view, "output_722"),
+        input,
+        "streaming reuses the entity"
+    );
+    assert_eq!(
+        cx.update(|_, app| input.read(app).selected_text()),
+        Some(selected.clone())
+    );
+    assert_eq!(
+        cx.update(|_, app| view
+            .read(app)
+            .popover_host
+            .read(app)
+            .hook_activity_output_offset_for_test()),
+        offset
+    );
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    cx.simulate_keystrokes("secondary-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(selected)
+    );
+    let copy = cx
+        .debug_bounds("hook_activity_copy_722")
+        .expect("copy output button");
+    cx.simulate_click(copy.center(), Modifiers::default());
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(repo.feedback.hook_activity[0].combined_output())
+    );
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_selected_range(0..5, false, window, cx)
+        })
+    });
+    repo.feedback.hook_activity[0].output = Arc::new(std::collections::VecDeque::from([
+        gitcomet_state::model::GitHookOutputChunk {
+            stream: gitcomet_core::git_operation::GitOutputStream::Stdout,
+            text: Arc::from("retained output\n"),
+        },
+    ]));
+    repo.feedback.hook_activity[0].output_truncated = true;
+    repo.feedback.hook_activity_rev += 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+    assert!(cx.update(|_, app| input.read(app).selected_range().is_empty()));
+    assert!(
+        cx.debug_bounds("hook_activity_text_output_truncation")
+            .is_some()
+    );
+
+    let minimize = cx.debug_bounds("hook_activity_minimize").unwrap();
+    cx.simulate_click(minimize.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    let open = cx.debug_bounds("bottom_hook_activity").unwrap();
+    cx.simulate_click(open.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(cx.update(|_, app| activity_text_input_is_empty_selection(&view, app, "output_722")));
+}
+
+fn activity_text_input_is_empty_selection(
+    view: &Entity<GitCometView>,
+    app: &App,
+    key: &str,
+) -> bool {
+    view.read(app)
+        .popover_host
+        .read(app)
+        .hook_activity_text_for_test(key)
+        .read(app)
+        .selected_range()
+        .is_empty()
+}
+
+#[gpui::test]
+fn hook_activity_minimized_indicator_is_repository_specific(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let first = shortcut_fixture_repo(
+        RepoId(723),
+        &std::env::temp_dir().join("hook-first"),
+        &CommitId("723".into()),
+    );
+    let second = shortcut_fixture_repo(
+        RepoId(724),
+        &std::env::temp_dir().join("hook-second"),
+        &CommitId("724".into()),
+    );
+    apply_state(
+        cx,
+        &view,
+        hook_activity_state_for_two_repos(first.id, first.clone(), second.clone()),
+    );
+    let idle = crate::test_support::painted_control_quads(cx, "bottom_hook_activity");
+    let open = cx.debug_bounds("bottom_hook_activity").unwrap();
+    cx.simulate_click(open.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(cx.debug_bounds("hook_activity_text_empty").is_some());
+    drag_activity_text(cx, "hook_activity_text_empty");
+    let empty_message = activity_text(cx, &view, "empty");
+    let selection = cx.update(|_, app| empty_message.read(app).selected_text());
+    assert!(selection.is_some());
+    apply_state(
+        cx,
+        &view,
+        hook_activity_state_for_two_repos(first.id, first.clone(), second.clone()),
+    );
+    assert_eq!(activity_text(cx, &view, "empty"), empty_message);
+    assert_eq!(
+        cx.update(|_, app| empty_message.read(app).selected_text()),
+        selection
+    );
+    let minimize = cx.debug_bounds("hook_activity_minimize").unwrap();
+    cx.simulate_click(minimize.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    let selected = crate::test_support::painted_control_quads(cx, "bottom_hook_activity");
+    assert_ne!(selected, idle);
+    apply_state(
+        cx,
+        &view,
+        hook_activity_state_for_two_repos(second.id, first.clone(), second.clone()),
+    );
+    assert_eq!(
+        crate::test_support::painted_control_quads(cx, "bottom_hook_activity"),
+        idle
+    );
+    apply_state(
+        cx,
+        &view,
+        hook_activity_state_for_two_repos(first.id, first.clone(), second.clone()),
+    );
+    assert_eq!(
+        crate::test_support::painted_control_quads(cx, "bottom_hook_activity"),
+        selected
+    );
+    apply_state(cx, &view, app_state_with_active_repo(second.clone()));
+    apply_state(
+        cx,
+        &view,
+        hook_activity_state_for_two_repos(first.id, first, second),
+    );
+    assert_eq!(
+        crate::test_support::painted_control_quads(cx, "bottom_hook_activity"),
+        idle,
+        "closing the repo forgets its session setting"
+    );
+}
+
+#[gpui::test]
+fn hook_activity_text_layout_and_selected_fill_across_appearances(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let mut repo = shortcut_fixture_repo(
+        RepoId(725),
+        &std::env::temp_dir().join("hook-appearance"),
+        &CommitId("725".into()),
+    );
+    let mut operation = running_hook_activity(725);
+    operation.label = "Pull".into();
+    operation.context = Some("origin/main → main".into());
+    operation.duration = Some(Duration::from_millis(3400));
+    operation.status = GitHookOperationStatus::Succeeded;
+    operation.hooks[0].name = "reference-transaction".into();
+    operation.hooks[0].status = GitHookRunStatus::Succeeded;
+    operation.hooks[0].duration = Some(Duration::from_millis(207));
+    repo.feedback.hook_activity.push(operation);
+    repo.feedback.hook_activity_rev = 1;
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+        for density in [
+            crate::appearance::UiDensity::Compact,
+            crate::appearance::UiDensity::Comfortable,
+        ] {
+            cx.update(|_, app| {
+                app.set_global(crate::appearance::Appearance {
+                    density,
+                    ..Default::default()
+                });
+                view.update(app, |view, cx| view.set_theme(theme, cx));
+            });
+            draw_and_drain_test_window(cx);
+            let idle = crate::test_support::painted_control_quads(cx, "bottom_hook_activity");
+            let open = cx.debug_bounds("bottom_hook_activity").unwrap();
+            cx.simulate_click(open.center(), Modifiers::default());
+            draw_and_drain_test_window(cx);
+            let panel = cx.debug_bounds("hook_activity_panel").unwrap();
+            for key in [
+                "title",
+                "repository",
+                "runs_heading",
+                "run_725_label",
+                "run_725_status",
+                "run_725_timestamp",
+                "detail_725_label",
+                "detail_725_status",
+                "detail_725_duration",
+                "detail_725_context",
+                "hook_725_ui-test_1_name",
+                "hook_725_ui-test_1_status",
+                "hook_725_ui-test_1_duration",
+                "output_heading",
+            ] {
+                let input = activity_text(cx, &view, key);
+                cx.update(|_, app| {
+                    let input = input.read(app);
+                    assert_eq!(
+                        input.debug_displayed_single_line(),
+                        Some(input.text()),
+                        "{key} must show its full text when it fits ({density:?})"
+                    );
+                });
+            }
+            for selector in [
+                "hook_activity_text_title",
+                "hook_activity_text_repository",
+                "hook_activity_text_detail_725_context",
+                "hook_activity_text_hook_725_ui-test_1_name",
+            ] {
+                let text = cx.debug_bounds(selector).unwrap();
+                assert!(
+                    text.size.width > px(0.0) && text.size.height > px(0.0),
+                    "{selector} has visible text"
+                );
+                assert!(
+                    text.left() >= panel.left() && text.right() <= panel.right(),
+                    "{selector} fits the dialog"
+                );
+                assert!(text.top() >= panel.top() && text.bottom() <= panel.bottom());
+            }
+            let minimize = cx.debug_bounds("hook_activity_minimize").unwrap();
+            cx.simulate_click(minimize.center(), Modifiers::default());
+            draw_and_drain_test_window(cx);
+            let selected = crate::test_support::painted_control_quads(cx, "bottom_hook_activity");
+            assert_ne!(
+                selected, idle,
+                "selected fill differs in each theme and density"
+            );
+            cx.simulate_mouse_move(open.center(), None, Modifiers::default());
+            draw_and_drain_test_window(cx);
+            assert_eq!(
+                crate::test_support::painted_control_quads(cx, "bottom_hook_activity"),
+                selected,
+                "hover keeps selected fill"
+            );
+            cx.simulate_click(open.center(), Modifiers::default());
+            draw_and_drain_test_window(cx);
+            let close = cx.debug_bounds("hook_activity_close").unwrap();
+            cx.simulate_click(close.center(), Modifiers::default());
+            draw_and_drain_test_window(cx);
+            assert_eq!(
+                crate::test_support::painted_control_quads(cx, "bottom_hook_activity"),
+                idle
+            );
+        }
+    }
+}
+
 #[gpui::test]
 fn hook_activity_dialog_only_hides_progress_for_its_own_repository(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -224,6 +670,7 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
 
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    let idle_button = crate::test_support::painted_control_quads(cx, "bottom_hook_activity");
     assert!(
         cx.debug_bounds("bottom_hook_activity_running").is_none(),
         "the idle Activity button must not show a running indicator"
@@ -513,6 +960,11 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         cx.debug_bounds("hook_activity_panel").is_none(),
         "minimizing should close the Activity dialog"
     );
+    let minimized_button = crate::test_support::painted_control_quads(cx, "bottom_hook_activity");
+    assert_ne!(
+        minimized_button, idle_button,
+        "minimizing must immediately highlight the cached button"
+    );
     let compact_toast = cx
         .debug_bounds("hook_progress_toast")
         .expect("minimizing an active run should reveal compact progress");
@@ -547,6 +999,10 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         cx.debug_bounds("hook_progress_toast").is_none(),
         "compact hook progress should disappear when the minimized run finishes"
     );
+    assert_eq!(
+        crate::test_support::painted_control_quads(cx, "bottom_hook_activity"),
+        minimized_button
+    );
 
     repo_with_hook
         .feedback
@@ -577,6 +1033,10 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         cx.debug_bounds("hook_progress_toast").is_none(),
         "opening Activity from compact progress must hide the toast"
     );
+    assert_eq!(
+        crate::test_support::painted_control_quads(cx, "bottom_hook_activity"),
+        minimized_button
+    );
     let selected = cx
         .debug_bounds("hook_activity_selected_run")
         .expect("expected selected latest run");
@@ -596,6 +1056,10 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     assert!(
         cx.debug_bounds("hook_activity_panel").is_none(),
         "X should close the Activity dialog"
+    );
+    assert_eq!(
+        crate::test_support::painted_control_quads(cx, "bottom_hook_activity"),
+        idle_button
     );
     assert!(
         cx.debug_bounds("hook_progress_toast").is_some(),
@@ -666,6 +1130,7 @@ fn hook_activity_stays_minimized_when_another_overlay_blocks_auto_open(
     ));
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     apply_state(cx, &view, app_state_with_active_repo(repo.clone()));
+    let idle_button = crate::test_support::painted_control_quads(cx, "bottom_hook_activity");
 
     let zoom = cx
         .debug_bounds("bottom_status_bar_zoom")
@@ -705,5 +1170,10 @@ fn hook_activity_stays_minimized_when_another_overlay_blocks_auto_open(
     assert!(
         cx.debug_bounds("hook_progress_toast").is_some(),
         "compact progress should remain available after the blocking overlay closes"
+    );
+    assert_eq!(
+        crate::test_support::painted_control_quads(cx, "bottom_hook_activity"),
+        idle_button,
+        "a blocked auto-open does not enable keep-minimized styling"
     );
 }

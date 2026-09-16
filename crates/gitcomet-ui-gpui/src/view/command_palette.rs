@@ -1,11 +1,12 @@
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
 use crate::ui_scale;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, CursorStyle, Entity, FocusHandle, FontWeight, MouseButton, MouseDownEvent,
-    ScrollStrategy, SharedString, UniformListScrollHandle, WeakEntity, Window, div, px,
-    uniform_list,
+    AnyElement, Entity, FocusHandle, FontWeight, MouseButton, MouseDownEvent, ScrollStrategy,
+    SharedString, UniformListScrollHandle, WeakEntity, Window, div, px, uniform_list,
 };
 use palette::IntoColor;
 
@@ -1170,7 +1171,6 @@ impl CommandPaletteView {
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale);
         let row_height = scaled_px(36.0);
-        let hover_overlay = theme.hover_overlay();
         let selected_overlay = theme.active_overlay();
 
         range
@@ -1209,21 +1209,25 @@ impl CommandPaletteView {
                             .justify_between()
                             .gap(scaled_px(12.0))
                             .px(scaled_px(10.0))
-                            .rounded(px(theme.radii.row));
+                            .rounded(px(theme.radii.row))
+                            .control_interaction(
+                                controls::InteractionStyle::new(theme),
+                                controls::InteractionState::default()
+                                    .selected(selected, selected_overlay)
+                                    .disabled(unavailable.is_some()),
+                            );
                         let command_row = match unavailable {
-                            None => command_row
-                                .hover(move |style| style.bg(hover_overlay))
-                                .cursor(CursorStyle::PointingHand)
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                                        this.close_and_notify_root(
-                                            Some(command_id_for_click.clone()),
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                ),
+                            None => command_row.on_activate(
+                                false,
+                                controls::ControlActivation::Composite,
+                                cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                                    this.close_and_notify_root(
+                                        Some(command_id_for_click.clone()),
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            ),
                             Some(reason) => command_row
                                 .debug_selector(move || {
                                     format!("command_palette_disabled_{command_id}")
@@ -1290,7 +1294,6 @@ impl CommandPaletteView {
                         .when(selected, |row| {
                             row.rounded_tr(px(theme.radii.row))
                                 .rounded_br(px(theme.radii.row))
-                                .bg(selected_overlay)
                                 .child(
                                     div()
                                         .absolute()
@@ -1382,12 +1385,14 @@ impl Render for CommandPaletteView {
             )
             .child(list_body);
 
-        let scrim = components::modal_scrim(theme).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                this.close_and_notify_root(None, window, cx);
-            }),
-        );
+        let scrim = components::modal_scrim(theme)
+            .id("command_palette_scrim")
+            .on_pointer_click(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.close_and_notify_root(None, window, cx);
+                }),
+            );
 
         div()
             .absolute()

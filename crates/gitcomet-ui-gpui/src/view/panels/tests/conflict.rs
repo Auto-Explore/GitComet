@@ -6585,3 +6585,133 @@ use navigation_and_search::{
     assert_resolved_output_carries_treesitter_classes, other_dark_theme,
     resolved_output_placeholder_protected_ranges_for_test,
 };
+
+#[gpui::test]
+fn conflict_canvas_clicks_cannot_transfer_between_rows(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let _guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(173);
+    let path = std::path::PathBuf::from("conflict_clicks.txt");
+    let base = "ctx\nb1\nb2\nb3\ntail\n";
+    let ours = "ctx\no1\no2\no3\ntail\n";
+    let theirs = "ctx\nt1\nt2\nt3\ntail\n";
+    let current = "ctx\n<<<<<<< ours\no1\no2\no3\n=======\nt1\nt2\nt3\n>>>>>>> theirs\ntail\n";
+    let mut repo = opening_repo_state(repo_id, Path::new("/tmp/conflict_completed_clicks"));
+    set_test_conflict_status(
+        &mut repo,
+        path.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+    set_test_conflict_file(&mut repo, path.clone(), base, ours, theirs, current);
+    repo.conflict_state.conflict_file_load_mode = gitcomet_state::model::ConflictFileLoadMode::Full;
+    repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+        path.clone(),
+        gitcomet_core::domain::FileConflictKind::BothModified,
+        ConflictPayload::Text(base.into()),
+        ConflictPayload::Text(ours.into()),
+        ConflictPayload::Text(theirs.into()),
+        current,
+    ));
+    cx.update(|_, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_canvas_rows_enabled = true;
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+            });
+        })
+    });
+    cx.simulate_resize(gpui::size(px(1280.0), px(720.0)));
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "conflict canvas click fixture",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&path)
+                && pane.conflict_resolver.manual_alignment_enabled()
+                && pane
+                    .conflict_text_hitboxes
+                    .contains_key(&(2, ThreeWayColumn::Ours))
+        },
+        |pane| {
+            format!(
+                "path={:?} hitboxes={:?}",
+                pane.conflict_resolver.path,
+                pane.conflict_text_hitboxes.keys()
+            )
+        },
+    );
+    let [first, second] = cx.update(|_, app| {
+        let pane = view.read(app).main_pane.read(app);
+        [1, 2].map(|row| {
+            pane.conflict_text_hitboxes[&(row, ThreeWayColumn::Ours)]
+                .bounds
+                .center()
+        })
+    });
+    let menu_open = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| view.read(app).popover_host.read(app).is_open())
+    };
+    cx.simulate_mouse_down(first, MouseButton::Right, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(!menu_open(cx), "a context menu waits for the release");
+    cx.simulate_mouse_move(second, Some(MouseButton::Right), Modifiers::default());
+    cx.simulate_mouse_up(second, MouseButton::Right, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        !menu_open(cx),
+        "a release on another row cannot open its menu"
+    );
+    cx.simulate_mouse_down(second, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(second, MouseButton::Right, Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        menu_open(cx),
+        "the same row opens its menu on a completed click"
+    );
+    cx.update(|_, app| {
+        view.read(app)
+            .popover_host
+            .clone()
+            .update(app, |host, cx| host.close_popover(cx))
+    });
+    draw_and_drain_test_window(cx);
+
+    let alt = Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+    let marked_columns = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .conflict_resolver_alignment_marked_columns()
+        })
+    };
+    cx.simulate_mouse_down(first, MouseButton::Left, alt);
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        marked_columns(cx),
+        0,
+        "alignment marking waits for the release"
+    );
+    cx.simulate_mouse_move(second, Some(MouseButton::Left), alt);
+    cx.simulate_mouse_up(second, MouseButton::Left, alt);
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        marked_columns(cx),
+        0,
+        "cancelled marking changes neither row"
+    );
+    cx.simulate_mouse_down(second, MouseButton::Left, alt);
+    cx.simulate_mouse_up(second, MouseButton::Left, alt);
+    draw_and_drain_test_window(cx);
+    assert_eq!(marked_columns(cx), 1, "a completed Alt-click marks the row");
+}

@@ -798,8 +798,7 @@ pub(super) fn paint_history_graph_band(
     show_graph_color_marker: bool,
     // What the row is painted over, so the node's middle -- which has to be
     // opaque, or the lane through its column shows inside it -- matches. The
-    // band's hover tint comes from a `div().hover()` the canvas cannot observe,
-    // so this covers the row's persistent state (selection) only.
+    // caller resolves the row state and hover with the common interaction policy.
     row_background: gpui::Rgba,
     bounds: Bounds<Pixels>,
     window: &mut Window,

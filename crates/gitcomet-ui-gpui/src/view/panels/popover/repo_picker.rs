@@ -1,5 +1,6 @@
 use super::super::super::path_display;
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use std::collections::BTreeSet;
 
 /// Height this picker caps its row list at. Taller than the badge pickers'
@@ -550,8 +551,6 @@ fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl 
     let ui_scale = super::popover_ui_scale(cx);
     let scaled_px = crate::ui_scale::scaler(ui_scale);
     let menu_open = this.repo_picker_sort_menu_open;
-    let hover_overlay = theme.hover_overlay();
-    let active_overlay = theme.active_overlay();
 
     div()
         .id("repo_picker_sort_toggle")
@@ -569,18 +568,23 @@ fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl 
         } else {
             theme.colors.foreground.secondary
         })
-        .when(menu_open, |toggle| toggle.bg(active_overlay))
-        .hover(move |s| s.bg(hover_overlay))
-        .active(move |s| s.bg(active_overlay))
+        .control_interaction(
+            controls::InteractionStyle::new(theme),
+            controls::InteractionState::default().open(menu_open),
+        )
         .child(sort_toggle_label(this.repo_picker_sort))
         .child(crate::view::icons::svg_icon(
             "icons/chevron_down.svg",
             theme.colors.foreground.secondary,
             scaled_px(12.0),
         ))
-        .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-            toggle_sort_menu(this, cx);
-        }))
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                toggle_sort_menu(this, cx);
+            }),
+        )
 }
 
 fn sort_toggle_label(sort: RepoPickerSort) -> String {
@@ -616,11 +620,10 @@ fn sort_menu(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl In
                 components::ContextMenuIconSlot::Reserved
             })
             .selected(selected_index == Some(ix))
-            .render(theme, ui_scale_percent, cx)
-            .debug_selector(move || format!("repo_picker_sort_option_{ix}"))
-            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+            .on_select(theme, ui_scale_percent, cx, move |this, _e, _w, cx| {
                 apply_sort(this, sort, cx);
-            })),
+            })
+            .debug_selector(move || format!("repo_picker_sort_option_{ix}")),
         );
     }
     menu
@@ -812,10 +815,9 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     components::ContextMenuText::path_single_line(label),
                 )
                 .tooltip_host(this.tooltip_host.clone())
-                .render(theme, ui_scale_percent, cx)
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                .on_select(theme, ui_scale_percent, cx, move |this, _e, _w, cx| {
                     activate(this, entry.clone(), cx);
-                })),
+                }),
             );
         }
         components::context_menu(theme, menu)

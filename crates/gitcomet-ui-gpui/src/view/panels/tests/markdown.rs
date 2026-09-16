@@ -2787,8 +2787,8 @@ fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::Tes
         )))
         .expect("Ask mode draws the linked image's Retry control");
 
-    // Mouse-down belongs to the enclosing link wrapper, so it opens a menu
-    // before the nested Retry control can receive a complete click.
+    // The linked image is one action: its completed click opens a menu with
+    // navigation and image approval; the retry icon is part of that action.
     simulate_counted_click(cx, retry.center(), 1);
     cx.run_until_parked();
     cx.update(|_window, app| {
@@ -2814,9 +2814,10 @@ fn linked_blocked_image_menu_loads_one_image_only_in_ask_mode(cx: &mut gpui::Tes
         .debug_bounds("context_menu_load_image")
         .expect("a linked blocked image menu offers Load image")
         .center();
-    cx.simulate_mouse_move(
+    cx.simulate_mouse_move(load_image, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
         load_image,
-        Some(gpui::MouseButton::Left),
+        gpui::MouseButton::Left,
         gpui::Modifiers::default(),
     );
     cx.simulate_event(gpui::MouseUpEvent {
@@ -3234,7 +3235,12 @@ fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext)
         .debug_bounds("context_menu_copy_link_address")
         .expect("the link menu offers copying the address")
         .center();
-    // Menu entries fire on release.
+    // Menu entries require their own completed click.
+    cx.simulate_mouse_down(
+        copy_entry,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
     cx.simulate_mouse_move(
         copy_entry,
         Some(gpui::MouseButton::Left),

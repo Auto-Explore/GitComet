@@ -5,6 +5,8 @@
 //! row — but it resolves one reference rather than filtering a fixed list, so
 //! the "list" below the input is at most a single row.
 
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::theme::AppTheme;
 use crate::ui_scale;
 use gitcomet_core::domain::{Commit, CommitId};
@@ -13,8 +15,8 @@ use gitcomet_state::msg::Msg;
 use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, CursorStyle, Entity, FocusHandle, FontWeight, MouseButton, MouseDownEvent,
-    SharedString, WeakEntity, Window, div, px,
+    AnyElement, Entity, FocusHandle, FontWeight, MouseButton, MouseDownEvent, SharedString,
+    WeakEntity, Window, div, px,
 };
 use std::sync::Arc;
 
@@ -455,15 +457,6 @@ impl RevealCommitView {
         let theme = self.theme;
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = crate::ui_scale::scaler(ui_scale);
-        // The row already carries the selected wash, and `.hover()` *replaces*
-        // the background rather than stacking on it — so the hover fill has to
-        // be the two washes added up, or hovering would make the row lighter.
-        let resting = theme.active_overlay();
-        let hovered = crate::theme::with_alpha(
-            resting,
-            (resting.alpha + theme.hover_overlay().alpha).min(1.0),
-        );
-
         let sha = commit.id.as_ref();
         let short: SharedString = sha.get(0..8).unwrap_or(sha).to_owned().into();
         let summary = SharedString::from(commit.summary.to_string());
@@ -512,9 +505,11 @@ impl RevealCommitView {
                     .px(scaled_px(10.0))
                     .py(scaled_px(8.0))
                     .rounded(px(theme.radii.row))
-                    .bg(resting)
-                    .hover(move |style| style.bg(hovered))
-                    .cursor(CursorStyle::PointingHand)
+                    .control_interaction(
+                        controls::InteractionStyle::new(theme),
+                        controls::InteractionState::default()
+                            .selected(true, theme.active_overlay()),
+                    )
                     .child(
                         div()
                             .overflow_hidden()
@@ -524,9 +519,10 @@ impl RevealCommitView {
                             .child(summary),
                     )
                     .child(secondary)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                    .on_activate(
+                        false,
+                        controls::ControlActivation::Action,
+                        cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
                             this.close_and_notify_root(Some(target.clone()), window, cx);
                         }),
                     ),
@@ -586,12 +582,14 @@ impl Render for RevealCommitView {
             )
             .child(div().w_full().py(scaled_px(8.0)).child(self.render_row(cx)));
 
-        let scrim = components::modal_scrim(theme).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                this.close_and_notify_root(None, window, cx);
-            }),
-        );
+        let scrim = components::modal_scrim(theme)
+            .id("reveal_commit_scrim")
+            .on_pointer_click(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.close_and_notify_root(None, window, cx);
+                }),
+            );
 
         div()
             .absolute()

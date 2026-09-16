@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 
 impl MainPaneView {
     /// The worktree chip for the diff currently on screen, when that diff comes
@@ -20,13 +21,14 @@ impl MainPaneView {
             *detached,
             &inline.submodule_repo_path,
         );
-        let palette = crate::view::rows::sidebar::worktree_badge_palette(theme);
+
         let open_path = inline.submodule_repo_path.clone();
         // Scaled like the other two chips (the details pane's and the history
         // row's): an unscaled chip stops matching the title row it sits in.
         let ui_scale = crate::ui_scale::UiScale::current(cx);
         Some(
             crate::view::rows::sidebar::worktree_origin_chip(
+                "diff_title_worktree_origin",
                 theme,
                 label,
                 ui_scale.px(10.0),
@@ -34,12 +36,6 @@ impl MainPaneView {
                 ui_scale.px(220.0),
                 ui_scale.px(6.0),
             )
-            .id("diff_title_worktree_origin")
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |s| {
-                s.border_color(palette.hover_border)
-                    .text_color(palette.hover_text)
-            })
             .gitcomet_tooltip(
                 theme,
                 format!(
@@ -48,14 +44,18 @@ impl MainPaneView {
                 )
                 .into(),
             )
-            .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                if !e.standard_click() {
-                    return;
-                }
-                cx.stop_propagation();
-                this.store.dispatch(Msg::OpenRepo(open_path.clone()));
-                cx.notify();
-            }))
+            .on_activate(
+                false,
+                controls::ControlActivation::Nested,
+                cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                    if !e.standard_click() {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+                    cx.notify();
+                }),
+            )
             .into_any_element(),
         )
     }
@@ -210,6 +210,8 @@ impl MainPaneView {
                 _ => return None,
             };
 
+        let history_invoker: SharedString = "viewer_revision_badge".into();
+        let history_open = self.active_context_menu_invoker.as_ref() == Some(&history_invoker);
         // Monospace label so the badge keeps a constant width as the SHA changes.
         let badge = div()
             .id("viewer_revision_badge")
@@ -224,8 +226,10 @@ impl MainPaneView {
             .border_1()
             .border_color(theme.colors.stroke.default)
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55)))
-            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+            .control_interaction(
+                controls::InteractionStyle::header(theme),
+                controls::InteractionState::default().open(history_open),
+            )
             .child(svg_icon(
                 "icons/history.svg",
                 theme.colors.foreground.secondary,
@@ -238,17 +242,22 @@ impl MainPaneView {
                     .whitespace_nowrap()
                     .child(badge_label),
             )
-            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                this.open_popover_at(
-                    PopoverKind::FileHistory {
-                        repo_id,
-                        path: path.clone(),
-                    },
-                    e.position(),
-                    window,
-                    cx,
-                );
-            }))
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    this.open_popover_at(
+                        (PopoverKind::FileHistory {
+                            repo_id,
+                            path: path.clone(),
+                        })
+                        .invoked_by(history_invoker.clone()),
+                        e.position(),
+                        window,
+                        cx,
+                    );
+                }),
+            )
             .gitcomet_tooltip(theme, "Show file history".into());
 
         let back_btn = components::Button::new("viewer_nav_back", "")

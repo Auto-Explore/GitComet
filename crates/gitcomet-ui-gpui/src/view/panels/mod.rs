@@ -466,20 +466,14 @@ pub(in crate::view) enum ContextMenuAction {
         visible_ix: usize,
         region: DiffTextRegion,
     },
-    TerminalCopy {
+    TerminalCommand {
         repo_id: RepoId,
-    },
-    TerminalPaste {
-        repo_id: RepoId,
-    },
-    TerminalSelectAll {
-        repo_id: RepoId,
-    },
-    TerminalClear {
-        repo_id: RepoId,
+        session_seq: u64,
+        command: terminal_panel::TerminalCommand,
     },
     TerminalOpenExternal {
         repo_id: RepoId,
+        session_seq: u64,
     },
     ApplyIndexPatch {
         repo_id: RepoId,

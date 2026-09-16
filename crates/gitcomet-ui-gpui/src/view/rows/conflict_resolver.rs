@@ -3,6 +3,8 @@ use super::super::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
 use super::conflict_canvas::{self, ConflictChunkContext};
 use super::diff_text::*;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
+use crate::kit::interaction::{self as controls, ControlInteractionExt as _};
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
 const CONFLICT_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
@@ -786,14 +788,14 @@ impl MainPaneView {
                         .text_color(theme.colors.foreground.secondary)
                         .child(label)
                         .cursor(CursorStyle::PointingHand)
-                        .on_mouse_down(
+                        .on_pointer_click(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                 // section 30: clicking a conflict block body selects it.
                                 this.conflict_resolver_select_conflict(range_ix, cx);
                             }),
                         )
-                        .on_mouse_down(
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
@@ -1119,7 +1121,7 @@ impl MainPaneView {
                         if !row_selection_enabled {
                             // When split-selection is available, the begin
                             // handler above already selects the block.
-                            cell = cell.on_mouse_down(
+                            cell = cell.on_pointer_click(
                                 MouseButton::Left,
                                 cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                     // section 30: clicking a conflict block body selects it.
@@ -1127,7 +1129,7 @@ impl MainPaneView {
                                 }),
                             );
                         }
-                        cell = cell.on_mouse_down(
+                        cell = cell.on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
@@ -1164,7 +1166,7 @@ impl MainPaneView {
                             }),
                         );
                     } else if let Some(target_index) = semantic_nav_target {
-                        cell = cell.cursor(CursorStyle::PointingHand).on_mouse_down(
+                        cell = cell.cursor(CursorStyle::PointingHand).on_pointer_click(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                 this.conflict_jump_to_nav_target(target_index, cx);
@@ -1439,14 +1441,14 @@ impl MainPaneView {
                         this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
                     let (line_label, line_target, chunk_label, chunk_target) =
                         two_way_split_input_row_menu_targets(row_ix, conflict_ix, side);
-                    cell = cell.on_mouse_down(
+                    cell = cell.on_pointer_click(
                         MouseButton::Left,
                         cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                             // section 30: clicking a conflict block body selects it.
                             this.conflict_resolver_select_conflict(conflict_ix, cx);
                         }),
                     );
-                    cell = cell.on_mouse_down(
+                    cell = cell.on_pointer_click(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
@@ -1619,14 +1621,14 @@ impl MainPaneView {
                         .text_color(theme.colors.foreground.secondary)
                         .child(label)
                         .cursor(CursorStyle::PointingHand)
-                        .on_mouse_down(
+                        .on_pointer_click(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                 // section 30: clicking a conflict block body selects it.
                                 this.conflict_resolver_select_conflict(range_ix, cx);
                             }),
                         )
-                        .on_mouse_down(
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
@@ -1914,7 +1916,7 @@ impl MainPaneView {
                                     },
                                 ));
                         } else {
-                            cell = cell.on_mouse_down(
+                            cell = cell.on_pointer_click(
                                 MouseButton::Left,
                                 cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                     // section 30: clicking a conflict block body selects it.
@@ -1922,7 +1924,7 @@ impl MainPaneView {
                                 }),
                             );
                         }
-                        cell = cell.on_mouse_down(
+                        cell = cell.on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
@@ -1959,7 +1961,7 @@ impl MainPaneView {
                             }),
                         );
                     } else if let Some(target_index) = semantic_nav_target {
-                        cell = cell.cursor(CursorStyle::PointingHand).on_mouse_down(
+                        cell = cell.cursor(CursorStyle::PointingHand).on_pointer_click(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                 this.conflict_jump_to_nav_target(target_index, cx);
@@ -2008,37 +2010,27 @@ impl MainPaneView {
                           from_top: bool,
                           cx: &mut gpui::Context<Self>| {
             let btn_size = conflict_scaled_px(CONFLICT_FOLD_REVEAL_BUTTON_PX, ui_scale_percent);
-            div()
-                .id((id_suffix, vi))
-                .w(btn_size)
-                .h(btn_size)
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(theme.radii.row))
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |style| {
-                    style.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                        cx.stop_propagation();
-                        if output_pane {
-                            this.conflict_resolver_reveal_output_context_fold(
-                                fold_id, from_top, cx,
-                            );
-                        } else {
-                            this.conflict_resolver_reveal_context_fold(fold_id, from_top, cx);
-                        }
-                    }),
-                )
-                .child(svg_icon(
-                    icon,
-                    theme.colors.foreground.secondary,
-                    conflict_scaled_px(CONFLICT_FOLD_REVEAL_ICON_PX, ui_scale_percent),
-                ))
-                .gitcomet_tooltip(theme, tooltip.into())
+            components::inline_icon_button(
+                (id_suffix, vi),
+                theme,
+                btn_size,
+                icon,
+                conflict_scaled_px(CONFLICT_FOLD_REVEAL_ICON_PX, ui_scale_percent),
+                theme.colors.foreground.secondary,
+                true,
+            )
+            .on_activate(
+                false,
+                controls::ControlActivation::Nested,
+                cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
+                    if output_pane {
+                        this.conflict_resolver_reveal_output_context_fold(fold_id, from_top, cx);
+                    } else {
+                        this.conflict_resolver_reveal_context_fold(fold_id, from_top, cx);
+                    }
+                }),
+            )
+            .gitcomet_tooltip(theme, tooltip.into())
         };
         div()
             .id((id_prefix, vi))
@@ -2074,7 +2066,7 @@ impl MainPaneView {
             )
             .child(label)
             .cursor(CursorStyle::PointingHand)
-            .on_mouse_down(
+            .on_pointer_click(
                 MouseButton::Left,
                 cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                     cx.stop_propagation();
@@ -2384,7 +2376,7 @@ impl MainPaneView {
                         this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
                     let context_menu_invoker: SharedString =
                         format!("resolver_output_chunk_menu_{}_{}", conflict_ix, ix).into();
-                    row = row.on_mouse_down(
+                    row = row.on_pointer_click(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
@@ -2494,7 +2486,7 @@ impl MainPaneView {
                         .text_color(text_color)
                         .whitespace_nowrap()
                         .when_some(row_bg, |d, bg| d.bg(bg))
-                        .on_mouse_down(
+                        .on_pointer_click(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();

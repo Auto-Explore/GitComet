@@ -1,6 +1,7 @@
 use super::element::TextElement;
 use super::state::*;
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -9,6 +10,24 @@ impl Render for TextInput {
         let entity_id = cx.entity().entity_id();
         let chromeless = self.chromeless;
         let multiline = self.multiline;
+        let display_width = (self.display_text && !multiline).then(|| {
+            let style = window.text_style();
+            let text: SharedString = self.text().to_owned().into();
+            let run = style.to_run(text.len());
+            let width = window
+                .text_system()
+                .shape_line(
+                    text,
+                    style.font_size.to_pixels(window.rem_size()),
+                    &[run],
+                    None,
+                )
+                .width;
+            // Explicit layout widths snap to the nearest device pixel. Round
+            // intrinsic text widths up first so a fractional glyph advance
+            // cannot shrink the label enough to trigger an ellipsis.
+            (width * window.scale_factor()).ceil() / window.scale_factor()
+        });
         self.appearance_metrics = crate::appearance::current(cx);
         self.editor_line_height = crate::ui_scale::design_px_from_window(
             crate::appearance::current(cx).editor_line_height(),
@@ -99,6 +118,13 @@ impl Render for TextInput {
         }
 
         let mut text_surface = div()
+            // Refresh platform input registration when focus changes, while
+            // keeping the surrounding field's in-flight click state intact.
+            .id(if is_focused {
+                "focused_text"
+            } else {
+                "blurred_text"
+            })
             .pl(if leading_icon.is_some() {
                 px(6.0)
             } else {
@@ -172,14 +198,19 @@ impl Render for TextInput {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
+            .when(!self.interaction.suppress_right_click, |input| {
+                input.on_pointer_click(MouseButton::Right, cx.listener(Self::on_right_click))
+            })
             .line_height(self.effective_line_height(window))
-            .text_size(if self.editor_font {
-                crate::appearance::editor_size(window, cx)
-            } else {
-                crate::ui_scale::design_px_from_window(
-                    crate::appearance::current(cx).ui_text(13.0),
-                    window,
-                )
+            .when(!self.display_text, |d| {
+                d.text_size(if self.editor_font {
+                    crate::appearance::editor_size(window, cx)
+                } else {
+                    crate::ui_scale::design_px_from_window(
+                        crate::appearance::current(cx).ui_text(13.0),
+                        window,
+                    )
+                })
             })
             .when(!multiline && !chromeless, |d| {
                 d.h(crate::ui_scale::design_px_from_window(
@@ -227,14 +258,7 @@ impl Render for TextInput {
             input = input.focus(move |s| s.border_color(style.focus_border));
         }
 
-        let render_id = ElementId::from(("text_input_root", entity_id));
-        let render_id =
-            ElementId::from((render_id, if is_focused { "focused" } else { "blurred" }));
-        let mut outer = div()
-            // Focus changes toggle GPUI platform input handler registration during paint.
-            // Key the subtree by focus state so GPUI doesn't reuse a stale unfocused paint
-            // range that contains no input handlers when the field becomes focused.
-            .id(render_id);
+        let mut outer = div().id(ElementId::from(("text_input_root", entity_id)));
         if content_width_layout {
             // `items_start` so the flex-col cross axis doesn't stretch the inner
             // field back to the viewport width, letting it keep its content width.
@@ -243,6 +267,7 @@ impl Render for TextInput {
             outer = outer.w_full().min_w(px(0.0));
         }
         let mut outer = outer
+            .when_some(display_width, |d, width| d.w(width).max_w_full())
             .flex()
             .flex_col()
             // The outer field fills a multiline viewport while the inner field
@@ -258,6 +283,10 @@ impl Render for TextInput {
                     .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
                     .on_mouse_move(cx.listener(Self::on_mouse_move))
                     .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
+                    .when(!self.interaction.suppress_right_click, |input| {
+                        input
+                            .on_pointer_click(MouseButton::Right, cx.listener(Self::on_right_click))
+                    })
             })
             .child(input);
 

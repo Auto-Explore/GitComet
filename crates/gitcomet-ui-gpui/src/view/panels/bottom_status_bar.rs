@@ -1,4 +1,6 @@
 use super::*;
+use crate::kit::interaction as controls;
+use crate::view::components::{ControlInteractionExt, InteractionState, InteractionStyle};
 
 /// Slimmer than the tab-bar slot the bottom bar used to borrow; it hosts the
 /// pane collapse toggles, the zoom control and the branding strip on one shared
@@ -46,7 +48,7 @@ fn status_bar_chip(
     id: &'static str,
     hover_color: gpui::Rgba,
     ui_scale_percent: u32,
-    metrics: crate::appearance::Appearance,
+    theme: AppTheme,
 ) -> gpui::Stateful<gpui::Div> {
     let scaled_px = crate::ui_scale::scaler(ui_scale_percent);
 
@@ -54,7 +56,7 @@ fn status_bar_chip(
         .id(id)
         .group(id)
         .debug_selector(move || id.to_string())
-        .h(scaled_px(metrics.row_height(
+        .h(scaled_px(theme.metrics.row_height(
             BOTTOM_STATUS_BAR_ITEM_HEIGHT_PX,
             BOTTOM_STATUS_BAR_ITEM_COMFORTABLE_HEIGHT_PX,
         )))
@@ -63,8 +65,13 @@ fn status_bar_chip(
         .items_center()
         .justify_center()
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.text_color(hover_color))
-        .active(move |s| s.text_color(hover_color))
+        .tab_index(0)
+        .control_interaction(
+            InteractionStyle::link(theme)
+                .hover(StyleRefinement::default().text_color(hover_color))
+                .pressed(StyleRefinement::default().text_color(hover_color)),
+            InteractionState::default(),
+        )
 }
 
 pub(in super::super) struct BottomStatusBarView {
@@ -73,6 +80,7 @@ pub(in super::super) struct BottomStatusBarView {
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     active_context_menu_invoker: Option<SharedString>,
+    minimized_hook_activity_repos: rustc_hash::FxHashSet<RepoId>,
     pro_launch_label: SharedString,
 }
 
@@ -99,6 +107,7 @@ impl BottomStatusBarView {
             _ui_model_subscription: subscription,
             root_view,
             active_context_menu_invoker: None,
+            minimized_hook_activity_repos: Default::default(),
             // Use local calendar days and keep the startup label for this window.
             pro_launch_label: pro_launch_label(jiff::Zoned::now().date()),
         }
@@ -129,6 +138,17 @@ impl BottomStatusBarView {
         (repo_id, active, warning)
     }
 
+    pub(in super::super) fn set_minimized_hook_activity_repos(
+        &mut self,
+        repos: &rustc_hash::FxHashSet<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.minimized_hook_activity_repos != *repos {
+            self.minimized_hook_activity_repos.clone_from(repos);
+            cx.notify();
+        }
+    }
+
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         cx.notify();
@@ -149,11 +169,12 @@ impl BottomStatusBarView {
 
     fn open_popover_for_bounds(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         anchor_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
         });
@@ -161,22 +182,13 @@ impl BottomStatusBarView {
 
     fn open_popover_centered(
         &mut self,
-        kind: PopoverKind,
+        kind: impl Into<PopoverRequest>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let kind: PopoverRequest = kind.into();
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_centered(kind, window, cx);
-        });
-    }
-
-    fn activate_context_menu_invoker(
-        &mut self,
-        invoker: SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self.root_view.update(cx, move |root, cx| {
-            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 }
@@ -191,10 +203,7 @@ impl Render for BottomStatusBarView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == zoom_picker_invoker.as_ref());
-        let zoom_button_bg = with_alpha(
-            theme.colors.accent.foreground,
-            if theme.is_dark { 0.26 } else { 0.20 },
-        );
+        let zoom_button_bg = components::control_open_background(theme);
         let zoom_label = if ui_scale_percent == crate::ui_scale::DEFAULT_UI_SCALE_PERCENT {
             String::new()
         } else {
@@ -222,11 +231,15 @@ impl Render for BottomStatusBarView {
             .style(components::ButtonStyle::Subtle)
             .borderless()
             .no_hover_border()
-            .selected(zoom_picker_active)
+            .open(zoom_picker_active)
             .selected_bg(zoom_button_bg)
             .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                this.activate_context_menu_invoker(zoom_picker_invoker.clone(), cx);
-                this.open_popover_for_bounds(PopoverKind::UiScalePicker, bounds, window, cx);
+                this.open_popover_for_bounds(
+                    PopoverKind::UiScalePicker.invoked_by(zoom_picker_invoker.clone()),
+                    bounds,
+                    window,
+                    cx,
+                );
             })
             .gitcomet_tooltip(theme, "Adjust zoom".into())
             .debug_selector(|| "bottom_status_bar_zoom".to_string());
@@ -242,6 +255,8 @@ impl Render for BottomStatusBarView {
             })
             .unwrap_or((false, false));
 
+        // These footer toggles convey panel visibility through their icons and
+        // tooltips, with ordinary button feedback and no persistent highlight.
         let sidebar_toggle = components::Button::new("sidebar_toggle", "")
             .start_slot(svg_icon(
                 sidebar_toggle_icon_path(sidebar_collapsed),
@@ -286,6 +301,8 @@ impl Render for BottomStatusBarView {
 
         let (active_repo_id, active_hook_count, has_hook_warning) =
             Self::hook_activity_summary(&self.state);
+        let keep_minimized =
+            active_repo_id.is_some_and(|id| self.minimized_hook_activity_repos.contains(&id));
         let activity_icon_color = if active_hook_count > 0 {
             theme.colors.accent.foreground
         } else if has_hook_warning {
@@ -331,6 +348,7 @@ impl Render for BottomStatusBarView {
                 icon.debug_selector(|| "bottom_hook_activity_warning".to_string())
             });
         let hook_activity_button = components::Button::new("bottom_hook_activity", "")
+            .selected(keep_minimized)
             .start_slot(activity_icon)
             .style(components::ButtonStyle::Subtle)
             .borderless()
@@ -348,7 +366,14 @@ impl Render for BottomStatusBarView {
                     cx,
                 );
             })
-            .gitcomet_tooltip(theme, "Git hook activity".into())
+            .gitcomet_tooltip(
+                theme,
+                if keep_minimized {
+                    "Git hook activity — keep minimized enabled".into()
+                } else {
+                    "Git hook activity".into()
+                },
+            )
             .debug_selector(|| "bottom_hook_activity".to_string());
 
         // Branding strip: the edition badge moved down here from the title bar,
@@ -357,7 +382,7 @@ impl Render for BottomStatusBarView {
             "bottom_status_bar_discord",
             theme.colors.accent.foreground,
             ui_scale_percent,
-            theme.metrics,
+            theme,
         )
         .child(
             gpui::svg()
@@ -370,17 +395,21 @@ impl Render for BottomStatusBarView {
                     s.text_color(theme.colors.accent.foreground)
                 }),
         )
-        .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-            cx.stop_propagation();
-            cx.open_url(DISCORD_URL);
-        }))
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                cx.open_url(DISCORD_URL);
+            }),
+        )
         .gitcomet_tooltip(theme, "Join the GitComet Discord".into());
 
         let free_badge = status_bar_chip(
             "bottom_status_bar_free_badge",
             theme.colors.accent.foreground,
             ui_scale_percent,
-            theme.metrics,
+            theme,
         )
         .text_size(theme.ui_text(11.0))
         .line_height(scaled_px(theme.metrics.ui_text(12.0)))
@@ -389,10 +418,14 @@ impl Render for BottomStatusBarView {
             theme.colors.foreground.primary,
             if theme.is_dark { 0.72 } else { 0.62 },
         ))
-        .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-            cx.stop_propagation();
-            cx.open_url(EDITIONS_URL);
-        }))
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                cx.open_url(EDITIONS_URL);
+            }),
+        )
         .gitcomet_tooltip(theme, "See GitComet editions".into())
         .child("FREE");
 
@@ -400,15 +433,19 @@ impl Render for BottomStatusBarView {
             "bottom_status_bar_pro_link",
             theme.colors.accent.foreground,
             ui_scale_percent,
-            theme.metrics,
+            theme,
         )
         .text_size(theme.ui_text(11.0))
         .line_height(scaled_px(theme.metrics.ui_text(12.0)))
         .text_color(theme.colors.foreground.secondary)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-            cx.stop_propagation();
-            cx.open_url(EDITIONS_URL);
-        }))
+        .on_activate(
+            false,
+            controls::ControlActivation::Action,
+            cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                cx.open_url(EDITIONS_URL);
+            }),
+        )
         .gitcomet_tooltip(theme, "See GitComet Pro".into())
         .child(self.pro_launch_label.clone());
 
@@ -429,8 +466,8 @@ impl Render for BottomStatusBarView {
             .gap(scaled_px(4.0))
             .cursor(CursorStyle::PointingHand)
             .text_color(theme.colors.foreground.secondary)
-            .hover(move |s| s.text_color(theme.colors.accent.foreground))
-            .active(move |s| s.text_color(theme.colors.accent.foreground))
+            .tab_index(0)
+            .control_interaction(InteractionStyle::link(theme), InteractionState::default())
             .child(svg_icon(
                 "icons/gitcomet_mark.svg",
                 gpui::rgb(0x5ac1fe),
@@ -443,10 +480,14 @@ impl Render for BottomStatusBarView {
                     .line_height(scaled_px(theme.metrics.ui_text(12.0)))
                     .child("GitComet"),
             )
-            .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(WEBSITE_URL);
-            }))
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(WEBSITE_URL);
+                }),
+            )
             .gitcomet_tooltip(theme, "Open gitcomet.dev".into());
 
         let version_label: SharedString = format!("v{}", env!("CARGO_PKG_VERSION")).into();
@@ -459,12 +500,16 @@ impl Render for BottomStatusBarView {
             .text_size(theme.ui_text(11.0))
             .line_height(scaled_px(theme.metrics.ui_text(12.0)))
             .text_color(theme.colors.foreground.secondary)
-            .hover(move |s| s.text_color(theme.colors.accent.foreground))
-            .active(move |s| s.text_color(theme.colors.accent.foreground))
-            .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(RELEASES_URL);
-            }))
+            .tab_index(0)
+            .control_interaction(InteractionStyle::link(theme), InteractionState::default())
+            .on_activate(
+                false,
+                controls::ControlActivation::Action,
+                cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(RELEASES_URL);
+                }),
+            )
             .gitcomet_tooltip(theme, "View GitComet releases".into())
             .child(version_label);
 

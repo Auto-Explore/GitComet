@@ -125,10 +125,9 @@ fn stash_prompt_escape_cancels(cx: &mut gpui::TestAppContext) {
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some("stash_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::StashPrompt,
+                    PopoverKind::StashPrompt.invoked_by("stash_btn".into()),
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -239,10 +238,9 @@ fn stash_prompt_enter_stashes_and_closes(cx: &mut gpui::TestAppContext) {
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some("stash_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::StashPrompt,
+                    PopoverKind::StashPrompt.invoked_by("stash_btn".into()),
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -314,10 +312,9 @@ fn stash_prompt_enter_with_empty_input_does_not_close_or_stash(cx: &mut gpui::Te
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.set_active_context_menu_invoker(Some("stash_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::StashPrompt,
+                    PopoverKind::StashPrompt.invoked_by("stash_btn".into()),
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,

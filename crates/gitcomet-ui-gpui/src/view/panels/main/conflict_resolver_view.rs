@@ -5,6 +5,7 @@
 //! previews.
 
 use super::*;
+use crate::kit::click::PointerClickExt as _;
 
 pub(super) use conflict_resolver::CONFLICT_BOTTOM_OVERSCROLL_ROWS;
 
@@ -2068,7 +2069,7 @@ impl MainPaneView {
                                                                     !self
                                                                         .conflict_resolved_output_is_streamed(),
                                                                     |d| {
-                                                                        d.on_mouse_down(
+                                                                        d.on_pointer_click(
                                                                             MouseButton::Right,
                                                                             cx.listener(
                                                                                 |this,

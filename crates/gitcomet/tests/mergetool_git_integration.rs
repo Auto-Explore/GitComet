@@ -1254,16 +1254,27 @@ fn git_mergetool_no_trust_exit_code_changed_output_resolves_conflict() {
     );
     configure_mergetool_trust_exit_code(repo, "fake", false);
 
-    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "fake"]);
+    // Capture Git's setup commands as well as the tool output: an early shell
+    // failure can otherwise report only "Merging: file.txt", hiding whether
+    // the tool ran at all. Successful tests keep this trace captured.
+    let output = run_git_capture_with_env(
+        repo,
+        &["mergetool", "--no-prompt", "--tool", "fake"],
+        &[("GIT_TRACE", "1"), ("GIT_TRACE2", "1")],
+    );
     let text = output_text(&output);
 
     assert!(
-        output.status.success(),
-        "expected git mergetool to accept changed output when trustExitCode=false\n{text}"
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .any(|line| line == "TOOL=fake"),
+        "git mergetool stopped before the fake tool ran (status: {})\n{text}",
+        output.status
     );
     assert!(
-        text.contains("TOOL=fake"),
-        "expected fake tool marker in output\n{text}"
+        output.status.success(),
+        "expected git mergetool to accept changed output when trustExitCode=false (status: {})\n{text}",
+        output.status
     );
     assert!(
         !text.contains("Was the merge successful"),

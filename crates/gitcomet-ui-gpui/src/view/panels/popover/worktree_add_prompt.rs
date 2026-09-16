@@ -40,7 +40,6 @@ pub(super) fn panel(
                 .empty_text("No matches")
                 .max_height(scaled_px(branch_picker::REF_PICKER_LIST_MAX_HEIGHT_PX))
                 .selected_index(this.branch_picker_selected_index)
-                .select_on_mouse_down()
                 .render(
                     theme,
                     ui_scale_percent,

@@ -216,13 +216,15 @@ pub(super) fn panel(
                         ))
                         .selected(is_selected)
                         .tooltip_host(this.tooltip_host.clone())
-                        .render(theme, super::popover_ui_scale(cx), cx)
-                        .debug_selector(move || format!("push_upstream_remote_option_{ix}"))
-                        .on_click(cx.listener(
-                            move |this, _e: &ClickEvent, _window, cx| {
+                        .on_select(
+                            theme,
+                            super::popover_ui_scale(cx),
+                            cx,
+                            move |this, _e, _window, cx| {
                                 this.select_push_upstream_remote(selected_name.clone(), cx);
                             },
-                        )),
+                        )
+                        .debug_selector(move || format!("push_upstream_remote_option_{ix}")),
                     )
                 },
             );

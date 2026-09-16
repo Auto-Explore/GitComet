@@ -8,8 +8,8 @@ use super::canvas_text::{
 use super::diff_text::{whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text};
 use super::*;
 use gpui::{
-    App, Bounds, ContentMask, DispatchPhase, Pixels, Styled, TextStyle, Window, fill, point, px,
-    size,
+    App, Bounds, ContentMask, DispatchPhase, Hitbox, HitboxBehavior, Pixels, Styled, TextStyle,
+    Window, fill, point, px, size,
 };
 use palette::IntoColor;
 use rustc_hash::FxHasher;
@@ -32,6 +32,60 @@ pub(super) struct ConflictChunkContext {
     pub(super) conflict_ix: usize,
     pub(super) has_base: bool,
     pub(super) selected_choices: Vec<conflict_resolver::ConflictChoice>,
+}
+
+fn conflict_canvas_click_target(
+    view: &Entity<MainPaneView>,
+    action: &str,
+    cx: &App,
+) -> gpui::ElementId {
+    let state = &view.read(cx).conflict_resolver;
+    (
+        gpui::ElementId::View(view.entity_id()),
+        SharedString::from(format!(
+            "conflict:{:?}:{:?}:{:?}:{action}",
+            state.repo_id, state.path, state.source_hash,
+        )),
+    )
+        .into()
+}
+
+impl ConflictChunkContext {
+    fn install_menu(
+        &self,
+        view: &Entity<MainPaneView>,
+        target: gpui::ElementId,
+        hitbox: &Hitbox,
+        invoker: SharedString,
+        is_three_way: bool,
+        window: &mut Window,
+    ) {
+        let view = view.clone();
+        let chunk = self.clone();
+        crate::kit::click::on_canvas_click(
+            window,
+            (target, "menu").into(),
+            hitbox,
+            gpui::MouseButton::Right,
+            true,
+            move |event, window, cx| {
+                view.update(cx, |this, cx| {
+                    this.open_conflict_resolver_chunk_context_menu(
+                        invoker.clone(),
+                        chunk.conflict_ix,
+                        chunk.has_base,
+                        is_three_way,
+                        chunk.selected_choices.clone(),
+                        None,
+                        event.position(),
+                        window,
+                        cx,
+                    );
+                    cx.notify();
+                });
+            },
+        );
+    }
 }
 
 /// KDiff3 manual diff help: what one source-column row offers to a manual
@@ -80,7 +134,7 @@ pub(super) fn split_conflict_row_canvas(
 
     keyed_canvas(
         ("conflict_resolver_split_row_canvas", visible_row_ix),
-        move |bounds, _window, _cx| {
+        move |bounds, window, _cx| {
             let handle_width = conflict_scaled_px(PANE_RESIZE_HANDLE_PX, ui_scale_percent);
             let (left_col, handle_bounds, right_col) = split_columns_with_widths(
                 bounds,
@@ -92,6 +146,8 @@ pub(super) fn split_conflict_row_canvas(
                 left_col,
                 handle_bounds,
                 right_col,
+                left_hitbox: window.insert_hitbox(left_col, HitboxBehavior::Normal),
+                right_hitbox: window.insert_hitbox(right_col, HitboxBehavior::Normal),
             }
         },
         move |bounds, prepaint, window, cx| {
@@ -227,74 +283,32 @@ pub(super) fn split_conflict_row_canvas(
             );
 
             if let Some(chunk_context) = chunk_context.clone() {
-                let visible_left = prepaint.left_col.intersect(&clip_bounds);
-                let visible_right = prepaint.right_col.intersect(&clip_bounds);
-                window.on_mouse_event({
-                    let view = view.clone();
-                    move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble {
-                            return;
-                        }
-                        if event.button == gpui::MouseButton::Left {
-                            if visible_left.contains(&event.position)
-                                || visible_right.contains(&event.position)
-                            {
-                                // section 30: clicking a conflict block body selects it.
-                                let conflict_ix = chunk_context.conflict_ix;
-                                view.update(cx, |this, cx| {
-                                    this.conflict_resolver_select_conflict(conflict_ix, cx);
-                                });
-                            }
-                            return;
-                        }
-                        if event.button != gpui::MouseButton::Right {
-                            return;
-                        }
-
-                        let invoker = if visible_left.contains(&event.position) {
-                            Some::<SharedString>(
-                                format!(
-                                    "resolver_two_way_split_ours_chunk_menu_{}_{}",
-                                    chunk_context.conflict_ix, row_ix
-                                )
-                                .into(),
-                            )
-                        } else if visible_right.contains(&event.position) {
-                            Some::<SharedString>(
-                                format!(
-                                    "resolver_two_way_split_theirs_chunk_menu_{}_{}",
-                                    chunk_context.conflict_ix, row_ix
-                                )
-                                .into(),
-                            )
-                        } else {
-                            None
-                        };
-
-                        let Some(invoker) = invoker else {
-                            return;
-                        };
-
-                        let conflict_ix = chunk_context.conflict_ix;
-                        let has_base = chunk_context.has_base;
-                        let selected_choices = chunk_context.selected_choices.clone();
-                        let anchor = event.position;
-                        view.update(cx, |this, cx| {
-                            this.open_conflict_resolver_chunk_context_menu(
-                                invoker,
-                                conflict_ix,
-                                has_base,
-                                false,
-                                selected_choices,
-                                None,
-                                anchor,
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        });
-                    }
-                });
+                for (side, hitbox) in [
+                    ("ours", &prepaint.left_hitbox),
+                    ("theirs", &prepaint.right_hitbox),
+                ] {
+                    let invoker: SharedString = format!(
+                        "resolver_two_way_split_{side}_chunk_menu_{}_{}",
+                        chunk_context.conflict_ix, row_ix
+                    )
+                    .into();
+                    let target = conflict_canvas_click_target(&view, &invoker, cx);
+                    let select_view = view.clone();
+                    let conflict_ix = chunk_context.conflict_ix;
+                    crate::kit::click::on_canvas_click(
+                        window,
+                        target.clone(),
+                        hitbox,
+                        gpui::MouseButton::Left,
+                        true,
+                        move |_, _, cx| {
+                            select_view.update(cx, |this, cx| {
+                                this.conflict_resolver_select_conflict(conflict_ix, cx);
+                            });
+                        },
+                    );
+                    chunk_context.install_menu(&view, target, hitbox, invoker, false, window);
+                }
             }
         },
     )
@@ -344,8 +358,8 @@ pub(super) fn single_column_conflict_canvas(
 
     keyed_canvas(
         (id_prefix, visible_row_ix),
-        move |bounds, _window, _cx| bounds,
-        move |bounds, _prepaint, window, cx| {
+        move |bounds, window, _cx| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+        move |bounds, hitbox, window, cx| {
             let gutter_style = canvas_text::diff_text_style(window);
             let line_metrics = line_metrics(window, theme);
             let y = center_text_y(bounds, line_metrics.line_height);
@@ -460,143 +474,105 @@ pub(super) fn single_column_conflict_canvas(
                 },
             );
 
-            // kdiff3 manual diff help: Alt+click marks this line for the next
-            // Ctrl+Y. Registered outside the conflict-block handler below so
-            // context rows can be marked too.
-            if let Some(mark) = alignment_mark
-                && let Some(side_line) = mark.side_line
+            let target = conflict_canvas_click_target(
+                &view,
+                &format!(
+                    "{id_prefix}:{visible_row_ix}:{row_ix}:{}",
+                    prepared.text_hash
+                ),
+                cx,
+            );
+            let conflict_ix = chunk_context.as_ref().map(|chunk| chunk.conflict_ix);
+            if alignment_mark.is_some_and(|mark| mark.side_line.is_some())
+                || (conflict_ix.is_none() && semantic_nav_target.is_some())
+                || (conflict_ix.is_some() && row_selection.is_none())
             {
-                let visible = bounds.intersect(&clip_bounds);
                 let view = view.clone();
-                window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, _window, cx| {
-                    if phase != DispatchPhase::Bubble
-                        || event.button != gpui::MouseButton::Left
-                        || !event.modifiers.alt
-                        || !visible.contains(&event.position)
-                    {
-                        return;
-                    }
-                    view.update(cx, |this, cx| {
-                        this.conflict_resolver_mark_alignment_line(
-                            mark.column,
-                            side_line,
-                            event.modifiers.shift,
-                            cx,
-                        );
-                    });
-                });
-            }
-
-            if chunk_context.is_none()
-                && let Some(target_index) = semantic_nav_target
-            {
-                let visible = bounds.intersect(&clip_bounds);
-                let view = view.clone();
-                window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, _window, cx| {
-                    if phase != DispatchPhase::Bubble
-                        || event.button != gpui::MouseButton::Left
-                        || event.modifiers.alt
-                        || !visible.contains(&event.position)
-                    {
-                        return;
-                    }
-                    view.update(cx, |this, cx| {
-                        this.conflict_jump_to_nav_target(target_index, cx);
-                    });
-                });
+                crate::kit::click::on_canvas_click(
+                    window,
+                    target.clone(),
+                    &hitbox,
+                    gpui::MouseButton::Left,
+                    false,
+                    move |event, _, cx| {
+                        view.update(cx, |this, cx| {
+                            if event.modifiers().alt {
+                                if let Some(mark) = alignment_mark
+                                    && let Some(line) = mark.side_line
+                                {
+                                    this.conflict_resolver_mark_alignment_line(
+                                        mark.column,
+                                        line,
+                                        event.modifiers().shift,
+                                        cx,
+                                    );
+                                }
+                            } else if let Some(conflict_ix) = conflict_ix {
+                                if row_selection.is_none() {
+                                    this.conflict_resolver_select_conflict(conflict_ix, cx);
+                                }
+                            } else if let Some(target_index) = semantic_nav_target {
+                                this.conflict_jump_to_nav_target(target_index, cx);
+                            }
+                        });
+                    },
+                );
             }
 
             if let Some(chunk_context) = chunk_context.clone() {
-                let visible = bounds.intersect(&clip_bounds);
                 if row_selection.is_some() {
-                    // section 30 split: extend the drag as the cursor passes over
-                    // this row (begin happens on left-down below).
-                    let view = view.clone();
+                    // Row selection remains a continuous press/drag gesture.
+                    let selection_view = view.clone();
+                    let selection_hitbox = hitbox.clone();
                     let conflict_ix = chunk_context.conflict_ix;
                     window.on_mouse_event(
-                        move |event: &gpui::MouseMoveEvent, phase, _window, cx| {
-                            if phase != DispatchPhase::Bubble {
+                        move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                            if phase != DispatchPhase::Bubble
+                                || event.button != gpui::MouseButton::Left
+                                || event.modifiers.alt
+                                || !selection_hitbox.is_hovered(window)
+                            {
                                 return;
                             }
-                            if !visible.contains(&event.position) {
-                                return;
-                            }
-                            view.update(cx, |this, cx| {
+                            crate::press_gesture::claim_press(cx);
+                            selection_view.update(cx, |this, cx| {
+                                if event.modifiers.shift || event.modifiers.control {
+                                    this.conflict_resolver_click_row_selection(
+                                        conflict_ix,
+                                        row_ix,
+                                        event.modifiers,
+                                        cx,
+                                    );
+                                } else {
+                                    this.conflict_resolver_begin_row_selection(
+                                        conflict_ix,
+                                        row_ix,
+                                        cx,
+                                    );
+                                }
+                            });
+                        },
+                    );
+                    let selection_view = view.clone();
+                    let selection_hitbox = hitbox.clone();
+                    window.on_mouse_event(move |_: &gpui::MouseMoveEvent, phase, window, cx| {
+                        if phase == DispatchPhase::Bubble && selection_hitbox.is_hovered(window) {
+                            selection_view.update(cx, |this, cx| {
                                 this.conflict_resolver_extend_row_selection(
                                     conflict_ix,
                                     row_ix,
                                     cx,
                                 );
                             });
-                        },
-                    );
+                        }
+                    });
                 }
-                window.on_mouse_event({
-                    let view = view.clone();
-                    move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble {
-                            return;
-                        }
-                        if !visible.contains(&event.position) {
-                            return;
-                        }
-                        if event.button == gpui::MouseButton::Left {
-                            // Alt+click belongs to the manual-alignment handler
-                            // above; it must not also start a split drag.
-                            if event.modifiers.alt {
-                                return;
-                            }
-                            let conflict_ix = chunk_context.conflict_ix;
-                            view.update(cx, |this, cx| {
-                                if row_selection.is_some() {
-                                    if event.modifiers.shift || event.modifiers.control {
-                                        this.conflict_resolver_click_row_selection(
-                                            conflict_ix,
-                                            row_ix,
-                                            event.modifiers,
-                                            cx,
-                                        );
-                                    } else {
-                                        // section 30 split: begin a drag selection (also
-                                        // selects the block).
-                                        this.conflict_resolver_begin_row_selection(
-                                            conflict_ix,
-                                            row_ix,
-                                            cx,
-                                        );
-                                    }
-                                } else {
-                                    // section 30: clicking a conflict block body selects it.
-                                    this.conflict_resolver_select_conflict(conflict_ix, cx);
-                                }
-                            });
-                            return;
-                        }
-                        if event.button != gpui::MouseButton::Right {
-                            return;
-                        }
-                        let invoker: SharedString = format!(
-                            "{}_{}_{}",
-                            chunk_menu_prefix, chunk_context.conflict_ix, row_ix
-                        )
-                        .into();
-                        let anchor = event.position;
-                        view.update(cx, |this, cx| {
-                            this.open_conflict_resolver_chunk_context_menu(
-                                invoker,
-                                chunk_context.conflict_ix,
-                                chunk_context.has_base,
-                                is_three_way,
-                                chunk_context.selected_choices.clone(),
-                                None,
-                                anchor,
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        });
-                    }
-                });
+                let invoker = format!(
+                    "{}_{}_{}",
+                    chunk_menu_prefix, chunk_context.conflict_ix, row_ix,
+                )
+                .into();
+                chunk_context.install_menu(&view, target, &hitbox, invoker, is_three_way, window);
             }
         },
     )
@@ -613,6 +589,8 @@ struct SplitRowPrepaintState {
     left_col: Bounds<Pixels>,
     handle_bounds: Bounds<Pixels>,
     right_col: Bounds<Pixels>,
+    left_hitbox: Hitbox,
+    right_hitbox: Hitbox,
 }
 
 #[derive(Clone, Debug)]

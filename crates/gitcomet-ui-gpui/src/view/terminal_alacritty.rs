@@ -1,6 +1,6 @@
 use super::*;
 use alacritty_terminal::event::{Event as AlacEvent, EventListener};
-use alacritty_terminal::event_loop::{EventLoop, Msg};
+use alacritty_terminal::event_loop::{EventLoop, EventLoopSendError, Msg};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::Point as AlacPoint;
 use alacritty_terminal::sync::FairMutex;
@@ -189,30 +189,48 @@ pub(super) struct SpawnedAlacTerminal {
 }
 
 #[derive(Clone)]
-pub(super) struct PtySender {
-    event_loop_tx: alacritty_terminal::event_loop::EventLoopSender,
+pub(super) enum PtySender {
+    EventLoop(alacritty_terminal::event_loop::EventLoopSender),
+    #[cfg(test)]
+    Recording(smol::channel::Sender<Msg>),
 }
 
 impl PtySender {
+    fn send(&self, msg: Msg) -> Result<(), EventLoopSendError> {
+        match self {
+            Self::EventLoop(sender) => sender.send(msg),
+            #[cfg(test)]
+            Self::Recording(sender) => {
+                sender.try_send(msg).ok();
+                Ok(())
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn recording() -> (Self, smol::channel::Receiver<Msg>) {
+        let (sender, receiver) = smol::channel::unbounded();
+        (Self::Recording(sender), receiver)
+    }
+
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
-        if let Err(err) = self.event_loop_tx.send(Msg::Input(bytes.into())) {
+        if let Err(err) = self.send(Msg::Input(bytes.into())) {
             eprintln!("terminal: failed to write input to pty: {err}");
         }
     }
 
     pub fn resize(&self, columns: usize, screen_lines: usize) {
-        self.event_loop_tx
-            .send(Msg::Resize(alacritty_terminal::event::WindowSize {
-                num_lines: screen_lines as u16,
-                num_cols: columns as u16,
-                cell_width: 1,
-                cell_height: 1,
-            }))
-            .ok();
+        self.send(Msg::Resize(alacritty_terminal::event::WindowSize {
+            num_lines: screen_lines as u16,
+            num_cols: columns as u16,
+            cell_width: 1,
+            cell_height: 1,
+        }))
+        .ok();
     }
 
     pub fn shutdown(&self) {
-        self.event_loop_tx.send(Msg::Shutdown).ok();
+        self.send(Msg::Shutdown).ok();
     }
 }
 
@@ -283,7 +301,7 @@ pub(super) fn spawn_alacritty_terminal(
     Ok(SpawnedAlacTerminal {
         term_lock,
         events_rx,
-        pty_sender: PtySender { event_loop_tx },
+        pty_sender: PtySender::EventLoop(event_loop_tx),
         child_pid,
     })
 }
@@ -329,6 +347,39 @@ pub(super) fn new_term(
 ) -> AlacrittyTermLock {
     let term = Term::new(config.clone(), bounds, GitCometListener { events_tx });
     Arc::new(FairMutex::new(term))
+}
+
+/// Clear both grids without resetting terminal modes or sending input to the
+/// running process. In particular, leaving an alternate screen must not bring
+/// back the primary screen's old output or scrollback.
+pub(super) fn clear_terminal_screen_and_scrollback(term: &mut Term<GitCometListener>) {
+    let mut cursor = term.grid().cursor.clone();
+    let mut saved_cursor = term.grid().saved_cursor.clone();
+    cursor.point = AlacPoint::default();
+    cursor.input_needs_wrap = false;
+    saved_cursor.point = AlacPoint::default();
+    saved_cursor.input_needs_wrap = false;
+
+    term.grid_mut().reset();
+    // The inactive grid is private. Swapping twice restores the original
+    // screen and its keyboard mode stack, and marks the terminal fully damaged.
+    term.swap_alt();
+    let mut inactive_cursor = term.grid().cursor.clone();
+    let mut inactive_saved_cursor = term.grid().saved_cursor.clone();
+    inactive_cursor.point = AlacPoint::default();
+    inactive_cursor.input_needs_wrap = false;
+    inactive_saved_cursor.point = AlacPoint::default();
+    inactive_saved_cursor.input_needs_wrap = false;
+    term.grid_mut().reset();
+    term.grid_mut().cursor = inactive_cursor;
+    term.grid_mut().saved_cursor = inactive_saved_cursor;
+    term.swap_alt();
+
+    // Entering the alternate screen copies the primary cursor, so restore the
+    // active screen's rendition and character sets after the swaps.
+    term.grid_mut().cursor = cursor;
+    term.grid_mut().saved_cursor = saved_cursor;
+    term.vi_mode_cursor.point = AlacPoint::default();
 }
 
 fn pty_child_pid(pty: &tty::Pty) -> Option<u32> {

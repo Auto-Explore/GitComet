@@ -833,21 +833,6 @@ pub(in crate::view) fn tinted_row_bg(base: gpui::Rgba, tint: Option<gpui::Rgba>)
     tint.map_or(base, |tint| composite_over(base, tint))
 }
 
-/// [`tinted_row_bg`] for a fill that is itself translucent: it has to be
-/// flattened onto the row's surface first, or the tint would land under it and
-/// disappear.
-#[inline]
-pub(in crate::view) fn tinted_row_overlay_bg(
-    surface: gpui::Rgba,
-    overlay: gpui::Rgba,
-    tint: Option<gpui::Rgba>,
-) -> gpui::Rgba {
-    match tint {
-        None => overlay,
-        Some(_) => tinted_row_bg(composite_over(surface, overlay), tint),
-    }
-}
-
 /// Leading glyph for a file row: the file-type icon in its brand tint. A
 /// conflict keeps its warning glyph instead -- the row wash cannot say "this
 /// one needs your hands", and the file type is the least useful thing to know
@@ -918,6 +903,7 @@ pub(in crate::view) fn file_row_icon_slot(
         .when_some(badge, |slot, (badge_icon, badge_color)| {
             slot.child(
                 div()
+                    .id("file_row_kind_badge")
                     .absolute()
                     // Out past the slot's corner: the type glyphs fill their
                     // box, so a badge tucked inside would sit on top of one.
@@ -928,6 +914,9 @@ pub(in crate::view) fn file_row_icon_slot(
                     .bg(disc.resting)
                     .when_some(disc.hover, |badge, (group, hovered)| {
                         badge.group_hover(group, |badge| badge.bg(hovered))
+                    })
+                    .when_some(disc.pressed, |badge, (group, pressed)| {
+                        badge.group_active(group, |badge| badge.bg(pressed))
                     })
                     .flex()
                     .items_center()
@@ -947,6 +936,81 @@ pub(in crate::view) struct FileRowBadgeDisc {
     /// The row's hover group and the fill it takes inside it. `None` on lists
     /// whose rows carry no group.
     pub(in crate::view) hover: Option<(SharedString, gpui::Rgba)>,
+    pressed: Option<(SharedString, gpui::Rgba)>,
+}
+
+/// One state/color calculation for file rows and the opaque discs laid over
+/// their icons. Change-kind tints remain visible in every interaction state.
+pub(in crate::view) struct FileRowInteraction {
+    style: crate::kit::interaction::InteractionStyle,
+    state: crate::kit::interaction::InteractionState,
+    surface: gpui::Rgba,
+}
+
+impl FileRowInteraction {
+    pub(in crate::view) fn new(
+        theme: AppTheme,
+        tint: Option<gpui::Rgba>,
+        selected: bool,
+        open: bool,
+    ) -> Self {
+        let surface = tinted_row_bg(theme.colors.surface.canvas, tint);
+        Self {
+            style: crate::kit::interaction::InteractionStyle::new(theme).on_surface(surface),
+            state: crate::kit::interaction::InteractionState::default()
+                .selected(
+                    selected,
+                    crate::theme::composite_over(
+                        surface,
+                        crate::theme::with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.16 } else { 0.10 },
+                        ),
+                    ),
+                )
+                .open(open),
+            surface,
+        }
+    }
+
+    pub(in crate::view) fn disabled(mut self, disabled: bool) -> Self {
+        self.state = self.state.disabled(disabled);
+        self
+    }
+
+    pub(in crate::view) fn badge_disc(&self, group: SharedString) -> FileRowBadgeDisc {
+        use crate::kit::interaction::InteractionFeedback;
+        FileRowBadgeDisc {
+            pressed: Some((
+                group.clone(),
+                self.style.resolved_background(
+                    self.surface,
+                    self.state,
+                    InteractionFeedback::Pressed,
+                ),
+            )),
+            resting: self.style.resolved_background(
+                self.surface,
+                self.state,
+                InteractionFeedback::Resting,
+            ),
+            hover: Some((
+                group.clone(),
+                self.style.resolved_background(
+                    self.surface,
+                    self.state,
+                    InteractionFeedback::Hovered,
+                ),
+            )),
+        }
+    }
+
+    pub(in crate::view) fn apply(
+        self,
+        row: gpui::Stateful<gpui::Div>,
+    ) -> gpui::Stateful<gpui::Div> {
+        self.style.apply(row, self.state)
+    }
 }
 
 #[inline]
@@ -1304,26 +1368,26 @@ mod tests {
         }
     }
 
-    /// A translucent selection fill has to be flattened before the tint goes on
-    /// top, or the tint lands underneath it and vanishes.
     #[test]
-    fn translucent_fills_keep_their_tint() {
-        let theme = AppTheme::from_key("gitcomet_dark").expect("bundled theme");
-        let selected = with_alpha(theme.colors.accent.foreground, 0.16);
-        let tint = file_kind_row_tint(FileStatusKind::Deleted, &theme).expect("tinted kind");
-
-        assert_eq!(
-            tinted_row_overlay_bg(theme.colors.surface.canvas, selected, None),
-            selected,
-            "an untinted row keeps its original translucent fill",
-        );
-        let tinted = tinted_row_overlay_bg(theme.colors.surface.canvas, selected, Some(tint));
-        assert_eq!(tinted.alpha, 1.0, "the flattened fill is opaque");
-        assert_ne!(
-            tinted,
-            composite_over(theme.colors.surface.canvas, selected),
-            "the tint must survive the flatten",
-        );
+    fn file_row_badges_preserve_selection_and_tint_through_hover_and_press() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let tint = file_kind_row_tint(FileStatusKind::Deleted, &theme).expect("tinted kind");
+            let selected =
+                FileRowInteraction::new(theme, Some(tint), true, false).badge_disc("row".into());
+            let plain = FileRowInteraction::new(theme, None, true, false).badge_disc("row".into());
+            assert_eq!(selected.resting.alpha, 1.0);
+            assert_ne!(
+                selected.resting, plain.resting,
+                "change-kind tint survives selection"
+            );
+            assert_eq!(selected.resting, selected.hover.unwrap().1);
+            assert_eq!(selected.resting, selected.pressed.unwrap().1);
+            let open =
+                FileRowInteraction::new(theme, Some(tint), true, true).badge_disc("row".into());
+            assert_ne!(open.resting, selected.resting);
+            assert_eq!(open.resting, open.hover.unwrap().1);
+            assert_eq!(open.resting, open.pressed.unwrap().1);
+        }
     }
 
     fn reset_line_number_string_cache() {
