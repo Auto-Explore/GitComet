@@ -2226,6 +2226,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-fs-watch"
+version = "0.2.4"
+dependencies = [
+ "dispatch2",
+ "libc",
+ "notify",
+ "objc2-core-foundation",
+ "objc2-core-services",
+ "tempfile",
+]
+
+[[package]]
 name = "gitcomet-git-gix"
 version = "0.2.4"
 dependencies = [
@@ -2245,6 +2257,7 @@ name = "gitcomet-state"
 version = "0.2.4"
 dependencies = [
  "gitcomet-core",
+ "gitcomet-fs-watch",
  "gitcomet-git-gix",
  "notify",
  "rustc-hash 2.1.3",
@@ -5139,6 +5152,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "583300ad934cba24ff5292aee751ecc070f7ca6b39a574cc21b7b5e588e06a0b"
 dependencies = [
+ "dispatch2",
  "libc",
  "objc2-core-foundation",
 ]

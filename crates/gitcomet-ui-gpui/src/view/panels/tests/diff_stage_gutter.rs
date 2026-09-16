@@ -504,6 +504,7 @@ fn clicking_stage_gutter_button_stages_without_moving_the_row_selection(
     draw_and_drain_test_window(cx);
 
     let (_, cell) = stage_gutter_cell(cx, &view, "+new one", DiffStageSlot::Inline);
+    let ops_rev_before = crate::view::test_support::repo_ops_rev(&view, cx, RepoId(70910));
     simulate_counted_click(cx, cell.center(), 1);
     draw_and_drain_test_window(cx);
 
@@ -513,17 +514,13 @@ fn clicking_stage_gutter_button_stages_without_moving_the_row_selection(
         "clicking the gutter button must not move the diff row selection"
     );
 
-    // The reducer marks a local action in flight as soon as it accepts the patch
+    // The reducer bumps the repo's ops revision as soon as it accepts the patch
     // message, which is as far as this backend-less harness can follow it.
-    wait_until(cx, "the store to accept the staging command", |cx| {
-        cx.update(|_window, app| {
-            let snapshot = view.read(app).store.snapshot();
-            snapshot
-                .repos
-                .first()
-                .is_some_and(|repo| repo.local_actions_in_flight > 0)
-        })
-    });
+    crate::view::test_support::drain_store_worker(&view, cx);
+    assert!(
+        crate::view::test_support::repo_ops_rev(&view, cx, RepoId(70910)) > ops_rev_before,
+        "the store must accept the staging command"
+    );
 }
 
 #[gpui::test]

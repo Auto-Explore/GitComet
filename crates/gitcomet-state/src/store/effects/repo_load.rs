@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{
-    RepoMap, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
+    RepoMap, missing_repo_error, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
     spawn_with_repo_or_else,
 };
 
@@ -142,13 +142,6 @@ mod selected_diff_guard_tests {
             SelectedDiffLoadGuard::new(thread_state, repo_id, target("src/main.rs"), 7);
         assert!(!stale_target.is_current());
     }
-}
-
-fn missing_repo_error(repo_id: RepoId) -> Error {
-    Error::new(ErrorKind::Backend(format!(
-        "Repository handle not found for repo_id {}",
-        repo_id.0
-    )))
 }
 
 fn trace_side_stats(bytes: Option<&[u8]>, text: Option<&str>) -> MergetoolTraceSideStats {

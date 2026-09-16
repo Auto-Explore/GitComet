@@ -3,7 +3,9 @@
 //! Uses SSH signing rather than GPG: generating a throwaway ed25519 key is fast
 //! and hermetic, while a GPG keypair needs entropy and an agent.
 
-use gitcomet_core::domain::{CommitId, SignatureFormat, SignatureFormats, SignatureStatus};
+#[cfg(unix)]
+use gitcomet_core::domain::SignatureFormats;
+use gitcomet_core::domain::{CommitId, SignatureFormat, SignatureStatus};
 use gitcomet_core::services::{GitBackend, GitRepository};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
@@ -385,7 +387,7 @@ fn log_show_signature_does_not_corrupt_the_batch_parse() {
 
     let repo = open(&fixture.repo);
     let results = repo
-        .verify_commit_signatures(&[signed.clone()])
+        .verify_commit_signatures(std::slice::from_ref(&signed))
         .expect("verify signatures");
 
     assert_eq!(
@@ -410,7 +412,7 @@ fn verification_forces_utf8_despite_log_output_encoding() {
         &["config", "i18n.logOutputEncoding", "UTF-16"],
     );
     let result = open(&fixture.repo)
-        .verify_commit_signatures(&[signed.clone()])
+        .verify_commit_signatures(std::slice::from_ref(&signed))
         .unwrap();
     assert_eq!(
         result.len(),

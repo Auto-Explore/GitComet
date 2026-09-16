@@ -1300,6 +1300,16 @@ impl GitRepository for SlowSubmoduleRepo {
         Self::unsupported()
     }
 
+    /// Slow enough for the worktrees spinner test to catch the removal in
+    /// flight; a backend-less removal would otherwise finish at once.
+    fn remove_worktree_with_output(
+        &self,
+        _path: &Path,
+    ) -> Result<gitcomet_core::services::CommandOutput> {
+        std::thread::sleep(Duration::from_millis(250));
+        Self::unsupported()
+    }
+
     fn list_submodules(&self) -> Result<Vec<Submodule>> {
         std::thread::sleep(Duration::from_millis(250));
         Ok(Vec::new())
@@ -2056,7 +2066,9 @@ fn repo_tabs_right_click_does_not_close(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    // The removal must actually run: a repo the backend cannot open finishes
+    // its actions at once with a missing-handle error, spinner and all.
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2069,6 +2081,7 @@ fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAp
     let repo_ids =
         restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
 
     store_for_test.dispatch(Msg::RemoveWorktree {
         repo_id,
