@@ -2,7 +2,7 @@
 //!
 //! `#[global_allocator]` replaces Rust's `GlobalAlloc` and nothing else. tree-sitter
 //! is C: its `ts_malloc` calls plain `malloc`, which the linker resolves to libc
-//! unless mimalloc is built to interpose the symbol -- and the `mimalloc` crate
+//! unless mimalloc is built to interpose the symbol -- and the `rustfs-mimalloc` crate
 //! does not do that by default. Left alone, a GitComet process runs two
 //! allocators, with every subtree, parse stack and lexer buffer on libc's while
 //! the Rust side is on mimalloc.
@@ -17,7 +17,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
 
-use libmimalloc_sys::{mi_calloc, mi_free, mi_malloc, mi_realloc, mi_usable_size};
+use rustfs_mimalloc_sys::{mi_calloc, mi_free, mi_malloc, mi_realloc, mi_usable_size};
 
 static INSTALL: Once = Once::new();
 static INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -301,8 +301,8 @@ unsafe extern "C" fn tree_sitter_realloc(ptr: *mut c_void, size: usize) -> *mut 
     let result = unsafe { mi_realloc(ptr, size) };
     // mimalloc reallocates to a *zero-sized block* rather than freeing and
     // returning NULL, so unlike glibc a null result always means failure and
-    // `ptr` has not been freed (`c_src/mimalloc/v3/src/alloc.c`, the comment on
-    // `_mi_theap_realloc_zero`). That makes the abort below the only null case
+    // `ptr` has not been freed (`c_src/mimalloc/src/alloc.c`, the comment on
+    // `mi_theap_realloc_zero_ex`). That makes the abort below the only null case
     // to handle, and makes charging `size == 0` as a small live block correct:
     // the block really is still allocated.
     if result.is_null() {
