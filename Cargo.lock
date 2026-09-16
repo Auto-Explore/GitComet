@@ -2248,6 +2248,7 @@ dependencies = [
  "gitcomet-git-gix",
  "notify",
  "rustc-hash 2.1.3",
+ "rustfs-mimalloc",
  "serde",
  "serde_json",
  "smallvec",
