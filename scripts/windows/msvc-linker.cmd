@@ -14,13 +14,9 @@ if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" (
 
 if /i "%GITCOMET_TARGET_ARCH%"=="arm64" (
   set "VS_COMPONENT=Microsoft.VisualStudio.Component.VC.Tools.ARM64"
-  set "LINK_HOST_PRIMARY=Hostarm64\arm64"
-  set "LINK_HOST_FALLBACK=Hostx64\arm64"
   set "SDK_ARCH=arm64"
 ) else (
   set "VS_COMPONENT=Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
-  set "LINK_HOST_PRIMARY=Hostx64\x64"
-  set "LINK_HOST_FALLBACK="
   set "SDK_ARCH=x64"
 )
 
@@ -62,18 +58,20 @@ if not defined MSVC_VER (
 
 set "MSVC_ROOT=%MSVC_TOOLS%\%MSVC_VER%"
 
-rem ── Locate link.exe ───────────────────────────────────────────────────────
-set "LINK_EXE="
-if exist "%MSVC_ROOT%\bin\%LINK_HOST_PRIMARY%\link.exe" (
-  set "LINK_EXE=%MSVC_ROOT%\bin\%LINK_HOST_PRIMARY%\link.exe"
+rem ── Locate Rust's bundled LLD ─────────────────────────────────────────────
+rem Cargo supplies RUSTC; otherwise use the active rustup toolchain.
+rem Without --target, target-libdir identifies the host toolchain, including
+rem when linking for another architecture. The linker must run on the host.
+if not defined RUSTC set "RUSTC=rustc"
+set "RUST_HOST_LIB="
+for /f "usebackq delims=" %%I in (`"%RUSTC%" --print target-libdir`) do set "RUST_HOST_LIB=%%I"
+if not defined RUST_HOST_LIB (
+  echo gitcomet: could not locate the active Rust toolchain's libraries.
+  exit /b 1
 )
-if not defined LINK_EXE if defined LINK_HOST_FALLBACK (
-  if exist "%MSVC_ROOT%\bin\%LINK_HOST_FALLBACK%\link.exe" (
-    set "LINK_EXE=%MSVC_ROOT%\bin\%LINK_HOST_FALLBACK%\link.exe"
-  )
-)
-if not defined LINK_EXE (
-  echo gitcomet: link.exe not found for %GITCOMET_TARGET_ARCH% target under "%MSVC_ROOT%\bin".
+set "LINK_EXE=%RUST_HOST_LIB%\..\bin\rust-lld.exe"
+if not exist "%LINK_EXE%" (
+  echo gitcomet: Rust's bundled linker not found at "%LINK_EXE%".
   exit /b 1
 )
 
@@ -117,12 +115,12 @@ set "LIB=%MSVC_LIB%;%SDK_UM_LIB%;%SDK_UCRT_LIB%;%LIB%"
 set "LIBPATH=%MSVC_LIB%;%SDK_UM_LIB%;%SDK_UCRT_LIB%;%LIBPATH%"
 set "INCLUDE=%MSVC_INCLUDE%;%SDK_SHARED_INC%;%SDK_UM_INC%;%SDK_UCRT_INC%;%SDK_WINRT_INC%;%SDK_CPPWINRT_INC%;%INCLUDE%"
 
-rem ── Invoke link.exe ───────────────────────────────────────────────────────
+rem ── Invoke rust-lld in MSVC mode ──────────────────────────────────────────
 rem GitComet's GPUI diff/render paths are substantially deeper in debug builds.
 rem The Windows default 1 MiB main-thread stack is not enough there, which can
 rem abort the process with a stack overflow before Rust's panic hook runs.
 if "%GITCOMET_LINK_STACK_RESERVE%"=="" set "GITCOMET_LINK_STACK_RESERVE=8388608"
 
-"%LINK_EXE%" /STACK:%GITCOMET_LINK_STACK_RESERVE% %*
+"%LINK_EXE%" -flavor link /STACK:%GITCOMET_LINK_STACK_RESERVE% %*
 set "EXITCODE=%ERRORLEVEL%"
 exit /b %EXITCODE%
