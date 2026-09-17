@@ -1999,6 +1999,7 @@ impl HistoryLoadMoreAppendFixture {
             .request_log(gitcomet_state::model::PendingLogLoad {
                 scope: self.scope,
                 author: None,
+                solo: Default::default(),
                 limit: self.existing_commits.len(),
                 cursor: None,
             })
@@ -2060,6 +2061,7 @@ impl HistoryLoadMoreAppendFixture {
                 .request_log(gitcomet_state::model::PendingLogLoad {
                     scope: self.scope,
                     author: None,
+                    solo: Default::default(),
                     limit: page.commits.len(),
                     cursor: cursor.clone(),
                 })

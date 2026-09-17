@@ -12,7 +12,7 @@ use crate::util::{
 };
 use gitcomet_core::domain::{
     Commit, CommitDetails, CommitFileChange, CommitId, CommitParentIds, EMPTY_TREE_ID, HistoryMode,
-    LogCursor, LogPage, RecentCommitMessage, ReflogEntry, StashEntry,
+    HistorySolo, HistorySoloSet, LogCursor, LogPage, RecentCommitMessage, ReflogEntry, StashEntry,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::{CancellationToken, LogChunk, Result};

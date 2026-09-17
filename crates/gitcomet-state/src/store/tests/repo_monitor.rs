@@ -295,6 +295,7 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
         loads_in_flight.request_primary_refresh_batch(crate::model::PendingLogLoad {
             scope: gitcomet_core::domain::HistoryMode::FullReachable,
             author: None,
+            solo: Default::default(),
             limit: 200,
             cursor: None,
         });

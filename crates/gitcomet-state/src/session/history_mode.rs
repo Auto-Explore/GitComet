@@ -28,6 +28,78 @@ impl From<HistoryScopeSetting> for LogScope {
     }
 }
 
+/// The stored form of [`HistorySolo`]. Spelled out here rather than derived on
+/// the domain type so the on-disk shape stays independent of the `Arc<str>`
+/// fields the walk uses.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(super) enum HistorySoloSetting {
+    LocalBranch { name: String },
+    RemoteBranch { remote: String, branch: String },
+    Remote { name: String },
+}
+
+/// Reads the stored solo map, tolerating anything it does not recognise.
+///
+/// This field is a preference, but it shares a file with the list of open
+/// repositories: one value serde cannot parse makes the whole session file
+/// unreadable, and the user silently loses every open repository and every
+/// other setting with it. So an entry that will not parse is dropped and the
+/// rest of the file is kept. A single object rather than a list is accepted for
+/// the same reason — an earlier build stored solo as one ref.
+pub(super) fn deserialize_repo_history_solos<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<BTreeMap<String, Vec<HistorySoloSetting>>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(raw) = Option::<BTreeMap<String, serde_json::Value>>::deserialize(deserializer)?
+    else {
+        return Ok(None);
+    };
+    let restored = raw
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let targets = serde_json::from_value::<Vec<HistorySoloSetting>>(value.clone())
+                .or_else(|_| {
+                    serde_json::from_value::<HistorySoloSetting>(value).map(|one| vec![one])
+                })
+                .ok()?;
+            (!targets.is_empty()).then_some((key, targets))
+        })
+        .collect();
+    Ok(Some(restored))
+}
+
+impl From<&HistorySolo> for HistorySoloSetting {
+    fn from(value: &HistorySolo) -> Self {
+        match value {
+            HistorySolo::LocalBranch { name } => Self::LocalBranch {
+                name: name.to_string(),
+            },
+            HistorySolo::RemoteBranch { remote, branch } => Self::RemoteBranch {
+                remote: remote.to_string(),
+                branch: branch.to_string(),
+            },
+            HistorySolo::Remote { name } => Self::Remote {
+                name: name.to_string(),
+            },
+        }
+    }
+}
+
+impl From<HistorySoloSetting> for HistorySolo {
+    fn from(value: HistorySoloSetting) -> Self {
+        match value {
+            HistorySoloSetting::LocalBranch { name } => Self::local_branch(name),
+            HistorySoloSetting::RemoteBranch { remote, branch } => {
+                Self::remote_branch(remote, branch)
+            }
+            HistorySoloSetting::Remote { name } => Self::remote(name),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum HistoryModeSetting {
@@ -258,6 +330,34 @@ pub fn persist_repo_history_scope_to_path(
             .get_or_insert_with(BTreeMap::new)
             .insert(workdir_key, scope);
 
+        persist_to_path(session_file_path, &file)
+    })
+}
+
+/// Persists the soloed refs for `workdir`. An empty set clears the stored solo
+/// rather than writing an empty list, so a repository that is not soloed leaves
+/// no entry behind.
+pub fn persist_repo_history_solo_to_path(
+    workdir: &Path,
+    solo: &HistorySoloSet,
+    session_file_path: &Path,
+) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        let stored = file.repo_history_solos.get_or_insert_with(BTreeMap::new);
+        let workdir_key = path_storage_key(workdir);
+        let setting: Vec<HistorySoloSetting> = solo.iter().map(HistorySoloSetting::from).collect();
+        if setting.is_empty() {
+            if stored.remove(&workdir_key).is_none() {
+                return Ok(());
+            }
+        } else {
+            if stored.get(&workdir_key) == Some(&setting) {
+                return Ok(());
+            }
+            stored.insert(workdir_key, setting);
+        }
+        file.version = CURRENT_SESSION_FILE_VERSION;
         persist_to_path(session_file_path, &file)
     })
 }

@@ -14,6 +14,8 @@ use std::sync::Arc;
 mod authors;
 #[path = "log_integration/snapshot_refresh.rs"]
 mod snapshot_refresh;
+#[path = "log_integration/solo.rs"]
+mod solo;
 
 fn run_git(repo: &Path, args: &[&str]) {
     run_git_with_env(repo, args, &[]);

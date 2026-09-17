@@ -29,6 +29,12 @@ pub(crate) fn load_repo_session_preferences_from_path(
             .map(|(k, v)| (k, v.into()))
             .collect(),
         repo_history_author_filters: file.repo_history_author_filters.unwrap_or_default(),
+        repo_history_solos: file
+            .repo_history_solos
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().map(Into::into).collect()))
+            .collect(),
     }
 }
 

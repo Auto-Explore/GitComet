@@ -42,6 +42,12 @@ pub enum Effect {
         author: Option<String>,
         action: &'static str,
     },
+    PersistRepoHistorySolo {
+        repo_id: Option<RepoId>,
+        workdir: PathBuf,
+        solo: HistorySoloSet,
+        action: &'static str,
+    },
     OpenRepo {
         repo_id: RepoId,
         path: PathBuf,
@@ -91,6 +97,8 @@ pub enum Effect {
         scope: LogScope,
         /// Case-insensitive author filter, or `None` for all authors.
         author: Option<String>,
+        /// The refs the walk is soloed on, empty for the normal seed.
+        solo: HistorySoloSet,
         limit: usize,
         cursor: Option<LogCursor>,
     },

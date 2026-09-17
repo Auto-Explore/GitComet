@@ -214,6 +214,7 @@ fn lane_branch_labels(
         history_scope: LogScope::AllBranches,
         log_source: 0,
         history_author_filter: None,
+        history_solo: Default::default(),
         head_branch_rev: 0,
         detached_head_commit: None,
         head_branch_target: None,

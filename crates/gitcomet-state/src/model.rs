@@ -143,6 +143,8 @@ pub type LineStatsGeneration = u64;
 pub struct PendingLogLoad {
     pub scope: LogScope,
     pub author: Option<String>,
+    /// The refs the walk is soloed on, empty for the normal seed.
+    pub solo: HistorySoloSet,
     pub limit: usize,
     pub cursor: Option<LogCursor>,
 }
@@ -285,13 +287,17 @@ impl RepoLoadsInFlight {
     /// the new walk's sequence number when it starts now, `None` when it was
     /// queued behind the walk in flight.
     ///
-    /// A request that changes the scope or the author filter is dispatched
-    /// straight away instead of being queued: on a large repository a walk runs
-    /// for tens of seconds, and the repo-load pool has one or two threads, so
-    /// waiting the old one out would stall the new filter for that whole time.
-    /// The effects layer cancels the superseded walk, and its reply is dropped
-    /// by [`Self::is_active_log_reply`].
+    /// A request that changes what the walk covers — its scope, author filter or
+    /// solo — is dispatched straight away instead of being queued: on a large
+    /// repository a walk runs for tens of seconds, and the repo-load pool has
+    /// one or two threads, so waiting the old one out would stall the new filter
+    /// for that whole time. The effects layer cancels the superseded walk, and
+    /// its reply is dropped by [`Self::is_active_log_reply`].
     pub fn request_log(&mut self, next: PendingLogLoad) -> Option<LogLoadSeq> {
+        fn covers_different_history(a: &PendingLogLoad, b: &PendingLogLoad) -> bool {
+            a.scope != b.scope || a.author != b.author || a.solo != b.solo
+        }
+
         if !self.is_in_flight(Self::LOG) {
             self.in_flight |= Self::LOG;
             return Some(self.start_log(next));
@@ -300,15 +306,15 @@ impl RepoLoadsInFlight {
         let supersedes_active = self
             .active_log
             .as_ref()
-            .is_none_or(|(_, active)| active.scope != next.scope || active.author != next.author);
+            .is_none_or(|(_, active)| covers_different_history(active, &next));
         if supersedes_active {
             self.pending_log = None;
             return Some(self.start_log(next));
         }
         match &self.pending_log {
-            // Scope or author changes invalidate older pending requests
+            // Scope, author and solo changes invalidate older pending requests
             // (including pagination).
-            Some(existing) if existing.scope != next.scope || existing.author != next.author => {
+            Some(existing) if covers_different_history(existing, &next) => {
                 self.pending_log = Some(next);
             }
             // A fresh walk invalidates pagination cursors. Never let a later
@@ -1048,6 +1054,10 @@ pub struct HistoryState {
     /// Case-insensitive author filter for the history, or `None` for all
     /// authors. Matches the author name shown in the UI.
     pub history_author_filter: Option<String>,
+    /// The refs the history is soloed on, empty for the normal walk. Solo
+    /// reseeds the walk rather than filtering its output, so it composes with
+    /// [`HistoryState::history_scope`] instead of replacing it.
+    pub history_solo: HistorySoloSet,
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
@@ -1203,6 +1213,7 @@ impl Default for HistoryState {
             authors: Default::default(),
             history_scope: LogScope::default(),
             history_author_filter: None,
+            history_solo: HistorySoloSet::default(),
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
@@ -2455,6 +2466,18 @@ impl RepoState {
         self.bump_log_revs();
     }
 
+    pub(crate) fn set_history_solo(&mut self, solo: HistorySoloSet) {
+        if self.history_state.history_solo == solo {
+            return;
+        }
+        self.history_state.indexed.reset_query();
+        self.history_state.history_solo = solo;
+        // The author catalog is scoped to the soloed walk, so the one in flight
+        // describes a history that is no longer on screen.
+        self.history_state.authors.cancellation.cancel();
+        self.bump_log_revs();
+    }
+
     pub(crate) fn set_reveal_target(&mut self, v: Option<CommitId>) {
         self.history_state.reveal_target = v;
     }
@@ -3458,6 +3481,7 @@ mod tests {
         PendingLogLoad {
             scope,
             author: author.map(str::to_owned),
+            solo: Default::default(),
             limit: 20,
             cursor,
         }

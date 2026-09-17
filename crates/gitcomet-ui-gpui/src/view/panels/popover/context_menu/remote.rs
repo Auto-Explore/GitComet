@@ -36,6 +36,14 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextM
         action: Box::new(ContextMenuAction::PruneLocalTags { repo_id }),
     });
     items.push(ContextMenuItem::Separator);
+    // Soloing a remote seeds the walk from every branch it tracks, so the graph
+    // shows that remote's work and nothing else.
+    items.push(super::solo::entry(
+        this,
+        repo_id,
+        gitcomet_core::domain::HistorySolo::remote(name),
+    ));
+    items.push(ContextMenuItem::Separator);
 
     let open_in_browser_ix = items.len();
     let open_in_browser_tooltip = match (&web_url, remote_url) {
