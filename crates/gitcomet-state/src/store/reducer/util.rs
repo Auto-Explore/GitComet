@@ -774,6 +774,7 @@ pub(super) fn first_page_log_request(repo_state: &RepoState) -> crate::model::Pe
     crate::model::PendingLogLoad {
         scope: repo_state.history_state.history_scope,
         author: repo_state.history_state.history_author_filter.clone(),
+        solo: repo_state.history_state.history_solo.clone(),
         limit: DEFAULT_LOG_PAGE_SIZE,
         cursor: None,
     }
@@ -808,6 +809,7 @@ pub(super) fn request_log_effect(
     let crate::model::PendingLogLoad {
         scope,
         author,
+        solo,
         limit,
         cursor,
     } = load;
@@ -816,6 +818,7 @@ pub(super) fn request_log_effect(
         seq,
         scope,
         author,
+        solo,
         limit,
         cursor,
     })
@@ -844,6 +847,7 @@ pub(super) fn append_refresh_primary_effects(
             seq,
             scope: log_request.scope,
             author: log_request.author,
+            solo: log_request.solo,
             limit: log_request.limit,
             cursor: log_request.cursor,
         });

@@ -262,6 +262,18 @@ pub enum Msg {
         repo_id: RepoId,
         author: Option<String>,
     },
+    /// Solos the history on a set of refs: the walk is reseeded from them, so
+    /// only the commits they reach remain. An empty set clears the solo.
+    SetHistorySolo {
+        repo_id: RepoId,
+        solo: HistorySoloSet,
+    },
+    /// Adds `target` to the solo set, or removes it when it is already there.
+    /// The per-ref menu entry is a toggle, and this is what it sends.
+    ToggleHistorySolo {
+        repo_id: RepoId,
+        target: HistorySolo,
+    },
     LoadMoreHistory {
         repo_id: RepoId,
     },

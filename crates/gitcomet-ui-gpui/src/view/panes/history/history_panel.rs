@@ -449,7 +449,7 @@ impl HistoryView {
         let handle_w = scaled_px(HISTORY_COL_HANDLE_PX);
         let handle_half = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
         let cell_pad = handle_half;
-        let scope_label: SharedString = self
+        let history_mode_label: SharedString = self
             .active_repo()
             .map(|r| {
                 crate::view::history_mode::history_mode_label(r.history_state.history_scope)
@@ -462,6 +462,16 @@ impl HistoryView {
                 .to_string()
             })
             .into();
+        // A soloed walk shows one ref's commits and nothing else, which is
+        // drastic enough that the header has to say so rather than leave the
+        // mode name explaining a graph it no longer describes.
+        let solo_label: Option<String> = self
+            .active_repo()
+            .and_then(|r| r.history_state.history_solo.label());
+        let scope_label: SharedString = match &solo_label {
+            Some(solo) => format!("Solo: {solo}").into(),
+            None => history_mode_label.clone(),
+        };
         let scope_repo_id = self.active_repo_id();
         let index_error = self
             .active_repo()
@@ -675,7 +685,16 @@ impl HistoryView {
                             }),
                         )
                     })
-                    .gitcomet_tooltip(theme, format!("History mode: {}", scope_label).into()),
+                    .gitcomet_tooltip(
+                        theme,
+                        match &solo_label {
+                            Some(solo) => {
+                                format!("Soloed on {solo} · History mode: {history_mode_label}")
+                                    .into()
+                            }
+                            None => format!("History mode: {history_mode_label}").into(),
+                        },
+                    ),
             );
         let (ref_control, graph_control, message_control) = if !inline_refs {
             (Some(scope_control), None, None)

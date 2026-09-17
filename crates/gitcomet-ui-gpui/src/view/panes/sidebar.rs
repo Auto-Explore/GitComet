@@ -2047,6 +2047,73 @@ impl SidebarPaneView {
     /// A slim always-visible filter field pinned above the branch tree. It
     /// narrows the Local/Remote (and pinned) sections live; a query force-expands
     /// those sections so matches are always visible.
+    /// The mustard banner above the branch list, shown only while the history is
+    /// soloed.
+    ///
+    /// The sidebar is where solo is switched on, one ref at a time, so it is
+    /// also where the way out belongs: the banner says how much of the
+    /// repository is currently in view and clears the whole set in one click.
+    fn render_solo_banner(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<gpui::Div> {
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = ui_scale::scaler(ui_scale_percent);
+        let repo = self.active_repo()?;
+        let repo_id = repo.id;
+        let soloed = repo.history_state.history_solo.len();
+        if soloed == 0 {
+            return None;
+        }
+        // The denominator is the repository's local branches: the banner answers
+        // "how much of my work am I looking at", not "how many refs exist".
+        let local_branches = repo.branches.ready().map_or(0, |branches| branches.len());
+        let mustard = theme.colors.status.warning.foreground;
+        let store = self.store.clone();
+
+        Some(
+            div().px(scaled_px(8.0)).pb(scaled_px(6.0)).child(
+                div()
+                    .id("branch_sidebar_solo_banner")
+                    .debug_selector(|| "branch_sidebar_solo_banner".to_string())
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(scaled_px(6.0))
+                    .px(scaled_px(8.0))
+                    .py(scaled_px(4.0))
+                    .rounded(px(theme.radii.control))
+                    .border_1()
+                    .border_color(mustard)
+                    .bg(with_alpha(mustard, if theme.is_dark { 0.18 } else { 0.22 }))
+                    .text_size(theme.ui_text(12.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(mustard)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .debug_selector(|| "branch_sidebar_solo_banner_count".to_string())
+                            .child(format!("Soloing {soloed}/{local_branches}")),
+                    )
+                    .child(
+                        components::Button::new("branch_sidebar_solo_banner_stop", "Stop Soloing")
+                            .borderless()
+                            .style(components::ButtonStyle::Subtle)
+                            .on_click(theme, cx, move |_this, _e, _w, _cx| {
+                                store.dispatch(Msg::SetHistorySolo {
+                                    repo_id,
+                                    solo: gitcomet_core::domain::HistorySoloSet::default(),
+                                });
+                            }),
+                    ),
+            ),
+        )
+    }
+
     fn render_branch_filter_bar(
         &mut self,
         theme: AppTheme,
@@ -2126,6 +2193,7 @@ impl SidebarPaneView {
         let scaled_px = ui_scale::scaler(ui_scale_percent);
 
         let filter_bar = self.render_branch_filter_bar(theme, cx);
+        let solo_banner = self.render_solo_banner(theme, cx);
         let Some(presentation) = self.branch_sidebar_presentation_cached() else {
             return div()
                 .flex()
@@ -2184,6 +2252,7 @@ impl SidebarPaneView {
             .h_full()
             .min_h(px(0.0))
             .child(filter_bar)
+            .children(solo_banner)
             .child(panel_body)
             .into_any()
     }

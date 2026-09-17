@@ -470,6 +470,7 @@ fn replacing_history_rechecks_verdicts_and_discards_old_replies() {
         .request_log(crate::model::PendingLogLoad {
             scope: gitcomet_core::domain::LogScope::AllBranches,
             author: None,
+            solo: Default::default(),
             limit: 200,
             cursor: None,
         })
@@ -602,6 +603,7 @@ fn assert_history_check_preserves_verification(
         .request_log(crate::model::PendingLogLoad {
             scope: gitcomet_core::domain::LogScope::AllBranches,
             author: None,
+            solo: Default::default(),
             limit: 200,
             cursor: None,
         })
@@ -706,6 +708,7 @@ fn loading_more_history_preserves_badges_and_verifies_only_new_commits() {
         .request_log(crate::model::PendingLogLoad {
             scope: gitcomet_core::domain::LogScope::AllBranches,
             author: None,
+            solo: Default::default(),
             limit: 200,
             cursor: Some(cursor.clone()),
         })

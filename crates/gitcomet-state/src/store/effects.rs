@@ -293,6 +293,7 @@ fn send_unavailable_git_effect_result(
         | Effect::PersistRepoHistoryMode { .. }
         | Effect::PersistRepoHistoryModesBatch { .. }
         | Effect::PersistRepoHistoryAuthorFilter { .. }
+        | Effect::PersistRepoHistorySolo { .. }
         | Effect::CancelRepoLoads { .. }
         | Effect::CancelGitOperation { .. } => {}
         Effect::OpenRepo { repo_id, path } => {
@@ -1542,6 +1543,30 @@ pub(super) fn schedule_effect(
                 }
             });
         }
+        Effect::PersistRepoHistorySolo {
+            repo_id,
+            workdir,
+            solo,
+            action,
+        } => {
+            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+                return;
+            };
+            session_persist_executor.spawn(move || {
+                if let Err(error) =
+                    session::persist_repo_history_solo_to_path(&workdir, &solo, &session_file_path)
+                {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id,
+                            action,
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
         Effect::PersistRepoHistoryAuthorFilter {
             repo_id,
             workdir,
@@ -1772,6 +1797,7 @@ pub(super) fn schedule_effect(
             seq,
             scope,
             author,
+            solo,
             limit,
             cursor,
         } => {
@@ -1810,6 +1836,7 @@ pub(super) fn schedule_effect(
                     seq,
                     scope,
                     author,
+                    solo,
                     cursor,
                     request,
                     cancellation,

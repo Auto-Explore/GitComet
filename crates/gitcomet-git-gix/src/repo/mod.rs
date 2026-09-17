@@ -4,9 +4,9 @@ use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitSignature, Diff, DiffArea,
     DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
-    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
-    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, Upstream,
-    UpstreamDivergence, Worktree,
+    HistorySoloSet, LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
+    Tag, Upstream, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::remote_url::RemoteUrlPolicy;
@@ -510,9 +510,10 @@ impl GitRepository for GixRepo {
     fn history_authors(
         &self,
         mode: HistoryMode,
+        solo: &HistorySoloSet,
         cancellation: &CancellationToken,
     ) -> Result<Arc<[Arc<str>]>> {
-        self.history_authors_impl(mode, cancellation)
+        self.history_authors_impl(mode, solo, cancellation)
     }
     fn spec(&self) -> &RepoSpec {
         &self.spec
@@ -522,10 +523,11 @@ impl GitRepository for GixRepo {
         &self,
         mode: HistoryMode,
         author: Option<&str>,
+        solo: &HistorySoloSet,
         cancellation: &CancellationToken,
         on_progress: &mut dyn FnMut(gitcomet_core::history_index::HistoryIndexProgress),
     ) -> Result<Option<gitcomet_core::history_index::HistoryIndexHandle>> {
-        self.build_history_index_impl(mode, author, cancellation, on_progress)
+        self.build_history_index_impl(mode, author, solo, cancellation, on_progress)
     }
 
     fn read_history_range(
@@ -541,11 +543,12 @@ impl GitRepository for GixRepo {
         &self,
         mode: HistoryMode,
         author: Option<&str>,
+        solo: &HistorySoloSet,
         request: &gitcomet_core::services::HistoryReadRequest,
         cancellation: &CancellationToken,
         on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
     ) -> Result<gitcomet_core::services::HistoryReadResult> {
-        self.read_history_impl(mode, author, request, cancellation, on_chunk)
+        self.read_history_impl(mode, author, solo, request, cancellation, on_chunk)
     }
 
     fn log_history_mode_page(

@@ -1,5 +1,5 @@
 use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, RepoId};
-use gitcomet_core::domain::{HistoryMode, LogScope};
+use gitcomet_core::domain::{HistoryMode, HistorySolo, HistorySoloSet, LogScope};
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -178,6 +178,11 @@ struct UiSessionFile {
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
+    #[serde(
+        default,
+        deserialize_with = "history_mode::deserialize_repo_history_solos"
+    )]
+    repo_history_solos: Option<BTreeMap<String, Vec<HistorySoloSetting>>>,
     #[serde(skip_serializing)]
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     survey_prompt: Option<SurveyPromptSession>,
@@ -313,6 +318,7 @@ pub(crate) struct RepoSessionPreferences {
     pub(crate) repo_history_modes: BTreeMap<String, HistoryMode>,
     pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
     pub(crate) repo_history_author_filters: BTreeMap<String, Option<String>>,
+    pub(crate) repo_history_solos: BTreeMap<String, HistorySoloSet>,
 }
 
 #[cfg(test)]
@@ -541,7 +547,7 @@ fn app_state_dir() -> Option<PathBuf> {
     }
 }
 
-use history_mode::{HistoryModeSetting, HistoryScopeSetting};
+use history_mode::{HistoryModeSetting, HistoryScopeSetting, HistorySoloSetting};
 use parse::*;
 use survey::SurveyPromptSession;
 

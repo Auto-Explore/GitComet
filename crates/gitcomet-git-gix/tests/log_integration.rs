@@ -11,6 +11,8 @@ use std::sync::Arc;
 mod authors;
 #[path = "log_integration/snapshot_refresh.rs"]
 mod snapshot_refresh;
+#[path = "log_integration/solo.rs"]
+mod solo;
 #[cfg(windows)]
 use std::sync::OnceLock;
 

@@ -630,6 +630,29 @@ impl GixRepo {
         self.log_all_branches_page_impl_inner(limit, cursor, Some(cancellation), None, None)
     }
 
+    /// The commits a history walk starts from.
+    ///
+    /// Solo replaces the seed, not the mode: a soloed first-parent walk still
+    /// follows first parents, it just starts at the soloed refs' tips instead of
+    /// HEAD. That is what makes solo compose with every history mode.
+    pub(super) fn history_tips(
+        &self,
+        repo: &gix::Repository,
+        mode: HistoryMode,
+        solo: &HistorySoloSet,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<Arc<[gix::ObjectId]>> {
+        if !solo.is_empty() {
+            return solo_tips(repo, solo, cancellation);
+        }
+        if mode == HistoryMode::AllBranches {
+            return self.all_branches_tips(repo, cancellation);
+        }
+        Ok(Arc::from(
+            gix_head_id_or_none(repo)?.into_iter().collect::<Vec<_>>(),
+        ))
+    }
+
     pub(super) fn all_branches_tips(
         &self,
         repo: &gix::Repository,
@@ -1089,4 +1112,80 @@ fn find_commit_by_id<'repo>(
     object
         .peel_to_commit()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}"))))
+}
+
+/// Resolves a solo set to the union of the tips its walk is seeded from.
+///
+/// A target that no longer resolves contributes no tips rather than failing: a
+/// soloed branch can be deleted, renamed or pruned between the moment it is
+/// picked and the moment the walk runs, and an empty history the user can clear
+/// from the header is a better answer than a failed load.
+pub(super) fn solo_tips(
+    repo: &gix::Repository,
+    solo: &HistorySoloSet,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Arc<[gix::ObjectId]>> {
+    let mut tips = Vec::new();
+    let mut seen = FxHashSet::default();
+    for target in solo.iter() {
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
+        append_solo_target_tips(repo, target, cancellation, &mut tips, &mut seen)?;
+    }
+    tips.sort_unstable();
+    Ok(Arc::from(tips))
+}
+
+fn append_solo_target_tips(
+    repo: &gix::Repository,
+    solo: &HistorySolo,
+    cancellation: Option<&CancellationToken>,
+    tips: &mut Vec<gix::ObjectId>,
+    seen: &mut FxHashSet<gix::ObjectId>,
+) -> Result<()> {
+    match solo {
+        HistorySolo::LocalBranch { .. } | HistorySolo::RemoteBranch { .. } => {
+            let name = solo
+                .ref_name()
+                .expect("a single-ref solo always names one ref");
+            let reference = repo.try_find_reference(name.as_str()).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}")))
+            })?;
+            if let Some(reference) = reference
+                && let Some(id) = reference_commit_id(reference)?
+                && seen.insert(id)
+            {
+                tips.push(id);
+            }
+        }
+        HistorySolo::Remote { name } => {
+            let prefix = format!("refs/remotes/{name}/");
+            let refs = repo
+                .references()
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+            let iter = refs.prefixed(prefix.as_str()).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!("gix references(prefixed): {e}")))
+            })?;
+            for reference in iter {
+                if let Some(cancellation) = cancellation {
+                    cancellation.check_cancelled()?;
+                }
+                let reference = reference
+                    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+                // `origin/HEAD` is a symbolic alias for a branch already in this
+                // prefix; following it would only duplicate that tip.
+                if reference.name().as_bstr().ends_with(b"/HEAD") {
+                    continue;
+                }
+                let Some(id) = reference_commit_id(reference)? else {
+                    continue;
+                };
+                if seen.insert(id) {
+                    tips.push(id);
+                }
+            }
+        }
+    }
+    Ok(())
 }

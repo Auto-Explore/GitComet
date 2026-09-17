@@ -50,6 +50,7 @@ pub(super) struct HistoryBaseCacheRequest {
     pub(super) history_scope: LogScope,
     pub(super) log_source: usize,
     pub(super) history_author_filter: Option<String>,
+    pub(super) history_solo: gitcomet_core::domain::HistorySoloSet,
     pub(super) head_branch_rev: u64,
     pub(super) detached_head_commit: Option<CommitId>,
     pub(super) head_branch_target: Option<CommitId>,

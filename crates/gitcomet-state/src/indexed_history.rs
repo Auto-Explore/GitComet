@@ -133,6 +133,8 @@ pub enum IndexedHistoryEffect {
         seq: u64,
         mode: HistoryMode,
         author: Option<String>,
+        /// The refs the index is soloed on, empty for the normal seed.
+        solo: gitcomet_core::domain::HistorySoloSet,
         cancellation: CancellationToken,
     },
     Range {

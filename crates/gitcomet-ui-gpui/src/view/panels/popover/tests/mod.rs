@@ -56,6 +56,7 @@ mod mergetool_settings;
 mod picker;
 mod refs;
 mod repository_switcher;
+mod solo;
 mod stash;
 mod status;
 mod submodule;

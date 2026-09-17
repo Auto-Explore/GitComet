@@ -2333,6 +2333,11 @@ pub(super) fn branches_loaded(
             effects.push(Effect::LoadBranches { repo_id });
         }
     }
+    effects.extend(super::external_and_history::clear_missing_history_solo(
+        state,
+        repo_id,
+        super::external_and_history::SoloRefList::LocalBranches,
+    ));
     effects
 }
 
@@ -2358,6 +2363,11 @@ pub(super) fn remotes_loaded(
             effects.push(Effect::LoadRemotes { repo_id });
         }
     }
+    effects.extend(super::external_and_history::clear_missing_history_solo(
+        state,
+        repo_id,
+        super::external_and_history::SoloRefList::Remotes,
+    ));
     effects
 }
 
@@ -2394,6 +2404,11 @@ pub(super) fn remote_branches_loaded(
         };
         repo_state.set_remote_branches(branches);
     }
+    effects.extend(super::external_and_history::clear_missing_history_solo(
+        state,
+        repo_id,
+        super::external_and_history::SoloRefList::RemoteBranches,
+    ));
     effects
 }
 
@@ -2576,8 +2591,8 @@ pub(super) fn head_branch_loaded(
                     if repo_state.detached_head_commit.is_none()
                         && repo_state
                             .history_state
-                            .history_scope
-                            .guarantees_head_visibility()
+                            .history_solo
+                            .head_is_first(repo_state.history_state.history_scope)
                         && let Loadable::Ready(page) = &repo_state.log
                     {
                         repo_state

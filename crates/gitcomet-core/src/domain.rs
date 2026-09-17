@@ -104,6 +104,153 @@ impl HistoryMode {
 
 pub type LogScope = HistoryMode;
 
+/// A "solo" history filter: the walk is seeded from one ref — or from one
+/// remote's branches — instead of from HEAD or from every ref.
+///
+/// Solo is orthogonal to [`HistoryMode`]: the mode still decides *how* the walk
+/// runs (first-parent, no merges, …), solo decides *where it starts*. A soloed
+/// walk therefore shows exactly the commits reachable from the chosen ref, which
+/// is what makes one branch's line of development readable in a busy repository.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub enum HistorySolo {
+    /// `refs/heads/<name>`.
+    LocalBranch { name: Arc<str> },
+    /// `refs/remotes/<remote>/<branch>`.
+    RemoteBranch { remote: Arc<str>, branch: Arc<str> },
+    /// Every branch under `refs/remotes/<remote>/`.
+    Remote { name: Arc<str> },
+}
+
+impl HistorySolo {
+    pub fn local_branch(name: impl AsRef<str>) -> Self {
+        Self::LocalBranch {
+            name: Arc::from(name.as_ref()),
+        }
+    }
+
+    pub fn remote_branch(remote: impl AsRef<str>, branch: impl AsRef<str>) -> Self {
+        Self::RemoteBranch {
+            remote: Arc::from(remote.as_ref()),
+            branch: Arc::from(branch.as_ref()),
+        }
+    }
+
+    pub fn remote(name: impl AsRef<str>) -> Self {
+        Self::Remote {
+            name: Arc::from(name.as_ref()),
+        }
+    }
+
+    /// What the user sees: the branch name, `remote/branch`, or the remote.
+    pub fn label(&self) -> String {
+        match self {
+            Self::LocalBranch { name } => name.to_string(),
+            Self::RemoteBranch { remote, branch } => format!("{remote}/{branch}"),
+            Self::Remote { name } => name.to_string(),
+        }
+    }
+
+    /// The full ref name a single-ref solo names, or `None` for a whole remote,
+    /// which has no one ref.
+    pub fn ref_name(&self) -> Option<String> {
+        match self {
+            Self::LocalBranch { name } => Some(format!("refs/heads/{name}")),
+            Self::RemoteBranch { remote, branch } => {
+                Some(format!("refs/remotes/{remote}/{branch}"))
+            }
+            Self::Remote { .. } => None,
+        }
+    }
+}
+
+/// The set of refs the history is soloed on, empty when it is not soloed.
+///
+/// Solo is a set rather than a single ref because the gesture is a per-ref
+/// toggle: soloing two branches seeds the walk from both and shows the union of
+/// what they reach, which is how you compare two lines of development without
+/// the rest of the repository in the way.
+///
+/// Kept sorted and deduplicated so two sets built in different orders are the
+/// same value — walk caches and snapshots are keyed on it.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+pub struct HistorySoloSet(Arc<[HistorySolo]>);
+
+impl HistorySoloSet {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn contains(&self, target: &HistorySolo) -> bool {
+        self.0.contains(target)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &HistorySolo> {
+        self.0.iter()
+    }
+
+    pub fn as_slice(&self) -> &[HistorySolo] {
+        &self.0
+    }
+
+    /// The one target, when exactly one is soloed.
+    pub fn single(&self) -> Option<&HistorySolo> {
+        match self.0.as_ref() {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
+    /// This set with `target` added, or removed when it is already in it. The
+    /// menu entry is a toggle, and this is that toggle.
+    pub fn toggled(&self, target: &HistorySolo) -> Self {
+        if self.contains(target) {
+            Self::from_iter(self.iter().filter(|held| *held != target).cloned())
+        } else {
+            Self::from_iter(self.iter().cloned().chain(std::iter::once(target.clone())))
+        }
+    }
+
+    /// This set without the targets `keep` rejects. Used to drop refs that have
+    /// been deleted while leaving the rest of the solo intact.
+    pub fn retaining(&self, keep: impl FnMut(&HistorySolo) -> bool) -> Self {
+        let mut keep = keep;
+        Self::from_iter(self.iter().filter(|target| keep(target)).cloned())
+    }
+
+    /// What the header shows: the ref's own label when one is soloed, a count
+    /// when several are.
+    pub fn label(&self) -> Option<String> {
+        match self.0.as_ref() {
+            [] => None,
+            [only] => Some(only.label()),
+            many => Some(format!("{} refs", many.len())),
+        }
+    }
+
+    /// Whether a walk in `mode`, seeded by this set, is guaranteed to have HEAD
+    /// as its first commit.
+    ///
+    /// The guarantee belongs to the mode and the seed together: a soloed walk
+    /// starts at the soloed refs, so its first row says nothing about HEAD even
+    /// under a mode that would otherwise promise it.
+    pub fn head_is_first(&self, mode: HistoryMode) -> bool {
+        self.is_empty() && mode.guarantees_head_visibility()
+    }
+}
+
+impl FromIterator<HistorySolo> for HistorySoloSet {
+    fn from_iter<T: IntoIterator<Item = HistorySolo>>(iter: T) -> Self {
+        let mut targets: Vec<_> = iter.into_iter().collect();
+        targets.sort();
+        targets.dedup();
+        Self(Arc::from(targets))
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitDetails {
     pub id: CommitId,
@@ -1660,6 +1807,110 @@ mod file_status_count_tests {
                 ..clean
             }
             .is_dirty()
+        );
+    }
+}
+
+#[cfg(test)]
+mod history_solo_tests {
+    use super::*;
+
+    #[test]
+    fn history_solo_names_the_ref_it_seeds_from() {
+        assert_eq!(
+            HistorySolo::local_branch("feature").ref_name().as_deref(),
+            Some("refs/heads/feature")
+        );
+        assert_eq!(
+            HistorySolo::remote_branch("origin", "feature/awesome")
+                .ref_name()
+                .as_deref(),
+            Some("refs/remotes/origin/feature/awesome")
+        );
+        // A whole remote is many refs, so it names none of them.
+        assert_eq!(HistorySolo::remote("origin").ref_name(), None);
+
+        assert_eq!(HistorySolo::local_branch("feature").label(), "feature");
+        assert_eq!(
+            HistorySolo::remote_branch("origin", "feature").label(),
+            "origin/feature"
+        );
+        assert_eq!(HistorySolo::remote("origin").label(), "origin");
+    }
+
+    /// The modes that promise HEAD is the first commit only promise it for a
+    /// walk seeded from HEAD; a solo seeds it somewhere else.
+    #[test]
+    fn a_solo_withdraws_the_head_is_first_guarantee() {
+        let empty = HistorySoloSet::default();
+        let soloed = HistorySoloSet::from_iter([HistorySolo::local_branch("feature")]);
+        for mode in [
+            HistoryMode::FullReachable,
+            HistoryMode::FirstParent,
+            HistoryMode::NoMerges,
+            HistoryMode::MergesOnly,
+            HistoryMode::AllBranches,
+        ] {
+            assert_eq!(
+                empty.head_is_first(mode),
+                mode.guarantees_head_visibility(),
+                "an unsoloed walk keeps whatever the mode promises"
+            );
+            assert!(
+                !soloed.head_is_first(mode),
+                "a soloed walk promises nothing about HEAD under {mode:?}"
+            );
+        }
+    }
+
+    /// The menu entry is a per-ref toggle, so the set has to add and remove one
+    /// target at a time without disturbing the others.
+    #[test]
+    fn toggling_adds_and_removes_one_target_at_a_time() {
+        let main = HistorySolo::local_branch("main");
+        let feature = HistorySolo::local_branch("feature");
+        let origin = HistorySolo::remote("origin");
+
+        let set = HistorySoloSet::default().toggled(&main).toggled(&feature);
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&main) && set.contains(&feature));
+        assert!(!set.contains(&origin));
+
+        let set = set.toggled(&main);
+        assert_eq!(set.len(), 1, "toggling a held target removes just that one");
+        assert!(set.contains(&feature));
+
+        assert!(set.toggled(&feature).is_empty());
+    }
+
+    /// Two sets built in different orders are the same value; walk caches and
+    /// snapshots are keyed on it, so a reorder must not look like a change.
+    #[test]
+    fn set_identity_ignores_insertion_order_and_duplicates() {
+        let a = HistorySolo::local_branch("a");
+        let b = HistorySolo::local_branch("b");
+        assert_eq!(
+            HistorySoloSet::from_iter([a.clone(), b.clone()]),
+            HistorySoloSet::from_iter([b.clone(), a.clone(), a.clone()])
+        );
+    }
+
+    /// The header names the ref when one is soloed and counts them when several
+    /// are, because a list of names does not fit the chip.
+    #[test]
+    fn set_label_names_one_ref_and_counts_many() {
+        assert_eq!(HistorySoloSet::default().label(), None);
+        assert_eq!(
+            HistorySoloSet::from_iter([HistorySolo::remote_branch("origin", "main")]).label(),
+            Some("origin/main".to_string())
+        );
+        assert_eq!(
+            HistorySoloSet::from_iter([
+                HistorySolo::local_branch("a"),
+                HistorySolo::local_branch("b"),
+            ])
+            .label(),
+            Some("2 refs".to_string())
         );
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::HistorySoloSet;
 mod refresh;
 
 /// Production always reaches `LogLoaded` through `request_log`, which records the
@@ -41,6 +42,7 @@ fn expect_log_reply(
         .request_log(crate::model::PendingLogLoad {
             scope,
             author: author.map(str::to_owned),
+            solo: Default::default(),
             limit: 200,
             cursor,
         })
@@ -2019,6 +2021,7 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
         .request_log(crate::model::PendingLogLoad {
             scope: LogScope::FullReachable,
             author: None,
+            solo: Default::default(),
             limit: 200,
             cursor: None,
         })
@@ -3558,6 +3561,7 @@ fn superseded_log_chunks_are_ignored() {
         .request_log(crate::model::PendingLogLoad {
             scope,
             author: Some("bob".to_string()),
+            solo: Default::default(),
             limit: 200,
             cursor: None,
         })
@@ -4249,4 +4253,288 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
             generation = *next;
         }
     }
+}
+
+fn repo_state_for_solo_tests() -> AppState {
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    state
+}
+
+fn branch_named(name: &str) -> gitcomet_core::domain::Branch {
+    gitcomet_core::domain::Branch {
+        name: name.to_string(),
+        target: CommitId("a".repeat(40).into()),
+        upstream: None,
+        divergence: None,
+    }
+}
+
+/// Soloing restarts the walk with the solo attached and writes it to the
+/// session, the same contract the author filter has.
+#[test]
+fn toggling_a_solo_restarts_the_walk_and_persists_it() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = repo_state_for_solo_tests();
+    let scope = state.repos[0].history_state.history_scope;
+    let unsoloed = expect_log_reply(&mut state.repos[0], scope, None, None);
+    let target = gitcomet_core::domain::HistorySolo::local_branch("feature");
+    let expected = HistorySoloSet::from_iter([target.clone()]);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ToggleHistorySolo {
+            repo_id: RepoId(1),
+            target: target.clone(),
+        },
+    );
+
+    assert_eq!(state.repos[0].history_state.history_solo, expected);
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadLog { solo, cursor: None, .. } if *solo == expected
+        )),
+        "expected the solo to start its own first-page walk, got {effects:?}"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::PersistRepoHistorySolo { solo, .. } if *solo == expected
+        )),
+        "expected the solo to be persisted, got {effects:?}"
+    );
+    assert!(
+        !state.repos[0].loads_in_flight.is_active_log_reply(unsoloed),
+        "the unsoloed walk it replaced is no longer the active one"
+    );
+}
+
+/// Toggling the same ref again takes it back out, which is the only way the
+/// per-ref menu entry can clear what it set.
+#[test]
+fn toggling_a_soloed_ref_again_removes_just_that_ref() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = repo_state_for_solo_tests();
+    let feature = gitcomet_core::domain::HistorySolo::local_branch("feature");
+    let main = gitcomet_core::domain::HistorySolo::local_branch("main");
+    state.repos[0].history_state.history_solo =
+        HistorySoloSet::from_iter([feature.clone(), main.clone()]);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ToggleHistorySolo {
+            repo_id: RepoId(1),
+            target: feature,
+        },
+    );
+
+    assert_eq!(
+        state.repos[0].history_state.history_solo,
+        HistorySoloSet::from_iter([main]),
+        "the other soloed ref must survive"
+    );
+}
+
+/// Setting the set the repository already has must not restart the walk.
+#[test]
+fn setting_the_solo_already_in_effect_changes_nothing() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = repo_state_for_solo_tests();
+    let solo = HistorySoloSet::from_iter([gitcomet_core::domain::HistorySolo::remote_branch(
+        "origin", "main",
+    )]);
+    state.repos[0].history_state.history_solo = solo.clone();
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetHistorySolo {
+            repo_id: RepoId(1),
+            solo,
+        },
+    );
+
+    assert!(effects.is_empty(), "expected no effects, got {effects:?}");
+}
+
+/// "Stop Soloing" empties the set in one message and returns the normal walk.
+#[test]
+fn clearing_the_solo_set_restarts_the_unsoloed_walk() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = repo_state_for_solo_tests();
+    state.repos[0].history_state.history_solo = HistorySoloSet::from_iter([
+        gitcomet_core::domain::HistorySolo::local_branch("feature"),
+        gitcomet_core::domain::HistorySolo::remote("origin"),
+    ]);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetHistorySolo {
+            repo_id: RepoId(1),
+            solo: HistorySoloSet::default(),
+        },
+    );
+
+    assert!(state.repos[0].history_state.history_solo.is_empty());
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadLog { solo, cursor: None, .. } if solo.is_empty()
+        )),
+        "expected the normal walk to be restarted, got {effects:?}"
+    );
+}
+
+/// A soloed branch that is deleted would otherwise leave the history empty with
+/// nothing on screen to explain it, so the branch list clears the solo.
+#[test]
+fn a_branch_list_without_the_soloed_branch_clears_the_solo() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = repo_state_for_solo_tests();
+    state.repos[0].history_state.history_solo = HistorySoloSet::from_iter([
+        gitcomet_core::domain::HistorySolo::local_branch("feature"),
+        gitcomet_core::domain::HistorySolo::local_branch("main"),
+    ]);
+
+    // Still there: the solo survives.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![branch_named("main"), branch_named("feature")]),
+        }),
+    );
+    assert_eq!(state.repos[0].history_state.history_solo.len(), 2);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![branch_named("main")]),
+        }),
+    );
+
+    // Only the deleted branch drops out; `main` is still soloed.
+    assert_eq!(
+        state.repos[0].history_state.history_solo,
+        HistorySoloSet::from_iter([gitcomet_core::domain::HistorySolo::local_branch("main")]),
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadLog { solo, cursor: None, .. } if solo.len() == 1
+        )),
+        "expected the surviving solo to be reloaded, got {effects:?}"
+    );
+}
+
+/// A failed branch load says nothing about whether the branch exists, so it
+/// must not be read as a deletion.
+#[test]
+fn a_failed_branch_load_leaves_the_solo_alone() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = repo_state_for_solo_tests();
+    let solo =
+        HistorySoloSet::from_iter([gitcomet_core::domain::HistorySolo::local_branch("feature")]);
+    state.repos[0].history_state.history_solo = solo.clone();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
+            repo_id: RepoId(1),
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("no".into()),
+            )),
+        }),
+    );
+
+    assert_eq!(state.repos[0].history_state.history_solo, solo);
+}
+
+/// The bug this guards: a repository finishing its startup loads dropped the
+/// user's solo on its own. Only the list that governs a target may retire it,
+/// and only when that list is loaded and non-empty.
+#[test]
+fn other_ref_lists_loading_never_clear_a_solo() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = repo_state_for_solo_tests();
+    let solo =
+        HistorySoloSet::from_iter([gitcomet_core::domain::HistorySolo::local_branch("feature")]);
+    state.repos[0].history_state.history_solo = solo.clone();
+    state.repos[0].branches = Loadable::Ready(Arc::new(vec![branch_named("feature")]));
+
+    // A remote list arriving says nothing about a local branch.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
+        }),
+    );
+    assert_eq!(state.repos[0].history_state.history_solo, solo);
+
+    // Nor does a remote-branch list.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
+        }),
+    );
+    assert_eq!(state.repos[0].history_state.history_solo, solo);
+}
+
+/// An empty branch list is a repository that has not finished loading, not one
+/// whose branches were all deleted.
+#[test]
+fn an_empty_branch_list_never_clears_a_solo() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = repo_state_for_solo_tests();
+    let solo =
+        HistorySoloSet::from_iter([gitcomet_core::domain::HistorySolo::local_branch("feature")]);
+    state.repos[0].history_state.history_solo = solo.clone();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
+        }),
+    );
+
+    assert_eq!(state.repos[0].history_state.history_solo, solo);
 }

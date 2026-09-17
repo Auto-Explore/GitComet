@@ -1561,6 +1561,7 @@ impl HistoryView {
             // while this key is live. A mutation must copy a shared page first.
             log_source: std::ptr::from_ref(page) as usize,
             history_author_filter: repo.history_state.history_author_filter.clone(),
+            history_solo: repo.history_state.history_solo.clone(),
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
             head_branch_target: Self::attached_head_target_for_repo(repo),
@@ -2768,6 +2769,7 @@ fn stash_summary_from_log_summary(summary: &str) -> Option<&str> {
 
 fn resolve_history_head_target<'a>(
     history_scope: LogScope,
+    history_solo: &gitcomet_core::domain::HistorySoloSet,
     detached_head_commit: Option<&'a CommitId>,
     head_branch: Option<&'a str>,
     branches: &'a [Branch],
@@ -2775,9 +2777,11 @@ fn resolve_history_head_target<'a>(
     commits: &'a [Commit],
 ) -> Option<&'a str> {
     match head_branch {
+        // Falling back to the first visible commit is only sound when the walk
+        // is seeded from HEAD; a soloed walk starts somewhere else entirely.
         Some("HEAD") => detached_head_commit.map(AsRef::as_ref).or_else(|| {
-            history_scope
-                .guarantees_head_visibility()
+            history_solo
+                .head_is_first(history_scope)
                 .then(|| {
                     visible_indices
                         .first()
@@ -2810,6 +2814,7 @@ fn build_history_base_cache(
     let visible_indices = build_history_visible_indices(&page.commits, &stash_helper_ids);
     let head_target = resolve_history_head_target(
         request.history_scope,
+        &request.history_solo,
         request.detached_head_commit.as_ref(),
         head_branch,
         branches,
@@ -2921,6 +2926,7 @@ fn build_history_decoration_cache(
 ) -> HistoryDecorationCache {
     let head_target = resolve_history_head_target(
         request.base_request.history_scope,
+        &request.base_request.history_solo,
         request.detached_head_commit.as_ref(),
         head_branch,
         branches,

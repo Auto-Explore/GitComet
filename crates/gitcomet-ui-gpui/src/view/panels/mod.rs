@@ -261,6 +261,16 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
     },
+    /// Adds a ref to the history solo set, or removes it when already there.
+    ToggleHistorySolo {
+        repo_id: RepoId,
+        target: gitcomet_core::domain::HistorySolo,
+    },
+    /// Replaces the history solo set outright; an empty set clears the solo.
+    SetHistorySolo {
+        repo_id: RepoId,
+        solo: gitcomet_core::domain::HistorySoloSet,
+    },
     SetCommitFileSort {
         list: crate::view::rows::FileListId,
         sort: crate::view::rows::CommitFileSort,
