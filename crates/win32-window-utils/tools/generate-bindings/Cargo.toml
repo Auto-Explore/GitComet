@@ -1,0 +1,11 @@
+[package]
+name = "gitcomet-win32-window-utils-bindgen"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Keep the generator and metadata out of the library's dependency graph.
+[workspace]
+
+[dependencies]
+windows-bindgen = "=0.100.0"
