@@ -74,7 +74,7 @@ fn open_popover(
     kind: PopoverKind,
 ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
     let repo_id = repo.id;
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|window, app| {

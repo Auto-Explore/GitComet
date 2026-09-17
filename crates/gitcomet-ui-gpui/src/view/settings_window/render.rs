@@ -1998,7 +1998,12 @@ impl Render for SettingsWindowView {
                                 .child(git_executable_scope_note()),
                         )
                         .child(system_git_row)
-                        .child(custom_git_row);
+                        .child(custom_git_row)
+                        .child(components::Button::new("settings_window_recheck_executables", "Recheck")
+                            .style(components::ButtonStyle::Outlined)
+                            .on_click(theme, cx, |_this, _e, _window, cx| {
+                                super::super::runtime_probe::request(cx, true);
+                            }));
 
                     if self.git_executable_mode == GitExecutableMode::Custom {
                         let browse_button = components::Button::new(

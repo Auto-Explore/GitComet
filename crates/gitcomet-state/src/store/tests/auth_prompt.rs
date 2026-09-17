@@ -17,7 +17,7 @@ fn setup_open_repo(
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     repos.insert(repo_id, Arc::new(DummyRepo::new(workdir)));
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -343,7 +343,7 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
 fn clone_finished_auth_error_sets_clone_retry_prompt() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "https://example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/private-repo");
 
@@ -376,7 +376,7 @@ fn clone_finished_auth_error_sets_clone_retry_prompt() {
 fn clone_finished_ssh_publickey_error_sets_passphrase_prompt() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "git@github.com:private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/private-repo");
 
@@ -690,7 +690,7 @@ fn submit_auth_prompt_replays_clone_operation() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "ssh://git@example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/retry-clone");
     state.banner_error = Some(crate::model::BannerErrorState {
@@ -786,7 +786,7 @@ fn submit_auth_prompt_preserves_non_clone_banner_when_replaying_clone() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let url = "ssh://git@example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/retry-clone");
     let banner_message = "Fetch failed".to_string();

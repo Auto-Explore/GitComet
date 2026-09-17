@@ -1785,7 +1785,7 @@ fn restore_session_and_draw(
 #[gpui::test]
 fn gitcomet_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         cx.open_window(Default::default(), |window, cx| {
             cx.new(|cx| crate::view::GitCometView::new(store, events, None, window, cx))
         })
@@ -1795,7 +1795,7 @@ fn gitcomet_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn repo_tabs_can_drag_reorder_by_right_half(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -1841,7 +1841,7 @@ fn repo_tabs_can_drag_reorder_by_right_half(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn repo_tab_reorder_does_not_bounce_on_minor_pointer_reversal(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -1906,7 +1906,7 @@ fn repo_tab_reorder_does_not_bounce_on_minor_pointer_reversal(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn repo_tabs_can_drag_reorder_by_left_half(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -1952,7 +1952,7 @@ fn repo_tabs_can_drag_reorder_by_left_half(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn repo_tabs_drop_on_self_is_noop(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -1994,7 +1994,7 @@ fn repo_tabs_drop_on_self_is_noop(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn repo_tabs_middle_click_closes_inactive_tab_without_reactivating(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2031,7 +2031,7 @@ fn repo_tabs_middle_click_closes_inactive_tab_without_reactivating(cx: &mut gpui
 
 #[gpui::test]
 fn repo_tabs_right_click_does_not_close(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2068,7 +2068,7 @@ fn repo_tabs_right_click_does_not_close(cx: &mut gpui::TestAppContext) {
 fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAppContext) {
     // The removal must actually run: a repo the backend cannot open finishes
     // its actions at once with a missing-handle error, spinner and all.
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2108,7 +2108,7 @@ fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2156,7 +2156,7 @@ fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext)
 
 #[gpui::test]
 fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(SlowStashBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowStashBackend));
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2204,7 +2204,7 @@ fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2265,7 +2265,7 @@ fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::Test
 fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2360,7 +2360,7 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
 #[gpui::test]
 fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2415,7 +2415,7 @@ fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAp
 #[gpui::test]
 fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2512,7 +2512,7 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn workspace_badge_appears_when_worktree_added_for_branch(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2561,7 +2561,7 @@ fn workspace_badge_appears_when_worktree_added_for_branch(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn workspace_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2637,7 +2637,7 @@ fn workspace_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn workspace_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2718,7 +2718,7 @@ fn workspace_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn workspace_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2808,7 +2808,7 @@ fn workspace_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppCont
 #[gpui::test]
 fn worktree_branch_badge_hidden_for_detached_worktree_item(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2856,7 +2856,7 @@ fn worktree_branch_badge_hidden_for_detached_worktree_item(cx: &mut gpui::TestAp
 fn workspace_badge_survives_reload_repo_and_manual_worktree_resupply(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -2940,7 +2940,7 @@ fn workspace_badge_survives_reload_repo_and_manual_worktree_resupply(
 
 #[gpui::test]
 fn workspace_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let (store, events) = AppStore::new_test(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -3284,7 +3284,7 @@ fn picker_prompt_scrollbar_drag_scrolls_list(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store_for_view, events, None, window, cx)
@@ -3359,7 +3359,7 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store_for_view, events, None, window, cx)
@@ -3416,7 +3416,7 @@ fn titlebar_hamburger_opens_app_menu(cx: &mut gpui::TestAppContext) {
     }
 
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store_for_view, events, None, window, cx)
@@ -3467,7 +3467,7 @@ fn titlebar_hamburger_opens_from_keyboard_and_restores_focus_on_escape(
     }
 
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store_for_view, events, None, window, cx)
@@ -3517,7 +3517,7 @@ fn repo_tab_strip_plus_button_opens_add_repo_menu(cx: &mut gpui::TestAppContext)
     }
 
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store_for_view, events, None, window, cx)
@@ -3570,7 +3570,7 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
         return;
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
     });
@@ -3969,7 +3969,7 @@ fn titlebar_only_reserves_visible_repository_controls_from_window_drag(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4048,7 +4048,7 @@ fn titlebar_only_reserves_visible_repository_controls_from_window_drag(
 
 #[gpui::test]
 fn repo_tabs_scroll_with_the_wheel_once_they_overflow(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4092,7 +4092,7 @@ fn repo_tabs_scroll_with_the_wheel_once_they_overflow(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn repo_tab_strip_never_renders_scroll_arrows(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4155,7 +4155,7 @@ fn repo_tab_strip_never_renders_scroll_arrows(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn roomy_repo_tab_expands_to_show_its_full_repository_name(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4202,7 +4202,7 @@ fn the_title_bar_keeps_its_leading_control_clear_of_the_traffic_lights(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4246,7 +4246,7 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
     }
 
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4314,7 +4314,7 @@ fn the_title_bar_and_repository_tabs_hold_their_size_at_every_ui_scale(
 #[gpui::test]
 fn repository_tabs_shrink_long_names_before_short_names(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4426,7 +4426,7 @@ fn repository_tabs_shrink_long_names_before_short_names(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn repo_tabs_show_separators_only_between_inactive_tabs(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4453,7 +4453,7 @@ fn repo_tabs_show_separators_only_between_inactive_tabs(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn dragging_a_repo_tab_to_the_edge_scrolls_the_strip(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4542,7 +4542,7 @@ fn dragging_a_repo_tab_to_the_edge_scrolls_the_strip(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn dragging_a_repo_tab_past_the_strip_ends_keeps_it_inside(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4614,7 +4614,7 @@ fn dragging_a_repo_tab_past_the_strip_ends_keeps_it_inside(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn add_repo_button_stays_after_the_overflowing_tab_viewport(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4649,7 +4649,7 @@ fn add_repo_button_stays_after_the_overflowing_tab_viewport(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn add_repo_button_stays_at_the_strip_end_when_tabs_fit(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -4683,7 +4683,7 @@ fn add_repo_button_stays_at_the_strip_end_when_tabs_fit(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn activating_a_repo_scrolls_its_tab_into_view(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)

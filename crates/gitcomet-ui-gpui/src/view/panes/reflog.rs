@@ -1031,7 +1031,7 @@ mod view_tests {
         Arc::new(AppState {
             repos: vec![repo],
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         })
     }
 
@@ -1040,7 +1040,7 @@ mod view_tests {
         entries: Vec<ReflogEntry>,
     ) -> (Entity<ReflogPaneView>, RepoId, &mut gpui::VisualTestContext) {
         let repo_id = RepoId(1);
-        let (store, _events) = AppStore::new(Arc::new(NoopBackend));
+        let (store, _events) = AppStore::new_test(Arc::new(NoopBackend));
         let store = Arc::new(store);
         let state = seeded_state(repo_id, entries);
 

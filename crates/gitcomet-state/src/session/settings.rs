@@ -158,6 +158,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         apply_setting!(settings, file, terminal_action_bar_target);
         apply_setting!(settings, file, history_show_tags);
         apply_setting!(settings, file, history_verify_commit_signatures);
+        if let Some(enabled) = settings.history_verify_commit_signatures {
+            file.history_verify_commit_signatures_opt_in = Some(enabled);
+        }
         apply_setting!(settings, file, history_highlight_commit_chain);
         apply_setting!(settings, file, file_browser_follow_selected_commit);
         apply_setting!(settings, file, history_relative_dates);

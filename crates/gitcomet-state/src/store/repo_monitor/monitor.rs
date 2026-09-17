@@ -285,6 +285,7 @@ pub(super) fn summarize(
         index: false,
         git_state: false,
         tags: false,
+        verification_context: false,
     };
     let structural = structural_event(event);
     for path in &event.paths {
@@ -604,12 +605,14 @@ pub(super) fn repo_monitor_thread(
                         index: false,
                         git_state: false,
                         tags: false,
+                        verification_context: false,
                     }),
                     RepoExternalChange {
                         worktree: false,
                         index: true,
                         git_state: false,
                         tags: false,
+                        verification_context: false,
                     },
                 ));
             }
@@ -638,7 +641,10 @@ pub(super) fn repo_monitor_thread(
                 }
                 note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
                 debouncer.take();
-                due_change = Some(RepoExternalChange::all());
+                due_change = Some(RepoExternalChange {
+                    verification_context: policy_dirty,
+                    ..RepoExternalChange::all()
+                });
             }
             policy_dirty = false;
             index_dirty = false;

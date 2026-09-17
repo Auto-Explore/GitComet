@@ -3,7 +3,7 @@ use super::*;
 fn open_app_menu(
     cx: &mut gpui::TestAppContext,
 ) -> (Entity<GitCometView>, &mut gpui::VisualTestContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -194,7 +194,7 @@ fn app_menu_view_with(
     remotes: Loadable<Arc<Vec<gitcomet_core::domain::Remote>>>,
 ) -> (Entity<GitCometView>, &mut gpui::VisualTestContext) {
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(23);
@@ -212,7 +212,7 @@ fn app_menu_view_with(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model

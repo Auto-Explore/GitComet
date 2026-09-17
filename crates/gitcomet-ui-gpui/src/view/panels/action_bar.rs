@@ -1309,7 +1309,7 @@ mod tests {
         let repo_id = RepoId(1);
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(RepoState::new_opening(
             repo_id,
@@ -1337,7 +1337,7 @@ mod tests {
         let repo_id = RepoId(1);
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(RepoState::new_opening(
             repo_id,

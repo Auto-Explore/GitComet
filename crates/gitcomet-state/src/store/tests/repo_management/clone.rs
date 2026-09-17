@@ -4,7 +4,7 @@ use super::*;
 fn clone_repo_sets_running_state_and_emits_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let effects = reduce(
         &mut repos,
@@ -30,7 +30,7 @@ fn configured_remote_url_policy_is_carried_to_clone_effects() {
 
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let policy = RemoteUrlPolicy::default().with_allowed(RemoteProtocol::Http, true);
 
     assert!(
@@ -66,7 +66,7 @@ fn configured_remote_url_policy_is_carried_to_clone_effects() {
 fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
 
     reduce(
@@ -113,7 +113,7 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
 fn clone_repo_progress_tracks_loading_and_remote_object_phases() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
 
     reduce(
@@ -160,7 +160,7 @@ fn clone_repo_progress_tracks_loading_and_remote_object_phases() {
 fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
 
     reduce(
@@ -223,7 +223,7 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
 fn abort_clone_repo_marks_operation_cancelling_and_emits_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
 
     reduce(
@@ -255,7 +255,7 @@ fn abort_clone_repo_marks_operation_cancelling_and_emits_effect() {
 fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
 
     reduce(
@@ -312,7 +312,7 @@ fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
 fn clone_repo_finished_maps_cancelling_error_to_cancelled() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
 
     reduce(
@@ -351,7 +351,7 @@ fn clone_repo_finished_maps_cancelling_error_to_cancelled() {
 fn clone_repo_finished_preserves_cleanup_failure_when_cancelling() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let dest = PathBuf::from("/tmp/example");
 
     reduce(
@@ -399,7 +399,7 @@ fn clone_repo_finished_preserves_cleanup_failure_when_cancelling() {
 fn clone_repo_finished_replaces_state_when_destination_differs() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,

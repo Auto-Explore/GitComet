@@ -4,7 +4,6 @@ use gitcomet_core::history_index::{HISTORY_BLOCK_SIZE, HISTORY_ROW_CACHE_LIMIT};
 use gitcomet_core::services::CancellationToken;
 
 pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
-    let signature_formats = state.signature_verification_formats();
     let repo_id = match &event {
         Event::Retry { repo_id }
         | Event::Select { repo_id, .. }
@@ -286,7 +285,6 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 return Vec::new();
             }
             history.pending.remove(&start);
-            let mut loaded_range = None;
             match result {
                 Ok(range)
                     if range.snapshot == snapshot
@@ -303,7 +301,6 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                     history.lru.push_back(start);
                     let range = Arc::new(range);
                     history.ranges.insert(start, range.clone());
-                    loaded_range = Some(range);
                     history.ranges_rev = history.ranges_rev.wrapping_add(1);
                     while history.ranges.len() > HISTORY_ROW_CACHE_LIMIT / HISTORY_BLOCK_SIZE {
                         let Some(oldest) = history.lru.pop_front() else {
@@ -326,14 +323,6 @@ pub(super) fn reduce(state: &mut AppState, event: Event) -> Vec<Effect> {
                 }
             }
             history.rev = history.rev.wrapping_add(1);
-            if let Some(range) = loaded_range {
-                effects.extend(super::util::verify_commit_signatures_effect(
-                    signature_formats,
-                    repo,
-                    repo_id,
-                    range.commits.iter().map(|commit| commit.id.clone()),
-                ));
-            }
         }
     }
     let history = &mut repo.history_state.indexed;
@@ -405,7 +394,7 @@ mod tests {
                     verify_commit_signatures: false,
                     ..Default::default()
                 },
-                ..Default::default()
+                ..AppState::test_default()
             },
             index,
         )
@@ -494,100 +483,29 @@ mod tests {
     }
 
     #[test]
-    fn indexed_ranges_verify_badges_beyond_the_bootstrap_without_delaying_range_requests() {
-        use gitcomet_core::domain::{CommitSignature, LogPage, SignatureFormat, SignatureStatus};
-
+    fn prefetched_indexed_ranges_never_schedule_signature_verification() {
         let (mut state, index) = fixture();
         state.git_log_settings.verify_commit_signatures = true;
-        state.repos[0].set_log(Loadable::Ready(Arc::new(LogPage {
-            commits: Vec::new(),
-            next_cursor: None,
-        })));
+        state.signing_tools.gpg.availability =
+            gitcomet_core::signing_tools::SigningToolAvailability::Unknown;
         let mut work = request(&mut state, &index, vec![9984, 10240, 10496]);
         let next = reduce(&mut state, loaded(work.remove(0)));
-        let (epoch, ids) = next
-            .iter()
-            .find_map(|effect| match effect {
-                Effect::VerifyCommitSignatures {
-                    epoch, commit_ids, ..
-                } => Some((*epoch, commit_ids.clone())),
-                _ => None,
-            })
-            .expect("loaded indexed rows must be verified");
-        assert_eq!(ids.len(), 16);
-        assert_eq!(ids[0], index.commit_id(9984).unwrap());
-        assert_eq!(
-            state.repos[0]
-                .history_state
-                .commit_signatures_requested
-                .len(),
-            256
+        assert!(
+            !next
+                .iter()
+                .any(|effect| matches!(effect, Effect::VerifyCommitSignatures { .. }))
         );
-        assert_eq!(state.repos[0].history_state.indexed.pending.len(), 2);
-        assert!(next.iter().any(|effect| matches!(
-            effect,
-            Effect::IndexedHistory(Work::Range { start: 10496, .. })
-        )));
-
-        let id = ids[0].clone();
-        let signature = CommitSignature {
-            status: SignatureStatus::Good,
-            format: SignatureFormat::Ssh,
-            signer: None,
-            key_id: None,
-        };
-        effects::commit_signatures_verified(
-            &mut state,
-            RepoId(1),
-            epoch,
-            Ok(vec![(id.clone(), signature.clone())]),
-        );
-        assert_eq!(
-            state.repos[0].history_state.commit_signatures.get(&id),
-            Some(&signature)
-        );
-        state.repos[0].set_selected_commit(Some(id.clone()));
-        state.repos[0].set_selected_commit(None);
-        assert_eq!(
-            state.repos[0].history_state.commit_signatures.get(&id),
-            Some(&signature),
-            "deselecting a loaded indexed row must retain its badge"
-        );
-    }
-
-    #[test]
-    fn indexed_range_signature_verification_honors_preferences_and_rechecks_cached_rows() {
-        let (mut state, index) = fixture();
-        let work = request(&mut state, &index, vec![9984]).remove(0);
-        assert!(reduce(&mut state, loaded(work)).is_empty());
         assert!(
             state.repos[0]
                 .history_state
                 .commit_signatures_requested
                 .is_empty()
         );
-
-        let repo = &mut state.repos[0];
-        for _ in 0..2 {
-            let work = super::super::util::reverify_loaded_commit_signatures_effect(
-                gitcomet_core::domain::SignatureFormats::ALL,
-                repo,
-            )
-            .unwrap();
-            let Effect::VerifyCommitSignatures { commit_ids, .. } = work else {
-                panic!("expected signatures")
-            };
-            assert_eq!(commit_ids[0], index.commit_id(9984).unwrap());
-            assert_eq!(repo.history_state.commit_signatures_requested.len(), 256);
-        }
-        assert!(
-            super::super::util::reverify_loaded_commit_signatures_effect(
-                gitcomet_core::domain::SignatureFormats::NONE,
-                repo
-            )
-            .is_none()
-        );
-        assert!(repo.history_state.commit_signatures_requested.is_empty());
+        assert_eq!(state.repos[0].history_state.indexed.pending.len(), 2);
+        assert!(next.iter().any(|effect| matches!(
+            effect,
+            Effect::IndexedHistory(Work::Range { start: 10496, .. })
+        )));
     }
 
     #[test]

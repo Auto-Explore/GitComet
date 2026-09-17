@@ -1014,7 +1014,7 @@ pub struct GitCometView {
     /// Background gpg/ssh-keygen detection. A newer probe supersedes older ones.
     pub(super) signing_tools_probe_seq: u64,
     pub(super) signing_tools_probe_in_flight: bool,
-    pub(super) signing_tools_probed_at: Option<Instant>,
+    pub(super) signing_tools_probe_cancellation: gitcomet_core::services::CancellationToken,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,

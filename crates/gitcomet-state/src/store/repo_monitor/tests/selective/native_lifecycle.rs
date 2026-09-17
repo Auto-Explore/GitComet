@@ -275,7 +275,8 @@ fn metadata_noise_in_a_mixed_event_preserves_real_changes() {
             worktree: true,
             index: true,
             git_state: false,
-            tags: false
+            tags: false,
+            verification_context: false,
         })
     );
 }

@@ -145,7 +145,7 @@ fn indexed_regression_comparison_count_and_cache_survive_metadata_loading(
     let _guard = crate::test_support::lock_visual_test();
     let (repo, _) = fixture(&[301, 100, 300]);
     let (store, events) =
-        gitcomet_state::store::AppStore::new(Arc::new(crate::view::test_support::TestBackend));
+        gitcomet_state::store::AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|_, app| {
@@ -185,7 +185,7 @@ fn indexed_history_comparison_ignores_progress_and_unrelated_blocks(cx: &mut gpu
     let _guard = crate::test_support::lock_visual_test();
     let (mut repo, commits) = fixture(&[300, 301]);
     let (store, events) =
-        gitcomet_state::store::AppStore::new(Arc::new(crate::view::test_support::TestBackend));
+        gitcomet_state::store::AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|_, app| {
@@ -231,7 +231,7 @@ fn indexed_history_large_comparisons_prepare_order_once_and_only_build_visible_c
             .collect(),
     );
     let (store, events) =
-        gitcomet_state::store::AppStore::new(Arc::new(crate::view::test_support::TestBackend));
+        gitcomet_state::store::AppStore::new_test(Arc::new(crate::view::test_support::TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let pane = cx.update(|_, app| view.read(app).details_pane.clone());
@@ -240,7 +240,7 @@ fn indexed_history_large_comparisons_prepare_order_once_and_only_build_visible_c
             pane.state = Arc::new(gitcomet_state::model::AppState {
                 repos: vec![repo.clone()],
                 active_repo: Some(repo.id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             pane.ensure_comparison_order(cx);
             assert!(pane.comparison_order.is_none());
@@ -267,7 +267,7 @@ fn indexed_history_large_comparisons_prepare_order_once_and_only_build_visible_c
             pane.state = Arc::new(gitcomet_state::model::AppState {
                 repos: vec![repo.clone()],
                 active_repo: Some(repo.id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             pane.ensure_comparison_order(cx);
             assert!(Arc::ptr_eq(

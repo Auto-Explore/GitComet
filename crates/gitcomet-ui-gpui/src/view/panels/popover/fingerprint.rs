@@ -1190,7 +1190,7 @@ mod tests {
         let state = AppState {
             repos: vec![repo],
             active_repo: None,
-            ..Default::default()
+            ..AppState::test_default()
         };
 
         let popover = PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu);
@@ -1221,7 +1221,7 @@ mod tests {
 
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(repo);
 
@@ -1243,7 +1243,7 @@ mod tests {
         );
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(repo);
 
@@ -1265,7 +1265,7 @@ mod tests {
         );
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(repo);
         let picker = PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu);
@@ -1279,7 +1279,7 @@ mod tests {
 
     #[test]
     fn remote_picker_fingerprints_differ_per_repository() {
-        let state = AppState::default();
+        let state = AppState::test_default();
         let picker = |repo_id| {
             notify_fingerprint(
                 &state,
@@ -1292,7 +1292,7 @@ mod tests {
     #[test]
     fn remote_picker_and_remote_menu_fingerprints_differ() {
         let repo_id = RepoId(9);
-        let state = AppState::default();
+        let state = AppState::test_default();
         let picker = notify_fingerprint(
             &state,
             &PopoverKind::remote(repo_id, RemotePopoverKind::OpenInBrowserMenu),
@@ -1320,7 +1320,7 @@ mod tests {
         );
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(repo);
 
@@ -1346,7 +1346,7 @@ mod tests {
         );
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(repo);
 
@@ -1371,7 +1371,7 @@ mod tests {
         );
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(repo);
 
@@ -1393,7 +1393,7 @@ mod tests {
         );
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
         state.repos.push(repo);
 
@@ -1406,10 +1406,10 @@ mod tests {
 
     #[test]
     fn repo_picker_fingerprint_changes_with_active_repo() {
-        let base = AppState::default();
+        let base = AppState::test_default();
         let with_active_repo = AppState {
             active_repo: Some(RepoId(99)),
-            ..Default::default()
+            ..AppState::test_default()
         };
 
         let before = notify_fingerprint(&base, &PopoverKind::RepoPicker);

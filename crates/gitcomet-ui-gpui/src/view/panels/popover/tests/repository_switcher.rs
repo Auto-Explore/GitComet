@@ -32,7 +32,7 @@ fn repository_switcher_opens_the_repo_picker_with_a_fresh_search_input(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -67,7 +67,7 @@ fn repository_switcher_opens_the_repo_picker_with_a_fresh_search_input(
 
 #[gpui::test]
 fn repository_switcher_reopen_clears_previous_search_text(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -148,7 +148,7 @@ fn repository_switcher_selecting_recent_repo_opens_it_subprocess(cx: &mut gpui::
         .expect("seeded recent repo");
     let expected_path = normalize_existing_path(expected_path);
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -238,7 +238,7 @@ fn repository_switcher_removes_a_recent_repo_subprocess(cx: &mut gpui::TestAppCo
     let removed = seeded[0].clone();
     let kept = seeded[1].clone();
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -306,7 +306,7 @@ fn repository_switcher_removes_a_recent_repo_subprocess(cx: &mut gpui::TestAppCo
 #[gpui::test]
 fn repository_switcher_shortcut_toggles_the_picker_closed(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 

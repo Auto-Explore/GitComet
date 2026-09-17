@@ -56,7 +56,7 @@ fn fixture(count: usize, section: CollapsedSidebarSection) -> Arc<AppState> {
     Arc::new(AppState {
         active_repo: Some(repo.id),
         repos: vec![repo],
-        ..Default::default()
+        ..AppState::test_default()
     })
 }
 
@@ -75,7 +75,7 @@ fn row_selector(section: CollapsedSidebarSection, index: usize) -> &'static str 
 #[gpui::test]
 fn auxiliary_sidebar_lists_and_popups_keep_rendering_bounded(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
@@ -206,7 +206,7 @@ fn branch_fixture(count: usize) -> Arc<AppState> {
     Arc::new(AppState {
         active_repo: Some(repo.id),
         repos: vec![repo],
-        ..Default::default()
+        ..AppState::test_default()
     })
 }
 
@@ -215,7 +215,7 @@ fn branch_fixture(count: usize) -> Arc<AppState> {
 #[gpui::test]
 fn cross_section_filter_popover_places_rows_using_both_row_heights(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
@@ -347,7 +347,7 @@ fn assert_popover_row_heights_match_layout(
     density: crate::appearance::UiDensity,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
@@ -449,7 +449,7 @@ fn an_open_popover_reuses_its_rows_without_copying_the_persisted_sets(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
@@ -540,7 +540,7 @@ fn file_fixture(count: usize) -> Arc<AppState> {
     Arc::new(AppState {
         active_repo: Some(repo.id),
         repos: vec![repo],
-        ..Default::default()
+        ..AppState::test_default()
     })
 }
 
@@ -549,7 +549,7 @@ fn file_fixture(count: usize) -> Arc<AppState> {
 #[gpui::test]
 fn collapsed_files_popover_renders_a_bounded_window(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());

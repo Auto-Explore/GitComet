@@ -3,7 +3,7 @@ use palette::IntoColor;
 
 #[gpui::test]
 fn worktree_preview_ready_rows_preserve_trailing_empty_line(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -46,7 +46,7 @@ fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -165,7 +165,7 @@ fn short_file_preview_uses_the_space_below_eof_for_selection_and_menu(
 #[gpui::test]
 fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppContext) {
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -272,7 +272,7 @@ fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -376,7 +376,7 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
 fn html_file_preview_renders_injected_javascript_and_css_from_real_document(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -479,7 +479,7 @@ fn html_file_preview_renders_injected_javascript_and_css_from_real_document(
 fn html_file_preview_renders_injected_attribute_syntax_from_real_document(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -576,7 +576,7 @@ fn html_file_preview_renders_injected_attribute_syntax_from_real_document(
 fn added_file_preview_text_file_materializes_and_uses_prepared_syntax_highlighting(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -690,7 +690,7 @@ fn added_file_preview_text_file_materializes_and_uses_prepared_syntax_highlighti
 fn deleted_file_preview_text_file_materializes_and_uses_prepared_syntax_highlighting(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -807,7 +807,7 @@ fn deleted_file_preview_text_file_materializes_and_uses_prepared_syntax_highligh
 /// so an x coordinate proves nothing about which character was hit.
 #[gpui::test]
 fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1036,7 +1036,7 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
 /// The same path, across lines and with whole tags rather than single chars.
 #[gpui::test]
 fn file_preview_click_lights_whole_html_tags_across_lines(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1152,7 +1152,7 @@ fn file_preview_click_lights_whole_html_tags_across_lines(cx: &mut gpui::TestApp
 /// stays lit too -- one click answers both "what is this" and "where else".
 #[gpui::test]
 fn file_preview_click_lights_every_use_of_the_clicked_name(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1271,7 +1271,7 @@ fn file_preview_click_lights_every_use_of_the_clicked_name(cx: &mut gpui::TestAp
 fn untracked_json_file_preview_keeps_underscored_string_value_highlighted(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1396,7 +1396,7 @@ fn untracked_json_file_preview_keeps_underscored_string_value_highlighted(
 fn large_file_preview_keeps_prepared_syntax_document_above_old_line_gate(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1491,7 +1491,7 @@ fn oversized_json_preview_uses_visible_line_fallback_without_prepared_syntax_doc
     const PAYLOAD_BYTES: usize = 16 * 1024;
     const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1611,7 +1611,7 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
     const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
     const PAYLOAD_BYTES: usize = PREPARED_DOCUMENT_MAX_BYTES + 256 * 1024;
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1791,7 +1791,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
     const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
     const PAYLOAD_BYTES: usize = PREPARED_DOCUMENT_MAX_BYTES + 256 * 1024;
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2036,7 +2036,7 @@ fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::Te
     const PAYLOAD_BYTES: usize = 256 * 1024;
 
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2129,7 +2129,7 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_target(
     const PAYLOAD_BYTES: usize = 96 * 1024;
 
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2294,7 +2294,7 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_target(
 fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2436,7 +2436,7 @@ fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
 
 #[gpui::test]
 fn xml_file_preview_renders_syntax_highlights_from_real_document(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2538,7 +2538,7 @@ fn annotate_column_has_a_resize_handle_in_the_file_content_view(cx: &mut gpui::T
     // The read-only content view drew the annotation column but mounted no drag
     // handle, so only the diff view could resize it.
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2624,7 +2624,7 @@ fn annotate_column_has_a_resize_handle_in_the_file_content_view(cx: &mut gpui::T
 fn file_preview_search_marks_the_current_match_differently_from_the_rest(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2794,7 +2794,7 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
 /// hitbox it measures against — but on its own scroll handle.
 #[gpui::test]
 fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2904,7 +2904,7 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
 /// second click worked.
 #[gpui::test]
 fn preview_click_before_the_document_lands_is_replayed(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3030,7 +3030,7 @@ fn preview_click_before_the_document_lands_is_replayed(cx: &mut gpui::TestAppCon
 /// editor pairs it, and this view did not.
 #[gpui::test]
 fn file_preview_click_lights_whole_tags_in_a_template(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -3152,7 +3152,7 @@ fn file_preview_click_lights_whole_tags_in_a_template(cx: &mut gpui::TestAppCont
 /// show the gap was never specific to templates.
 #[gpui::test]
 fn file_preview_click_lights_every_use_of_a_name_in_a_script(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });

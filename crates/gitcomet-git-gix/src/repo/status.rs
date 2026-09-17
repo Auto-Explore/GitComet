@@ -105,14 +105,19 @@ impl GixRepo {
             // Fast path: HEAD and index unchanged — skip Tree→Index comparison and
             // collect Index→Worktree changes directly without the generic iterator's
             // extra thread/channel hop.
-            let direct =
-                collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
+            let direct = collect_index_worktree_status_direct(
+                &repo,
+                &mut unstaged,
+                may_have_gitlinks,
+                cancellation,
+            )?;
             cancellation.check_cancelled()?;
             has_conflicted_unstaged = direct.has_conflicted_unstaged;
             (cached_staged, direct.index_stamp_after_write)
         } else {
             // Full path: run both Tree→Index and Index→Worktree comparisons.
             cancellation.check_cancelled()?;
+            let thread_limit = worker_limit::for_repo(&repo, cancellation)?;
             let platform = repo
                 .status(gix::progress::Discard)
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status platform: {e}"))))?
@@ -121,7 +126,7 @@ impl GixRepo {
                 // common no-submodule path.
                 .index_worktree_submodules(None)
                 .index_worktree_options_mut(|options| {
-                    options.thread_limit = worker_limit::for_repo(&repo);
+                    options.thread_limit = thread_limit;
                 })
                 .untracked_files(gix::status::UntrackedFiles::Files);
             let mut staged = Vec::new();
@@ -204,7 +209,12 @@ impl GixRepo {
         let index_stamp = repo_index_stamp(&repo);
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         let mut unstaged = Vec::new();
-        let direct = collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
+        let direct = collect_index_worktree_status_direct(
+            &repo,
+            &mut unstaged,
+            may_have_gitlinks,
+            cancellation,
+        )?;
         cancellation.check_cancelled()?;
 
         if should_supplement_unmerged_conflicts(
@@ -755,11 +765,18 @@ fn collect_index_worktree_status_direct(
     repo: &gix::Repository,
     unstaged: &mut Vec<FileStatus>,
     may_have_gitlinks: bool,
+    cancellation: &CancellationToken,
 ) -> Result<DirectIndexWorktreeStatus> {
     let index = repo
         .index_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
-    collect_index_worktree_status_direct_from_index(repo, &index, unstaged, may_have_gitlinks)
+    collect_index_worktree_status_direct_from_index(
+        repo,
+        &index,
+        unstaged,
+        may_have_gitlinks,
+        cancellation,
+    )
 }
 
 fn collect_index_worktree_status_direct_from_index(
@@ -767,6 +784,7 @@ fn collect_index_worktree_status_direct_from_index(
     index: &gix::worktree::Index,
     unstaged: &mut Vec<FileStatus>,
     may_have_gitlinks: bool,
+    cancellation: &CancellationToken,
 ) -> Result<DirectIndexWorktreeStatus> {
     let dirwalk_options = repo
         .dirwalk_options()
@@ -791,6 +809,7 @@ fn collect_index_worktree_status_direct_from_index(
             dirwalk_options,
             unstaged,
             submodule,
+            cancellation,
         )?
     } else {
         collect_index_worktree_status_direct_with_submodule(
@@ -799,6 +818,7 @@ fn collect_index_worktree_status_direct_from_index(
             dirwalk_options,
             unstaged,
             NoopSubmoduleStatus,
+            cancellation,
         )?
     };
     let index_stamp_after_write =
@@ -831,6 +851,7 @@ fn collect_index_worktree_status_direct_with_submodule<S, E>(
     dirwalk_options: gix::dirwalk::Options,
     unstaged: &mut Vec<FileStatus>,
     submodule: S,
+    cancellation: &CancellationToken,
 ) -> Result<StatusEntryCollection>
 where
     S: gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus<
@@ -923,7 +944,7 @@ where
             fscache: false,
             tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
                 fs: fs_caps,
-                thread_limit: worker_limit::for_repo(repo),
+                thread_limit: worker_limit::for_index(repo, index, cancellation)?,
                 fscache: false,
                 stat: repo.stat_options().map_err(|e| {
                     Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))

@@ -2,7 +2,7 @@ use super::*;
 
 #[gpui::test]
 fn ui_scale_picker_selection_updates_zoom(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -60,7 +60,7 @@ fn ui_scale_picker_selection_updates_zoom(cx: &mut gpui::TestAppContext) {
 fn bottom_status_bar_zoom_button_keeps_icon_at_default_scale_and_opens_picker(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -149,7 +149,7 @@ fn open_repo_for_bottom_status_bar_test(
 fn bottom_status_bar_free_badge_opens_editions_page_and_updates_tooltip_on_hover(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -180,7 +180,7 @@ fn bottom_status_bar_free_badge_opens_editions_page_and_updates_tooltip_on_hover
 
 #[gpui::test]
 fn bottom_status_bar_pro_link_renders_and_opens_editions_page(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -204,7 +204,7 @@ fn bottom_status_bar_pro_link_renders_and_opens_editions_page(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn bottom_status_bar_free_badge_scales_with_ui_zoom(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -227,7 +227,7 @@ fn bottom_status_bar_free_badge_scales_with_ui_zoom(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn bottom_status_bar_branding_opens_discord_and_release_notes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -259,7 +259,7 @@ fn bottom_status_bar_branding_opens_discord_and_release_notes(cx: &mut gpui::Tes
 
 #[gpui::test]
 fn bottom_status_bar_brand_opens_the_website_and_shows_a_tooltip(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -290,7 +290,7 @@ fn bottom_status_bar_brand_opens_the_website_and_shows_a_tooltip(cx: &mut gpui::
 
 #[gpui::test]
 fn shared_context_menu_rows_fill_the_popover_width(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -317,7 +317,7 @@ fn shared_context_menu_rows_fill_the_popover_width(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn context_menus_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -355,7 +355,7 @@ fn context_menus_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn prompt_popovers_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -400,7 +400,7 @@ fn prompt_popovers_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn history_horizontal_wheel_does_not_scroll_vertically(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -506,7 +506,7 @@ fn history_horizontal_wheel_does_not_scroll_vertically(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn ui_scale_ctrl_scroll_wheel_changes_zoom(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -561,7 +561,7 @@ fn ui_scale_ctrl_scroll_wheel_changes_zoom(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn ctrl_s_stages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -600,7 +600,7 @@ fn ctrl_s_stages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn ctrl_s_stages_last_file_and_clears_diff(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -655,7 +655,7 @@ fn ctrl_s_stages_last_file_and_clears_diff(cx: &mut gpui::TestAppContext) {
 fn ctrl_shift_c_copies_current_file_path(cx: &mut gpui::TestAppContext) {
     let _clipboard_guard = crate::test_support::lock_clipboard_test();
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -693,7 +693,7 @@ fn ctrl_shift_c_copies_current_file_path(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn ctrl_d_opens_discard_confirm_popover(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -735,7 +735,7 @@ fn ctrl_d_opens_discard_confirm_popover(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn ctrl_h_opens_file_history_popover(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -777,7 +777,7 @@ fn ctrl_h_opens_file_history_popover(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -825,7 +825,7 @@ fn ctrl_h_opens_file_history_for_a_file_at_a_commit(cx: &mut gpui::TestAppContex
 fn ctrl_shortcuts_do_not_crash_without_diff_target(cx: &mut gpui::TestAppContext) {
     let _clipboard_guard = crate::test_support::lock_clipboard_test();
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -876,7 +876,7 @@ fn ctrl_e_opens_file_in_code_editor(cx: &mut gpui::TestAppContext) {
         },
     ));
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -918,7 +918,7 @@ fn ctrl_e_opens_file_in_code_editor(cx: &mut gpui::TestAppContext) {
 fn ctrl_e_is_ignored_when_no_editor_configured(cx: &mut gpui::TestAppContext) {
     let _external_editor_guard = crate::external_editor::configured_setting_override_test_guard();
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -956,7 +956,7 @@ fn ctrl_e_is_ignored_when_no_editor_configured(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn ctrl_u_unstages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });

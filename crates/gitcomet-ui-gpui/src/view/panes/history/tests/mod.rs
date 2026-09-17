@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, SystemTime};
 /// invalidation tests can opt into the production cache path.
 #[test]
 fn the_history_fingerprint_tracks_the_worktree_revs() {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state
         .repos
         .push(gitcomet_state::model::RepoState::new_opening(

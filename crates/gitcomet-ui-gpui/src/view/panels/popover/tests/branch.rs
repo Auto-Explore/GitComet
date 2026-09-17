@@ -436,7 +436,7 @@ pub(super) fn create_tracking_store(
     let workdir = unique_temp_dir(label);
     let expected_workdir = normalize_store_workdir(&workdir);
     let repo = Arc::new(TrackingRepo::new(workdir.clone()));
-    let (store, events) = AppStore::new(Arc::new(TrackingBackend {
+    let (store, events) = AppStore::new_test(Arc::new(TrackingBackend {
         repo: Arc::clone(&repo),
     }));
     store.dispatch(Msg::OpenRepo(workdir.clone()));
@@ -969,7 +969,7 @@ fn worktree_ref_picker_enter_selects_and_focuses_add(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn rename_branch_prompt_cancel_button_and_escape_close(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1063,7 +1063,7 @@ fn create_branch_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::Te
 
 #[gpui::test]
 fn create_branch_from_ref_popover_tabs_to_checkout_and_wraps(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -1832,7 +1832,7 @@ mod checkout_picker {
         repo: RepoState,
         repo_id: RepoId,
     ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2630,7 +2630,7 @@ fn branch_group_menu_model_filtered(
     filter: &str,
     configure: impl FnOnce(&mut RepoState),
 ) -> ContextMenuModel {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2675,7 +2675,7 @@ fn branch_group_menu_model_filtered(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -2729,7 +2729,7 @@ fn branch_group_delete_confirm_names_with_head(
     head: &str,
     configure: impl FnOnce(&mut RepoState),
 ) -> Vec<String> {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2769,7 +2769,7 @@ fn branch_group_delete_confirm_names_with_head(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -3015,7 +3015,7 @@ fn pinned_section_menu_model(
     section: BranchSection,
     pins: &[(BranchSection, &str)],
 ) -> ContextMenuModel {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3060,7 +3060,7 @@ fn pinned_section_menu_model(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -3145,7 +3145,7 @@ fn activate_sidebar_action_with(
     collapsed_keys: &[&str],
     pick: impl FnOnce(&mut PopoverHost, &mut gpui::Context<PopoverHost>) -> ContextMenuAction,
 ) -> (BTreeSet<String>, BTreeSet<String>) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3179,7 +3179,7 @@ fn activate_sidebar_action_with(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -3464,7 +3464,7 @@ fn branch_group_menu_treats_a_blank_filter_as_no_filter(cx: &mut gpui::TestAppCo
 /// collapse key alone would offer "Expand" on a visibly open section.
 #[gpui::test]
 fn pinned_section_menu_reports_expanded_while_a_filter_is_live(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3485,7 +3485,7 @@ fn pinned_section_menu_reports_expanded_while_a_filter_is_live(cx: &mut gpui::Te
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model

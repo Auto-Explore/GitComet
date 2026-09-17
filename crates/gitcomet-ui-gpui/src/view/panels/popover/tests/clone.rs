@@ -27,7 +27,7 @@ fn unique_parent_dir(label: &str) -> std::path::PathBuf {
 
 #[gpui::test]
 fn clone_repo_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -65,7 +65,7 @@ fn clone_repo_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn clone_repo_popover_escape_closes_from_parent_input(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -111,7 +111,7 @@ fn clone_repo_popover_escape_closes_from_parent_input(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn clone_repo_popover_escape_closes_from_browse_button(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -156,7 +156,7 @@ fn clone_repo_popover_escape_closes_from_browse_button(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn clone_repo_popover_tabs_between_inputs_buttons_and_wraps(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -269,7 +269,7 @@ fn clone_repo_popover_tabs_between_inputs_buttons_and_wraps(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn clone_repo_popover_enter_from_parent_input_submits_and_closes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -340,7 +340,7 @@ fn clone_repo_popover_enter_from_parent_input_submits_and_closes(cx: &mut gpui::
 
 #[gpui::test]
 fn clone_repo_popover_clone_button_requires_parent_path(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));

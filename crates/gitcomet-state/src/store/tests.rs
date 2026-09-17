@@ -161,7 +161,7 @@ fn has_status_refresh_effects(effects: &[Effect], repo_id: RepoId) -> bool {
 #[test]
 fn app_store_clone_dispatches_restore_and_close_paths() {
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
-    let (store, event_rx) = AppStore::new(backend);
+    let (store, event_rx) = AppStore::new_test(backend);
     let cloned = store.clone();
 
     cloned.dispatch(Msg::RestoreSession {
@@ -183,7 +183,7 @@ fn app_store_clone_dispatches_restore_and_close_paths() {
 #[test]
 fn app_store_open_repo_effect_propagates_open_error_into_state() {
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
-    let (store, event_rx) = AppStore::new(backend);
+    let (store, event_rx) = AppStore::new_test(backend);
 
     let base = std::env::temp_dir().join(format!(
         "gitcomet-store-open-repo-{}-{}",

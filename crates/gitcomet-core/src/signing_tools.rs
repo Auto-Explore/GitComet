@@ -11,18 +11,18 @@
 //! Git executes such an alias directly, without a shell, when the name contains
 //! no shell metacharacters, which [`classify_program`] guarantees.
 //!
-//! Only a definite "not found" disables verification. Inconclusive probes keep
-//! the previous behaviour of letting Git try.
+//! Verification waits for discovery. After discovery, an inconclusive probe
+//! lets Git try; a definite "not found" excludes that verifier's formats.
 
 use crate::domain::{SignatureFormat, SignatureFormats};
 use crate::process::{
-    background_command, bytes_to_text_preserving_utf8, current_git_runtime, git_command,
+    background_command, bytes_to_text_preserving_utf8, current_git_runtime,
+    git_command_for_preference, probe_output,
 };
-use std::io::Read;
+use crate::services::CancellationToken;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::process::{Command, Output};
+use std::time::Duration;
 
 pub const DEFAULT_GPG_PROGRAM: &str = "gpg";
 pub const DEFAULT_SSH_KEYGEN_PROGRAM: &str = "ssh-keygen";
@@ -33,7 +33,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SigningToolAvailability {
-    /// Not probed yet, or the probe was inconclusive. Verification still runs.
+    /// No probe has completed. Do not start speculative verification.
+    NotChecked,
+    /// The completed probe was inconclusive; let Git try.
     Unknown,
     Available {
         version: Option<String>,
@@ -61,7 +63,7 @@ impl SigningTool {
     fn unknown(program: &str) -> Self {
         Self {
             program: program.to_string(),
-            availability: SigningToolAvailability::Unknown,
+            availability: SigningToolAvailability::NotChecked,
         }
     }
 
@@ -90,12 +92,18 @@ impl SigningToolsState {
     /// The signature formats whose verifier was not positively ruled out.
     pub fn usable_formats(&self) -> SignatureFormats {
         let mut formats = SignatureFormats::NONE;
-        if !self.gpg.availability.is_not_found() {
+        if matches!(
+            self.gpg.availability,
+            SigningToolAvailability::Available { .. } | SigningToolAvailability::Unknown
+        ) {
             formats = formats
                 .with(SignatureFormat::OpenPgp)
                 .with(SignatureFormat::X509);
         }
-        if !self.ssh_keygen.availability.is_not_found() {
+        if matches!(
+            self.ssh_keygen.availability,
+            SigningToolAvailability::Available { .. } | SigningToolAvailability::Unknown
+        ) {
             formats = formats.with(SignatureFormat::Ssh);
         }
         formats
@@ -105,15 +113,33 @@ impl SigningToolsState {
 /// Probes the signing programs of the currently installed Git runtime. Blocks
 /// for a few process spawns, so call it off the UI thread.
 pub fn detect_signing_tools() -> SigningToolsState {
-    if !current_git_runtime().is_available() {
-        return SigningToolsState::default();
-    }
-    detect_signing_tools_with(&git_command)
+    detect_signing_tools_cancellable(&CancellationToken::new())
 }
 
-/// [`detect_signing_tools`] with an injectable Git command factory.
+pub fn detect_signing_tools_cancellable(cancellation: &CancellationToken) -> SigningToolsState {
+    let runtime = current_git_runtime();
+    if !runtime.is_available() || cancellation.is_cancelled() {
+        return SigningToolsState::default();
+    }
+    detect_signing_tools_with_cancellation(
+        &|| git_command_for_preference(&runtime.preference),
+        cancellation,
+    )
+}
+
+/// Injectable factory for deterministic tests and callers with a frozen runtime.
 pub fn detect_signing_tools_with(git: &(dyn Fn() -> Command + Sync)) -> SigningToolsState {
-    let programs = read_signing_programs(git);
+    detect_signing_tools_with_cancellation(git, &CancellationToken::new())
+}
+
+pub fn detect_signing_tools_with_cancellation(
+    git: &(dyn Fn() -> Command + Sync),
+    cancellation: &CancellationToken,
+) -> SigningToolsState {
+    if cancellation.is_cancelled() {
+        return SigningToolsState::default();
+    }
+    let programs = read_signing_programs(git, cancellation);
     let gpg_program = programs
         .gpg
         .unwrap_or_else(|| DEFAULT_GPG_PROGRAM.to_string());
@@ -122,8 +148,8 @@ pub fn detect_signing_tools_with(git: &(dyn Fn() -> Command + Sync)) -> SigningT
         .unwrap_or_else(|| DEFAULT_SSH_KEYGEN_PROGRAM.to_string());
 
     let (gpg, ssh_keygen) = std::thread::scope(|scope| {
-        let gpg = scope.spawn(|| detect_gpg(git, &gpg_program));
-        let ssh_keygen = detect_ssh_keygen(git, &ssh_keygen_program);
+        let gpg = scope.spawn(|| detect_gpg(git, &gpg_program, cancellation));
+        let ssh_keygen = detect_ssh_keygen(git, &ssh_keygen_program, cancellation);
         (
             gpg.join().unwrap_or(SigningToolAvailability::Unknown),
             ssh_keygen,
@@ -148,7 +174,10 @@ struct SigningPrograms {
     ssh_keygen: Option<String>,
 }
 
-fn read_signing_programs(git: &(dyn Fn() -> Command + Sync)) -> SigningPrograms {
+fn read_signing_programs(
+    git: &(dyn Fn() -> Command + Sync),
+    cancellation: &CancellationToken,
+) -> SigningPrograms {
     let mut command = git();
     command
         .args([
@@ -158,7 +187,7 @@ fn read_signing_programs(git: &(dyn Fn() -> Command + Sync)) -> SigningPrograms 
             r"^gpg\.(program|openpgp\.program|ssh\.program)$",
         ])
         .current_dir(std::env::temp_dir());
-    match output_with_timeout(command, PROBE_TIMEOUT) {
+    match output_with_timeout_cancellable(command, PROBE_TIMEOUT, cancellation) {
         Ok(Some(output)) if output.status.success() => {
             parse_signing_programs(&bytes_to_text_preserving_utf8(&output.stdout))
         }
@@ -225,7 +254,12 @@ enum ProbeOutcome {
     Inconclusive,
 }
 
-fn probe_program(git: &(dyn Fn() -> Command + Sync), program: &str, args: &[&str]) -> ProbeOutcome {
+fn probe_program(
+    git: &(dyn Fn() -> Command + Sync),
+    program: &str,
+    args: &[&str],
+    cancellation: &CancellationToken,
+) -> ProbeOutcome {
     let kind = classify_program(program);
     let mut command = match kind {
         ProgramKind::Bare => {
@@ -245,7 +279,7 @@ fn probe_program(git: &(dyn Fn() -> Command + Sync), program: &str, args: &[&str
         .env("LC_ALL", "C")
         .env("LANGUAGE", "C");
 
-    match output_with_timeout(command, PROBE_TIMEOUT) {
+    match output_with_timeout_cancellable(command, PROBE_TIMEOUT, cancellation) {
         Ok(Some(output)) if kind == ProgramKind::Bare && alias_program_missing(&output) => {
             ProbeOutcome::NotFound(format!("`{program}` was not found on Git's PATH."))
         }
@@ -272,8 +306,12 @@ fn alias_program_missing(output: &Output) -> bool {
             .contains(&format!("while expanding alias '{PROBE_ALIAS}'"))
 }
 
-fn detect_gpg(git: &(dyn Fn() -> Command + Sync), program: &str) -> SigningToolAvailability {
-    match probe_program(git, program, &["--version"]) {
+fn detect_gpg(
+    git: &(dyn Fn() -> Command + Sync),
+    program: &str,
+    cancellation: &CancellationToken,
+) -> SigningToolAvailability {
+    match probe_program(git, program, &["--version"], cancellation) {
         ProbeOutcome::Ran(output) => SigningToolAvailability::Available {
             version: first_line(&output.stdout).or_else(|| first_line(&output.stderr)),
         },
@@ -282,11 +320,15 @@ fn detect_gpg(git: &(dyn Fn() -> Command + Sync), program: &str) -> SigningToolA
     }
 }
 
-fn detect_ssh_keygen(git: &(dyn Fn() -> Command + Sync), program: &str) -> SigningToolAvailability {
+fn detect_ssh_keygen(
+    git: &(dyn Fn() -> Command + Sync),
+    program: &str,
+    cancellation: &CancellationToken,
+) -> SigningToolAvailability {
     // ssh-keygen has no version flag; an unknown option prints usage and exits 1.
-    match probe_program(git, program, &["-?"]) {
+    match probe_program(git, program, &["-?"], cancellation) {
         ProbeOutcome::Ran(_) => SigningToolAvailability::Available {
-            version: openssh_version(git, program),
+            version: openssh_version(git, program, cancellation),
         },
         ProbeOutcome::NotFound(detail) => SigningToolAvailability::NotFound { detail },
         ProbeOutcome::Inconclusive => SigningToolAvailability::Unknown,
@@ -294,7 +336,11 @@ fn detect_ssh_keygen(git: &(dyn Fn() -> Command + Sync), program: &str) -> Signi
 }
 
 /// ssh-keygen's version, read from the `ssh` client installed beside it.
-fn openssh_version(git: &(dyn Fn() -> Command + Sync), ssh_keygen: &str) -> Option<String> {
+fn openssh_version(
+    git: &(dyn Fn() -> Command + Sync),
+    ssh_keygen: &str,
+    cancellation: &CancellationToken,
+) -> Option<String> {
     let ssh = match classify_program(ssh_keygen) {
         ProgramKind::Bare if ssh_keygen == DEFAULT_SSH_KEYGEN_PROGRAM => "ssh".to_string(),
         ProgramKind::Absolute => {
@@ -307,7 +353,7 @@ fn openssh_version(git: &(dyn Fn() -> Command + Sync), ssh_keygen: &str) -> Opti
         }
         _ => return None,
     };
-    match probe_program(git, &ssh, &["-V"]) {
+    match probe_program(git, &ssh, &["-V"], cancellation) {
         ProbeOutcome::Ran(output) if output.status.success() => {
             first_line(&output.stderr).or_else(|| first_line(&output.stdout))
         }
@@ -323,45 +369,23 @@ fn first_line(bytes: &[u8]) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Runs `command` to completion, or returns `None` after killing it at `timeout`.
-fn output_with_timeout(mut command: Command, timeout: Duration) -> std::io::Result<Option<Output>> {
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn()?;
-    let stdout = spawn_reader(child.stdout.take());
-    let stderr = spawn_reader(child.stderr.take());
-
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+fn output_with_timeout_cancellable(
+    command: Command,
+    timeout: Duration,
+    cancellation: &CancellationToken,
+) -> std::io::Result<Option<Output>> {
+    match probe_output(command, timeout, cancellation) {
+        Ok(output) => Ok(Some(output)),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted
+            ) =>
+        {
+            Ok(None)
         }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            // A grandchild may still hold the pipes open; leave the readers be.
-            return Ok(None);
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    };
-
-    Ok(Some(Output {
-        status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
-    }))
-}
-
-fn spawn_reader<R: Read + Send + 'static>(pipe: Option<R>) -> JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut buffer = Vec::new();
-        if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut buffer);
-        }
-        buffer
-    })
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -382,10 +406,10 @@ mod tests {
     }
 
     #[test]
-    fn unprobed_tools_keep_every_format_usable() {
+    fn unprobed_tools_do_not_start_verification() {
         assert_eq!(
             SigningToolsState::default().usable_formats(),
-            SignatureFormats::ALL
+            SignatureFormats::NONE
         );
     }
 

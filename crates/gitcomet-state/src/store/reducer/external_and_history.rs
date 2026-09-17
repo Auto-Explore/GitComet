@@ -76,6 +76,9 @@ pub(super) fn reload_repo(
     let mut effects = Vec::new();
     append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
     let repo_state = &mut state.repos[repo_ix];
+    if git_log_settings.verify_commit_signatures {
+        repo_state.clear_commit_signatures();
+    }
 
     repo_state.set_head_branch(Loadable::Loading);
     repo_state.set_detached_head_commit(None);
@@ -160,6 +163,13 @@ pub(super) fn repo_externally_changed(
     repo_id: crate::model::RepoId,
     change: RepoExternalChange,
 ) -> Vec<Effect> {
+    if change.verification_context && state.git_log_settings.verify_commit_signatures {
+        // Config includes and control-file replacements can change the verifier
+        // or trust settings without changing any commit. Wait for fresh tool
+        // discovery; the GUI republishes its viewport for the new epoch.
+        state.signing_tools = Default::default();
+        super::util::reverify_all_commit_signatures_effects(state);
+    }
     let sidebar_shows_this_files_tree =
         state.sidebar_mode == SidebarMode::Files && state.active_repo == Some(repo_id);
     if change.git_state {
@@ -622,10 +632,14 @@ pub(super) fn log_loaded(
     result: std::result::Result<gitcomet_core::services::HistoryReadResult, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
-    let signature_formats = state.signature_verification_formats();
+    let verification_enabled = state.git_log_settings.verify_commit_signatures;
+    let signature_formats = if state.active_repo == Some(repo_id) {
+        state.signature_verification_formats()
+    } else {
+        gitcomet_core::domain::SignatureFormats::NONE
+    };
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let is_load_more = cursor.is_some();
-        let mut appended_signature_ids = Vec::new();
 
         // Drop replies from a walk that a newer request superseded. That walk
         // was cancelled and its replacement is still running, so the in-flight
@@ -655,13 +669,6 @@ pub(super) fn log_loaded(
                 return finish_log_load(repo_state);
             }
             Ok(gitcomet_core::services::HistoryReadResult::Page { mut page, snapshot }) => {
-                if is_load_more {
-                    appended_signature_ids = page
-                        .commits
-                        .iter()
-                        .map(|commit| commit.id.clone())
-                        .collect();
-                }
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
                     // Drop the history_state copy first so the Arc's refcount
                     // goes to 1 and make_mut can mutate in-place instead of
@@ -769,17 +776,10 @@ pub(super) fn log_loaded(
             repo_state.set_log_loading_more(false);
         }
 
-        if !is_load_more {
+        if !is_load_more && verification_enabled {
             effects.extend(super::util::reverify_loaded_commit_signatures_effect(
                 signature_formats,
                 repo_state,
-            ));
-        } else {
-            effects.extend(super::util::verify_commit_signatures_effect(
-                signature_formats,
-                repo_state,
-                repo_id,
-                appended_signature_ids,
             ));
         }
 

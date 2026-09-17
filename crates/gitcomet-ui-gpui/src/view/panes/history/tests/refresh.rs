@@ -11,7 +11,7 @@ fn mount(
     AppState,
     AppStore,
 ) {
-    let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+    let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let store_for_test = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -29,7 +29,7 @@ fn mount(
     let state = AppState {
         repos: vec![repo],
         active_repo: Some(RepoId(1)),
-        ..Default::default()
+        ..AppState::test_default()
     };
     store_for_test.replace_snapshot_for_test(Arc::new(state.clone()));
     cx.update(|_, app| {
@@ -483,6 +483,108 @@ fn install_index(state: &mut AppState, index: gitcomet_core::history_index::Hist
     history.indexed.requested = Some(index.snapshot.clone());
     history.indexed.index = Some(index);
     history.indexed.rev += 1;
+}
+
+fn signature_demand_follows_the_viewport(cx: &mut gpui::TestAppContext, indexed: bool) {
+    let _guard = crate::test_support::lock_visual_test();
+    let (index, commits) = indexed_fixture(600);
+    let (view, cx, mut state, store) = mount(cx, Arc::new(log_page(commits.clone(), None)));
+    let history = cx.update(|_, app| view.read(app).main_pane.read(app).history_view.clone());
+    cx.update(|_, app| {
+        assert!(history.read(app).signature_debounce.is_none());
+        assert!(history.read(app).signature_viewport.is_none());
+    });
+    state.git_log_settings.verify_commit_signatures = true;
+    // Leave tools NotChecked: observe actual viewport messages without running
+    // a verifier or replacing this fixture with a backend response.
+    if indexed {
+        install_index(&mut state, index);
+    }
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(state));
+    wait_until(cx, "signature debounce scheduled", |cx| {
+        cx.update(|_, app| {
+            let history = history.read(app);
+            history.signature_debounce.is_some()
+                && (!indexed || history.indexed.presentation.is_some())
+        })
+    });
+    cx.executor().advance_clock(Duration::from_millis(100));
+    wait_until(cx, "initial signature viewport", |_| {
+        !store.snapshot().repos[0]
+            .history_state
+            .signature_targets_for_test()
+            .is_empty()
+    });
+    let first = store.snapshot().repos[0]
+        .history_state
+        .signature_targets_for_test()
+        .clone();
+    assert_eq!(first.first(), Some(&commits[0].id));
+    assert!(first.len() < 60, "offscreen history was scheduled");
+    // Two quick scrolls must replace the pending target set, never append the
+    // intermediate viewport. The initial demand remains until debounce ends.
+    for row in [100, 200] {
+        if indexed {
+            cx.update(|window, app| {
+                history.update(app, |history, cx| {
+                    let mut scroll = history.scroll_interaction.borrow_mut();
+                    let logical = scroll.logical.as_mut().unwrap();
+                    logical.set_position(row as f64 * logical.height);
+                    cx.notify();
+                });
+                window.refresh();
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        } else {
+            scroll(cx, &view, Some(row));
+        }
+    }
+    cx.executor().advance_clock(Duration::from_millis(99));
+    cx.run_until_parked();
+    assert!(Arc::ptr_eq(
+        &first,
+        store.snapshot().repos[0]
+            .history_state
+            .signature_targets_for_test()
+    ));
+    cx.executor().advance_clock(Duration::from_millis(1));
+    wait_until(cx, "latest signature viewport", |_| {
+        store.snapshot().repos[0]
+            .history_state
+            .signature_targets_for_test()
+            .first()
+            == Some(&commits[200].id)
+    });
+    let current = store.snapshot().repos[0]
+        .history_state
+        .signature_targets_for_test()
+        .clone();
+    assert!(!current.contains(&commits[100].id));
+    assert!(!current.contains(&commits[300].id));
+    let mut disabled = (*store.snapshot()).clone();
+    disabled.git_log_settings.verify_commit_signatures = false;
+    store.replace_snapshot_for_test(Arc::new(disabled.clone()));
+    set_history_view_state_for_tests(cx, &view, Arc::new(disabled));
+    cx.update(|_, app| {
+        assert!(history.read(app).signature_debounce.is_none());
+        assert!(history.read(app).signature_viewport.is_none());
+    });
+}
+
+#[gpui::test]
+fn fallback_signature_demand_is_debounced_and_disabled_without_a_timer(
+    cx: &mut gpui::TestAppContext,
+) {
+    signature_demand_follows_the_viewport(cx, false);
+}
+
+#[gpui::test]
+fn indexed_signature_demand_is_debounced_and_disabled_without_a_timer(
+    cx: &mut gpui::TestAppContext,
+) {
+    signature_demand_follows_the_viewport(cx, true);
 }
 
 fn logical_top(

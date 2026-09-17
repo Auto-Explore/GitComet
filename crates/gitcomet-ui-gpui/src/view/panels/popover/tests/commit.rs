@@ -15,14 +15,14 @@ fn open_repo(repo_id: RepoId, workdir: &str) -> RepoState {
 
 #[gpui::test]
 fn clean_repo_disables_commit_prompt_submission(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let repo_id = RepoId(1);
     let mut repo = open_repo(repo_id, "/tmp/clean-commit-prompt");
     repo.staged_status = Loadable::Ready(Arc::new(Vec::new()));
     store.replace_snapshot_for_test(Arc::new(AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     }));
 
     let store_for_view = store.clone();
@@ -57,7 +57,7 @@ fn clean_repo_disables_commit_prompt_submission(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn commit_prompt_restores_drafts_per_repo(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let repo_a = RepoId(11);
     let repo_b = RepoId(12);
     store.replace_snapshot_for_test(Arc::new(AppState {
@@ -66,7 +66,7 @@ fn commit_prompt_restores_drafts_per_repo(cx: &mut gpui::TestAppContext) {
             open_repo(repo_b, "/tmp/commit-prompt-b"),
         ],
         active_repo: Some(repo_a),
-        ..Default::default()
+        ..AppState::test_default()
     }));
 
     let store_for_view = store.clone();
@@ -127,7 +127,7 @@ fn commit_prompt_restores_drafts_per_repo(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn successful_commit_prompt_submission_clears_draft(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let repo_id = RepoId(21);
     let mut repo = open_repo(repo_id, "/tmp/commit-prompt-submit");
     repo.staged_status = Loadable::Ready(Arc::new(Vec::new()));
@@ -135,7 +135,7 @@ fn successful_commit_prompt_submission_clears_draft(cx: &mut gpui::TestAppContex
     store.replace_snapshot_for_test(Arc::new(AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     }));
 
     let store_for_view = store.clone();
@@ -200,7 +200,7 @@ fn merge_entry_names_and_gates_on_the_commits_own_repository(cx: &mut gpui::Test
         .expect("expected the merge entry")
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -220,7 +220,7 @@ fn merge_entry_names_and_gates_on_the_commits_own_repository(cx: &mut gpui::Test
                 let state = Arc::new(AppState {
                     repos: vec![active, other],
                     active_repo: Some(active_id),
-                    ..Default::default()
+                    ..AppState::test_default()
                 });
                 this.state = Arc::clone(&state);
                 this.ui_model

@@ -540,7 +540,7 @@ mod tests {
     }
 
     fn host(cx: &mut gpui::TestAppContext) -> Entity<CommitMessageHoverHost> {
-        let (store, _events) = AppStore::new(Arc::new(NoopBackend));
+        let (store, _events) = AppStore::new_test(Arc::new(NoopBackend));
         let store = Arc::new(store);
         cx.update(|cx| {
             let ui_model = cx.new(|_cx| AppUiModel::new(store.snapshot()));

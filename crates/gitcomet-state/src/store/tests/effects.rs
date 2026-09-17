@@ -25,7 +25,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
         let spec = RepoSpec {
             workdir: PathBuf::from("/tmp/signature-scheduling"),
         };
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         state
             .repos
             .push(RepoState::new_opening(repo_id, spec.clone()));
@@ -50,6 +50,7 @@ fn signature_work_survives_repo_load_cancellation_and_does_not_use_primary_worke
             Effect::VerifyCommitSignatures {
                 repo_id,
                 epoch: 0,
+                batch: 1,
                 cancellation: CancellationToken::new(),
                 commit_ids: vec![CommitId("aaaa".into())].into(),
                 formats: gitcomet_core::domain::SignatureFormats::ALL,
@@ -177,7 +178,7 @@ fn schedule_effect_for_test(
         session_persist_executor,
         backend,
         repos,
-        AppState::default(),
+        AppState::test_default(),
         msg_tx,
         effect,
     );
@@ -312,7 +313,7 @@ fn unavailable_git_effect_emits_synthetic_repo_command_error() {
                 detail: "Custom Git executable is not configured. Choose an executable or switch back to System PATH.".to_string(),
             },
         },
-        ..AppState::default()
+        ..AppState::test_default()
     };
 
     schedule_effect_with_state_for_test(
@@ -371,7 +372,7 @@ fn unavailable_git_revert_emits_synthetic_revert_command_error() {
                 detail: "git missing".to_string(),
             },
         },
-        ..AppState::default()
+        ..AppState::test_default()
     };
     let commit_id = CommitId("deadbeef".into());
 
@@ -3741,7 +3742,7 @@ fn push_lifecycle_uses_cached_tracking_branch_context() {
         &repos,
         AppState {
             repos: vec![repo_state],
-            ..AppState::default()
+            ..AppState::test_default()
         },
         msg_tx,
         Effect::Push {
@@ -4965,7 +4966,7 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -5068,7 +5069,7 @@ fn open_repo_effects_are_bounded_by_repo_load_executor() {
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(AppState::default())));
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(AppState::test_default())));
     let mut repo_task_tokens = FxHashMap::default();
     let executors = super::effects::EffectExecutors {
         executor: &executor,
@@ -5281,7 +5282,7 @@ fn log_effect_streams_only_while_replacing_a_loading_page() {
                 calls: Arc::clone(&calls),
             }),
         );
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let mut repo = RepoState::new_opening(repo_id, spec);
         repo.set_log(if loading {
             Loadable::Loading
@@ -5430,7 +5431,7 @@ fn remote_tag_load_for_one_repo_does_not_block_other_repo_metadata_refresh() {
         super::executor::TaskExecutor::new(super::executor::metadata_worker_threads());
     let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_a,
         RepoSpec {
@@ -5538,7 +5539,7 @@ fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
         path: PathBuf::from("repo-b.txt"),
         area: DiffArea::Unstaged,
     };
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state_a = RepoState::new_opening(
         repo_a,
         RepoSpec {
@@ -5680,7 +5681,7 @@ fn cancelled_uncommitted_line_stats_frees_the_repo_load_executor() {
     let metadata_executor = super::executor::TaskExecutor::new(1);
     let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
     let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_a,
         RepoSpec {
@@ -5791,7 +5792,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         path: PathBuf::from("tracked.txt"),
         area: DiffArea::Unstaged,
     };
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let mut repo_state = crate::model::RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -6904,14 +6905,14 @@ fn branch_action_in_other_worktree_fails_when_backend_opens_own_workdir() {
 #[test]
 fn repo_action_without_open_handle_releases_in_flight_counter() {
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
-    let (store, _event_rx) = AppStore::new(backend);
+    let (store, _event_rx) = AppStore::new_test(backend);
     let repo_id = RepoId(1);
     let spec = RepoSpec {
         workdir: PathBuf::from("/tmp/gitcomet-missing-handle"),
     };
     let mut state = AppState {
         active_repo: Some(repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     };
     state.repos.push(RepoState::new_opening(repo_id, spec));
     store.replace_snapshot_for_test(Arc::new(state));

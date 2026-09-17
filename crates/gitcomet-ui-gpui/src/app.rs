@@ -2183,7 +2183,7 @@ mod tests {
     #[gpui::test]
     fn manual_update_check_activates_its_feedback_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
         let main_window_id = cx.update(|window, app| {
@@ -3076,7 +3076,7 @@ mod tests {
     fn settings_shortcut_opens_a_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let store_for_view = store.clone();
         let (view, cx) = cx.add_window_view(|window, cx| {
             GitCometView::new(store_for_view, events, None, window, cx)
@@ -3099,7 +3099,7 @@ mod tests {
     fn settings_shortcut_reuses_existing_window_and_activates_it(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3151,7 +3151,7 @@ mod tests {
     fn recent_picker_shortcut_toggles_the_popover(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let store_for_view = store.clone();
         let (view, cx) = cx.add_window_view(|window, cx| {
             GitCometView::new(store_for_view, events, None, window, cx)
@@ -3186,7 +3186,7 @@ mod tests {
     fn new_window_shortcuts_open_new_windows(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3217,7 +3217,7 @@ mod tests {
 
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3281,7 +3281,7 @@ mod tests {
     ) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3301,7 +3301,7 @@ mod tests {
     fn close_window_shortcut_closes_the_active_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3322,7 +3322,7 @@ mod tests {
     fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let store_for_view = store.clone();
         let (view, cx) = cx.add_window_view(|window, cx| {
             GitCometView::new(store_for_view, events, None, window, cx)
@@ -3410,7 +3410,7 @@ mod tests {
     fn repository_picker_fallback_reuses_existing_normal_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3490,7 +3490,7 @@ mod tests {
     fn macos_clone_repository_action_opens_native_clone_prompt(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3516,7 +3516,7 @@ mod tests {
     fn macos_initialize_repository_action_requests_folder_picker(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3553,7 +3553,7 @@ mod tests {
 
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3569,7 +3569,7 @@ mod tests {
                                 detail: "Git unavailable for menu routing test".to_string(),
                             },
                         },
-                        ..AppState::default()
+                        ..AppState::test_default()
                     }),
                     cx,
                 );
@@ -3622,7 +3622,7 @@ mod tests {
     fn locate_file_action_activates_background_normal_window(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3671,7 +3671,7 @@ mod tests {
     ) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -3697,7 +3697,7 @@ mod tests {
     ) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (store, events) = AppStore::new_test(Arc::clone(&backend));
         let (_view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 

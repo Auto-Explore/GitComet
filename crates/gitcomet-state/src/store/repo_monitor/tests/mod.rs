@@ -249,6 +249,7 @@ fn merge_change_coalesces_to_both() {
             index: false,
             git_state: true,
             tags: false,
+            verification_context: false,
         }
     );
     assert_eq!(
@@ -258,6 +259,7 @@ fn merge_change_coalesces_to_both() {
             index: false,
             git_state: true,
             tags: false,
+            verification_context: false,
         }
     );
     assert_eq!(
@@ -323,6 +325,7 @@ fn classify_repo_change_distinguishes_gitdir_from_worktree() {
             index: false,
             git_state: true,
             tags: false,
+            verification_context: false,
         })
     );
 }

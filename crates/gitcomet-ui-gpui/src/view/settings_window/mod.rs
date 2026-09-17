@@ -3,11 +3,11 @@ use crate::appearance::{Appearance, FontRole, UiDensity};
 use crate::ui_scale;
 use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
-    GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
+    GitExecutablePreference, GitRuntimeState, current_git_runtime, select_git_executable_path,
 };
 use gitcomet_core::signing_tools::{
     DEFAULT_GPG_PROGRAM, DEFAULT_SSH_KEYGEN_PROGRAM, SigningTool, SigningToolAvailability,
-    SigningToolsState, detect_signing_tools,
+    SigningToolsState,
 };
 use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
 use gitcomet_state::session::ExternalCodeEditorSetting;
@@ -570,6 +570,7 @@ pub(crate) struct SettingsWindowView {
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
     signing_tools_probe: Option<gpui::Task<()>>,
+    signing_tools_cancellation: gitcomet_core::services::CancellationToken,
     git_executable_mode: GitExecutableMode,
     git_custom_path_draft: String,
     git_executable_input: Entity<components::TextInput>,
@@ -965,7 +966,7 @@ impl SettingsWindowView {
             };
         let theme = theme_mode.resolve_theme(window.appearance());
         let runtime_info = SettingsRuntimeInfo::detect();
-        let signing_tools_probe = Self::spawn_signing_tools_probe(cx);
+        let signing_tools_probe = None;
         let git_executable_mode =
             GitExecutableMode::from_preference(&runtime_info.git.runtime.preference);
         let git_custom_path_draft = match &runtime_info.git.runtime.preference {
@@ -1233,6 +1234,7 @@ impl SettingsWindowView {
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
             signing_tools_probe,
+            signing_tools_cancellation: Default::default(),
             git_executable_mode,
             git_custom_path_draft,
             git_executable_input,
@@ -1263,6 +1265,9 @@ impl SettingsWindowView {
             return;
         }
         self.selected_category = category;
+        if category == SettingsCategory::GitExecutable {
+            super::runtime_probe::request(cx, true);
+        }
         // Collapse any expanded row so the new page starts clean, and scroll
         // the content pane back to the top.
         self.set_expanded_section(None, cx);

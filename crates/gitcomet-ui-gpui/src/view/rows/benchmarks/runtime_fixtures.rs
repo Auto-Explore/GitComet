@@ -1384,7 +1384,7 @@ impl NetworkFixture {
 
 #[cfg(any(test, feature = "benchmarks"))]
 fn build_network_baseline_state(url: &str, dest: &Path) -> AppState {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let _ = dispatch_sync(
         &mut state,
         Msg::CloneRepo {

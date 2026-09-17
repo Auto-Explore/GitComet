@@ -749,6 +749,11 @@ impl GitCometView {
             tag_fetch_mode,
             verify_commit_signatures: enabled,
         });
+        if enabled {
+            self.refresh_signing_tools(true, cx);
+        } else {
+            self.cancel_signing_tools_probe();
+        }
         self.schedule_ui_settings_persist(cx);
     }
 

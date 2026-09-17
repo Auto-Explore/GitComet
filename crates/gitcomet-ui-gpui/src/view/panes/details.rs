@@ -2538,7 +2538,7 @@ mod tests {
                     push_after_commit: false,
                 },
             }),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         assert!(
@@ -2565,7 +2565,7 @@ mod tests {
         let state = AppState {
             repos: vec![repo],
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         assert!(
@@ -2591,7 +2591,7 @@ mod tests {
         let state = AppState {
             repos: vec![repo_state(repo_id, "/tmp/repo")],
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         assert!(
@@ -2613,7 +2613,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, inactive],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = DetailsPaneView::notify_fingerprint(&state);
@@ -2633,7 +2633,7 @@ mod tests {
         let mut state = AppState {
             active_repo: Some(RepoId(1)),
             repos: vec![repo_state(RepoId(1), "/tmp/indexed-comparison")],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let before = DetailsPaneView::notify_fingerprint(&state);
         state.repos[0].history_state.indexed.rev += 1;
@@ -2645,7 +2645,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = DetailsPaneView::notify_fingerprint(&state);
@@ -2683,7 +2683,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = DetailsPaneView::notify_fingerprint(&state);

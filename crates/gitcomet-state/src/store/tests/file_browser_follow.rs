@@ -33,7 +33,7 @@ fn file_browser_loads(effects: &[Effect]) -> Vec<FileSource> {
 
 /// An open repo with active browsing and a loaded, partly expanded live tree.
 fn ready_state(sidebar_mode: SidebarMode) -> (Repos, AtomicU64, AppState, RepoId) {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,

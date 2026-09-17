@@ -1065,16 +1065,28 @@ fn reduce_inner(
             Vec::new()
         }
         Msg::SetGitRuntimeState(runtime) => {
+            if state.git_runtime == runtime {
+                return Vec::new();
+            }
             state.git_runtime = runtime;
-            Vec::new()
+            state.signing_tools = Default::default();
+            if state.git_log_settings.verify_commit_signatures {
+                util::reverify_all_commit_signatures_effects(state)
+            } else {
+                Vec::new()
+            }
         }
+        Msg::SetCommitSignatureTargets {
+            repo_id,
+            epoch,
+            commit_ids,
+        } => util::set_commit_signature_targets(state, repo_id, epoch, commit_ids),
         Msg::SetSigningToolsState(tools) => {
             if state.signing_tools == tools {
                 return Vec::new();
             }
-            let formats_changed = state.signing_tools.usable_formats() != tools.usable_formats();
             state.signing_tools = tools;
-            if !formats_changed || !state.git_log_settings.verify_commit_signatures {
+            if !state.git_log_settings.verify_commit_signatures {
                 return Vec::new();
             }
             // A verifier was installed or went missing: badges must follow it.
@@ -1097,8 +1109,8 @@ fn reduce_inner(
             if !verification_toggled {
                 return Vec::new();
             }
-            // Turning it off drops the verdicts so every badge clears on the next
-            // paint; turning it back on re-checks what is already loaded.
+            // A fresh opt-in waits for discovery before starting any verifier.
+            state.signing_tools = Default::default();
             util::reverify_all_commit_signatures_effects(state)
         }
         Msg::SetRemoteSettings(settings) => {
@@ -2650,8 +2662,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::CommitSignaturesVerified {
             repo_id,
             epoch,
+            batch,
             result,
-        }) => effects::commit_signatures_verified(state, repo_id, epoch, result),
+        }) => effects::commit_signatures_verified(state, repo_id, epoch, batch, result),
         Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
             repo_id,
             reference,

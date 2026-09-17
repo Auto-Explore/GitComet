@@ -829,6 +829,12 @@ fn fill_set_active_repo_inline_impl(
     if changed {
         append_cancel_repo_loads_effect_for_repo(state, previous_active, effects);
     }
+    if changed && state.git_log_settings.verify_commit_signatures {
+        for repo in &mut state.repos {
+            repo.history_state.commit_signatures_queue.clear();
+            repo.history_state.commit_signatures_visible = Default::default();
+        }
+    }
     state.active_repo = Some(repo_id);
     let persist_effect = (changed && persist_on_change)
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));

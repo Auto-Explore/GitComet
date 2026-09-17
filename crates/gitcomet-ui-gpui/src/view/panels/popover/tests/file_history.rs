@@ -91,7 +91,7 @@ fn open_file_history_with(
 /// block so that rebinding `cx` to the visual context reaches the test body.
 macro_rules! file_history_picker {
     ($cx:ident, $host:ident) => {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, $cx) =
             $cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
         let $host = open_file_history(&view, $cx);
@@ -104,7 +104,7 @@ macro_rules! file_history_picker {
 #[gpui::test]
 fn file_history_reports_older_commits_still_loading(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let pending = Some(gitcomet_core::domain::LogCursor {

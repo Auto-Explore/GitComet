@@ -3564,7 +3564,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -3576,7 +3576,7 @@ mod tests {
 
     #[test]
     fn sidebar_notify_fingerprint_tracks_sidebar_mode() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let initial = SidebarNotifyFingerprint::from_state(&state);
 
         state.sidebar_mode = SidebarMode::Files;
@@ -3599,7 +3599,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, worktree_repo],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -3625,7 +3625,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, worktree_repo],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -3650,7 +3650,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, worktree_repo],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -3670,7 +3670,7 @@ mod tests {
                 repo_state(RepoId(2), "/tmp/repo-wt"),
             ],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let state_b = AppState {
@@ -3679,7 +3679,7 @@ mod tests {
                 repo_state(RepoId(1), "/tmp/repo"),
             ],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         assert_eq!(
@@ -3734,7 +3734,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, inactive],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -3764,7 +3764,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![active, related, unrelated],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -3780,7 +3780,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -3802,7 +3802,7 @@ mod tests {
         let mut state = AppState {
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -3823,7 +3823,7 @@ mod tests {
                 repo_state(RepoId(2), "/tmp/inactive"),
             ],
             active_repo: Some(RepoId(1)),
-            ..AppState::default()
+            ..AppState::test_default()
         };
 
         let initial = SidebarNotifyFingerprint::from_state(&state);

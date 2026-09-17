@@ -3927,7 +3927,7 @@ mod tests {
         let feature_path = worktrees_path.join("repo-feature");
         std::fs::create_dir(&repo_path).expect("main worktree directory");
         std::fs::create_dir(&feature_path).expect("feature worktree directory");
-        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -4327,7 +4327,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = crate::test_support::lock_visual_test();
-        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -4431,7 +4431,7 @@ mod tests {
     #[gpui::test]
     fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::TestAppContext) {
         let _visual_guard = crate::test_support::lock_visual_test();
-        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -4550,7 +4550,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = crate::test_support::lock_visual_test();
-        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));

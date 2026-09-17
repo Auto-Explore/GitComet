@@ -1349,29 +1349,24 @@ impl GitCometView {
             }
             let self_initiated_grab =
                 consume_window_grab_activation(&mut this.window_grab_activation_suppressed_at, now);
-            let runtime = refresh_git_runtime();
-            if runtime != this.state.git_runtime {
-                this.store
-                    .dispatch(Msg::SetGitRuntimeState(runtime.clone()));
+            if self_initiated_grab {
+                return;
+            }
+            let git_available = this.state.git_runtime.is_available();
+            if !git_available {
+                runtime_probe::request(cx, false);
             }
             // Suppressed activations skip `repo_activation_msg` entirely, so its
             // throttle map is not stamped and a genuine alt-tab immediately after
             // a drag still refreshes.
-            if !runtime.is_available() || self_initiated_grab {
+            if !git_available {
                 return;
             }
-            // Coming back to the app may follow installing gpg or ssh-keygen.
-            this.refresh_signing_tools(false, cx);
             if let Some(msg) =
                 repo_activation_msg(&this.state, &mut this.last_repo_activation_dispatch_at, now)
             {
-                // Other worktrees have no watcher of their own — the repo
-                // monitor only flushes for the active repo — so coming back to
-                // the window is the moment their uncommitted-change counts get
-                // reconciled. Rides the same throttle as the activation refresh.
-                if let Some(repo_id) = this.state.active_repo {
-                    this.store.dispatch(Msg::LoadWorktreeDirty { repo_id });
-                }
+                // The full refresh already requests the other worktrees' scan.
+                // Requesting it here too schedules a redundant trailing scan.
                 this.store.dispatch(msg);
             }
         });
@@ -1564,7 +1559,7 @@ impl GitCometView {
             window_grab_activation_suppressed_at: None,
             signing_tools_probe_seq: 0,
             signing_tools_probe_in_flight: false,
-            signing_tools_probed_at: None,
+            signing_tools_probe_cancellation: Default::default(),
             date_time_format,
             timezone,
             show_timezone,
@@ -1658,6 +1653,7 @@ impl GitCometView {
         view.drive_submodule_diff_bootstrap();
         view.maybe_show_user_survey_on_startup(cx);
         view.maybe_check_for_updates_on_startup(cx);
+        runtime_probe::request(cx, false);
         view.refresh_signing_tools(false, cx);
 
         crate::app::sync_gitcomet_window_state(
@@ -2821,38 +2817,57 @@ impl GitCometView {
         &self.terminal_preferences
     }
 
-    /// Re-probes gpg and ssh-keygen off the UI thread, so signature badges are
-    /// only requested for formats Git can verify. Window activation fires on
-    /// every app switch, so unforced probes are throttled.
-    pub(super) fn refresh_signing_tools(&mut self, force: bool, cx: &mut gpui::Context<Self>) {
-        // View tests drive a fixed store state and must not probe the host's tools.
-        if cfg!(test) {
-            return;
-        }
-        let now = Instant::now();
-        let recently_probed = self
-            .signing_tools_probed_at
-            .is_some_and(|at| now.duration_since(at) < SIGNING_TOOLS_REPROBE_INTERVAL);
-        if !force && (self.signing_tools_probe_in_flight || recently_probed) {
-            return;
-        }
+    pub(super) fn cancel_signing_tools_probe(&mut self) {
+        self.signing_tools_probe_cancellation.cancel();
         self.signing_tools_probe_seq = self.signing_tools_probe_seq.wrapping_add(1);
-        let seq = self.signing_tools_probe_seq;
-        self.signing_tools_probe_in_flight = true;
-        self.signing_tools_probed_at = Some(now);
+        self.signing_tools_probe_in_flight = false;
+    }
 
-        let detection =
-            cx.background_spawn(async { gitcomet_core::signing_tools::detect_signing_tools() });
+    /// Discovery runs only after explicit opt-in, startup, or diagnostics.
+    pub(super) fn refresh_signing_tools(&mut self, force: bool, cx: &mut gpui::Context<Self>) {
+        if cfg!(test)
+            || !self
+                .ui_model
+                .read(cx)
+                .preferences
+                .history
+                .verify_commit_signatures
+            || !current_git_runtime().is_available()
+        {
+            return;
+        }
+        if !force && self.signing_tools_probe_in_flight {
+            return;
+        }
+        self.cancel_signing_tools_probe();
+        self.signing_tools_probe_cancellation = Default::default();
+        let cancellation = self.signing_tools_probe_cancellation.clone();
+        let seq = self.signing_tools_probe_seq;
+        let runtime = current_git_runtime();
+        self.signing_tools_probe_in_flight = true;
+        // Explicit diagnostics may follow changes to trust/config files without
+        // changing a verifier's name or version. Retire the old trust context.
+        self.store
+            .dispatch(Msg::SetSigningToolsState(Default::default()));
+        let detection = cx.background_spawn(async move {
+            gitcomet_core::signing_tools::detect_signing_tools_cancellable(&cancellation)
+        });
         cx.spawn(async move |view, cx| {
             let tools = detection.await;
-            let _ = view.update(cx, |this, _cx| {
-                if this.signing_tools_probe_seq != seq {
+            let _ = view.update(cx, |this, cx| {
+                if this.signing_tools_probe_seq != seq
+                    || current_git_runtime() != runtime
+                    || !this
+                        .ui_model
+                        .read(cx)
+                        .preferences
+                        .history
+                        .verify_commit_signatures
+                {
                     return;
                 }
                 this.signing_tools_probe_in_flight = false;
-                if tools != this.state.signing_tools {
-                    this.store.dispatch(Msg::SetSigningToolsState(tools));
-                }
+                this.store.dispatch(Msg::SetSigningToolsState(tools));
             });
         })
         .detach();

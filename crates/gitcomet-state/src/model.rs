@@ -62,7 +62,7 @@ impl Default for GitLogSettings {
         Self {
             show_history_tags: true,
             tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
-            verify_commit_signatures: true,
+            verify_commit_signatures: false,
         }
     }
 }
@@ -731,6 +731,20 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Deterministic fixture: tests opt into an available runtime without spawning Git.
+    #[cfg(any(test, feature = "test-support", feature = "benchmarks"))]
+    pub fn test_default() -> Self {
+        Self {
+            git_runtime: GitRuntimeState {
+                preference: gitcomet_core::process::GitExecutablePreference::SystemPath,
+                availability: gitcomet_core::process::GitExecutableAvailability::Available {
+                    version_output: "git version 2.55.0 (test)".into(),
+                },
+            },
+            ..Self::default()
+        }
+    }
+
     /// The signature formats to verify: none when the preference is off,
     /// otherwise those whose verifier was not found missing.
     pub fn signature_verification_formats(&self) -> SignatureFormats {
@@ -1068,10 +1082,13 @@ pub struct HistoryState {
     pub commit_signatures_rev: u64,
     /// Invalidates batches started before a refresh or preference change.
     pub commit_signatures_epoch: u64,
-    /// Includes queued, running, and completed no-badge commits for this epoch.
+    /// Bounded memo of started attempts, including completed no-badge results.
     pub(crate) commit_signatures_requested: Shared<FxHashSet<CommitId>>,
+    pub(crate) commit_signatures_attempt_order: Shared<VecDeque<CommitId>>,
+    pub(crate) commit_signatures_visible: Shared<[CommitId]>,
     pub(crate) commit_signatures_queue: VecDeque<Shared<[CommitId]>>,
     pub(crate) commit_signatures_in_flight: bool,
+    pub(crate) commit_signatures_batch: u64,
     pub(crate) commit_signatures_cancellation: gitcomet_core::services::CancellationToken,
     pub multi_selection: CommitMultiSelection,
     selected_ids: Arc<FxHashSet<CommitId>>,
@@ -1164,6 +1181,12 @@ struct HistorySquashCache {
 }
 
 impl HistoryState {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn signature_targets_for_test(&self) -> &Shared<[CommitId]> {
+        &self.commit_signatures_visible
+    }
+
     pub fn selection_contains(&self, id: &CommitId) -> bool {
         if self.selected_ids.len() == self.multi_selection.commits.len() {
             self.selected_ids.contains(id)
@@ -1201,8 +1224,11 @@ impl Default for HistoryState {
             commit_signatures_rev: 0,
             commit_signatures_epoch: 0,
             commit_signatures_requested: Shared::default(),
+            commit_signatures_attempt_order: Shared::default(),
+            commit_signatures_visible: Shared::default(),
             commit_signatures_queue: VecDeque::new(),
             commit_signatures_in_flight: false,
+            commit_signatures_batch: 0,
             commit_signatures_cancellation: Default::default(),
             multi_selection: CommitMultiSelection::default(),
             selected_ids: Arc::new(FxHashSet::default()),
@@ -2507,24 +2533,6 @@ impl RepoState {
             self.history_state.selected_ids = Arc::new(FxHashSet::default());
             self.clear_range_comparison();
         }
-        if let Some(previous) = &self.history_state.selected_commit
-            && Some(previous) != v.as_ref()
-            && self.history_state.commit_signatures.contains_key(previous)
-            && let Loadable::Ready(page) = &self.log
-            && !page.commits.iter().any(|commit| &commit.id == previous)
-            && !self.history_state.indexed.contains_loaded_commit(previous)
-        {
-            Arc::make_mut(&mut self.history_state.commit_signatures).remove(previous);
-            if self
-                .history_state
-                .commit_signatures_requested
-                .contains(previous)
-            {
-                Arc::make_mut(&mut self.history_state.commit_signatures_requested).remove(previous);
-            }
-            self.history_state.commit_signatures_rev =
-                self.history_state.commit_signatures_rev.wrapping_add(1);
-        }
         self.history_state.selected_commit = v;
         self.history_state.selected_commit_rev =
             self.history_state.selected_commit_rev.wrapping_add(1);
@@ -2709,13 +2717,12 @@ impl RepoState {
         self.history_state.commit_signatures_cancellation.cancel();
         self.history_state.commit_signatures_cancellation = Default::default();
         self.history_state.commit_signatures_requested = Shared::default();
+        self.history_state.commit_signatures_attempt_order = Shared::default();
+        self.history_state.commit_signatures_visible = Shared::default();
         self.history_state.commit_signatures_queue.clear();
         self.history_state.commit_signatures_in_flight = false;
         self.history_state.commit_signatures_epoch =
             self.history_state.commit_signatures_epoch.wrapping_add(1);
-        if self.history_state.commit_signatures.is_empty() {
-            return;
-        }
         self.history_state.commit_signatures = Shared::default();
         self.history_state.commit_signatures_rev =
             self.history_state.commit_signatures_rev.wrapping_add(1);
@@ -2727,18 +2734,8 @@ impl RepoState {
         let updates: Vec<_> = verified
             .into_iter()
             .filter(|(id, signature)| {
-                let displayed = self.history_state.selected_commit.as_ref() == Some(id)
-                    || self.history_state.indexed.contains_loaded_commit(id)
-                    || match &self.log {
-                        Loadable::Ready(page) => page.commits.iter().any(|commit| &commit.id == id),
-                        _ => true,
-                    };
-                // A discarded badge must be recoverable if this off-page commit
-                // is revealed again. Keep completed no-badge attempts memoized.
-                if !displayed && self.history_state.commit_signatures_requested.contains(id) {
-                    Arc::make_mut(&mut self.history_state.commit_signatures_requested).remove(id);
-                }
-                displayed && self.history_state.commit_signatures.get(id) != Some(signature)
+                self.history_state.commit_signatures_requested.contains(id)
+                    && self.history_state.commit_signatures.get(id) != Some(signature)
             })
             .collect();
         if updates.is_empty() {
@@ -3349,7 +3346,7 @@ mod tests {
 
     #[test]
     fn app_state_clone_shares_heavy_repo_fields_via_arc() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         state.repos.push(RepoState::new_opening(
             RepoId(1),
             RepoSpec {

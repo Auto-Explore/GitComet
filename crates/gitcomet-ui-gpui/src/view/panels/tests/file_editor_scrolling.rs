@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[gpui::test]
 fn markdown_inline_colors_stay_stable_through_held_key_frames(test_cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = test_cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
     });
@@ -82,7 +82,7 @@ fn file_editor_horizontal_scrollbar_works_for_all_text_file_types(
 ) {
     let _visual_guard = lock_visual_test();
     for (case, filename) in ["notes.md", "main.rs", "notes.txt"].into_iter().enumerate() {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = test_cx.add_window_view(|window, cx| {
             crate::view::GitCometView::new(store, events, None, window, cx)
         });
@@ -233,7 +233,7 @@ fn file_editor_horizontal_scrollbar_works_for_all_text_file_types(
 fn file_editor_wrapped_typing_keeps_the_viewport_stable(test_cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     for filename in ["notes.md", "main.rs", "notes.txt"] {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = test_cx.add_window_view(|window, cx| {
             crate::view::GitCometView::new(store, events, None, window, cx)
         });

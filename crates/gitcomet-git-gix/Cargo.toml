@@ -13,6 +13,10 @@ workspace = true
 [features]
 benchmarks = ["gitcomet-core/benchmarks"]
 
+[[example]]
+name = "status-refresh-bench"
+required-features = ["benchmarks"]
+
 [dependencies]
 gitcomet-core = { workspace = true }
 gix = { workspace = true }

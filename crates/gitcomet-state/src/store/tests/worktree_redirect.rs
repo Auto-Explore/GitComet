@@ -98,7 +98,7 @@ fn assert_no_error_diagnostics(store: &AppStore, repo_id: RepoId) {
 #[test]
 fn checkout_of_branch_held_by_linked_worktree_opens_that_worktree_tab() {
     let (_dir, repo, worktree) = repo_with_linked_worktree();
-    let (store, _events) = AppStore::new(Arc::new(gitcomet_git_gix::GixBackend));
+    let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
     let repo_id = open_repo_and_wait(&store, &repo);
 
     store.dispatch(Msg::CheckoutBranch {
@@ -127,7 +127,7 @@ fn checkout_of_branch_held_by_linked_worktree_opens_that_worktree_tab() {
 fn overwrite_of_branch_held_by_linked_worktree_resets_it_there_and_opens_the_tab() {
     let (_dir, repo, worktree) = repo_with_linked_worktree();
     let main_commit = git_output(&repo, &["rev-parse", "main"]);
-    let (store, _events) = AppStore::new(Arc::new(gitcomet_git_gix::GixBackend));
+    let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
     let repo_id = open_repo_and_wait(&store, &repo);
 
     store.dispatch(Msg::CreateBranchAndCheckout {
@@ -167,7 +167,7 @@ fn rename_onto_branch_held_by_linked_worktree_overwrites_there_and_opens_the_tab
     let (_dir, repo, worktree) = repo_with_linked_worktree();
     run_git(&repo, &["branch", "renamed-source", "main"]);
     let main_commit = git_output(&repo, &["rev-parse", "main"]);
-    let (store, _events) = AppStore::new(Arc::new(gitcomet_git_gix::GixBackend));
+    let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
     let repo_id = open_repo_and_wait(&store, &repo);
 
     store.dispatch(Msg::RenameBranch {
@@ -250,7 +250,7 @@ fn overwrite_from_remote_branch_held_by_linked_worktree_clears_its_upstream() {
         &["config", "branch.feature.merge", "refs/heads/feature"],
     );
     let main_commit = git_output(&repo, &["rev-parse", "main"]);
-    let (store, _events) = AppStore::new(Arc::new(gitcomet_git_gix::GixBackend));
+    let (store, _events) = AppStore::new_test(Arc::new(gitcomet_git_gix::GixBackend));
     let repo_id = open_repo_and_wait(&store, &repo);
 
     store.dispatch(Msg::CreateBranchAndCheckout {

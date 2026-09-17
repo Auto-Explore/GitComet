@@ -362,11 +362,13 @@ impl std::fmt::Debug for InternalMsg {
             InternalMsg::CommitSignaturesVerified {
                 repo_id,
                 epoch,
+                batch,
                 result,
             } => f
                 .debug_struct("CommitSignaturesVerified")
                 .field("repo_id", repo_id)
                 .field("epoch", epoch)
+                .field("batch", batch)
                 .field("verified", &result.as_ref().map(Vec::len))
                 .finish(),
             InternalMsg::CommitRevealResolved {

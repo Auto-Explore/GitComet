@@ -216,7 +216,7 @@ impl Default for HistoryPreferences {
             highlight_commit_chain: true,
             files_follow_selected_commit: true,
             show_tags: true,
-            verify_commit_signatures: true,
+            verify_commit_signatures: false,
             tag_fetch_mode: GitLogTagFetchMode::default(),
             default_mode: HistoryMode::default(),
         }
@@ -378,7 +378,7 @@ impl UiPreferences {
                     .file_browser_follow_selected_commit
                     .unwrap_or(true),
                 show_tags: session.history_show_tags.unwrap_or(true),
-                verify_commit_signatures: session.history_verify_commit_signatures.unwrap_or(true),
+                verify_commit_signatures: session.history_verify_commit_signatures.unwrap_or(false),
                 tag_fetch_mode: session.history_tag_fetch_mode.unwrap_or_default(),
                 default_mode: session.default_history_mode.unwrap_or_default(),
             },

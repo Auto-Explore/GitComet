@@ -2,7 +2,7 @@ use super::*;
 
 #[gpui::test]
 fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(3);
@@ -44,7 +44,7 @@ fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext
             this.state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.details_pane.update(cx, |pane, cx| {
                 pane.status_multi_selection.insert(
@@ -109,7 +109,7 @@ fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(4);
@@ -151,7 +151,7 @@ fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppConte
             this.state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.details_pane.update(cx, |pane, cx| {
                 pane.status_multi_selection.insert(
@@ -216,7 +216,7 @@ fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppConte
 
 #[gpui::test]
 fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(5);
@@ -248,7 +248,7 @@ fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppC
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -343,7 +343,7 @@ fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppC
 
 #[gpui::test]
 fn status_file_menu_hides_external_mergetool_for_staged_conflicts(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(7);
@@ -375,7 +375,7 @@ fn status_file_menu_hides_external_mergetool_for_staged_conflicts(cx: &mut gpui:
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -417,7 +417,7 @@ fn status_file_menu_hides_external_mergetool_for_staged_conflicts(cx: &mut gpui:
 
 #[gpui::test]
 fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(8);
@@ -463,7 +463,7 @@ fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestApp
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -498,7 +498,7 @@ fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(9);
@@ -543,7 +543,7 @@ fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppCon
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -592,7 +592,7 @@ fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppCon
 fn status_file_menu_open_from_details_pane_does_not_double_lease_panic(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(6);
@@ -624,7 +624,7 @@ fn status_file_menu_open_from_details_pane_does_not_double_lease_panic(
             this.state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             cx.notify();
         });
@@ -656,7 +656,7 @@ fn status_menu_for(
     selection: &[&str],
     clicked: &str,
 ) -> ContextMenuModel {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(7);
@@ -694,7 +694,7 @@ fn status_menu_for(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             // In the running app the host mirrors the UI model through an

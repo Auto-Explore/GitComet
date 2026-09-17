@@ -239,7 +239,7 @@ pub(crate) fn bench_app_state(repos: Vec<RepoState>, active_repo: Option<RepoId>
     AppState {
         repos,
         active_repo,
-        ..AppState::default()
+        ..AppState::test_default()
     }
 }
 
