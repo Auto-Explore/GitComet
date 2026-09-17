@@ -24,8 +24,8 @@ use std::time::SystemTime;
 /// Default page size for log fetches.
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
 
-/// Queue each commit at most once per refresh, including no-badge results.
-/// One small batch per repository runs at a time; replies start the next batch.
+/// Replace pending demand with the selection and current viewport. Attempts are
+/// memoized only when started, so scrolling never marks skipped commits done.
 pub(super) fn verify_commit_signatures_effect(
     formats: SignatureFormats,
     repo_state: &mut RepoState,
@@ -39,26 +39,44 @@ pub(super) fn verify_commit_signatures_effect(
     let mut unique = FxHashSet::default();
     let pending: Vec<_> = ids
         .into_iter()
+        .chain(history.selected_commit.iter().cloned())
+        .chain(history.commit_signatures_visible.iter().cloned())
         .filter(|id| {
-            !history.commit_signatures.contains_key(id)
-                && !history.commit_signatures_requested.contains(id)
+            !history.commit_signatures_requested.contains(id)
+                && !history.commit_signatures.contains_key(id)
                 && unique.insert(id.clone())
         })
+        .take(257)
         .collect();
-    if !pending.is_empty() {
-        Arc::make_mut(&mut history.commit_signatures_requested).extend(pending.iter().cloned());
-        history
-            .commit_signatures_queue
-            .extend(pending.chunks(16).map(Arc::from));
-    }
+    history.commit_signatures_queue.clear();
+    history
+        .commit_signatures_queue
+        .extend(pending.chunks(16).map(Arc::from));
     if history.commit_signatures_in_flight {
         return None;
     }
     let commit_ids = history.commit_signatures_queue.pop_front()?;
+    let requested = Arc::make_mut(&mut history.commit_signatures_requested);
+    let order = Arc::make_mut(&mut history.commit_signatures_attempt_order);
+    for id in commit_ids.iter() {
+        if requested.insert(id.clone()) {
+            order.push_back(id.clone());
+        }
+    }
+    while order.len() > 4096 {
+        let id = order.pop_front().unwrap();
+        requested.remove(&id);
+        if history.commit_signatures.contains_key(&id) {
+            Arc::make_mut(&mut history.commit_signatures).remove(&id);
+            history.commit_signatures_rev = history.commit_signatures_rev.wrapping_add(1);
+        }
+    }
     history.commit_signatures_in_flight = true;
+    history.commit_signatures_batch = history.commit_signatures_batch.wrapping_add(1);
     Some(Effect::VerifyCommitSignatures {
         repo_id,
         epoch: history.commit_signatures_epoch,
+        batch: history.commit_signatures_batch,
         cancellation: history.commit_signatures_cancellation.clone(),
         commit_ids,
         formats,
@@ -70,44 +88,52 @@ pub(super) fn reverify_loaded_commit_signatures_effect(
     repo_state: &mut RepoState,
 ) -> Option<Effect> {
     repo_state.clear_commit_signatures();
-    if formats.is_empty() {
-        return None;
-    }
-    let mut ids: Vec<CommitId> = match &repo_state.log {
-        Loadable::Ready(page) => page
-            .commits
-            .iter()
-            .map(|commit| commit.id.clone())
-            .collect(),
-        _ => Vec::new(),
-    };
-    // Indexed scrolling keeps metadata outside the bootstrap page. Recheck
-    // those bounded, loaded blocks when verification is enabled or refreshed.
-    ids.extend(
-        repo_state
-            .history_state
-            .indexed
-            .ranges
-            .values()
-            .flat_map(|range| range.commits.iter().map(|commit| commit.id.clone())),
-    );
-    if let Some(selected) = &repo_state.history_state.selected_commit
-        && !ids.contains(selected)
-    {
-        ids.push(selected.clone());
-    }
-    verify_commit_signatures_effect(formats, repo_state, repo_state.id, ids)
+    // The UI republishes its viewport for the new epoch; never scan loaded pages.
+    verify_commit_signatures_effect(formats, repo_state, repo_state.id, [])
 }
 
-/// Clears every repository's verdicts and re-checks what is loaded with the
-/// current formats, so badges follow the preference and installed verifiers
-/// without waiting for the next log reload.
 pub(super) fn reverify_all_commit_signatures_effects(state: &mut AppState) -> Vec<Effect> {
     let formats = state.signature_verification_formats();
+    let active = state.active_repo;
     state
         .repos
         .iter_mut()
-        .filter_map(|repo_state| reverify_loaded_commit_signatures_effect(formats, repo_state))
+        .filter_map(|repo| {
+            reverify_loaded_commit_signatures_effect(
+                if active == Some(repo.id) {
+                    formats
+                } else {
+                    SignatureFormats::NONE
+                },
+                repo,
+            )
+        })
+        .collect()
+}
+
+pub(super) fn set_commit_signature_targets(
+    state: &mut AppState,
+    repo_id: RepoId,
+    epoch: u64,
+    commit_ids: Arc<[CommitId]>,
+) -> Vec<Effect> {
+    if !state.git_log_settings.verify_commit_signatures || state.active_repo != Some(repo_id) {
+        return Vec::new();
+    }
+    let formats = state.signature_verification_formats();
+    let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    if epoch != repo.history_state.commit_signatures_epoch {
+        return Vec::new();
+    }
+    repo.history_state.commit_signatures_visible = if commit_ids.len() > 256 {
+        Arc::from(&commit_ids[..256])
+    } else {
+        commit_ids
+    };
+    verify_commit_signatures_effect(formats, repo, repo_id, [])
+        .into_iter()
         .collect()
 }
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
@@ -2207,7 +2233,7 @@ mod tests {
 
     #[test]
     fn push_notification_and_diagnostic_cap_old_entries() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         for ix in 0..205 {
             push_notification(
                 &mut state,

@@ -43,7 +43,7 @@ fn suggestion_names(authors: &[SharedString]) -> Vec<String> {
 /// once per frame.
 #[gpui::test]
 fn author_suggestions_are_reused_until_the_log_changes(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(9001);
@@ -98,7 +98,7 @@ fn author_suggestions_are_reused_until_the_log_changes(cx: &mut gpui::TestAppCon
 /// selected, with no way to switch to anyone else.
 #[gpui::test]
 fn author_suggestions_survive_an_applied_filter(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(9002);
@@ -138,7 +138,7 @@ fn author_suggestions_survive_an_applied_filter(cx: &mut gpui::TestAppContext) {
 fn completed_author_catalog_replaces_bootstrap_suggestions_without_a_log_change(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(9003);
@@ -204,7 +204,7 @@ fn completed_author_catalog_replaces_bootstrap_suggestions_without_a_log_change(
 
 #[gpui::test]
 fn author_catalog_from_another_scope_is_not_offered(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(9004);

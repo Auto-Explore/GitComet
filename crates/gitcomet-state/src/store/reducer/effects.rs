@@ -944,7 +944,7 @@ pub(super) fn select_commit_multi(
             .flatten()
     };
 
-    match range_pair {
+    let mut effects = match range_pair {
         Some((from, to)) => {
             // Keep the focused commit selected (selection-derived UI stays
             // coherent) but don't load its details — the comparison view takes
@@ -976,7 +976,19 @@ pub(super) fn select_commit_multi(
             }
             effects
         }
+    };
+    if state.active_repo == Some(repo_id) && state.git_log_settings.verify_commit_signatures {
+        let formats = state.signature_verification_formats();
+        if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+            effects.extend(super::util::verify_commit_signatures_effect(
+                formats,
+                repo,
+                repo_id,
+                [],
+            ));
+        }
     }
+    effects
 }
 
 /// Emit a details load when the loaded commit details don't describe
@@ -2960,7 +2972,11 @@ pub(super) fn commit_reveal_resolved(
     reference: CommitId,
     result: std::result::Result<CommitDetails, Error>,
 ) -> Vec<Effect> {
-    let signature_formats = state.signature_verification_formats();
+    let signature_formats = if state.active_repo == Some(repo_id) {
+        state.signature_verification_formats()
+    } else {
+        gitcomet_core::domain::SignatureFormats::NONE
+    };
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -3004,7 +3020,11 @@ pub(super) fn commit_details_loaded(
     commit_id: CommitId,
     result: std::result::Result<CommitDetails, Error>,
 ) -> Vec<Effect> {
-    let signature_formats = state.signature_verification_formats();
+    let signature_formats = if state.active_repo == Some(repo_id) {
+        state.signature_verification_formats()
+    } else {
+        gitcomet_core::domain::SignatureFormats::NONE
+    };
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.history_state.selected_commit.as_ref() == Some(&commit_id)
     {
@@ -3049,6 +3069,7 @@ pub(super) fn commit_signatures_verified(
     state: &mut AppState,
     repo_id: RepoId,
     epoch: u64,
+    batch: u64,
     result: std::result::Result<Vec<(CommitId, CommitSignature)>, Error>,
 ) -> Vec<Effect> {
     let signature_formats = state.signature_verification_formats();
@@ -3058,7 +3079,10 @@ pub(super) fn commit_signatures_verified(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    if repo_state.history_state.commit_signatures_epoch != epoch {
+    if repo_state.history_state.commit_signatures_epoch != epoch
+        || !repo_state.history_state.commit_signatures_in_flight
+        || repo_state.history_state.commit_signatures_batch != batch
+    {
         return Vec::new();
     }
     repo_state.history_state.commit_signatures_in_flight = false;
@@ -3066,6 +3090,9 @@ pub(super) fn commit_signatures_verified(
     // toast: signing is optional and gpg may simply be unavailable.
     if let Ok(verified) = result {
         repo_state.merge_commit_signatures(verified);
+    }
+    if state.active_repo != Some(repo_id) {
+        return Vec::new();
     }
     super::util::verify_commit_signatures_effect(signature_formats, repo_state, repo_id, [])
         .into_iter()

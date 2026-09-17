@@ -8,7 +8,7 @@ fn notify_fingerprint_tracks_cherry_pick_message_readiness() {
     use gitcomet_state::model::{InteractiveCherryPickSetup, RepoState};
     use std::path::PathBuf;
 
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.active_repo = Some(RepoId(1));
     state.repos.push(RepoState::new_opening(
         RepoId(1),
@@ -44,7 +44,7 @@ fn notify_fingerprint_tracks_cherry_pick_message_readiness() {
 #[test]
 fn notify_fingerprint_tracks_line_stats_for_the_open_diff_area() {
     let repo_id = RepoId(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.active_repo = Some(repo_id);
     state.repos.push(RepoState::new_opening(
         repo_id,

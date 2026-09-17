@@ -24,7 +24,7 @@ fn read(
         &CancellationToken::new(),
         &mut |_| {},
     )
-    .unwrap()
+    .unwrap_or_else(|error| panic!("read history {mode:?}, author {author:?}: {error:?}"))
 }
 
 fn page(result: HistoryReadResult) -> (Arc<LogPage>, Option<HistorySnapshot>) {

@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn count_ready_repos_only_counts_opened_repositories() {
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let mut ready = RepoState::new_opening(
             RepoId(1),
             RepoSpec {

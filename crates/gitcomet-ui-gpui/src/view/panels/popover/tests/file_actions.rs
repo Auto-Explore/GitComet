@@ -60,7 +60,7 @@ fn commit_menu_test_repo(repo_id: RepoId, commit_id: &CommitId) -> RepoState {
 
 #[gpui::test]
 fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -128,7 +128,7 @@ fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn commit_menu_disables_add_tag_when_history_tags_are_hidden(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -181,7 +181,7 @@ fn commit_menu_disables_add_tag_when_history_tags_are_hidden(cx: &mut gpui::Test
 
 #[gpui::test]
 fn commit_menu_cherry_pick_action_opens_confirm_popover(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -225,7 +225,7 @@ fn commit_menu_cherry_pick_action_opens_confirm_popover(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn commit_menu_revert_action_opens_confirm_popover(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -270,7 +270,7 @@ fn commit_menu_revert_action_opens_confirm_popover(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn revert_confirm_keeps_and_restores_the_commit_menu_invoker_focus(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(1);
@@ -321,7 +321,7 @@ fn revert_confirm_keeps_and_restores_the_commit_menu_invoker_focus(cx: &mut gpui
 
 #[gpui::test]
 fn commit_menu_hides_cherry_pick_for_current_head(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -359,7 +359,7 @@ fn commit_menu_hides_cherry_pick_for_current_head(cx: &mut gpui::TestAppContext)
 fn commit_menu_disables_cherry_pick_when_local_operation_in_progress(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -395,7 +395,7 @@ fn commit_menu_disables_cherry_pick_when_local_operation_in_progress(
 
 #[gpui::test]
 fn commit_menu_disables_merge_when_repository_is_busy(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -434,7 +434,7 @@ fn commit_menu_disables_merge_when_repository_is_busy(cx: &mut gpui::TestAppCont
 
 #[gpui::test]
 fn detached_head_commit_menu_names_head_as_merge_destination(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -474,7 +474,7 @@ fn detached_head_commit_menu_names_head_as_merge_destination(cx: &mut gpui::Test
 
 #[gpui::test]
 fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -538,7 +538,7 @@ fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn status_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -572,7 +572,7 @@ fn status_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
             this.state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
         });
     });
@@ -640,7 +640,7 @@ fn unopened_submodule_menus_disable_open_in_code_editor(cx: &mut gpui::TestAppCo
             arguments: None,
         },
     ));
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -748,7 +748,7 @@ fn unopened_submodule_menus_disable_open_in_code_editor(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn status_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -782,7 +782,7 @@ fn status_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -838,7 +838,7 @@ fn status_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn commit_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -862,7 +862,7 @@ fn commit_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -919,7 +919,7 @@ fn commit_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
 #[gpui::test]
 fn commit_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::TestAppContext) {
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -943,7 +943,7 @@ fn commit_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::Te
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -1023,7 +1023,7 @@ fn commit_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::Te
 #[gpui::test]
 fn status_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::TestAppContext) {
     let _clipboard_guard = lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1057,7 +1057,7 @@ fn status_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::Te
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -1136,7 +1136,7 @@ fn status_file_menu_copy_path_requires_a_completed_right_click(cx: &mut gpui::Te
 
 #[gpui::test]
 fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1206,7 +1206,7 @@ fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1386,7 +1386,7 @@ fn file_browser_folder_menu_model(
     cx: &mut gpui::TestAppContext,
     configure: impl FnOnce(&mut RepoState),
 ) -> ContextMenuModel {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1423,7 +1423,7 @@ fn file_browser_folder_menu_model(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -1632,7 +1632,7 @@ fn copy_path_mnemonic_selects_the_relative_entry_in_every_menu(cx: &mut gpui::Te
         }
     }
 
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1663,7 +1663,7 @@ fn copy_path_mnemonic_selects_the_relative_entry_in_every_menu(cx: &mut gpui::Te
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model

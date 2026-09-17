@@ -15,7 +15,7 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::file_diff::FileDiffRow;
 use gitcomet_core::git_operation::GitOperationId;
-use gitcomet_core::process::refresh_git_runtime;
+use gitcomet_core::process::current_git_runtime;
 use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
@@ -95,9 +95,6 @@ const REPO_ACTIVATION_THROTTLE: Duration = Duration::from_secs(5);
 /// generous enough for a loaded system, short enough that a genuine alt-tab
 /// right after a drag is not mistaken for the grab.
 const WINDOW_GRAB_DEACTIVATE_GRACE: Duration = Duration::from_millis(1_500);
-/// Window activation re-probes gpg and ssh-keygen at most this often.
-const SIGNING_TOOLS_REPROBE_INTERVAL: Duration = Duration::from_secs(10);
-
 /// Upper bound on how long a drag may hold the grab before the re-activation is
 /// no longer treated as its echo. Only a safety valve: arming already requires a
 /// fresh grab plus a deactivation within [`WINDOW_GRAB_DEACTIVATE_GRACE`].
@@ -764,6 +761,7 @@ pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FO
 
 mod gitcomet_view;
 mod gitcomet_view_render;
+mod runtime_probe;
 
 #[cfg(test)]
 mod tests;

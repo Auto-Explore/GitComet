@@ -50,11 +50,9 @@ fn git_command_for_repo(repo: &Path) -> Command {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = git_command_for_repo(repo)
-        .args(args)
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
+    // Capture output so concurrent Git-for-Windows transport shells do not
+    // share the test runner's console and hang after receive-pack exits.
+    run_git_capture(repo, args);
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
@@ -64,8 +62,9 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> String {
         .expect("git command to run");
     assert!(
         output.status.success(),
-        "git {:?} failed: {}",
+        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
         args,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).to_string()

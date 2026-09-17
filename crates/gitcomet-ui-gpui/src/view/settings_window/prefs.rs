@@ -977,6 +977,11 @@ impl SettingsWindowView {
         }
 
         self.history_verify_commit_signatures = enabled;
+        if enabled {
+            self.refresh_signing_tools(cx);
+        } else {
+            self.cancel_signing_tools_probe();
+        }
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_verify_commit_signatures_preference(enabled, cx);

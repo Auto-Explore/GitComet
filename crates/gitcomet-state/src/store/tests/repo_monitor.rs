@@ -193,7 +193,7 @@ fn active_ready_repo_state(repo_id: RepoId, workdir: PathBuf) -> AppState {
     AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     }
 }
 
@@ -302,7 +302,7 @@ fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
         loads_in_flight.request(crate::model::RepoLoadsInFlight::REMOTE_BRANCHES);
         state
     };
-    let (store, _events) = AppStore::new(std::sync::Arc::new(FailingBackend));
+    let (store, _events) = AppStore::new_test(std::sync::Arc::new(FailingBackend));
     store.replace_snapshot_for_test(std::sync::Arc::new(state));
     store.insert_repo_for_test(
         repo_id,
@@ -333,7 +333,7 @@ fn repo_monitor_unavailable_repo_activation_falls_back_to_git_state_refresh() {
     std::fs::create_dir_all(&workdir).expect("create activation fallback workdir");
     let calls = std::sync::Arc::new(RepoActivationCallCounts::default());
     let state = active_ready_repo_state(repo_id, workdir.clone());
-    let (store, _events) = AppStore::new(std::sync::Arc::new(FailingBackend));
+    let (store, _events) = AppStore::new_test(std::sync::Arc::new(FailingBackend));
     store.replace_snapshot_for_test(std::sync::Arc::new(state));
     store.insert_repo_for_test(
         repo_id,
@@ -428,7 +428,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
     let state = AppState {
         repos: vec![old_repo, new_repo],
         active_repo: Some(new_repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     };
     let thread_state = std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(state)));
     let active_repo_id = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(old_repo_id.0));

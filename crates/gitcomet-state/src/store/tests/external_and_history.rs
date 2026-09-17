@@ -1,4 +1,47 @@
 use super::*;
+
+#[test]
+fn activation_refresh_scans_worktrees_once_and_real_follow_up_changes_are_retained() {
+    for external_change_during_scan in [false, true] {
+        let mut state = AppState::test_default();
+        state.active_repo = Some(RepoId(1));
+        state.repos.push(RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.repos[0].set_open(Loadable::Ready(()));
+        let mut repos = FxHashMap::default();
+        let ids = AtomicU64::new(2);
+        // This is the full refresh dispatched by the store on RepoActivated.
+        let refresh = || Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::all(),
+        };
+        let count = |effects: &[Effect]| {
+            effects
+                .iter()
+                .filter(|effect| matches!(effect, Effect::LoadWorktreeDirty { .. }))
+                .count()
+        };
+        assert_eq!(count(&reduce(&mut repos, &ids, &mut state, refresh())), 1);
+        if external_change_during_scan {
+            assert_eq!(count(&reduce(&mut repos, &ids, &mut state, refresh())), 0);
+        }
+        let complete = || {
+            Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                repo_id: RepoId(1),
+                result: Ok(Vec::new()),
+            })
+        };
+        assert_eq!(
+            count(&reduce(&mut repos, &ids, &mut state, complete())),
+            usize::from(external_change_during_scan)
+        );
+        assert_eq!(count(&reduce(&mut repos, &ids, &mut state, complete())), 0);
+    }
+}
 mod refresh;
 
 /// Production always reaches `LogLoaded` through `request_log`, which records the
@@ -70,7 +113,7 @@ fn repo_activated_is_reducer_noop_by_itself() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let repo_id = RepoId(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -128,7 +171,7 @@ fn repo_load_trace_names_repo_activation_and_refresh_messages() {
 fn external_worktree_change_refreshes_status_and_selected_diff() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -249,7 +292,7 @@ fn external_index_change_refreshes_both_staged_and_unstaged_lanes() {
     // (stale) in the lane that was not reloaded.
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
 
     reduce(
@@ -314,7 +357,7 @@ fn external_index_change_reloads_open_working_tree_diff() {
     // a stale diff.
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
 
     reduce(
@@ -400,7 +443,7 @@ fn external_index_change_must_not_refresh_only_the_staged_lane() {
     // unstaged section. The change must also pursue the unstaged (worktree) lane.
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
 
     reduce(
@@ -472,7 +515,7 @@ fn external_index_change_must_not_refresh_only_the_staged_lane() {
 fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recent_messages() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     let mut repo_state = RepoState::new_opening(
         repo_id,
@@ -510,7 +553,7 @@ fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recen
 fn external_git_state_change_refreshes_history_and_selected_diff() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -709,7 +752,7 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
 fn external_git_state_refresh_is_coalesced_and_replayed_once() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -886,7 +929,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
 fn external_worktree_refresh_replays_coalesced_change_then_settles() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -1011,7 +1054,7 @@ fn external_worktree_refresh_replays_coalesced_change_then_settles() {
 fn external_worktree_refresh_coalesces_status_while_status_is_in_flight() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1096,7 +1139,7 @@ fn external_worktree_refresh_coalesces_status_while_status_is_in_flight() {
 fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1152,7 +1195,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
 }
 
 fn state_with_blamed_unstaged_diff() -> (AppState, RepoId) {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -1283,7 +1326,7 @@ fn reload_repo_clears_stale_navigation_history() {
     // nav stacks must start fresh rather than letting Back restore a dead view.
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -1366,7 +1409,7 @@ fn reload_repo_clears_a_stale_comparison_mark() {
     // "Compare with …" whose only possible outcome is a backend error.
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -1398,7 +1441,7 @@ fn reload_repo_clears_a_stale_comparison_mark() {
 fn load_more_history_emits_paginated_load_log_effect() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1469,7 +1512,7 @@ fn cursor_after(commits: &[Commit]) -> LogCursor {
 }
 
 fn paginated_repo_state(commits: &[Commit]) -> AppState {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1846,14 +1889,11 @@ fn queued_refresh_promoted_after_load_more_covers_the_grown_log() {
     assert!(
         matches!(
             effects.as_slice(),
-            [
-                Effect::VerifyCommitSignatures { .. },
-                Effect::LoadLog {
-                    limit: 600,
-                    cursor: None,
-                    ..
-                },
-            ]
+            [Effect::LoadLog {
+                limit: 600,
+                cursor: None,
+                ..
+            },]
         ),
         "unexpected effects: {effects:?}"
     );
@@ -1870,7 +1910,7 @@ fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
     ] {
         let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(1);
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         state.repos.push(RepoState::new_opening(
             RepoId(1),
             RepoSpec {
@@ -1946,7 +1986,7 @@ fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
 fn set_history_scope_retains_ready_log_while_loading() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -1993,7 +2033,7 @@ fn set_history_scope_retains_ready_log_while_loading() {
 fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2108,7 +2148,7 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
 fn load_more_history_noops_when_no_next_cursor() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2145,7 +2185,7 @@ fn load_more_history_noops_when_no_next_cursor() {
 fn log_loaded_appends_when_loading_more() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2228,7 +2268,7 @@ fn log_loaded_appends_when_loading_more() {
 fn log_loaded_reconciles_commit_multi_selection() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2295,7 +2335,7 @@ fn lookup_state() -> (
     AtomicU64,
     AppState,
 ) {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2475,7 +2515,7 @@ fn commit_lookup_failure_stays_inline_without_a_notification() {
 fn reveal_commit_resolves_an_abbreviation_and_shows_it_immediately() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2532,7 +2572,7 @@ fn reveal_commit_resolves_an_abbreviation_and_shows_it_immediately() {
 fn reveal_commit_reports_an_unresolvable_reference_without_selecting() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2586,7 +2626,7 @@ fn reveal_commit_reports_an_unresolvable_reference_without_selecting() {
 fn log_loaded_keeps_a_not_yet_paged_selection_when_loading_more() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2670,7 +2710,7 @@ fn log_loaded_keeps_a_not_yet_paged_selection_when_loading_more() {
 fn log_loaded_first_page_keeps_the_commit_a_reveal_is_walking_toward() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2727,7 +2767,7 @@ fn log_loaded_first_page_keeps_the_commit_a_reveal_is_walking_toward() {
 fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2820,7 +2860,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
 fn log_loaded_clears_retained_scope_switch_log() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2897,7 +2937,7 @@ fn log_loaded_clears_retained_scope_switch_log() {
 fn log_loaded_initial_paginated_page_keeps_append_slack() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -2952,7 +2992,7 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
 fn log_loaded_bumps_log_rev() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
     state.repos.push(RepoState::new_opening(
@@ -3004,7 +3044,7 @@ fn log_loaded_bumps_log_rev() {
 fn detached_head_target_tracks_current_branch_log_head() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
     state.repos.push(RepoState::new_opening(
@@ -3093,7 +3133,7 @@ fn filtered_current_branch_logs_do_not_backfill_detached_head_target() {
     ] {
         let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(2);
-        let mut state = AppState::default();
+        let mut state = AppState::test_default();
         let repo_id = RepoId(1);
         repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
         state.repos.push(RepoState::new_opening(
@@ -3144,7 +3184,7 @@ fn filtered_current_branch_logs_do_not_backfill_detached_head_target() {
 fn set_history_scope_bumps_log_rev() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
     state.repos.push(RepoState::new_opening(
@@ -3181,7 +3221,7 @@ fn set_history_scope_bumps_log_rev() {
 fn status_loaded_bumps_status_rev() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
     state.repos.push(RepoState::new_opening(
@@ -3214,7 +3254,7 @@ fn status_loaded_bumps_status_rev() {
 fn external_tags_change_reloads_tags() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -3258,7 +3298,7 @@ fn external_tags_change_reloads_tags() {
 fn external_git_state_change_without_tags_flag_does_not_reload_tags() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -3296,7 +3336,7 @@ fn external_git_state_change_without_tags_flag_does_not_reload_tags() {
 fn external_tags_change_without_git_state_flag_reloads_tags() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -3346,7 +3386,7 @@ fn external_tags_change_without_git_state_flag_reloads_tags() {
 fn author_filter_change_starts_its_load_while_a_walk_is_in_flight() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -3389,7 +3429,7 @@ fn author_filter_change_starts_its_load_while_a_walk_is_in_flight() {
 fn cancelled_log_reply_is_not_reported_as_an_error() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -3436,7 +3476,7 @@ fn cancelled_log_reply_is_not_reported_as_an_error() {
 fn log_chunks_replace_the_page_progressively() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -3541,7 +3581,7 @@ fn log_chunks_replace_the_page_progressively() {
 fn superseded_log_chunks_are_ignored() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -3603,7 +3643,7 @@ fn superseded_log_chunks_are_ignored() {
 fn cancelling_repo_loads_clears_the_scan_progress() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -3658,7 +3698,7 @@ fn cancelling_repo_loads_clears_the_scan_progress() {
 /// An open repository with nothing loaded, for the hover-message reducer tests
 /// below.
 fn hover_message_state(repo_id: RepoId) -> AppState {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -3889,7 +3929,7 @@ fn hovering_a_repository_that_is_not_open_yet_reads_nothing() {
 fn an_index_only_change_does_not_rescan_the_other_worktrees() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
 
     reduce(
@@ -3975,7 +4015,7 @@ use crate::model::SidebarMode;
 use gitcomet_core::domain::{FileEntry, FileSource};
 
 fn state_with_loaded_file_browser(sidebar_mode: SidebarMode) -> (AppState, RepoId) {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,
@@ -4204,7 +4244,7 @@ fn line_stats_completion_replays_one_pending_refresh_then_settles() {
     let mut repos = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let repo_id = RepoId(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {

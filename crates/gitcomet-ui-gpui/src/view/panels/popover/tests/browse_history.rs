@@ -3,7 +3,7 @@ use crate::view::panels::tests::{app_state_with_repo, opening_repo_state};
 
 #[gpui::test]
 fn browse_history_menu_exposes_full_commit_message_tooltip(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 

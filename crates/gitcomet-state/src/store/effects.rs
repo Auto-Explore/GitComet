@@ -548,10 +548,16 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::VerifyCommitSignatures { repo_id, epoch, .. } => send(Msg::Internal(
+        Effect::VerifyCommitSignatures {
+            repo_id,
+            epoch,
+            batch,
+            ..
+        } => send(Msg::Internal(
             crate::msg::InternalMsg::CommitSignaturesVerified {
                 repo_id,
                 epoch,
+                batch,
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -2052,6 +2058,7 @@ pub(super) fn schedule_effect(
         Effect::VerifyCommitSignatures {
             repo_id,
             epoch,
+            batch,
             cancellation,
             commit_ids,
             formats,
@@ -2064,6 +2071,7 @@ pub(super) fn schedule_effect(
                 msg_tx,
                 repo_id,
                 epoch,
+                batch,
                 cancellation,
                 commit_ids,
                 formats,

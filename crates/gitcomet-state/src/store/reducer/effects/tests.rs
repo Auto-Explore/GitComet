@@ -47,7 +47,7 @@ fn commit_details_for(id: CommitId) -> CommitDetails {
 
 #[test]
 fn browse_history_pushes_dedups_and_go_live_clears() {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -105,7 +105,7 @@ fn empty_conflict_file(path: &Path) -> ConflictFile {
 }
 
 fn new_state_with_repo(repo_id: RepoId) -> AppState {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
@@ -135,7 +135,7 @@ fn mark_pending(state: &mut AppState, repo_id: RepoId, flag: u32) {
 
 #[test]
 fn unknown_repo_handlers_are_noops() {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(42);
     let path = PathBuf::from("tracked.txt");
     let commit_id = CommitId("abc".into());
@@ -2070,7 +2070,7 @@ fn file_browser_loaded_discards_stale_results() {
 
 #[test]
 fn reveal_file_browser_path_expands_every_ancestor_and_clears_the_search() {
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
         repo_id,

@@ -41,7 +41,7 @@ fn hook_activity_state_for_two_repos(
     Arc::new(AppState {
         repos: vec![first, second],
         active_repo: Some(active_repo),
-        ..Default::default()
+        ..AppState::test_default()
     })
 }
 
@@ -76,7 +76,7 @@ fn drag_activity_text(cx: &mut gpui::VisualTestContext, key: &'static str) {
 #[gpui::test]
 fn hook_activity_text_selects_copies_and_keeps_run_clicks(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
@@ -182,7 +182,7 @@ fn hook_activity_text_selects_copies_and_keeps_run_clicks(cx: &mut gpui::TestApp
 #[gpui::test]
 fn hook_activity_live_output_preserves_selection_and_view(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_clipboard_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.update(|_, app| crate::app::bind_text_input_keys_for_test(app));
@@ -307,7 +307,7 @@ fn activity_text_input_is_empty_selection(
 
 #[gpui::test]
 fn hook_activity_minimized_indicator_is_repository_specific(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let first = shortcut_fixture_repo(
@@ -383,7 +383,7 @@ fn hook_activity_minimized_indicator_is_repository_specific(cx: &mut gpui::TestA
 #[gpui::test]
 fn hook_activity_text_layout_and_selected_fill_across_appearances(cx: &mut gpui::TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let mut repo = shortcut_fixture_repo(
@@ -493,7 +493,7 @@ fn hook_activity_text_layout_and_selected_fill_across_appearances(cx: &mut gpui:
 
 #[gpui::test]
 fn hook_activity_dialog_only_hides_progress_for_its_own_repository(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -577,7 +577,7 @@ fn hook_activity_dialog_only_hides_progress_for_its_own_repository(cx: &mut gpui
 fn hook_activity_dialog_only_suppresses_completion_for_its_own_repository(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -657,7 +657,7 @@ fn hook_activity_dialog_only_suppresses_completion_for_its_own_repository(
 fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -1118,7 +1118,7 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
 fn hook_activity_stays_minimized_when_another_overlay_blocks_auto_open(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });

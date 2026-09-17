@@ -48,7 +48,7 @@ fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo = ref_repo();
@@ -56,7 +56,7 @@ fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
     let state = Arc::new(AppState {
         active_repo: Some(repo.id),
         repos: vec![repo],
-        ..Default::default()
+        ..AppState::test_default()
     });
     cx.update(|window, app| {
         view.update(app, |this, cx| {
@@ -112,14 +112,14 @@ fn combined_history_ref_groups_keep_exact_targets_and_toggle_with_keyboard(
 /// cursor is aimed at.
 #[gpui::test]
 fn the_push_menu_keeps_force_push_last_and_fenced_off(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo = ref_repo();
     let state = Arc::new(AppState {
         active_repo: Some(repo.id),
         repos: vec![repo],
-        ..Default::default()
+        ..AppState::test_default()
     });
 
     cx.update(|_window, app| {
@@ -171,7 +171,7 @@ fn the_push_menu_keeps_force_push_last_and_fenced_off(cx: &mut gpui::TestAppCont
 fn tag_push_menu_keeps_actions_enabled_when_preview_is_unavailable_and_preserves_upstream_mode(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let mut repo = ref_repo();
@@ -185,7 +185,7 @@ fn tag_push_menu_keeps_actions_enabled_when_preview_is_unavailable_and_preserves
     let state = Arc::new(AppState {
         active_repo: Some(repo.id),
         repos: vec![repo],
-        ..Default::default()
+        ..AppState::test_default()
     });
     cx.update(|window, app| view.update(app, |this, cx| {
         this.state = state.clone();

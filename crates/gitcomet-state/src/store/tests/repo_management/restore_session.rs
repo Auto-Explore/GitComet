@@ -4,7 +4,7 @@ use super::*;
 fn remote_branches_loaded_sets_state() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -42,7 +42,7 @@ fn remote_branches_loaded_sets_state() {
 fn restore_session_opens_only_active_repo_and_selects_active_repo() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let dir = std::env::temp_dir().join(format!(
         "gitcomet-restore-session-test-{}-{}",
@@ -118,7 +118,7 @@ fn restore_session_opens_only_active_repo_and_selects_active_repo() {
 fn selecting_inactive_restored_repo_cancels_previous_load_and_starts_open() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let dir = tempfile::tempdir().expect("tempdir");
     let repo_a = dir.path().join("repo-a");
@@ -193,7 +193,7 @@ fn selecting_inactive_restored_repo_cancels_previous_load_and_starts_open() {
 fn selecting_third_restored_repo_while_second_is_opening_cancels_second_open() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let dir = tempfile::tempdir().expect("tempdir");
     let repo_a = dir.path().join("repo-a");
@@ -273,7 +273,7 @@ fn selecting_third_restored_repo_while_second_is_opening_cancels_second_open() {
 fn restore_session_resolves_history_mode_precedence_per_repository() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     let dir = tempfile::tempdir().expect("tempdir");
     let session_file = dir.path().join("session.json");

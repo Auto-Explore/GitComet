@@ -325,13 +325,7 @@ fn git_command() -> Command {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
+    run_git_output(repo, args);
 
     if args.first() == Some(&"init") {
         // Keep text-file assertions deterministic across platforms, regardless
@@ -347,13 +341,19 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_expect_failure(repo: &Path, args: &[&str]) {
-    let status = git_command()
+    let output = git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
-        .status()
+        .output()
         .expect("git command to run");
-    assert!(!status.success(), "expected git {:?} to fail", args);
+    assert!(
+        !output.status.success(),
+        "expected git {:?} to fail:\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn run_git_output(repo: &Path, args: &[&str]) -> String {
@@ -365,8 +365,9 @@ fn run_git_output(repo: &Path, args: &[&str]) -> String {
         .expect("git command to run");
     assert!(
         output.status.success(),
-        "git {:?} failed: {}",
+        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
         args,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).trim().to_string()

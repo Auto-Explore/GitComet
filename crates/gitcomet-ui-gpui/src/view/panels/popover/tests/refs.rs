@@ -14,7 +14,7 @@ fn click_debug_selector(cx: &mut gpui::VisualTestContext, selector: &'static str
 
 #[gpui::test]
 fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -63,7 +63,7 @@ fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) 
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -122,7 +122,7 @@ fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) 
 
 #[gpui::test]
 fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -164,7 +164,7 @@ fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) 
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -247,7 +247,7 @@ fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) 
 
 #[gpui::test]
 fn combined_ref_menu_scopes_actions_to_expanded_tag(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -295,7 +295,7 @@ fn combined_ref_menu_scopes_actions_to_expanded_tag(cx: &mut gpui::TestAppContex
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -345,7 +345,7 @@ fn combined_ref_menu_scopes_actions_to_expanded_tag(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn tag_ref_menu_requests_remote_tags_when_not_loaded(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
 
     let repo_id = RepoId(22);
     let commit_id = CommitId("fedcba9876543210".into());
@@ -369,7 +369,7 @@ fn tag_ref_menu_requests_remote_tags_when_not_loaded(cx: &mut gpui::TestAppConte
     store.replace_snapshot_for_test(Arc::new(AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     }));
 
     let store_for_view = store.clone();
@@ -796,7 +796,7 @@ fn create_tag_prompt_enter_with_empty_input_does_not_close_or_create(
 
 #[gpui::test]
 fn remote_menu_lists_fetch_and_prune_actions(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -823,7 +823,7 @@ fn remote_menu_lists_fetch_and_prune_actions(cx: &mut gpui::TestAppContext) {
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -901,7 +901,7 @@ fn remote_menu_model_with(
     remotes: Vec<gitcomet_core::domain::Remote>,
     kind: RemotePopoverKind,
 ) -> ContextMenuModel {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(22);
@@ -917,7 +917,7 @@ fn remote_menu_model_with(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -1216,7 +1216,7 @@ fn open_in_browser_picker_shows_an_empty_state(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1240,7 +1240,7 @@ fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCon
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -1368,7 +1368,7 @@ fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCon
 
 #[gpui::test]
 fn branch_menu_pin_entry_toggles_and_relabels(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1392,7 +1392,7 @@ fn branch_menu_pin_entry_toggles_and_relabels(cx: &mut gpui::TestAppContext) {
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -1462,7 +1462,7 @@ fn branch_menu_pin_entry_toggles_and_relabels(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1486,7 +1486,7 @@ fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCo
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -1610,7 +1610,7 @@ fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCo
 fn remote_branch_menu_preserves_exact_identity_and_uses_its_loaded_tip(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(2301);
@@ -1647,7 +1647,7 @@ fn remote_branch_menu_preserves_exact_identity_and_uses_its_loaded_tip(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -1737,7 +1737,7 @@ fn remote_branch_menu_preserves_exact_identity_and_uses_its_loaded_tip(
 
 #[gpui::test]
 fn remote_branch_menu_renders_squash_entry_without_panic(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1760,7 +1760,7 @@ fn remote_branch_menu_renders_squash_entry_without_panic(cx: &mut gpui::TestAppC
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -1798,7 +1798,7 @@ fn remote_branch_menu_renders_squash_entry_without_panic(cx: &mut gpui::TestAppC
 fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1855,7 +1855,7 @@ fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -1953,7 +1953,7 @@ fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
 fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -1988,7 +1988,7 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -2072,7 +2072,7 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -2109,7 +2109,7 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
 
 #[gpui::test]
 fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2141,7 +2141,7 @@ fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::Test
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model
@@ -2181,7 +2181,7 @@ fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::Test
 
 #[gpui::test]
 fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2226,7 +2226,7 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
                 let state = Arc::new(AppState {
                     repos: vec![repo],
                     active_repo: Some(repo_id),
-                    ..Default::default()
+                    ..AppState::test_default()
                 });
                 this.state = Arc::clone(&state);
                 this.ui_model
@@ -2306,7 +2306,7 @@ fn pull_menu_disables_every_pull_mode_without_a_live_upstream(cx: &mut gpui::Tes
 fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
     cx: &mut gpui::TestAppContext,
 ) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -2330,7 +2330,7 @@ fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model

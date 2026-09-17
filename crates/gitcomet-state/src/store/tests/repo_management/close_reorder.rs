@@ -4,7 +4,7 @@ use super::*;
 fn close_repo_removes_and_moves_active() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(10);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -71,7 +71,7 @@ fn recent_repo_effect_workdirs(effects: &[Effect]) -> Vec<PathBuf> {
 fn close_repo_records_the_closed_repository_as_recent() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     for name in ["repo1", "repo2"] {
         reduce(
@@ -116,7 +116,7 @@ fn close_repo_records_the_closed_repository_as_recent() {
 fn close_repos_records_recents_in_tab_order() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     for ix in 1..=3 {
         reduce(
@@ -156,7 +156,7 @@ fn close_repos_records_recents_in_tab_order() {
 fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(20);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -221,7 +221,7 @@ fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
 fn close_repos_ignores_unknown_ids_and_persists_once() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -277,7 +277,7 @@ fn close_repos_ignores_unknown_ids_and_persists_once() {
 fn close_repos_selects_left_neighbor_when_active_repo_is_closed() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     for ix in 1..=3 {
         reduce(
@@ -315,7 +315,7 @@ fn close_repos_selects_left_neighbor_when_active_repo_is_closed() {
 fn close_repos_uses_requested_active_repo_after_batch_close() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     for ix in 1..=3 {
         reduce(
@@ -353,7 +353,7 @@ fn close_repos_uses_requested_active_repo_after_batch_close() {
 fn close_repos_noops_when_no_existing_repos_match() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     for ix in 1..=2 {
         reduce(
@@ -388,7 +388,7 @@ fn close_repos_noops_when_no_existing_repos_match() {
 fn close_repos_closing_all_repos_clears_active_and_persists_once() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     for ix in 1..=2 {
         reduce(
@@ -424,7 +424,7 @@ fn close_repos_closing_all_repos_clears_active_and_persists_once() {
 fn reorder_repo_tabs_moves_repo_and_keeps_active() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,
@@ -496,7 +496,7 @@ fn reorder_repo_tabs_moves_repo_and_keeps_active() {
 fn reorder_repo_tabs_noops_for_invalid_or_already_stable_ordering() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
 
     reduce(
         &mut repos,

@@ -29,7 +29,7 @@ fn assert_first_entry_has_no_enter_shortcut(model: &ContextMenuModel, expected_l
 
 #[gpui::test]
 fn context_menu_default_actions_do_not_render_enter_shortcuts(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -51,7 +51,7 @@ fn context_menu_default_actions_do_not_render_enter_shortcuts(cx: &mut gpui::Tes
             let state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
-                ..Default::default()
+                ..AppState::test_default()
             });
             this.state = Arc::clone(&state);
             this.ui_model

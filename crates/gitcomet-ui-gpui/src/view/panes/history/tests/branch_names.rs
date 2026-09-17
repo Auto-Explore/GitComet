@@ -12,7 +12,7 @@ fn history_branch_names_repositions_headers_and_separates_hover_regions(
     cx: &mut gpui::TestAppContext,
 ) {
     let _guard = crate::test_support::lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+    let (store, events) = AppStore::new_test(Arc::new(BlockingBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     cx.simulate_resize(size(px(1400.0), px(900.0)));
@@ -53,7 +53,7 @@ fn history_branch_names_repositions_headers_and_separates_hover_regions(
         Arc::new(AppState {
             repos: vec![repo],
             active_repo: Some(RepoId(1)),
-            ..Default::default()
+            ..AppState::test_default()
         }),
     );
     wait_until(cx, "history rows", |cx| {

@@ -57,7 +57,7 @@ fn draw_comparison(
     selected: usize,
     files: Files,
 ) -> &mut gpui::VisualTestContext {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -341,7 +341,7 @@ mod worktree_uncommitted {
         summary: WorktreeDirtySummary,
         selected: bool,
     ) -> &mut gpui::VisualTestContext {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
             super::super::super::GitCometView::new(store, events, None, window, cx)
         });
@@ -402,7 +402,7 @@ mod worktree_uncommitted {
             line_stats: Default::default(),
         };
 
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
             super::super::super::GitCometView::new(store, events, None, window, cx)
         });
@@ -493,7 +493,7 @@ mod worktree_uncommitted {
             line_stats: Default::default(),
         };
 
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
             super::super::super::GitCometView::new(store, events, None, window, cx)
         });

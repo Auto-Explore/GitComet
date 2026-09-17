@@ -168,7 +168,7 @@ fn remote_browser_view(
     &mut gpui::VisualTestContext,
 ) {
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -336,7 +336,7 @@ fn nothing_to_open_warns_instead_of_launching(cx: &mut gpui::TestAppContext) {
 fn without_a_repository_nothing_happens(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(backend);
+    let (store, events) = AppStore::new_test(backend);
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -550,7 +550,7 @@ fn an_open_picker_follows_the_remotes(cx: &mut gpui::TestAppContext) {
 fn secondary_k_without_a_repository_does_nothing(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
-    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let (store, events) = AppStore::new_test(Arc::clone(&backend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     install_app_shortcuts_for_test(cx, backend);

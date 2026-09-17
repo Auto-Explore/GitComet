@@ -346,7 +346,7 @@ mod tests {
         let mut state = AppState {
             active_repo: Some(repo.id),
             repos: vec![repo, open],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let empty = BTreeMap::new();
         let mut cache = SidebarPresentationCache::default();
@@ -414,7 +414,7 @@ mod tests {
         let state = AppState {
             active_repo: Some(RepoId(1)),
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
-            ..Default::default()
+            ..AppState::test_default()
         };
 
         let (_, request) =
@@ -430,7 +430,7 @@ mod tests {
         let state = AppState {
             active_repo: Some(RepoId(1)),
             repos: vec![repo_state(RepoId(1), "/tmp/repo")],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let collapsed_items = BTreeMap::from([(
             PathBuf::from("/tmp/repo"),
@@ -468,7 +468,7 @@ mod tests {
         let mut state = AppState {
             active_repo: Some(repo.id),
             repos: vec![repo],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let expanded_worktrees = branch_sidebar::expanded_default_section_storage_key(
             branch_sidebar::worktrees_section_storage_key(),
@@ -531,7 +531,7 @@ mod tests {
         let mut state = AppState {
             active_repo: Some(RepoId(1)),
             repos: vec![repo],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let mut cache = SidebarPresentationCache::default();
 
@@ -698,7 +698,7 @@ mod tests {
         let state = AppState {
             active_repo: Some(repo.id),
             repos: vec![repo],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let mut cache = SidebarPresentationCache::default();
 
@@ -726,7 +726,7 @@ mod tests {
         let mut state = AppState {
             active_repo: Some(repo.id),
             repos: vec![repo],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let mut cache = SidebarPresentationCache::default();
 
@@ -760,7 +760,7 @@ mod tests {
         let mut state = AppState {
             active_repo: Some(repo.id),
             repos: vec![repo],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let mut cache = SidebarPresentationCache::default();
 
@@ -812,7 +812,7 @@ mod tests {
         let mut state = AppState {
             active_repo: Some(repo.id),
             repos: vec![repo],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let mut cache = SidebarPresentationCache::default();
 

@@ -297,7 +297,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) -> (Entity<GitCometView>, RepoId, &mut gpui::VisualTestContext) {
         let repo_id = RepoId(1);
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
@@ -309,7 +309,7 @@ mod tests {
                 },
             )],
             active_repo: Some(repo_id),
-            ..AppState::default()
+            ..AppState::test_default()
         });
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
@@ -378,7 +378,7 @@ mod tests {
 
     #[gpui::test]
     fn opening_from_a_menu_without_a_repository_is_inert(cx: &mut gpui::TestAppContext) {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (store, events) = AppStore::new_test(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 

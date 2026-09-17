@@ -619,6 +619,11 @@ impl SettingsWindowView {
             gpui::Rgba,
             SharedString,
         ) = match self.runtime_info.git.compatibility {
+            GitCompatibility::Checking => (
+                "icons/info.svg",
+                theme.colors.foreground.secondary,
+                "Checking...".into(),
+            ),
             GitCompatibility::Supported => (
                 "icons/check.svg",
                 theme.colors.status.success.foreground,
@@ -676,6 +681,9 @@ impl SettingsWindowView {
                 theme.colors.foreground.secondary,
                 "Unknown",
             ),
+            SigningToolStatus::NotChecked => {
+                (None, theme.colors.foreground.secondary, "Not checked")
+            }
             SigningToolStatus::Detecting => (None, theme.colors.foreground.secondary, "Detecting…"),
         };
 

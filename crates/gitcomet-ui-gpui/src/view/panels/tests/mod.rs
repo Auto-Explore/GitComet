@@ -722,7 +722,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
 ) {
     let _clipboard_guard = lock_clipboard_test();
     let expected = lines.join("\n");
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -834,7 +834,7 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
     create_worktree_file: bool,
 ) {
     let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -992,7 +992,7 @@ pub(super) fn app_state_with_repo(
     Arc::new(AppState {
         repos: vec![repo],
         active_repo: Some(repo_id),
-        ..Default::default()
+        ..AppState::test_default()
     })
 }
 

@@ -14,9 +14,10 @@ pub(super) struct YamlFixture {
 
 impl YamlFixture {
     pub fn unified_diff(&self) -> &'static str {
-        let header = format!("diff --git a/{} b/{}\n", self.path, self.path);
+        let header = format!("diff --git a/{} b/{}", self.path, self.path);
         let start = COMMIT_PATCH
-            .find(&header)
+            .find(&format!("{header}\n"))
+            .or_else(|| COMMIT_PATCH.find(&format!("{header}\r\n")))
             .expect("YAML fixture must have a section in the commit patch");
         let section = &COMMIT_PATCH[start..];
         let end = section

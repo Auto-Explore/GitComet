@@ -1552,6 +1552,7 @@ impl GitCometView {
 
 impl Drop for GitCometView {
     fn drop(&mut self) {
+        self.signing_tools_probe_cancellation.cancel();
         // Fallback teardown for OS-level window close / unwind that bypasses the
         // explicit shutdown flow. SIGTERM the child process group (a no-op on a
         // group already terminating) so commands aren't left as orphans, then

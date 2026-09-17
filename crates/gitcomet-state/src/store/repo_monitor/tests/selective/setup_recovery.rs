@@ -322,7 +322,13 @@ fn replacement_reconciles_all_state(ignore_trigger: bool, recovery: bool) {
     assert!(!armed.load(Ordering::Relaxed), "gap injection never ran");
     match result {
         Ok(Msg::RepoExternallyChanged { change, .. }) => {
-            assert_eq!(change, RepoExternalChange::all())
+            assert_eq!(
+                change,
+                RepoExternalChange {
+                    verification_context: ignore_trigger,
+                    ..RepoExternalChange::all()
+                }
+            )
         }
         other => panic!("replacement did not reconcile all state: {other:?}"),
     }

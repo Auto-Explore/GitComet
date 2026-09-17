@@ -331,7 +331,19 @@ impl AppStore {
     }
 
     pub fn new(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        let state = Arc::new(RwLock::new(Arc::new(AppState::default())));
+        Self::with_initial_state(backend, AppState::default())
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_test(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
+        Self::with_initial_state(backend, AppState::test_default())
+    }
+
+    fn with_initial_state(
+        backend: Arc<dyn GitBackend>,
+        initial: AppState,
+    ) -> (Self, smol::channel::Receiver<StoreEvent>) {
+        let state = Arc::new(RwLock::new(Arc::new(initial)));
         let (command_tx, command_rx) = mpsc::channel::<StoreWorkerCommand>();
         let store_id = StoreInstanceId::next();
         let store_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));

@@ -55,6 +55,7 @@ impl HistoryView {
         if self.indexed.presentation.is_none() {
             self.sync_history_viewport(&plan, cx);
         }
+        self.sync_signature_viewport(&plan, cx);
         let repo = self.active_repo();
         let commits_count = self
             .history_cache

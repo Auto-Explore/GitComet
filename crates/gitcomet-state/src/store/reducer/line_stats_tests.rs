@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 fn fixture() -> (AppState, RepoId) {
     let id = RepoId(901);
-    let mut state = AppState::default();
+    let mut state = AppState::test_default();
     state.repos.push(RepoState::new_opening(
         id,
         RepoSpec {

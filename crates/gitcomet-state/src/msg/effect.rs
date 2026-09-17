@@ -166,6 +166,7 @@ pub enum Effect {
     VerifyCommitSignatures {
         repo_id: RepoId,
         epoch: u64,
+        batch: u64,
         cancellation: gitcomet_core::services::CancellationToken,
         commit_ids: std::sync::Arc<[CommitId]>,
         /// Only signatures in these formats are checked: the others have no

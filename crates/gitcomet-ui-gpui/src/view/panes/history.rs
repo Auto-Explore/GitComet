@@ -17,6 +17,7 @@ mod indexed;
 pub(in crate::view) mod indexed_graph;
 mod loading;
 mod scroll;
+mod signatures;
 mod viewport;
 
 pub(in super::super) fn history_scrollbar_gutter() -> Pixels {
@@ -1119,6 +1120,8 @@ pub(in super::super) struct HistoryView {
     /// Minute tick that re-renders the table while the relative date format is
     /// active, so "2 mins ago" labels don't freeze. `None` for absolute formats.
     relative_time_tick: Option<gpui::Task<()>>,
+    signature_viewport: Option<signatures::ViewportKey>,
+    signature_debounce: Option<gpui::Task<()>>,
 }
 
 /// A hoverable sub-area of a history row. Both are painted on the canvas, so
@@ -1234,6 +1237,10 @@ impl HistoryView {
     fn notify_fingerprint_for(state: &AppState, show_history_tags: bool) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
+        state
+            .git_log_settings
+            .verify_commit_signatures
+            .hash(&mut hasher);
 
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
@@ -1420,6 +1427,8 @@ impl HistoryView {
             history_scroll: UniformListScrollHandle::default(),
             history_panel_focus_handle,
             relative_time_tick: None,
+            signature_viewport: None,
+            signature_debounce: None,
         }
     }
 

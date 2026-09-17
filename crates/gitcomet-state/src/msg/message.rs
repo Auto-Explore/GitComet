@@ -219,6 +219,11 @@ pub enum Msg {
     CancelAuthPrompt,
     SetGitRuntimeState(GitRuntimeState),
     SetSigningToolsState(SigningToolsState),
+    SetCommitSignatureTargets {
+        repo_id: RepoId,
+        epoch: u64,
+        commit_ids: Arc<[CommitId]>,
+    },
     SetRemoteUrlPolicy(RemoteUrlPolicy),
     SetGitLogSettings {
         show_history_tags: bool,
@@ -1295,6 +1300,7 @@ pub enum InternalMsg {
     CommitSignaturesVerified {
         repo_id: RepoId,
         epoch: u64,
+        batch: u64,
         result: Result<Vec<(CommitId, CommitSignature)>, Error>,
     },
     /// A [`Msg::RevealCommit`] reference resolved (or failed to).

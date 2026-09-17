@@ -3,7 +3,7 @@ use super::*;
 
 #[gpui::test]
 fn stash_menu_has_apply_pop_and_drop_entries(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(8);
@@ -73,7 +73,7 @@ fn stash_menu_has_apply_pop_and_drop_entries(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn stash_menu_drop_action_opens_drop_confirm_popover(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new_test(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
     let repo_id = RepoId(9);

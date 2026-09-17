@@ -353,6 +353,15 @@ impl GitCometView {
         }
 
         self.state = next;
+        if self.state.git_log_settings.verify_commit_signatures
+            && matches!(
+                self.state.signing_tools.gpg.availability,
+                gitcomet_core::signing_tools::SigningToolAvailability::NotChecked
+            )
+            && !self.signing_tools_probe_in_flight
+        {
+            self.refresh_signing_tools(false, cx);
+        }
         // Only an open palette shows enablement; `open` takes a fresh context.
         if self.command_palette_open {
             let context = self.command_palette_context(cx);
@@ -389,7 +398,6 @@ impl GitCometView {
         self.sync_reflog_panels_with_state();
         if !prev_git_runtime_available && self.state.git_runtime.is_available() {
             self.resume_after_git_runtime_recovery();
-            self.refresh_signing_tools(true, cx);
         }
         for msg in follow_up_msgs {
             self.store.dispatch(msg);
@@ -644,7 +652,7 @@ mod tests {
                 repo_with_open_state(RepoId(1), "/tmp/repo-a", false),
                 repo_with_open_state(RepoId(2), "/tmp/repo-b", true),
             ],
-            ..Default::default()
+            ..AppState::test_default()
         };
         let next = AppState {
             repos: vec![
@@ -652,7 +660,7 @@ mod tests {
                 repo_with_open_state(RepoId(2), "/tmp/repo-b", true),
                 repo_with_open_state(RepoId(3), "/tmp/repo-c", false),
             ],
-            ..Default::default()
+            ..AppState::test_default()
         };
 
         assert_eq!(
@@ -664,13 +672,13 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn newly_opened_repo_paths_includes_brand_new_ready_repos_and_ignores_loading_ones() {
-        let prev = AppState::default();
+        let prev = AppState::test_default();
         let next = AppState {
             repos: vec![
                 repo_with_open_state(RepoId(10), "/tmp/repo-new", true),
                 repo_with_open_state(RepoId(11), "/tmp/repo-loading", false),
             ],
-            ..Default::default()
+            ..AppState::test_default()
         };
 
         assert_eq!(

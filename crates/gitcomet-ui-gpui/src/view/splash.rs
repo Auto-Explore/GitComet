@@ -179,7 +179,10 @@ impl GitCometView {
     }
 
     fn git_runtime_unavailable(&self) -> bool {
-        !self.state.git_runtime.is_available()
+        matches!(
+            self.state.git_runtime.availability,
+            gitcomet_core::process::GitExecutableAvailability::Unavailable { .. }
+        )
     }
 
     fn git_runtime_unavailable_detail(&self) -> String {
@@ -231,11 +234,12 @@ impl GitCometView {
     #[cfg(test)]
     pub(crate) fn blocks_non_repository_actions(&self) -> bool {
         repository_entry_interstitial_active(self.view_mode, self.has_repo_tabs())
-            || matches!(self.view_mode, GitCometViewMode::Normal) && self.git_runtime_unavailable()
+            || matches!(self.view_mode, GitCometViewMode::Normal)
+                && !self.state.git_runtime.is_available()
     }
 
     pub(crate) fn blocks_repository_management_actions(&self) -> bool {
-        matches!(self.view_mode, GitCometViewMode::Normal) && self.git_runtime_unavailable()
+        matches!(self.view_mode, GitCometViewMode::Normal) && !self.state.git_runtime.is_available()
     }
 
     pub(crate) fn is_splash_screen_active(&self) -> bool {
@@ -631,6 +635,12 @@ impl GitCometView {
     }
 
     pub(super) fn splash_screen(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        if matches!(
+            self.state.git_runtime.availability,
+            gitcomet_core::process::GitExecutableAvailability::Checking
+        ) {
+            return self.startup_repository_loading_screen();
+        }
         if self.git_runtime_unavailable() {
             return self.git_unavailable_splash(cx);
         }
