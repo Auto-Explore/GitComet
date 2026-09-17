@@ -954,7 +954,19 @@ impl FileRowInteraction {
         selected: bool,
         open: bool,
     ) -> Self {
-        let surface = tinted_row_bg(theme.colors.surface.canvas, tint);
+        let mut canvas = theme.colors.surface.canvas;
+        if canvas.alpha < 1.0 {
+            // Custom themes may have translucent canvases. The row and its icon
+            // mask need a shared opaque backing to flatten interaction fills.
+            let appearance = if theme.is_dark {
+                gpui::WindowAppearance::Dark
+            } else {
+                gpui::WindowAppearance::Light
+            };
+            let backing = AppTheme::default_for_window_appearance(appearance);
+            canvas = composite_over(backing.colors.surface.canvas, canvas);
+        }
+        let surface = tinted_row_bg(canvas, tint);
         Self {
             style: crate::kit::interaction::InteractionStyle::new(theme).on_surface(surface),
             state: crate::kit::interaction::InteractionState::default()
@@ -1364,6 +1376,67 @@ mod tests {
                     resting, theme.colors.surface.canvas,
                     "{kind:?} tint must actually shift the surface",
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn file_row_interactions_support_translucent_canvases() {
+        use crate::kit::interaction::InteractionFeedback;
+
+        for base_theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            for alpha in [0.0, 0.5, 1.0] {
+                let mut theme = base_theme;
+                theme.colors.surface.canvas = gpui::Rgba::new(0.2, 0.4, 0.6, alpha);
+                let canvas = composite_over(
+                    base_theme.colors.surface.canvas,
+                    theme.colors.surface.canvas,
+                );
+                for kind in [FileStatusKind::Modified, FileStatusKind::Deleted] {
+                    let tint = file_kind_row_tint(kind, &theme);
+                    let surface = tinted_row_bg(canvas, tint);
+                    for (selected, open) in
+                        [(false, false), (true, false), (false, true), (true, true)]
+                    {
+                        let interaction = FileRowInteraction::new(theme, tint, selected, open);
+                        let disc = interaction.badge_disc("row".into());
+                        for (feedback, actual) in [
+                            (InteractionFeedback::Resting, disc.resting),
+                            (InteractionFeedback::Hovered, disc.hover.unwrap().1),
+                            (InteractionFeedback::Pressed, disc.pressed.unwrap().1),
+                        ] {
+                            let overlay = if open {
+                                Some(theme.active_overlay())
+                            } else if selected {
+                                Some(with_alpha(
+                                    theme.colors.accent.foreground,
+                                    if theme.is_dark { 0.16 } else { 0.10 },
+                                ))
+                            } else {
+                                match feedback {
+                                    InteractionFeedback::Resting => None,
+                                    InteractionFeedback::Hovered => Some(theme.hover_overlay()),
+                                    InteractionFeedback::Pressed => Some(theme.active_overlay()),
+                                }
+                            };
+                            let expected =
+                                overlay.map_or(surface, |color| composite_over(surface, color));
+                            assert_eq!(actual.alpha, 1.0);
+                            for (actual, expected) in [
+                                (actual.red, expected.red),
+                                (actual.green, expected.green),
+                                (actual.blue, expected.blue),
+                            ] {
+                                assert!(
+                                    (actual - expected).abs() < 1e-6,
+                                    "alpha={alpha}, kind={kind:?}, selected={selected}, open={open}, feedback={feedback:?}"
+                                );
+                            }
+                        }
+                        // Both status and commit-file rows apply this same style.
+                        interaction.apply(div().id("translucent_file_row"));
+                    }
+                }
             }
         }
     }
