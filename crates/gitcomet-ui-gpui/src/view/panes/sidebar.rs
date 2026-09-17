@@ -437,6 +437,11 @@ struct SidebarNotifyFingerprint {
     /// has to repaint when it changes — nothing else in this fingerprint moves
     /// when the user opens a different file.
     diff_target_rev: u64,
+    /// The soloed refs. The sidebar draws them in mustard and puts a banner
+    /// above the branch list, and neither is part of the cached row data — both
+    /// are computed at render time — so the pane has to be told to repaint when
+    /// the set changes. Hashed because this fingerprint is `Copy`.
+    history_solo_hash: u64,
 }
 
 impl SidebarNotifyFingerprint {
@@ -462,6 +467,14 @@ impl SidebarNotifyFingerprint {
             .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
             .map(|r| r.diff_state.diff_target_rev)
             .unwrap_or(0);
+        let history_solo_hash = active_repo_id
+            .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
+            .map(|r| {
+                let mut hasher = FxHasher::default();
+                r.history_state.history_solo.hash(&mut hasher);
+                hasher.finish()
+            })
+            .unwrap_or(0);
         Self {
             sidebar_mode: state.sidebar_mode,
             active_repo_id,
@@ -472,6 +485,7 @@ impl SidebarNotifyFingerprint {
             active_workspace_badges_hash,
             file_browser_rev,
             diff_target_rev,
+            history_solo_hash,
         }
     }
 }
@@ -3647,6 +3661,41 @@ mod tests {
         state.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
 
         assert_ne!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    /// The mustard row colours and the "Soloing x/y" banner are computed while
+    /// rendering, not stored in the cached rows, so without this the sidebar
+    /// keeps painting the pre-solo colours until something else happens to
+    /// repaint it.
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_the_history_solo() {
+        use gitcomet_core::domain::{HistorySolo, HistorySoloSet};
+
+        let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+        let unsoloed = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos[0].history_state.history_solo =
+            HistorySoloSet::from_iter([HistorySolo::local_branch("feature")]);
+        let soloed = SidebarNotifyFingerprint::from_state(&state);
+        assert_ne!(soloed, unsoloed, "soloing a ref must repaint the sidebar");
+
+        // Adding a second ref is also a repaint: the banner's count changes.
+        state.repos[0].history_state.history_solo = HistorySoloSet::from_iter([
+            HistorySolo::local_branch("feature"),
+            HistorySolo::local_branch("main"),
+        ]);
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), soloed);
+
+        state.repos[0].history_state.history_solo = HistorySoloSet::default();
+        assert_eq!(
+            SidebarNotifyFingerprint::from_state(&state),
+            unsoloed,
+            "clearing the solo returns the sidebar to its unsoloed painting"
+        );
     }
 
     #[test]
