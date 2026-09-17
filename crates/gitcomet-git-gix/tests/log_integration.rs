@@ -32,8 +32,14 @@ fn run_git_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
     for (key, value) in envs {
         cmd.env(key, value);
     }
-    let status = cmd.status().expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
+    let output = cmd.output().expect("git command to run");
+    assert!(
+        output.status.success(),
+        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn git_stdout(repo: &Path, args: &[&str]) -> String {

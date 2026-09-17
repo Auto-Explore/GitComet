@@ -8,13 +8,19 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let output = Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(args)
-        .status()
+        .output()
         .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
+    assert!(
+        output.status.success(),
+        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn git_remote_url(path: &Path) -> String {

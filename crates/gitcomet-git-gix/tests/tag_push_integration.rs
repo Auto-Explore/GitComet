@@ -29,6 +29,14 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
+fn git_bare(repo: &Path, args: &[&str]) -> String {
+    // Name the bare repository explicitly so these fixtures also work with
+    // safe.bareRepository=explicit in the caller's protected configuration.
+    let mut explicit_args = vec!["--git-dir", "."];
+    explicit_args.extend_from_slice(args);
+    git(repo, &explicit_args)
+}
+
 struct Fixture {
     _dir: tempfile::TempDir,
     local: PathBuf,
@@ -42,7 +50,7 @@ impl Fixture {
         let remote = dir.path().join("remote.git");
         fs::create_dir_all(&local).unwrap();
         fs::create_dir_all(&remote).unwrap();
-        git(&remote, &["init", "--bare"]);
+        git_bare(&remote, &["init", "--bare"]);
         git(&local, &["init", "-b", "main"]);
         git(&local, &["config", "user.name", "Tag push test"]);
         git(&local, &["config", "user.email", "tag-push@example.test"]);
@@ -96,7 +104,7 @@ fn annotated_preview_and_push_use_reachability_and_exclude_lightweight_tags() {
     assert_eq!(preview.new_tags, ["annotated"]);
     assert!(preview.conflicting_tags.is_empty());
     assert_eq!(
-        git(&fixture.remote, &["for-each-ref", "--format=%(refname)"]),
+        git_bare(&fixture.remote, &["for-each-ref", "--format=%(refname)"]),
         ""
     );
     assert_eq!(git(&fixture.local, &["show-ref"]), before);
@@ -104,7 +112,7 @@ fn annotated_preview_and_push_use_reachability_and_exclude_lightweight_tags() {
     let output = repo.push_with_tags(&request).unwrap();
     assert!(output.command.contains("--follow-tags"));
     assert_eq!(
-        git(&fixture.remote, &["for-each-ref", "--format=%(refname)"]),
+        git_bare(&fixture.remote, &["for-each-ref", "--format=%(refname)"]),
         "refs/heads/release\nrefs/tags/annotated"
     );
     assert_eq!(
@@ -132,11 +140,11 @@ fn all_tags_push_includes_branch_lightweight_and_unrelated_tags() {
     assert_eq!(preview.new_tags, ["annotated", "light", "unrelated"]);
     repo.push_with_tags(&request).unwrap();
     assert_eq!(
-        git(&fixture.remote, &["rev-parse", "refs/heads/release"]),
+        git_bare(&fixture.remote, &["rev-parse", "refs/heads/release"]),
         request.head.0.as_ref()
     );
     assert_eq!(
-        git(&fixture.remote, &["tag", "--list"]),
+        git_bare(&fixture.remote, &["tag", "--list"]),
         "annotated\nlight\nunrelated"
     );
 }
@@ -149,7 +157,7 @@ fn preview_uses_push_urls_and_reports_conflicts_separately() {
     git(&fixture.local, &["tag", "-f", "light", "unrelated^{}"]);
     let fetch_only = fixture._dir.path().join("fetch-only.git");
     fs::create_dir_all(&fetch_only).unwrap();
-    git(&fetch_only, &["init", "--bare"]);
+    git_bare(&fetch_only, &["init", "--bare"]);
     git(
         &fixture.local,
         &["remote", "set-url", "origin", fetch_only.to_str().unwrap()],
@@ -182,7 +190,7 @@ fn multiple_push_urls_deduplicate_new_tags_and_transport_failure_is_unavailable(
     fixture.tags();
     let second = fixture._dir.path().join("second.git");
     fs::create_dir_all(&second).unwrap();
-    git(&second, &["init", "--bare"]);
+    git_bare(&second, &["init", "--bare"]);
     git(
         &fixture.local,
         &[
@@ -243,7 +251,7 @@ fn stale_requests_and_cancelled_previews_never_push() {
             .is_err()
     );
     assert_eq!(
-        git(&fixture.remote, &["for-each-ref", "--format=%(refname)"]),
+        git_bare(&fixture.remote, &["for-each-ref", "--format=%(refname)"]),
         ""
     );
 }
@@ -272,7 +280,7 @@ fn preview_skips_hooks_and_signing_but_real_push_runs_hooks() {
     assert!(repo.push_with_tags(&request).is_err());
     assert!(fixture.local.join("hook-ran").exists());
     assert_eq!(
-        git(&fixture.remote, &["for-each-ref", "--format=%(refname)"]),
+        git_bare(&fixture.remote, &["for-each-ref", "--format=%(refname)"]),
         ""
     );
 }

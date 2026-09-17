@@ -8,13 +8,10 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
+    // Concurrent local transports can leave Git-for-Windows shell children
+    // stuck after receive-pack exits when they share the test runner's console.
+    // Pipe their output instead, retaining diagnostics for failed commands.
+    run_git_capture(repo, args);
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
@@ -26,8 +23,9 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> String {
         .expect("git command to run");
     assert!(
         output.status.success(),
-        "git {:?} failed: {}",
+        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
         args,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).to_string()

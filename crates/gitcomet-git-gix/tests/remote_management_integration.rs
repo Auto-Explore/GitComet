@@ -23,13 +23,7 @@ fn git_command() -> Command {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = git_command()
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
+    run_git_capture(repo, args);
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
@@ -41,8 +35,9 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> String {
         .expect("git command to run");
     assert!(
         output.status.success(),
-        "git {:?} failed: {}",
+        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
         args,
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).to_string()
@@ -53,8 +48,9 @@ fn run_git_status(repo: &Path, args: &[&str]) -> std::process::ExitStatus {
         .arg("-C")
         .arg(repo)
         .args(args)
-        .status()
+        .output()
         .expect("git command to run")
+        .status
 }
 
 fn git_remote_url(path: &Path) -> String {

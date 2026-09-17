@@ -22,19 +22,14 @@ fn install_prepare_commit_msg_hook(repo: &Path, script: &str) {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = Command::new("git");
-    test_git_env::apply(&mut cmd);
-    let status = cmd
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_EDITOR", "true")
-        .env("EDITOR", "true")
-        .env("VISUAL", "true")
-        .status()
-        .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
+    let output = git_output(repo, args);
+    assert!(
+        output.status.success(),
+        "git {:?} failed:\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> std::process::Output {
