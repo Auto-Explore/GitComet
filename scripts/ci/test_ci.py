@@ -2,6 +2,7 @@
 
 import copy
 from contextlib import redirect_stdout
+from functools import partial
 import importlib.util
 import io
 import json
@@ -140,32 +141,45 @@ class RunnerTests(unittest.TestCase):
             runner.run_suite("app", "app::smoke", suite, test_filter="misspelled", exact=True)
 
     def test_ignored_or_unreported_test_is_not_counted_as_executed(self):
-        suites = {"core": {"package-id": "core", "testcases": {"required": {"ignored": False}}}}
+        suites = {"core": {"package-id": "core", "binary-name": "gitcomet_core",
+                           "testcases": {"required": {"ignored": False}}}}
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)):
             junit = Path(directory) / "junit.xml"
             junit.write_text('<testsuites><testsuite name="core"><testcase name="required"><skipped/></testcase></testsuite></testsuites>')
-            with self.assertRaisesRegex(RuntimeError, "coverage mismatch"):
-                runner.check_nextest_results("core", suites, {"core": "gitcomet-core"}, junit)
+            for platform_name in ("linux", "darwin", "win32"):
+                select_runner = partial(runner.uses_libtest, platform_name=platform_name)
+                with self.subTest(platform=platform_name), patch.object(runner, "uses_libtest", select_runner):
+                    with self.assertRaisesRegex(RuntimeError, "coverage mismatch"):
+                        runner.check_nextest_results("core", suites, {"core": "gitcomet-core"}, junit)
 
     def test_ui_owned_tests_are_not_required_in_nextest_results(self):
         suites = {
-            "core": {"package-id": "core", "testcases": {"required": {"ignored": False}}},
-            "ui": {"package-id": "ui", "testcases": {"render": {"ignored": False}}},
+            "core": {"package-id": "core", "binary-name": "gitcomet_core",
+                     "testcases": {"required": {"ignored": False}}},
+            "ui": {"package-id": "ui", "binary-name": "gitcomet_ui_gpui",
+                   "testcases": {"render": {"ignored": False}}},
         }
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)):
             junit = Path(directory) / "junit.xml"
             junit.write_text('<testsuites><testsuite name="core"><testcase name="required"/></testsuite></testsuites>')
-            runner.check_nextest_results("workspace", suites, {"core": "gitcomet-core", "ui": runner.UI}, junit)
+            for platform_name in ("linux", "darwin", "win32"):
+                select_runner = partial(runner.uses_libtest, platform_name=platform_name)
+                with self.subTest(platform=platform_name), patch.object(runner, "uses_libtest", select_runner):
+                    runner.check_nextest_results("workspace", suites, {"core": "gitcomet-core", "ui": runner.UI}, junit)
 
     def test_successful_nextest_exit_cannot_hide_git_prerequisite_skip(self):
-        suites = {"core": {"package-id": "core", "testcases": {"required": {"ignored": False}}}}
+        suites = {"core": {"package-id": "core", "binary-name": "gitcomet_core",
+                           "testcases": {"required": {"ignored": False}}}}
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)):
             junit = Path(directory) / "junit.xml"
             junit.write_text('<testsuites><testsuite name="core"><testcase name="required">'
                              '<system-err>skipping status integration test: Git-for-Windows shell startup failed</system-err>'
                              '</testcase></testsuite></testsuites>')
-            with self.assertRaisesRegex(RuntimeError, "required Git test did not run"):
-                runner.check_nextest_results("core", suites, {"core": "gitcomet-core"}, junit)
+            for platform_name in ("linux", "darwin", "win32"):
+                select_runner = partial(runner.uses_libtest, platform_name=platform_name)
+                with self.subTest(platform=platform_name), patch.object(runner, "uses_libtest", select_runner):
+                    with self.assertRaisesRegex(RuntimeError, "required Git test did not run"):
+                        runner.check_nextest_results("core", suites, {"core": "gitcomet-core"}, junit)
 
     def test_libtest_count_cannot_hide_git_prerequisite_skip(self):
         suite = {"binary-path": "unused", "binary-name": "status_integration", "cwd": runner.ROOT,
