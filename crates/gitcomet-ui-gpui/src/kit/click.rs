@@ -1,6 +1,7 @@
 //! Completed pointer clicks shared by elements, canvases and text subtargets.
 //! GPUI pairs element clicks; this layer also gives the innermost control sole
 //! ownership and rejects mismatched buttons. Canvas targets use the same gate.
+//! Focusing presses participate in the same press/release pairing.
 use gpui::{prelude::*, *};
 
 /// A text subtarget can observe a press without taking selection away from
@@ -19,9 +20,7 @@ impl<T> Default for SubtargetClick<T> {
 impl<T: PartialEq> SubtargetClick<T> {
     pub(crate) fn press(&mut self, target: Option<T>, event: &MouseDownEvent) {
         self.pending = target
-            .filter(|_| {
-                event.button == MouseButton::Left && event.click_count == 1 && !event.first_mouse
-            })
+            .filter(|_| event.button == MouseButton::Left && event.click_count == 1)
             .map(|target| (target, event.clone()));
     }
 
@@ -92,7 +91,7 @@ fn begin(target: ClickTarget, down: &MouseDownEvent, window: &Window, cx: &mut A
             window: window.window_handle().window_id(),
             target,
             down: down.clone(),
-            consumed: down.first_mouse,
+            consumed: false,
             released_on: None,
             cleanup_scheduled: false,
         }),
