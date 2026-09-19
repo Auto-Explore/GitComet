@@ -8,8 +8,6 @@ mod test_git_env;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-#[cfg(windows)]
-use std::sync::OnceLock;
 
 fn git_command() -> Command {
     let mut cmd = Command::new("git");
@@ -74,50 +72,8 @@ fn commit_id(repo: &Path, rev: &str) -> CommitId {
     CommitId(run_git_capture(repo, &["rev-parse", rev]).trim().into())
 }
 
-#[cfg(windows)]
-fn is_git_shell_startup_failure(text: &str) -> bool {
-    text.contains("sh.exe: *** fatal error -")
-        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
-}
-
-#[cfg(windows)]
-fn git_shell_available_for_upstream_tests() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let output = match git_command().args(["difftool", "--tool-help"]).output() {
-            Ok(output) => output,
-            Err(_) => return true,
-        };
-        if output.status.success() {
-            return true;
-        }
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        !is_git_shell_startup_failure(&text)
-    })
-}
-
-fn require_git_shell_for_upstream_tests() -> bool {
-    #[cfg(windows)]
-    {
-        if !git_shell_available_for_upstream_tests() {
-            eprintln!(
-                "skipping upstream integration test: Git-for-Windows shell startup failed in this environment"
-            );
-            return false;
-        }
-    }
-    true
-}
-
 #[test]
 fn push_without_upstream_sets_upstream() {
-    if !require_git_shell_for_upstream_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -170,9 +126,6 @@ fn push_without_upstream_sets_upstream() {
 
 #[test]
 fn pull_without_upstream_sets_upstream() {
-    if !require_git_shell_for_upstream_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -247,9 +200,6 @@ fn pull_without_upstream_sets_upstream() {
 
 #[test]
 fn safe_push_after_published_amend_blocks_and_offers_lease() {
-    if !require_git_shell_for_upstream_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -369,9 +319,6 @@ fn safe_push_after_published_amend_blocks_and_offers_lease() {
 
 #[test]
 fn safe_push_after_commit_without_upstream_sets_upstream_for_new_branch() {
-    if !require_git_shell_for_upstream_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -436,9 +383,6 @@ fn safe_push_after_commit_without_upstream_sets_upstream_for_new_branch() {
 
 #[test]
 fn push_after_commit_checked_push_rejects_stale_branch_and_head() {
-    if !require_git_shell_for_upstream_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -517,9 +461,6 @@ fn push_after_commit_checked_push_rejects_stale_branch_and_head() {
 
 #[test]
 fn safe_push_after_commit_rejects_branch_change_before_decision() {
-    if !require_git_shell_for_upstream_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -587,9 +528,6 @@ fn safe_push_after_commit_rejects_branch_change_before_decision() {
 
 #[test]
 fn safe_push_after_amend_blocks_when_remote_advanced_without_conflicting_worktree() {
-    if !require_git_shell_for_upstream_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -691,9 +629,6 @@ fn safe_push_after_amend_blocks_when_remote_advanced_without_conflicting_worktre
 
 #[test]
 fn safe_push_after_commit_remote_advance_does_not_refresh_force_lease_tracking_ref() {
-    if !require_git_shell_for_upstream_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 

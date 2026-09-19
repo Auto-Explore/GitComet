@@ -1,6 +1,7 @@
 """Regression coverage for failure propagation, inventory accounting, and cache isolation."""
 
 import copy
+from contextlib import redirect_stdout
 import importlib.util
 import io
 import json
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -91,14 +93,40 @@ class CacheTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
-    def test_windows_capability_probes_keep_process_local_cache(self):
-        suite = {"binary-name": "mergetool_git_integration"}
-        self.assertTrue(runner.uses_libtest("gitcomet", suite, "win32"))
-        self.assertFalse(runner.uses_libtest("gitcomet", suite, "linux"))
+    def test_windows_git_suites_preserve_shared_setup_and_mutexes(self):
+        for name in ("mergetool_git_integration", "status_integration", "refs_integration",
+                     "upstream_integration", "upstream_divergence_integration", "log_integration"):
+            suite = {"binary-name": name}
+            self.assertTrue(runner.uses_libtest("gitcomet-git-gix", suite, "win32"))
+            self.assertFalse(runner.uses_libtest("gitcomet-git-gix", suite, "linux"))
         self.assertFalse(runner.uses_libtest("gitcomet-core", {"binary-name": "gitcomet_core"}, "win32"))
 
+    def test_silent_timeout_kills_descendants_and_records_failure(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}), redirect_stdout(io.StringIO()):
+            heartbeat = Path(directory) / "heartbeat"
+            child = ("import pathlib, sys, time\n"
+                     "path = pathlib.Path(sys.argv[1])\n"
+                     "while True:\n"
+                     "    path.write_text(str(time.monotonic_ns()))\n"
+                     "    time.sleep(0.02)\n")
+            parent = ("import subprocess, sys, time; "
+                      "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]]); "
+                      "time.sleep(60)")
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                runner.run("hung-suite", [sys.executable, "-c", parent, child, str(heartbeat)],
+                           timeout=3 if os.name == "nt" else 1)
+            self.assertEqual(raised.exception.returncode, 124)
+            before = heartbeat.read_text()
+            time.sleep(0.15)
+            self.assertEqual(heartbeat.read_text(), before, "descendant survived timeout")
+            timing = json.loads((Path(directory) / "timings.jsonl").read_text())
+            self.assertTrue(timing["timed_out"])
+            self.assertEqual(timing["returncode"], 124)
+
     def test_nonzero_child_status_is_not_masked(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)):
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}), redirect_stdout(io.StringIO()):
             with self.assertRaises(subprocess.CalledProcessError) as raised:
                 runner.run("failure", [sys.executable, "-c", "print('failure output'); raise SystemExit(7)"])
             self.assertEqual(raised.exception.returncode, 7)
@@ -128,6 +156,37 @@ class RunnerTests(unittest.TestCase):
             junit = Path(directory) / "junit.xml"
             junit.write_text('<testsuites><testsuite name="core"><testcase name="required"/></testsuite></testsuites>')
             runner.check_nextest_results("workspace", suites, {"core": "gitcomet-core", "ui": runner.UI}, junit)
+
+    def test_successful_nextest_exit_cannot_hide_git_prerequisite_skip(self):
+        suites = {"core": {"package-id": "core", "testcases": {"required": {"ignored": False}}}}
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)):
+            junit = Path(directory) / "junit.xml"
+            junit.write_text('<testsuites><testsuite name="core"><testcase name="required">'
+                             '<system-err>skipping status integration test: Git-for-Windows shell startup failed</system-err>'
+                             '</testcase></testsuite></testsuites>')
+            with self.assertRaisesRegex(RuntimeError, "required Git test did not run"):
+                runner.check_nextest_results("core", suites, {"core": "gitcomet-core"}, junit)
+
+    def test_libtest_count_cannot_hide_git_prerequisite_skip(self):
+        suite = {"binary-path": "unused", "binary-name": "status_integration", "cwd": runner.ROOT,
+                 "testcases": {"required": {"ignored": False}}}
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                patch.object(runner, "suite_env", return_value={}), patch.object(runner, "run", return_value=0):
+            (Path(directory) / "workspace-status_integration-all.log").write_text(
+                "skipping status integration test: Git-for-Windows local push shell startup failed\n"
+                "test result: ok. 1 passed; 0 failed;\n")
+            with self.assertRaisesRegex(RuntimeError, "required Git test did not run"):
+                runner.run_suite("workspace", "status_integration", suite)
+
+    def test_display_profiles_reuse_workspace_ui_and_headless_app(self):
+        with patch.object(sys, "argv", ["run.py", "display"]), patch.object(runner, "smoke") as smoke:
+            runner.main()
+        self.assertEqual(smoke.call_count, 9)
+        for index, values in enumerate(runner.DISPLAY_PROFILES.values()):
+            calls = smoke.call_args_list[index * 3:index * 3 + 3]
+            self.assertEqual([call.args[0] for call in calls], ["app", "app", "workspace"])
+            self.assertEqual(calls[2].args[1], "gitcomet_ui_gpui")
+            self.assertEqual(calls[2].kwargs["env"]["XDG_CURRENT_DESKTOP"], values[3])
 
 
 class ReportTests(unittest.TestCase):

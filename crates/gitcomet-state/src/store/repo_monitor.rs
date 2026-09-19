@@ -31,6 +31,8 @@ use ignore_rules::IgnoreRules;
 use monitor::{EventEffect, MAX_WORKTREE_WATCH_DIRS, MonitorState, summarize};
 use monitor::{MonitorConfig, WatchSetupOutcome, repo_monitor_thread};
 use native_watcher::MonitorWatcher;
+#[cfg(all(test, target_os = "linux"))]
+use native_watcher::NativeEventBarrier;
 use plan::WatchPlan;
 use policy::{
     PathClass, PolicyCell, PolicySnapshot, Triage, WatchInputs, normalized, structural_event,
@@ -43,6 +45,8 @@ enum MonitorMsg {
     Stop,
     #[cfg(test)]
     Barrier(mpsc::Sender<()>),
+    #[cfg(all(test, target_os = "linux"))]
+    Drain(mpsc::Sender<()>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -579,6 +579,8 @@ struct RunningMonitor {
     rx: mpsc::Receiver<Msg>,
     thread: Option<std::thread::JoinHandle<()>>,
     native_events: Arc<AtomicU64>,
+    #[cfg(target_os = "linux")]
+    native_barrier: Option<Arc<NativeEventBarrier>>,
 }
 impl RunningMonitor {
     fn revalidate(&self) {
@@ -609,6 +611,14 @@ impl RunningMonitor {
         let (tx, rx) = mpsc::channel();
         let (store_tx, store_rx) = mpsc::channel();
         let root = root.to_path_buf();
+        #[cfg(target_os = "linux")]
+        let native_barrier = callback_tx
+            .is_none()
+            .then(|| Arc::new(NativeEventBarrier::new()));
+        #[cfg(target_os = "linux")]
+        {
+            config.native_barrier = native_barrier.clone();
+        }
         let thread_tx = callback_tx.unwrap_or_else(|| tx.clone());
         let native_events = Arc::new(AtomicU64::new(0));
         config.native_events = Some(native_events.clone());
@@ -633,6 +643,8 @@ impl RunningMonitor {
             rx: store_rx,
             thread: Some(thread),
             native_events,
+            #[cfg(target_os = "linux")]
+            native_barrier,
         }
     }
     #[track_caller]
@@ -644,6 +656,19 @@ impl RunningMonitor {
         self.settle();
     }
     fn settle(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(barrier) = &self.native_barrier {
+            barrier.wait();
+            for (followup, message) in self.rx.try_iter().enumerate() {
+                assert!(
+                    followup < 3 && matches!(message, Msg::RepoExternallyChanged { .. }),
+                    "refreshes did not settle: {message:?}"
+                );
+            }
+            return;
+        }
+        // Other native backends, and tests deliberately redirecting callback
+        // events, retain the full quiet window until they have an OS fence.
         // Some native backends deliver a parent-directory update after the
         // file event. Bound those follow-ups, then require a full quiet window.
         for followup in 0..=3 {
@@ -670,6 +695,28 @@ impl Drop for RunningMonitor {
             thread.join().unwrap();
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_barrier_waits_for_debounced_refresh_without_counting_its_cookie() {
+    let (_temp, root) = repository();
+    let monitor = RunningMonitor::start(&root);
+    fs::write(root.join("queued.txt"), "edit before native fence").unwrap();
+    let barrier = monitor.native_barrier.as_ref().unwrap();
+    barrier.wait();
+    assert!(matches!(
+        monitor.rx.try_recv(),
+        Ok(Msg::RepoExternallyChanged { .. })
+    ));
+    let count = monitor.native_events.load(Ordering::Relaxed);
+    assert!(count > 0, "real filesystem callbacks were not observed");
+    barrier.wait();
+    assert_eq!(monitor.native_events.load(Ordering::Relaxed), count);
+    assert!(matches!(
+        monitor.rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
 }
 
 #[test]

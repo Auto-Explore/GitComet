@@ -2,7 +2,8 @@
 fail-fast = false
 retries = 0
 test-threads = "num-cpus"
-slow-timeout = { period = "60s" }
+slow-timeout = { period = "60s", terminate-after = 3, grace-period = "10s" }
+leak-timeout = { period = "500ms", result = "fail" }
 success-output = "never"
 failure-output = "immediate-final"
 
@@ -25,7 +26,7 @@ threads-required = 2
 
 [[profile.ci.overrides]]
 platform = "cfg(windows)"
-filter = 'package(gitcomet) | package(gitcomet-git-gix)'
+filter = 'package(gitcomet) | package(gitcomet-git-gix) | (package(gitcomet-core) & test(/^merge_extraction::tests::/)) | (package(gitcomet-state) & test(clone_repo_effect))'
 test-group = "windows-git-shell"
 
 [[profile.ci.overrides]]

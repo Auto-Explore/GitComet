@@ -4,8 +4,6 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-#[cfg(windows)]
-use std::sync::OnceLock;
 
 fn run_git(repo: &Path, args: &[&str]) {
     // Concurrent local transports can leave Git-for-Windows shell children
@@ -228,53 +226,8 @@ fn git_remote_url(path: &Path) -> String {
     }
 }
 
-#[cfg(windows)]
-fn is_git_shell_startup_failure(text: &str) -> bool {
-    text.contains("sh.exe: *** fatal error -")
-        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
-}
-
-#[cfg(windows)]
-fn git_shell_available_for_refs_integration_tests() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let output = match Command::new("git")
-            .args(["difftool", "--tool-help"])
-            .output()
-        {
-            Ok(output) => output,
-            Err(_) => return true,
-        };
-        if output.status.success() {
-            return true;
-        }
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        !is_git_shell_startup_failure(&text)
-    })
-}
-
-fn require_git_shell_for_refs_integration_tests() -> bool {
-    #[cfg(windows)]
-    {
-        if !git_shell_available_for_refs_integration_tests() {
-            eprintln!(
-                "skipping refs integration test: Git-for-Windows shell startup failed in this environment"
-            );
-            return false;
-        }
-    }
-    true
-}
-
 #[test]
 fn list_branches_reports_upstream_and_divergence() {
-    if !require_git_shell_for_refs_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -385,9 +338,6 @@ fn list_branches_reports_upstream_and_divergence() {
 
 #[test]
 fn list_branches_gone_upstream_is_exposed_as_untracked() {
-    if !require_git_shell_for_refs_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -442,9 +392,6 @@ fn list_branches_gone_upstream_is_exposed_as_untracked() {
 
 #[test]
 fn list_branches_reflects_new_upstream_without_reopen() {
-    if !require_git_shell_for_refs_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -508,9 +455,6 @@ fn list_branches_reflects_new_upstream_without_reopen() {
 
 #[test]
 fn list_branches_reflects_tracking_upstream_set_without_push() {
-    if !require_git_shell_for_refs_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -588,9 +532,6 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
 
 #[test]
 fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
-    if !require_git_shell_for_refs_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -707,9 +648,6 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
 
 #[test]
 fn fetching_a_pending_upstream_that_now_exists_clears_the_pending_marker() {
-    if !require_git_shell_for_refs_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     let remote_repo = root.join("remote.git");
@@ -787,9 +725,6 @@ fn fetching_a_pending_upstream_that_now_exists_clears_the_pending_marker() {
 
 #[test]
 fn list_branches_reflects_repeated_tracking_toggles_on_same_repo_instance() {
-    if !require_git_shell_for_refs_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -873,9 +808,6 @@ fn list_branches_reflects_repeated_tracking_toggles_on_same_repo_instance() {
 
 #[test]
 fn list_branches_preserves_nested_upstream_branch_names() {
-    if !require_git_shell_for_refs_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -946,9 +878,6 @@ fn list_branches_preserves_nested_upstream_branch_names() {
 
 #[test]
 fn list_branches_reflects_removed_upstream_without_reopen() {
-    if !require_git_shell_for_refs_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -1029,9 +958,6 @@ fn list_branches_reflects_removed_upstream_without_reopen() {
 
 #[test]
 fn list_ref_metadata_reports_author_date_and_subject_for_local_and_remote_refs() {
-    if !require_git_shell_for_refs_integration_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 

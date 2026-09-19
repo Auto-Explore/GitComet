@@ -1,5 +1,69 @@
 use super::*;
 
+/// A cookie on the same inotify queue as the repository's watches fences prior
+/// native callbacks. It lives outside the fixture and never contributes to the
+/// repository's callback counts or ignore policy. Other OS backends need their
+/// own ordering guarantees before they can use this test-only synchronization.
+#[cfg(all(test, target_os = "linux"))]
+pub(super) struct NativeEventBarrier {
+    _directory: tempfile::TempDir,
+    path: PathBuf,
+    sequence: AtomicU64,
+    pending: std::sync::Mutex<Option<(PathBuf, mpsc::Sender<()>)>>,
+}
+
+#[cfg(all(test, target_os = "linux"))]
+impl NativeEventBarrier {
+    pub fn new() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let path = normalized(&directory.path().canonicalize().unwrap());
+        Self {
+            _directory: directory,
+            path,
+            sequence: AtomicU64::new(0),
+            pending: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn wait(&self) {
+        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
+        let marker = self.path.join(sequence.to_string());
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut pending = self.pending.lock().unwrap();
+            assert!(pending.is_none(), "native barrier already pending");
+            *pending = Some((marker.clone(), tx));
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            // A watch rebuild can cross the first write. Repeat the same
+            // cookie until a live registration and the monitor acknowledge it.
+            fs::write(&marker, "barrier").unwrap();
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(()) => return,
+                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+                other => panic!("native event barrier did not finish: {other:?}"),
+            }
+        }
+    }
+
+    fn observe(&self, event: &notify::Event, tx: &mpsc::Sender<MonitorMsg>) -> bool {
+        if event.paths.is_empty() || !event.paths.iter().all(|path| path.starts_with(&self.path)) {
+            return false;
+        }
+        let mut pending = self.pending.lock().unwrap();
+        if pending
+            .as_ref()
+            .is_some_and(|(marker, _)| event.paths.contains(marker))
+        {
+            let (_, ready) = pending.take().unwrap();
+            // Wait for the real debounce deadline and any watch rebuild too.
+            let _ = tx.send(MonitorMsg::Drain(ready));
+        }
+        true
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WatchMode {
     Shallow,
@@ -25,8 +89,15 @@ fn callback(
     enabled: Arc<AtomicBool>,
     policy: PolicyCell,
     #[cfg(test)] native_events: Option<Arc<AtomicU64>>,
+    #[cfg(all(test, target_os = "linux"))] native_barrier: Option<Arc<NativeEventBarrier>>,
 ) -> impl FnMut(notify::Result<notify::Event>) + Send + 'static {
     move |result| {
+        #[cfg(all(test, target_os = "linux"))]
+        if let (Some(barrier), Ok(event)) = (&native_barrier, &result)
+            && barrier.observe(event, &tx)
+        {
+            return;
+        }
         #[cfg(test)]
         if let Some(count) = &native_events {
             count.fetch_add(1, Ordering::Relaxed);
@@ -75,6 +146,7 @@ impl MonitorWatcher {
         policy: &PolicyCell,
         boundaries: &[PathBuf],
         #[cfg(test)] native_events: Option<Arc<AtomicU64>>,
+        #[cfg(all(test, target_os = "linux"))] native_barrier: Option<Arc<NativeEventBarrier>>,
     ) -> notify::Result<(Self, usize)> {
         let snapshot = policy
             .read()
@@ -90,6 +162,8 @@ impl MonitorWatcher {
             policy.clone(),
             #[cfg(test)]
             native_events,
+            #[cfg(all(test, target_os = "linux"))]
+            native_barrier.clone(),
         );
         let roots = minimal_roots(&snapshot);
         #[cfg(not(target_os = "macos"))]
@@ -105,6 +179,12 @@ impl MonitorWatcher {
                 watcher,
                 watched: FxHashSet::default(),
             };
+            #[cfg(all(test, target_os = "linux"))]
+            if let Some(barrier) = native_barrier {
+                result
+                    .watcher
+                    .watch(&barrier.path, RecursiveMode::NonRecursive)?;
+            }
             let mut failures = 0;
             if WATCH_MODE == WatchMode::Recursive {
                 for root in roots {

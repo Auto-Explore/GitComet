@@ -271,8 +271,8 @@ opt-level = 0
 opt-level = 1
 split-debuginfo = "packed"
 
-# CI checks correctness with the same optimization as the normal test profile,
-# without generating and packaging full debugger symbols on ephemeral runners.
+# CI avoids generating and packaging debugger symbols on ephemeral runners.
+# Keep algorithm/dependency optimization; the large UI crate favors fast builds.
 [profile.ci-test]
 inherits = "dev"
 opt-level = 1
@@ -283,6 +283,9 @@ codegen-units = 256
 incremental = false
 debug-assertions = true
 overflow-checks = true
+
+[profile.ci-test.package.gitcomet-ui-gpui]
+opt-level = 0
 
 # Compile/link coverage only. Actual performance measurements still use bench,
 # which inherits the production release settings below.

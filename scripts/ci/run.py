@@ -2,12 +2,14 @@
 """Build once, inventory every test, then run nextest + the GPUI libtest harness."""
 
 import argparse
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -17,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 REPORTS = ROOT / "target" / "ci-reports"
 UI = "gitcomet-ui-gpui"
 CONTEXTS = {
-    "workspace": ["--workspace", "--no-default-features", "--features", "gix"],
+    "workspace": ["--workspace", "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
     "core": ["-p", "gitcomet-core"],
     "state": ["-p", "gitcomet-state"],
     "backend": ["-p", "gitcomet-git-gix"],
@@ -33,12 +35,18 @@ WINDOWS_LIBTEST_BINARIES = {
     "mergetool_git_integration", "difftool_git_integration",
     "standalone_tool_mode_integration", "submodules_integration",
     "remote_management_integration",
+    "status_integration", "refs_integration", "upstream_integration",
+    "upstream_divergence_integration", "log_integration",
 }
+GIT_PREREQUISITE_SKIP = re.compile(
+    r"\bskipping\b[^\n]*(?:Git-for-Windows|(?:git|posix|sh).*shell|shell.*(?:unavailable|startup))",
+    re.IGNORECASE,
+)
 
 
 def uses_libtest(package, suite, platform_name=sys.platform):
-    # These Windows binaries cache expensive Git-shell capability probes with
-    # OnceLock. A process per test would repeat each probe dozens of times.
+    # Share isolated Git environments and preserve process-local suite mutexes.
+    # Run shell-heavy binaries sequentially, with bounded test concurrency.
     return package == UI or (platform_name == "win32" and suite["binary-name"] in WINDOWS_LIBTEST_BINARIES)
 
 
@@ -54,36 +62,67 @@ def record(name, duration, returncode, **details):
             out.write(f"- `{name}`: {duration:.1f}s, exit {returncode}\n")
 
 
-def run(name, command, *, output=None, cwd=ROOT, env=None, check=True):
+def stop_process_tree(process):
+    if os.name == "nt":
+        # Kill descendants before the parent disappears from the process tree.
+        try:
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10, check=False)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            print(f"::error::process-tree cleanup failed: {error}", file=sys.stderr, flush=True)
+        finally:
+            if process.poll() is None:
+                process.kill()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.wait(timeout=10)
+
+
+def reject_prerequisite_skips(name, text):
+    if match := GIT_PREREQUISITE_SKIP.search(text):
+        raise RuntimeError(f"{name}: required Git test did not run: {match.group()}")
+
+
+def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=None):
     """Keep complete logs, surface runtime skips, and never mask subprocess failures."""
     REPORTS.mkdir(parents=True, exist_ok=True)
     print(f"::group::{name}", flush=True)
     print("$ " + subprocess.list2cmdline([str(arg) for arg in command]), flush=True)
     start = time.monotonic()
     log_name = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
-    with (REPORTS / f"{log_name}.log").open("w", encoding="utf-8") as log:
-        if output:
-            with Path(output).open("w", encoding="utf-8") as stream:
-                process = subprocess.Popen(command, cwd=cwd, env=env, stdout=stream,
-                                           stderr=subprocess.PIPE, text=True, errors="replace")
-                for line in process.stderr:
-                    log.write(line)
-                    print(line, end="", flush=True)
-        else:
-            process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT, text=True, errors="replace")
-            for line in process.stdout:
-                log.write(line)
-                print(line, end="", flush=True)
-                if re.search(r"\bskipping\b", line, re.IGNORECASE):
-                    with (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
-                        excluded.write(f"{name}: {line}")
-        code = process.wait()
-        if process.stdout:
-            process.stdout.close()
-        if process.stderr:
-            process.stderr.close()
-    record(name, time.monotonic() - start, code)
+    log_path = REPORTS / f"{log_name}.log"
+    timed_out = False
+    with ExitStack() as stack:
+        log = stack.enter_context(log_path.open("w", encoding="utf-8"))
+        stdout = stack.enter_context(Path(output).open("w", encoding="utf-8")) if output else log
+        # Tail a file instead of blocking on a pipe that a leaked descendant
+        # could hold open after its parent exits. Deadlines cover silent hangs.
+        reader = stack.enter_context(log_path.open(encoding="utf-8", errors="replace"))
+        process = subprocess.Popen(command, cwd=cwd, env=env, stdout=stdout,
+                                   stderr=log, start_new_session=os.name != "nt")
+        try:
+            while process.poll() is None:
+                print(reader.read(), end="", flush=True)
+                if timeout is not None and time.monotonic() - start >= timeout:
+                    timed_out = True
+                    stop_process_tree(process)
+                    break
+                time.sleep(0.05)
+            code = 124 if timed_out else process.wait()
+            print(reader.read(), end="", flush=True)
+        except BaseException:
+            stop_process_tree(process)
+            raise
+    if timed_out:
+        print(f"::error::{name}: exceeded {timeout}s; terminated process tree", flush=True)
+    with (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
+        for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if re.search(r"\bskipping\b", line, re.IGNORECASE):
+                excluded.write(f"{name}: {line}\n")
+    record(name, time.monotonic() - start, code, timed_out=timed_out)
     print("::endgroup::", flush=True)
     if check and code:
         raise subprocess.CalledProcessError(code, command)
@@ -182,9 +221,11 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
     name = f"{context}-{binary_id}-{test_filter or 'all'}"
     if env_overrides:
         name += "-" + env_overrides["XDG_SESSION_TYPE"] + "-" + env_overrides["XDG_CURRENT_DESKTOP"]
-    code = run(name, command, cwd=suite["cwd"], env=env, check=False)
+    code = run(name, command, cwd=suite["cwd"], env=env, check=False,
+               timeout=180 if test_filter else 600)
     log_name = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
-    log = (REPORTS / f"{log_name}.log").read_text(encoding="utf-8")
+    log = (REPORTS / f"{log_name}.log").read_text(encoding="utf-8", errors="replace")
+    reject_prerequisite_skips(name, log)
     summaries = re.findall(r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;", log)
     if not code and (not summaries or sum(map(int, summaries[-1])) != len(expected)):
         raise RuntimeError(f"{name}: libtest did not execute the inventoried test count ({len(expected)})")
@@ -196,6 +237,9 @@ def check_nextest_results(context, suites, packages, junit):
                 if not uses_libtest(packages[suite["package-id"]], suite)
                 for name, test in suite["testcases"].items() if not test["ignored"]}
     xml = ET.parse(junit)
+    for case in xml.iter("testcase"):
+        reject_prerequisite_skips(f"{context}:{case.attrib['name']}",
+                                  case.findtext("system-out", "") + "\n" + case.findtext("system-err", ""))
     actual = {(suite.attrib["name"], case.attrib["name"])
               for suite in xml.getroot().findall("testsuite") for case in suite.findall("testcase")
               if case.find("skipped") is None}
@@ -266,11 +310,11 @@ def main():
         for name, values in DISPLAY_PROFILES.items():
             env = dict(zip(["DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP"], values))
             print(f"Display profile: {name}: {env}", flush=True)
-            # These package-only contexts deliberately preserve their original
-            # feature graphs, including the headless app and default-feature UI.
+            # Keep the headless app context; the workspace already includes the
+            # UI's default features and its complete test suite.
             for target in ("mergetool_git_integration", "difftool_git_integration"):
                 smoke("app", target, "gui_default", env=env)
-            smoke("ui", "gitcomet_ui_gpui", "smoke_tests::smoke_view_renders_without_panicking", exact=True, env=env)
+            smoke("workspace", "gitcomet_ui_gpui", "smoke_tests::smoke_view_renders_without_panicking", exact=True, env=env)
     elif args.phase == "cmd-smoke":
         smoke("app", "standalone_tool_mode_integration", "help_flag_exits_zero", exact=True)
     else:

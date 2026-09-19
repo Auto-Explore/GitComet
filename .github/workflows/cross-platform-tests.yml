@@ -68,6 +68,7 @@ jobs:
           cold-cache: ${{ inputs.cold-cache }}
       - name: Verify host and test prerequisites
         shell: bash
+        timeout-minutes: 2
         env:
           EXPECTED_HOST: ${{ matrix.host }}
         run: |
@@ -75,10 +76,13 @@ jobs:
           git lfs version
           rustc -vV
           if [[ "$RUNNER_OS" == Windows ]]; then
-            git difftool --tool-help > /dev/null
+            git -c 'alias.gitcomet-ci-shell=!exit 0' gitcomet-ci-shell
             sh -lc 'exit 0'
           fi
           python3 -c 'import os, subprocess; version = subprocess.check_output(["rustc", "-vV"], text=True); assert "host: " + os.environ["EXPECTED_HOST"] in version, version'
+      - name: Verify Windows CI subprocess handling
+        if: runner.os == 'Windows'
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
       - name: Compile and inventory workspace tests
         run: python3 scripts/ci/run.py compile --context workspace
       - name: Execute workspace tests
@@ -88,20 +92,13 @@ jobs:
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash
         run: python3 scripts/ci/run.py doc --context workspace
-      # Preserve package-only feature contexts until equivalence is established.
-      # Compile these once, then reuse the binaries for all three environments.
-      - name: Compile original Linux UI and display-selection contexts
+      # The workspace enables the UI's default features and runs its complete
+      # suite. Only the headless app needs a separate feature context for smoke.
+      - name: Compile Linux display-selection app context
         if: success() && matrix.name == 'ubuntu22-x64'
         shell: bash
         run: |
-          python3 scripts/ci/run.py compile --context ui
           python3 scripts/ci/run.py compile --context app
-      - name: Original package-only GPUI tests and doctests
-        if: success() && matrix.name == 'ubuntu22-x64'
-        shell: bash
-        run: |
-          python3 scripts/ci/run.py test --context ui
-          python3 scripts/ci/run.py doc --context ui
       - name: All Linux display profiles
         if: success() && matrix.name == 'ubuntu22-x64'
         shell: bash
@@ -146,8 +143,8 @@ jobs:
           cache-key: ${{ steps.setup.outputs.cache-key }}
           cache-hit: ${{ steps.setup.outputs.cache-hit }}
           cold-cache: ${{ inputs.cold-cache }}
-          # Ubuntu x64 retains two UI feature graphs; Windows also builds the
-          # package-only CMD context. Keep the total active cache set below 8 GB.
+          # Ubuntu x64 and Windows also compile the headless app context.
+          # Keep the total active cache set below 8 GB.
           budget-mib: ${{ matrix.name == 'ubuntu22-x64' && '1200' || (runner.os == 'Windows' && '800' || '700') }}
 
   fedora:
