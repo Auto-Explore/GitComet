@@ -126,22 +126,52 @@ def summarize(records):
 
 
 def cache_context(key):
+    if key.startswith("gitcomet-ci-v2-deps-"):
+        return "deps/" + key.removeprefix("gitcomet-ci-v2-deps-").rsplit("-", 2)[0]
+    if key.startswith("gitcomet-ci-v2-sources-"):
+        return "sources/" + key.removeprefix("gitcomet-ci-v2-sources-").rsplit("-", 1)[0]
     if key.startswith("gitcomet-ci-v1-"):
-        return key.rsplit("-", 1)[0]
+        return "deps/" + key.removeprefix("gitcomet-ci-v1-").rsplit("-", 1)[0]
     if key.startswith("gitcomet-ci-audit-"):
         return "gitcomet-ci-audit"
     return None
 
 
+def fixture_timings(directory):
+    """Aggregate opt-in helper timings. Nested phases are deliberately separate."""
+    totals = {}
+    for path in sorted(directory.glob("*.tsv")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            test, phase, operation, microseconds = line.split("\t")
+            key = (test, phase, operation)
+            count, elapsed = totals.get(key, (0, 0))
+            totals[key] = (count + 1, elapsed + int(microseconds))
+    return sorted((dict(test=test, phase=phase, operation=operation, calls=count, seconds=elapsed / 1e6)
+                   for (test, phase, operation), (count, elapsed) in totals.items()),
+                  key=lambda row: (-row["seconds"], row["test"], row["phase"], row["operation"]))
+
+
 def obsolete_caches(caches):
     seen, obsolete = set(), []
-    for cache in sorted(caches, key=lambda item: item["created_at"], reverse=True):
+    # Prefer a published v2 replacement over v1 regardless of creation order.
+    ordered = sorted(caches, key=lambda item: (item["key"].startswith("gitcomet-ci-v2-"), item["created_at"]), reverse=True)
+    source_refs = {(cache.get("ref", ""), cache_context(cache["key"]).removeprefix("sources/"))
+                   for cache in caches if cache["key"].startswith("gitcomet-ci-v2-sources-")}
+    for cache in ordered:
         context = cache_context(cache["key"])
         if context is None:
             continue
-        if context in seen:
+        scope = cache.get("ref", "")
+        # Retire the former source-only allocations only after the OS fallback exists.
+        if cache["key"].startswith("gitcomet-ci-v1-") and ("benchmarks-ci-bench" in context or context.endswith("-clippy")):
+            os_family = "windows" if "windows" in context else "darwin" if "macos" in context else "linux"
+            if (scope, os_family) in source_refs:
+                obsolete.append(cache)
+                continue
+        identity = (scope, context)
+        if identity in seen:
             obsolete.append(cache)
-        seen.add(context)
+        seen.add(identity)
     return obsolete
 
 
@@ -171,6 +201,8 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     caches = sub.add_parser("caches")
     caches.add_argument("--prune", action="store_true")
+    fixtures = sub.add_parser("fixtures")
+    fixtures.add_argument("directory", type=Path)
     runs = sub.add_parser("runs")
     runs.add_argument("ids", nargs="+", type=int)
     runs.add_argument("--output", type=Path, required=True)
@@ -183,6 +215,8 @@ def main():
     args = parser.parse_args()
     if args.command == "caches":
         manage_caches(args.repository, args.prune)
+    elif args.command == "fixtures":
+        print(json.dumps(fixture_timings(args.directory), indent=2))
     elif args.command == "runs":
         records = collect_runs(args.repository, args.ids)
         args.output.write_text(json.dumps(records, indent=2) + "\n")

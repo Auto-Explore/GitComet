@@ -218,6 +218,19 @@ pub struct FsEventsWatcher {
     _streams: Vec<Stream>,
 }
 impl FsEventsWatcher {
+    /// Deliver events that precede this fence from every live native stream.
+    /// Call on the owner thread, never from a callback or with its locks held.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn flush_pending_events(&mut self) -> bool {
+        for stream in &self._streams {
+            // SAFETY: these streams have started and remain owned throughout
+            // the flush. Their callbacks only enqueue monitor messages.
+            unsafe { fs::FSEventStreamFlushSync(stream.stream) };
+            stream.queue.exec_sync(|| {});
+        }
+        !self._streams.is_empty()
+    }
+
     pub fn new(
         streams: Vec<(PathBuf, Vec<PathBuf>)>,
         handler: impl EventHandler,
@@ -238,6 +251,48 @@ impl FsEventsWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_watcher_cannot_acknowledge_a_native_fence() {
+        let (mut watcher, failures) = FsEventsWatcher::new(Vec::new(), |_| {});
+        assert!(failures.is_empty());
+        assert!(!watcher.flush_pending_events());
+    }
+
+    #[test]
+    fn flush_delivers_events_from_every_live_stream() {
+        let roots = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+        let paths: Vec<_> = roots
+            .iter()
+            .map(|root| root.path().canonicalize().unwrap())
+            .collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (mut watcher, failures) = FsEventsWatcher::new(
+            paths
+                .iter()
+                .map(|root| (root.clone(), Vec::new()))
+                .collect(),
+            move |event| {
+                tx.send(event).unwrap();
+            },
+        );
+        assert!(failures.is_empty());
+        watcher.flush_pending_events();
+        for root in &paths {
+            std::fs::write(root.join("before-fence.txt"), "ready").unwrap();
+        }
+        assert!(watcher.flush_pending_events());
+        let delivered: Vec<_> = rx
+            .try_iter()
+            .flat_map(|event| event.unwrap().paths)
+            .collect();
+        for root in &paths {
+            assert!(
+                delivered.contains(&root.join("before-fence.txt")),
+                "{delivered:?}"
+            );
+        }
+    }
 
     #[test]
     fn native_flags_preserve_structural_and_content_changes() {

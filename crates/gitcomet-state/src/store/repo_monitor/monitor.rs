@@ -466,6 +466,10 @@ pub(super) fn repo_monitor_thread(
     let mut debouncer = DebouncedChange::new(config.debounce, config.max_delay);
     #[cfg(all(test, target_os = "linux"))]
     let mut drains = Vec::new();
+    #[cfg(all(test, target_os = "macos"))]
+    let mut native_drains = Vec::new();
+    #[cfg(all(test, target_os = "macos"))]
+    let mut watcher_generation = 0_u64;
     let mut policy_dirty = false;
     let mut index_dirty = false;
     let mut rebuild = None;
@@ -496,6 +500,26 @@ pub(super) fn repo_monitor_thread(
             }
             #[cfg(all(test, target_os = "linux"))]
             Ok(MonitorMsg::Drain(tx)) => drains.push(tx),
+            #[cfg(all(test, target_os = "macos"))]
+            Ok(MonitorMsg::FlushNative(ready)) => {
+                if watcher
+                    .as_mut()
+                    .is_some_and(|watcher| watcher.flush_pending_events())
+                {
+                    // Flush completed callbacks before placing the marker behind
+                    // their events. The ordinary debounce/rebuild path still runs.
+                    let _ = monitor_tx.send(MonitorMsg::NativeDrained {
+                        generation: watcher_generation,
+                        ready,
+                    });
+                } else {
+                    let _ = ready.send(false);
+                }
+            }
+            #[cfg(all(test, target_os = "macos"))]
+            Ok(MonitorMsg::NativeDrained { generation, ready }) => {
+                native_drains.push((generation, ready));
+            }
             Ok(MonitorMsg::Revalidate) => revalidate = true,
             Ok(MonitorMsg::Event(result)) => {
                 if !monitor_enabled.load(Ordering::Relaxed) {
@@ -633,6 +657,10 @@ pub(super) fn repo_monitor_thread(
                     repo_id
                 );
                 drop(watcher.take());
+                #[cfg(all(test, target_os = "macos"))]
+                {
+                    watcher_generation += 1;
+                }
                 last_recovery = Some(now);
                 match state.setup(
                     &workdir,
@@ -666,6 +694,17 @@ pub(super) fn repo_monitor_thread(
         if !debouncer.is_pending() {
             for tx in drains.drain(..) {
                 let _ = tx.send(());
+            }
+        }
+        #[cfg(all(test, target_os = "macos"))]
+        if !debouncer.is_pending() && rebuild.is_none() {
+            for (generation, ready) in native_drains.drain(..) {
+                if generation == watcher_generation {
+                    let _ = ready.send(true);
+                } else {
+                    // A rebuild invalidates the old fence; synchronize the new streams.
+                    let _ = monitor_tx.send(MonitorMsg::FlushNative(ready));
+                }
             }
         }
     }

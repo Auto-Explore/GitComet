@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+test-support = []
+
 # Native FSEvents ownership is isolated here, like gitcomet-tree-sitter-alloc.
 # Application crates continue to inherit the workspace unsafe_code = forbid.
 [lints.rust]

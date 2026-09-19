@@ -139,6 +139,11 @@ pub(super) fn minimal_roots(policy: &PolicySnapshot) -> Vec<PathBuf> {
 }
 
 impl MonitorWatcher {
+    #[cfg(all(test, target_os = "macos"))]
+    pub fn flush_pending_events(&mut self) -> bool {
+        self._watcher.flush_pending_events()
+    }
+
     pub fn new(
         repo_id: RepoId,
         tx: &mpsc::Sender<MonitorMsg>,

@@ -38,6 +38,9 @@ tempfile = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 wayland-client = { workspace = true }
 
+[dev-dependencies]
+gitcomet-core = { workspace = true, features = ["test-support"] }
+
 [target.'cfg(unix)'.dependencies]
 signal-hook = { workspace = true }
 

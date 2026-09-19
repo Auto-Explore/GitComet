@@ -886,9 +886,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.6"
+version = "1.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3eb0f42d6c360dc3f8a821f6bf2fdea7f72bfd36b3076eb0e6d1e9e0752fff4"
+checksum = "54413ede23c2daf518f35156dfde027feb2374004d63bd497f983c8db9c0e313"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1810,9 +1810,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.12"
+version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
+checksum = "ef25905e51abafe4dcea6c15fec58c57b601cdbd0ee53d22ea1d3016c587d39b"
 
 [[package]]
 name = "fixedbitset"
@@ -3325,7 +3325,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3392,14 +3392,13 @@ dependencies = [
  "uuid",
  "waker-fn",
  "web-time",
- "windows 0.61.3",
- "windows 0.62.2",
+ "windows-core 0.100.0",
 ]
 
 [[package]]
 name = "gpui_ce_apple"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "anyhow",
  "block",
@@ -3425,7 +3424,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_collections"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "gpui_ce_util",
  "indexmap",
@@ -3435,7 +3434,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_derive_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3445,7 +3444,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_linux"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3492,7 +3491,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macos"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3539,7 +3538,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_macros"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -3550,7 +3549,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_media"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -3564,7 +3563,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_platform"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "console_error_panic_hook",
  "gpui-ce",
@@ -3578,7 +3577,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_refineable"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "gpui_ce_derive_refineable",
 ]
@@ -3586,19 +3585,20 @@ dependencies = [
 [[package]]
 name = "gpui_ce_render"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "gpui-ce",
  "naga 24.0.0",
  "naga 29.0.4",
  "wgsl-rs",
- "windows 0.62.2",
+ "windows-core 0.100.0",
+ "windows-link 0.100.0",
 ]
 
 [[package]]
 name = "gpui_ce_scheduler"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "async-task",
  "backtrace",
@@ -3613,7 +3613,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "schemars",
  "serde",
@@ -3623,7 +3623,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_sum_tree"
 version = "0.2.2"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "heapless 0.9.3",
  "log",
@@ -3634,7 +3634,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_util"
 version = "0.2.6"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "anyhow",
  "log",
@@ -3644,7 +3644,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_web"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3667,7 +3667,7 @@ dependencies = [
 [[package]]
 name = "gpui_ce_wgpu"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "anyhow",
  "core-foundation",
@@ -3698,14 +3698,13 @@ dependencies = [
  "web-sys",
  "wgpu",
  "wgsl-rs",
- "windows 0.61.3",
- "windows 0.62.2",
+ "windows-core 0.100.0",
 ]
 
 [[package]]
 name = "gpui_ce_windows"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -3726,17 +3725,17 @@ dependencies = [
  "smallvec",
  "uuid",
  "wgsl-rs",
- "windows 0.61.3",
- "windows 0.62.2",
- "windows-core 0.62.2",
- "windows-numerics 0.3.1",
+ "windows-collections 0.100.0",
+ "windows-core 0.100.0",
+ "windows-numerics 0.100.0",
  "windows-registry",
+ "windows-version 0.100.0",
 ]
 
 [[package]]
 name = "gpui_xim"
 version = "0.4.0-gpui"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "ahash",
  "hashbrown 0.17.1",
@@ -7062,7 +7061,7 @@ checksum = "9ed071c670382e85fc2f48ae706492d8c338f4f89bf72520d32f8abfe880aade"
 dependencies = [
  "thiserror 2.0.20",
  "windows 0.61.3",
- "windows-version",
+ "windows-version 0.1.7",
 ]
 
 [[package]]
@@ -8856,13 +8855,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-collections"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e884f6b14b3c101363efab151e89271b4da599d1e29d945023f92656b23020c2"
+dependencies = [
+ "windows-core 0.100.0",
+]
+
+[[package]]
 name = "windows-core"
 version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0fdd3ddb90610c7638aa2b3a3ab2904fb9e5cdbecc643ddb3647212781c4ae3"
 dependencies = [
- "windows-implement",
- "windows-interface",
+ "windows-implement 0.60.2",
+ "windows-interface 0.59.3",
  "windows-link 0.1.3",
  "windows-result 0.3.4",
  "windows-strings 0.4.2",
@@ -8874,11 +8882,24 @@ version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
 dependencies = [
- "windows-implement",
- "windows-interface",
+ "windows-implement 0.60.2",
+ "windows-interface 0.59.3",
  "windows-link 0.2.1",
  "windows-result 0.4.1",
  "windows-strings 0.5.1",
+]
+
+[[package]]
+name = "windows-core"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803590c6856f51d15fa2e9fabe4f4703122c8737f72ef2741b4ac09d4c2192f5"
+dependencies = [
+ "windows-implement 0.100.0",
+ "windows-interface 0.100.0",
+ "windows-link 0.100.0",
+ "windows-result 0.100.0",
+ "windows-strings 0.100.0",
 ]
 
 [[package]]
@@ -8915,10 +8936,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-implement"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bc1bc82e5a1b1a4d7255861b07881a0407b552f50a4d8543c0c7276fa96f6e8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "windows-interface"
 version = "0.59.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "windows-interface"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3f7005c3b757b9b82c2f40c0e71094ff1080adddaf3e8b6ce99b545d3c48796"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8936,6 +8979,12 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-link"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b39de7c7fe78858b0144c50c3fc000bab3be17d5e9b85b1053871693c7f7415"
 
 [[package]]
 name = "windows-numerics"
@@ -8958,14 +9007,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-registry"
-version = "0.6.1"
+name = "windows-numerics"
+version = "0.100.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
+checksum = "d9c5500bf6a9098f27922953422ae7324cdd330c868e945801593455a6832701"
 dependencies = [
- "windows-link 0.2.1",
- "windows-result 0.4.1",
- "windows-strings 0.5.1",
+ "windows-core 0.100.0",
+]
+
+[[package]]
+name = "windows-registry"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a14b75dbbc0f2bb1ebbf6dcb6dc0035ae17f10ec280045d10fa27ad8874903b2"
+dependencies = [
+ "windows-link 0.100.0",
+ "windows-result 0.100.0",
+ "windows-strings 0.100.0",
 ]
 
 [[package]]
@@ -8987,6 +9045,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-result"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44873a1ef61c85d5e2991db91fe656cfcf0731097e00dff1ac860f1cb3b752a0"
+dependencies = [
+ "windows-link 0.100.0",
+]
+
+[[package]]
 name = "windows-strings"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9002,6 +9069,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
 dependencies = [
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "windows-strings"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a70b590c684f1d2854f74999896f7c0558f1bdde62f599088599e20ea1d2f60"
+dependencies = [
+ "windows-link 0.100.0",
 ]
 
 [[package]]
@@ -9072,6 +9148,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4060a1da109b9d0326b7262c8e12c84df67cc0dbc9e33cf49e01ccc2eb63631"
 dependencies = [
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "windows-version"
+version = "0.100.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5d2a42ae19ff386c4680514519a225a2a99bcfada6aff0ab3766f928ff84365"
+dependencies = [
+ "windows-link 0.100.0",
 ]
 
 [[package]]
@@ -9218,7 +9303,7 @@ checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
 [[package]]
 name = "xim-ctext"
 version = "0.3.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "encoding_rs",
 ]
@@ -9226,7 +9311,7 @@ dependencies = [
 [[package]]
 name = "xim-parser"
 version = "0.2.1"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=711bd061b2074cde09fde053f7254546bbb9e73d#711bd061b2074cde09fde053f7254546bbb9e73d"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=71d785e409bad63e184a575f1bd87119bc2c8c3b#71d785e409bad63e184a575f1bd87119bc2c8c3b"
 dependencies = [
  "bitflags 2.13.2",
 ]

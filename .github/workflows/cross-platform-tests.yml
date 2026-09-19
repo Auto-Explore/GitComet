@@ -6,10 +6,27 @@ on:
       cold-cache:
         type: boolean
         default: false
+      test-schedule:
+        description: Test scheduling candidate (keep serial until measured)
+        type: string
+        default: serial
+      fixture-timings:
+        description: Collect per-test fixture and subprocess timings
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       cold-cache:
         description: Bypass dependency caches
+        type: boolean
+        default: false
+      test-schedule:
+        description: Test scheduling candidate (keep serial until measured)
+        type: choice
+        options: [serial, balanced]
+        default: serial
+      fixture-timings:
+        description: Collect per-test fixture and subprocess timings
         type: boolean
         default: false
 
@@ -18,6 +35,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CI_TEST_SCHEDULE: ${{ inputs.test-schedule || 'serial' }}
+  GITCOMET_CI_FIXTURE_TIMINGS: ${{ inputs.fixture-timings && format('{0}/target/ci-reports/fixture-timings', github.workspace) || '' }}
 
 jobs:
   native:
@@ -87,7 +106,8 @@ jobs:
         run: python3 scripts/ci/run.py compile --context workspace
       - name: Execute workspace tests
         id: tests
-        run: python3 scripts/ci/run.py test --context workspace
+        shell: bash
+        run: python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE"
       - name: Workspace doctests
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash
@@ -140,6 +160,9 @@ jobs:
         if: always()
         with:
           name: ${{ matrix.name }}
+          source-writer: ${{ matrix.name == 'ubuntu22-x64' || matrix.name == 'macos15-arm64' || matrix.name == 'windows-x64' }}
+          source-key: ${{ steps.setup.outputs.source-key }}
+          source-hit: ${{ steps.setup.outputs.source-hit }}
           cache-key: ${{ steps.setup.outputs.cache-key }}
           cache-hit: ${{ steps.setup.outputs.cache-hit }}
           cold-cache: ${{ inputs.cold-cache }}
@@ -176,7 +199,8 @@ jobs:
         run: python3 scripts/ci/run.py compile --context workspace
       - name: Execute workspace tests
         id: tests
-        run: python3 scripts/ci/run.py test --context workspace
+        shell: bash
+        run: python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE"
       - name: Workspace doctests
         if: success() || (failure() && steps.tests.outcome == 'failure')
         run: python3 scripts/ci/run.py doc --context workspace

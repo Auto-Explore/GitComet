@@ -581,6 +581,8 @@ struct RunningMonitor {
     native_events: Arc<AtomicU64>,
     #[cfg(target_os = "linux")]
     native_barrier: Option<Arc<NativeEventBarrier>>,
+    #[cfg(target_os = "macos")]
+    native_flush: bool,
 }
 impl RunningMonitor {
     fn revalidate(&self) {
@@ -608,6 +610,8 @@ impl RunningMonitor {
         callback_tx: Option<mpsc::Sender<MonitorMsg>>,
     ) -> Self {
         flush_native_events();
+        #[cfg(target_os = "macos")]
+        let native_flush = callback_tx.is_none();
         let (tx, rx) = mpsc::channel();
         let (store_tx, store_rx) = mpsc::channel();
         let root = root.to_path_buf();
@@ -645,6 +649,8 @@ impl RunningMonitor {
             native_events,
             #[cfg(target_os = "linux")]
             native_barrier,
+            #[cfg(target_os = "macos")]
+            native_flush,
         }
     }
     #[track_caller]
@@ -656,6 +662,23 @@ impl RunningMonitor {
         self.settle();
     }
     fn settle(&self) {
+        #[cfg(target_os = "macos")]
+        if self.native_flush {
+            let (ready, completed) = mpsc::channel();
+            self.tx.send(MonitorMsg::FlushNative(ready)).unwrap();
+            if completed
+                .recv_timeout(Duration::from_secs(10))
+                .expect("native FSEvents fence timed out")
+            {
+                for (followup, message) in self.rx.try_iter().enumerate() {
+                    assert!(
+                        followup < 3 && matches!(message, Msg::RepoExternallyChanged { .. }),
+                        "refreshes did not settle: {message:?}"
+                    );
+                }
+                return;
+            }
+        }
         #[cfg(target_os = "linux")]
         if let Some(barrier) = &self.native_barrier {
             barrier.wait();
@@ -717,6 +740,32 @@ fn native_barrier_waits_for_debounced_refresh_without_counting_its_cookie() {
         monitor.rx.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn native_fsevents_fence_waits_for_refresh_and_policy_rebuild() {
+    let (_temp, root) = repository();
+    let monitor = RunningMonitor::start(&root);
+    for (file, contents) in [
+        ("queued.txt", "edit before fence"),
+        (".gitignore", "ignored/\n"),
+    ] {
+        fs::write(root.join(file), contents).unwrap();
+        let (ready, completed) = mpsc::channel();
+        monitor.tx.send(MonitorMsg::FlushNative(ready)).unwrap();
+        assert!(completed.recv_timeout(Duration::from_secs(10)).unwrap());
+        assert!(
+            matches!(monitor.rx.try_recv(), Ok(Msg::RepoExternallyChanged { .. })),
+            "fence acknowledged before refreshing {file}"
+        );
+        monitor.settle();
+    }
+    assert!(monitor.native_events.load(Ordering::Relaxed) > 0);
+    // The rebuilt watcher must still observe subsequent edits.
+    fs::write(root.join("after-rebuild.txt"), "real edit").unwrap();
+    monitor.refresh();
+    monitor.quiet();
 }
 
 #[test]

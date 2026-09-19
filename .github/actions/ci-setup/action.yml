@@ -7,6 +7,9 @@ inputs:
   cold-cache:
     description: Bypass cache restore and save for baseline measurements
     default: "false"
+  compiled:
+    description: Restore compiled external dependencies for this context
+    default: "true"
   nextest:
     description: Install the pinned native test runner
     default: "true"
@@ -19,7 +22,16 @@ outputs:
     description: Exact dependency cache key
   cache-hit:
     value: ${{ steps.cache.outputs.cache-hit }}
-    description: Whether the dependency cache was restored
+    description: Whether the exact dependency key was restored
+  cache-restored:
+    value: ${{ steps.cache.outputs.cache-matched-key != '' }}
+    description: Whether any compatible dependency bundle was restored
+  source-key:
+    value: ${{ steps.key.outputs.source-key }}
+    description: Shared source cache key
+  source-hit:
+    value: ${{ steps.sources.outputs.cache-hit }}
+    description: Whether the exact shared source cache was restored
 runs:
   using: composite
   steps:
@@ -40,25 +52,42 @@ runs:
         CI_CACHE_CONTEXT: ${{ inputs.context }}
       run: python3 scripts/ci/cache.py key --context "$CI_CACHE_CONTEXT"
     - name: Restore dependency cache
-      if: inputs.cold-cache != 'true'
+      if: inputs.cold-cache != 'true' && inputs.compiled == 'true'
       id: cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/gitcomet-ci-cache.tar.gz
         key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.restore-key }}
     - name: Unpack dependency cache
-      if: steps.cache.outputs.cache-hit == 'true'
+      if: steps.cache.outputs.cache-matched-key != ''
       shell: bash
       run: python3 scripts/ci/cache.py restore --bundle "$RUNNER_TEMP/gitcomet-ci-cache.tar.gz"
+    - name: Restore shared sources after dependency miss (otherwise lookup only)
+      if: inputs.cold-cache != 'true'
+      id: sources
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/gitcomet-ci-sources.tar.gz
+        key: ${{ steps.key.outputs.source-key }}
+        restore-keys: ${{ steps.key.outputs.source-restore-key }}
+        lookup-only: ${{ steps.cache.outputs.cache-matched-key != '' }}
+    - name: Unpack shared sources
+      if: steps.sources.outputs.cache-matched-key != '' && steps.cache.outputs.cache-matched-key == ''
+      shell: bash
+      run: python3 scripts/ci/cache.py restore --bundle "$RUNNER_TEMP/gitcomet-ci-sources.tar.gz"
     - name: Report cache state
       shell: bash
       env:
         CI_CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        CI_CACHE_RESTORED: ${{ steps.cache.outputs.cache-matched-key != '' }}
         CI_COLD_CACHE: ${{ inputs.cold-cache }}
         CI_CACHE_CONTEXT: ${{ inputs.context }}
-      run: |
-        mkdir -p target/ci-reports
-        python3 -c 'import json, os, pathlib; pathlib.Path("target/ci-reports/cache-restore.json").write_text(json.dumps({k:os.environ[k] for k in ("CI_CACHE_HIT", "CI_COLD_CACHE", "CI_CACHE_CONTEXT")}, indent=2))'
+        CI_CACHE_KEY: ${{ steps.key.outputs.key }}
+        CI_CACHE_MATCHED_KEY: ${{ steps.cache.outputs.cache-matched-key }}
+        CI_SOURCE_KEY: ${{ steps.key.outputs.source-key }}
+        CI_SOURCE_MATCHED_KEY: ${{ steps.sources.outputs.cache-matched-key }}
+      run: python3 scripts/ci/cache.py state
     - name: Install pinned nextest
       if: inputs.nextest == 'true'
       shell: bash

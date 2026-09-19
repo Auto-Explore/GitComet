@@ -6,18 +6,28 @@ on:
       cold-cache:
         type: boolean
         default: false
+      benchmark-profile:
+        description: Compile/link profile (candidate disables UI optimization)
+        type: string
+        default: ci-bench
   workflow_dispatch:
     inputs:
       cold-cache:
         description: Bypass dependency caches
         type: boolean
         default: false
+      benchmark-profile:
+        description: Compile/link profile (candidate disables UI optimization)
+        type: choice
+        options: [ci-bench, ci-bench-candidate]
+        default: ci-bench
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  CI_BENCHMARK_PROFILE: ${{ inputs.benchmark-profile || 'ci-bench' }}
 
 jobs:
   compile:
@@ -47,14 +57,15 @@ jobs:
       - uses: ./.github/actions/ci-setup
         id: setup
         with:
-          context: ${{ matrix.name }}-benchmarks-ci-bench
+          context: ${{ matrix.name }}-benchmarks-${{ env.CI_BENCHMARK_PROFILE }}
           cold-cache: ${{ inputs.cold-cache }}
           nextest: "false"
+          compiled: "false"
       - name: Compile and link Criterion and support targets
         shell: bash
         run: |
-          python3 scripts/ci/run.py command --name compile-benchmark-targets -- cargo build --locked --profile ci-bench --timings -p gitcomet-ui-gpui --features benchmarks --bench performance --bin perf_budget_report --bin perf_idle_resource
-          python3 scripts/ci/run.py command --name compile-app-launch-harness -- cargo build --locked --profile ci-bench --timings -p gitcomet --bin perf-app-launch
+          python3 scripts/ci/run.py command --name compile-benchmark-targets -- cargo build --locked --profile "$CI_BENCHMARK_PROFILE" --timings -p gitcomet-ui-gpui --features benchmarks --bench performance --bin perf_budget_report --bin perf_idle_resource
+          python3 scripts/ci/run.py command --name compile-app-launch-harness -- cargo build --locked --profile "$CI_BENCHMARK_PROFILE" --timings -p gitcomet --bin perf-app-launch
       - uses: ./.github/actions/ci-finish
         if: always()
         with:
@@ -63,4 +74,3 @@ jobs:
           cache-hit: ${{ steps.setup.outputs.cache-hit }}
           cold-cache: ${{ inputs.cold-cache }}
           compiled: "false"
-          budget-mib: "128"

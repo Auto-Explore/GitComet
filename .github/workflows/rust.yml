@@ -6,10 +6,27 @@ on:
       cold-cache:
         type: boolean
         default: false
+      test-schedule:
+        description: Test scheduling candidate (keep serial until measured)
+        type: string
+        default: serial
+      fixture-timings:
+        description: Collect per-test fixture and subprocess timings
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       cold-cache:
         description: Bypass dependency caches
+        type: boolean
+        default: false
+      test-schedule:
+        description: Test scheduling candidate (keep serial until measured)
+        type: choice
+        options: [serial, balanced]
+        default: serial
+      fixture-timings:
+        description: Collect per-test fixture and subprocess timings
         type: boolean
         default: false
 
@@ -18,6 +35,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CI_TEST_SCHEDULE: ${{ inputs.test-schedule || 'serial' }}
+  GITCOMET_CI_FIXTURE_TIMINGS: ${{ inputs.fixture-timings && format('{0}/target/ci-reports/fixture-timings', github.workspace) || '' }}
 
 jobs:
   fmt:
@@ -60,8 +79,11 @@ jobs:
         run: cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
       - name: Run cargo-audit
         run: cargo audit
+      - name: Check audit cache budget
+        shell: bash
+        run: python3 -c 'import pathlib; assert (pathlib.Path.home()/".cargo/bin/cargo-audit").stat().st_size <= 64*1024**2, "cargo-audit exceeds its cache allocation"'
       - name: Save cargo-audit binary
-        if: success() && inputs.cold-cache != true && steps.audit-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: success() && inputs.cold-cache != true && steps.audit-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/cargo-audit
@@ -79,6 +101,7 @@ jobs:
           context: ubuntu22-x64-clippy
           cold-cache: ${{ inputs.cold-cache }}
           nextest: "false"
+          compiled: "false"
       - name: Clippy (libraries)
         run: cargo clippy --locked -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
       - name: Clippy (headless app)
@@ -91,7 +114,6 @@ jobs:
           cache-hit: ${{ steps.setup.outputs.cache-hit }}
           cold-cache: ${{ inputs.cold-cache }}
           compiled: "false"
-          budget-mib: "128"
 
   headless:
     name: Headless builds and package test suites
@@ -119,7 +141,7 @@ jobs:
         run: |
           result=0
           for context in core state backend app; do
-            python3 scripts/ci/run.py test --context "$context" || result=1
+            python3 scripts/ci/run.py test --context "$context" --schedule "$CI_TEST_SCHEDULE" || result=1
             python3 scripts/ci/run.py doc --context "$context" || result=1
           done
           exit "$result"

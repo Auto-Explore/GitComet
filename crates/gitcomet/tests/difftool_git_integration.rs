@@ -1,4 +1,8 @@
 use gitcomet_core::process::background_command as no_window_command;
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, RepositorySeed, append_config, init_repository,
+};
+use std::sync::OnceLock;
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
 #[path = "support/test_git_env.rs"]
@@ -20,6 +24,7 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let mut cmd = no_window_command("git");
     apply_isolated_git_config_env(&mut cmd);
     let output = cmd
@@ -38,6 +43,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let mut cmd = no_window_command("git");
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C")
@@ -48,6 +54,7 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
 }
 
 fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str>) -> Output {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let mut cmd = no_window_command("git");
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C").arg(repo).args(args);
@@ -60,6 +67,7 @@ fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str
 }
 
 fn run_git_capture_in(cwd: &Path, args: &[&str]) -> Output {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let mut cmd = no_window_command("git");
     apply_isolated_git_config_env(&mut cmd);
     cmd.current_dir(cwd)
@@ -85,10 +93,18 @@ fn write_bytes(repo: &Path, rel: &str, contents: &[u8]) {
 }
 
 fn init_repo(repo: &Path) {
-    run_git(repo, &["init"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    static SEED: OnceLock<RepositorySeed> = OnceLock::new();
+    init_repository(repo, &SEED, |repo| {
+        run_git(repo, &["init"]);
+        append_config(
+            repo,
+            &[
+                ("user.email", "you@example.com"),
+                ("user.name", "You"),
+                ("commit.gpgsign", "false"),
+            ],
+        );
+    });
 }
 
 fn commit_all(repo: &Path, message: &str) {

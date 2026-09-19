@@ -1,4 +1,8 @@
 use gitcomet_core::process::background_command as no_window_command;
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, RepositorySeed, append_config, init_repository,
+};
+use std::sync::OnceLock;
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
 use gitcomet_test_bin::gitcomet_bin;
@@ -12,6 +16,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let _timer = FixtureTimer::new("subprocess", "gitcomet");
     no_window_command(gitcomet_bin())
         .args(args)
         .output()
@@ -23,6 +28,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let _timer = FixtureTimer::new("subprocess", "gitcomet");
     no_window_command(gitcomet_bin())
         .current_dir(dir)
         .args(args)
@@ -39,6 +45,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let _timer = FixtureTimer::new("subprocess", "gitcomet");
     let mut command = no_window_command(gitcomet_bin());
     env.apply_to_command(&mut command);
     command
@@ -2346,6 +2353,7 @@ fn standalone_mergetool_auto_crlf_subchunk_preserves_line_endings() {
 
 /// Run a git command in a repo; assert success.
 fn setup_e2e_git(repo: &Path, args: &[&str]) {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = no_window_command("git")
         .arg("-C")
         .arg(repo)
@@ -2365,6 +2373,7 @@ fn setup_e2e_git(repo: &Path, args: &[&str]) {
 
 /// Run a git command in a repo; return output (may succeed or fail).
 fn setup_e2e_git_capture(repo: &Path, args: &[&str]) -> Output {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     no_window_command("git")
         .arg("-C")
         .arg(repo)
@@ -2377,10 +2386,18 @@ fn setup_e2e_git_capture(repo: &Path, args: &[&str]) -> Output {
 
 /// Initialize a git repo with user config for tests.
 fn setup_e2e_init(repo: &Path) {
-    setup_e2e_git(repo, &["init", "-b", "main"]);
-    setup_e2e_git(repo, &["config", "user.email", "test@test.com"]);
-    setup_e2e_git(repo, &["config", "user.name", "Test"]);
-    setup_e2e_git(repo, &["config", "commit.gpgsign", "false"]);
+    static SEED: OnceLock<RepositorySeed> = OnceLock::new();
+    init_repository(repo, &SEED, |repo| {
+        setup_e2e_git(repo, &["init", "-b", "main"]);
+        append_config(
+            repo,
+            &[
+                ("user.email", "test@test.com"),
+                ("user.name", "Test"),
+                ("commit.gpgsign", "false"),
+            ],
+        );
+    });
 }
 
 /// Stage all and commit.
@@ -2455,9 +2472,14 @@ fn setup_e2e_git_with_env(repo: &Path, args: &[&str], env: &IsolatedGlobalGitEnv
 
 fn setup_e2e_init_with_env(repo: &Path, env: &IsolatedGlobalGitEnv) {
     setup_e2e_git_with_env(repo, &["init", "-b", "main"], env);
-    setup_e2e_git_with_env(repo, &["config", "user.email", "test@test.com"], env);
-    setup_e2e_git_with_env(repo, &["config", "user.name", "Test"], env);
-    setup_e2e_git_with_env(repo, &["config", "commit.gpgsign", "false"], env);
+    append_config(
+        repo,
+        &[
+            ("user.email", "test@test.com"),
+            ("user.name", "Test"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
 }
 
 fn setup_e2e_commit_with_env(repo: &Path, message: &str, env: &IsolatedGlobalGitEnv) {

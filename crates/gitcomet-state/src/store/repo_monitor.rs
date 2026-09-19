@@ -47,6 +47,13 @@ enum MonitorMsg {
     Barrier(mpsc::Sender<()>),
     #[cfg(all(test, target_os = "linux"))]
     Drain(mpsc::Sender<()>),
+    #[cfg(all(test, target_os = "macos"))]
+    FlushNative(mpsc::Sender<bool>),
+    #[cfg(all(test, target_os = "macos"))]
+    NativeDrained {
+        generation: u64,
+        ready: mpsc::Sender<bool>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

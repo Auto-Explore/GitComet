@@ -1,5 +1,5 @@
 name: CI reports and cache
-description: Publish timing/coverage artifacts and save bounded dependencies from successful default-branch pushes
+description: Publish timing/coverage artifacts and save bounded dependencies from successful default-branch runs
 inputs:
   name:
     description: Unique artifact name
@@ -9,6 +9,15 @@ inputs:
     required: true
   cache-hit:
     description: Hit output from ci-setup
+    default: "false"
+  source-key:
+    description: Shared source key from ci-setup
+    default: ""
+  source-hit:
+    description: Exact shared source hit from ci-setup
+    default: "false"
+  source-writer:
+    description: Designated native writer for this OS family
     default: "false"
   cold-cache:
     description: Bypass cache writes for cold measurements
@@ -24,7 +33,7 @@ runs:
   steps:
     - name: Pack bounded dependency cache
       id: pack
-      if: success() && inputs.cold-cache != 'true' && inputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      if: success() && inputs.cold-cache != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && inputs.compiled == 'true' && inputs.cache-hit != 'true'
       shell: bash
       env:
         CI_CACHE_COMPILED: ${{ inputs.compiled }}
@@ -39,6 +48,17 @@ runs:
       with:
         path: ${{ runner.temp }}/gitcomet-ci-cache.tar.gz
         key: ${{ inputs.cache-key }}
+    - name: Pack shared source cache
+      id: sources
+      if: success() && inputs.cold-cache != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && inputs.source-writer == 'true' && inputs.source-hit != 'true' && inputs.source-key != ''
+      shell: bash
+      run: python3 scripts/ci/cache.py pack --bundle "$RUNNER_TEMP/gitcomet-ci-sources.tar.gz" --budget-mib 256 --report-name cache-sources
+    - name: Save shared source cache
+      if: steps.sources.outputs.save == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/gitcomet-ci-sources.tar.gz
+        key: ${{ inputs.source-key }}
     - name: Publish CI diagnostics
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
