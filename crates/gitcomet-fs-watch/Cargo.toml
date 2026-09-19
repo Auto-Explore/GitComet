@@ -12,6 +12,12 @@ rust-version.workspace = true
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 
+[features]
+test-support = ["dep:windows-sys"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", optional = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { workspace = true }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFString", "CFURL"] }

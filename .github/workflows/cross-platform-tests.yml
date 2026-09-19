@@ -3,11 +3,18 @@ name: Cross-Platform Tests
 on:
   workflow_call:
     inputs:
+      watcher-stress:
+        type: boolean
+        default: false
       cold-cache:
         type: boolean
         default: false
   workflow_dispatch:
     inputs:
+      watcher-stress:
+        description: Repeat native watcher synchronization and lifecycle tests ten times
+        type: boolean
+        default: false
       cold-cache:
         description: Bypass dependency caches
         type: boolean
@@ -88,6 +95,18 @@ jobs:
       - name: Execute workspace tests
         id: tests
         run: python3 scripts/ci/run.py test --context workspace
+      - name: Stress native watcher synchronization
+        if: success() && inputs.watcher-stress
+        shell: bash
+        env:
+          GITCOMET_TEST_SYNC_TRACE: "1"
+        run: >-
+          python3 scripts/ci/run.py command --name watcher-stress --
+          cargo nextest run
+          --binaries-metadata target/ci-reports/workspace/binaries.json
+          --cargo-metadata target/ci-reports/workspace/cargo.json
+          --profile ci-watch-stress --stress-count 10 --no-tests=fail
+          -E 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | test(::selective::native_lifecycle::)))'
       - name: Workspace doctests
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash

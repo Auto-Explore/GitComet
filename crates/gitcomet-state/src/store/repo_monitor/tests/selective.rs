@@ -6,6 +6,8 @@ mod policy_lifecycle;
 mod runtime_recovery;
 mod setup_recovery;
 mod storage_and_links;
+mod synchronization;
+use super::super::test_sync::{DrainAck, QUIET_WINDOW, SYNC_TIMEOUT};
 
 fn repository() -> (tempfile::TempDir, PathBuf) {
     let temp = unique_temp_dir("gitcomet-selective");
@@ -550,8 +552,8 @@ fn external_ignore_inputs_and_missing_config_includes_are_observed() {
 
 /// A "since now" FSEvents stream still receives kernel events that fseventsd
 /// had not read when the stream started, so fixture writes made just before a
-/// monitor starts can reach it as real changes. Once a later marker has been
-/// delivered, every event queued before that marker is too old to arrive.
+/// monitor starts can reach it as real changes. This separate stream is only
+/// startup hygiene, NOT an ordering fence for the repository's native streams.
 #[cfg(target_os = "macos")]
 fn flush_native_events() {
     let temp = unique_temp_dir("gitcomet-fsevents-barrier");
@@ -574,13 +576,19 @@ fn flush_native_events() {
 #[cfg(not(target_os = "macos"))]
 fn flush_native_events() {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Settled {
+    NativeFence,
+    QuietWindow,
+}
+
 struct RunningMonitor {
     tx: mpsc::Sender<MonitorMsg>,
     rx: mpsc::Receiver<Msg>,
     thread: Option<std::thread::JoinHandle<()>>,
     native_events: Arc<AtomicU64>,
-    #[cfg(target_os = "linux")]
-    native_barrier: Option<Arc<NativeEventBarrier>>,
+    observations: Arc<NativeObservations>,
+    callbacks_redirected: bool,
 }
 impl RunningMonitor {
     fn revalidate(&self) {
@@ -611,14 +619,9 @@ impl RunningMonitor {
         let (tx, rx) = mpsc::channel();
         let (store_tx, store_rx) = mpsc::channel();
         let root = root.to_path_buf();
-        #[cfg(target_os = "linux")]
-        let native_barrier = callback_tx
-            .is_none()
-            .then(|| Arc::new(NativeEventBarrier::new()));
-        #[cfg(target_os = "linux")]
-        {
-            config.native_barrier = native_barrier.clone();
-        }
+        let callbacks_redirected = callback_tx.is_some();
+        let observations = Arc::new(NativeObservations::default());
+        config.native_observations = Some(observations.clone());
         let thread_tx = callback_tx.unwrap_or_else(|| tx.clone());
         let native_events = Arc::new(AtomicU64::new(0));
         config.native_events = Some(native_events.clone());
@@ -643,8 +646,8 @@ impl RunningMonitor {
             rx: store_rx,
             thread: Some(thread),
             native_events,
-            #[cfg(target_os = "linux")]
-            native_barrier,
+            observations,
+            callbacks_redirected,
         }
     }
     #[track_caller]
@@ -655,33 +658,184 @@ impl RunningMonitor {
         }
         self.settle();
     }
-    fn settle(&self) {
+    fn settle(&self) -> Settled {
+        let started = Instant::now();
         #[cfg(target_os = "linux")]
-        if let Some(barrier) = &self.native_barrier {
-            barrier.wait();
-            for (followup, message) in self.rx.try_iter().enumerate() {
-                assert!(
-                    followup < 3 && matches!(message, Msg::RepoExternallyChanged { .. }),
-                    "refreshes did not settle: {message:?}"
-                );
+        if !self.callbacks_redirected {
+            match self.checkpoint_native(started + SYNC_TIMEOUT) {
+                Ok(_) => {
+                    self.consume_followups();
+                    return Settled::NativeFence;
+                }
+                Err(SyncError::Unavailable(_)) => {}
+                Err(error) => panic!("native synchronization failed: {error:?}"),
             }
-            return;
         }
-        // Other native backends, and tests deliberately redirecting callback
-        // events, retain the full quiet window until they have an OS fence.
-        // Some native backends deliver a parent-directory update after the
-        // file event. Bound those follow-ups, then require a full quiet window.
-        for followup in 0..=3 {
-            match self.rx.recv_timeout(Duration::from_secs(3)) {
-                Err(mpsc::RecvTimeoutError::Timeout) => return,
-                Ok(Msg::RepoExternallyChanged { .. }) if followup < 3 => {}
-                other => panic!("refreshes did not settle: {other:?}"),
+        #[cfg(target_os = "macos")]
+        if !self.callbacks_redirected {
+            match self.checkpoint_native(started + SYNC_TIMEOUT) {
+                Ok(_) | Err(SyncError::Unavailable(_)) => {}
+                Err(error) => panic!("callback checkpoint failed: {error:?}"),
+            }
+        }
+        // This guard is also the default on Windows: a cookie does not flush
+        // cache-delayed writes. Count checkpoint/drain time inside the window.
+        self.settle_guarded(started);
+        Settled::QuietWindow
+    }
+
+    fn drain_until(
+        &self,
+        generation: Option<u64>,
+        deadline: Instant,
+    ) -> Result<DrainAck, SyncError> {
+        let _timing = super::super::test_sync::WaitTiming::new("drain");
+        let (reply, rx) = mpsc::channel();
+        self.tx
+            .send(MonitorMsg::Drain(DrainRequest { generation, reply }))
+            .map_err(|_| SyncError::Stopped)?;
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(SyncError::Stopped),
+            Err(error) => panic!("Drain {generation:?}: {error}; {:?}", self.observations),
+        }
+    }
+
+    fn drain_delivered(&self) -> DrainAck {
+        self.drain_until(None, Instant::now() + SYNC_TIMEOUT)
+            .unwrap()
+    }
+
+    /// Call only when events have already been deliberately enqueued. Native
+    /// delivery/quiet assertions need their own observation, not this helper.
+    fn refresh_delivered(&self) {
+        self.drain_delivered();
+        assert!(matches!(
+            self.rx.try_recv(),
+            Ok(Msg::RepoExternallyChanged { .. })
+        ));
+        self.consume_followups();
+    }
+
+    fn checkpoint_native(&self, deadline: Instant) -> Result<u64, SyncError> {
+        assert!(
+            !self.callbacks_redirected,
+            "native callbacks are not routed to this monitor"
+        );
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "native generations did not stabilize: {:?}",
+                self.observations
+            );
+            let (tx, rx) = mpsc::channel();
+            self.tx
+                .send(MonitorMsg::NativeCheckpoint(tx))
+                .map_err(|_| SyncError::Stopped)?;
+            let checkpoint = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .unwrap_or_else(|error| {
+                    panic!("native checkpoint start: {error}; {:?}", self.observations)
+                })?;
+            let result = checkpoint.wait(deadline).and_then(|generation| {
+                self.drain_until(Some(generation), deadline)
+                    .map(|_| generation)
+            });
+            match result {
+                Err(SyncError::GenerationChanged) => continue,
+                other => return other,
             }
         }
     }
+
+    fn consume_followups(&self) {
+        for (followup, message) in self.rx.try_iter().enumerate() {
+            assert!(
+                followup < 3 && matches!(message, Msg::RepoExternallyChanged { .. }),
+                "refreshes did not settle: {message:?}"
+            );
+        }
+    }
+
+    fn settle_guarded(&self, started: Instant) {
+        let _timing = super::super::test_sync::WaitTiming::new("guarded-settle");
+        let deadline = started + Duration::from_secs(20);
+        let mut quiet_since = started;
+        let mut generation = self.drain_until(None, deadline).unwrap().generation;
+        let mut followups = 0;
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "native quiet deadline exceeded: {:?}",
+                self.observations
+            );
+            if let Some(last) = self.observations.last_relevant() {
+                quiet_since = quiet_since.max(last);
+            }
+            let remaining = (quiet_since + QUIET_WINDOW).saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                let ack = self.drain_until(None, deadline).unwrap();
+                if ack.generation != generation {
+                    generation = ack.generation;
+                    quiet_since = Instant::now();
+                    continue;
+                }
+                if self
+                    .observations
+                    .last_relevant()
+                    .is_some_and(|last| last > quiet_since)
+                {
+                    continue;
+                }
+                match self.rx.try_recv() {
+                    Err(mpsc::TryRecvError::Empty) => return,
+                    Ok(Msg::RepoExternallyChanged { .. }) if followups < 3 => {
+                        followups += 1;
+                        quiet_since = Instant::now();
+                    }
+                    other => panic!("refreshes did not settle: {other:?}"),
+                }
+            } else {
+                match self
+                    .rx
+                    .recv_timeout(remaining.min(Duration::from_millis(100)))
+                {
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Ok(Msg::RepoExternallyChanged { .. }) if followups < 3 => {
+                        followups += 1;
+                        quiet_since = Instant::now();
+                    }
+                    other => panic!("refreshes did not settle: {other:?}"),
+                }
+            }
+        }
+    }
+
+    /// Positive assertion for an operation-unique path. This is not a general
+    /// quiet check and must not be used for successive writes to the same path.
+    fn expect_change(&self, unique_path: &Path, operation: impl FnOnce()) -> RepoExternalChange {
+        assert!(!self.callbacks_redirected);
+        let after = self.observations.sequence();
+        let deadline = Instant::now() + SYNC_TIMEOUT;
+        operation();
+        self.observations
+            .wait_for_path(after, unique_path, deadline);
+        self.drain_until(None, deadline).unwrap();
+        let mut change = None;
+        for message in self.rx.try_iter() {
+            match message {
+                Msg::RepoExternallyChanged { change: next, .. } => {
+                    change = Some(merge_change(change.unwrap_or(next), next));
+                }
+                other => panic!("unexpected message: {other:?}"),
+            }
+        }
+        change.expect("observed change did not refresh the repository")
+    }
     #[track_caller]
     fn quiet(&self) {
-        let result = self.rx.recv_timeout(Duration::from_secs(3));
+        let _timing = super::super::test_sync::WaitTiming::new("quiet");
+        let result = self.rx.recv_timeout(QUIET_WINDOW);
         assert!(
             matches!(result, Err(mpsc::RecvTimeoutError::Timeout)),
             "unexpected refresh while quiet: {result:?}"
@@ -703,15 +857,18 @@ fn native_barrier_waits_for_debounced_refresh_without_counting_its_cookie() {
     let (_temp, root) = repository();
     let monitor = RunningMonitor::start(&root);
     fs::write(root.join("queued.txt"), "edit before native fence").unwrap();
-    let barrier = monitor.native_barrier.as_ref().unwrap();
-    barrier.wait();
+    monitor
+        .checkpoint_native(Instant::now() + SYNC_TIMEOUT)
+        .unwrap();
     assert!(matches!(
         monitor.rx.try_recv(),
         Ok(Msg::RepoExternallyChanged { .. })
     ));
     let count = monitor.native_events.load(Ordering::Relaxed);
     assert!(count > 0, "real filesystem callbacks were not observed");
-    barrier.wait();
+    monitor
+        .checkpoint_native(Instant::now() + SYNC_TIMEOUT)
+        .unwrap();
     assert_eq!(monitor.native_events.load(Ordering::Relaxed), count);
     assert!(matches!(
         monitor.rx.try_recv(),
@@ -780,8 +937,12 @@ fn native_monitor_excludes_ignored_directory_created_after_startup() {
     }
     fs::write(root.join("node_modules/pkg/.gitignore"), "*").unwrap();
     monitor.quiet();
-    fs::write(root.join("real.txt"), "real edit").unwrap();
-    monitor.refresh();
+    let real = root.join("real.txt");
+    assert!(
+        monitor
+            .expect_change(&real, || fs::write(&real, "real edit").unwrap())
+            .worktree
+    );
 }
 
 fn drain_monitor(rx: &mpsc::Receiver<MonitorMsg>, quiet: Duration) -> Vec<notify::Event> {

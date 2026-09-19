@@ -1,69 +1,5 @@
 use super::*;
 
-/// A cookie on the same inotify queue as the repository's watches fences prior
-/// native callbacks. It lives outside the fixture and never contributes to the
-/// repository's callback counts or ignore policy. Other OS backends need their
-/// own ordering guarantees before they can use this test-only synchronization.
-#[cfg(all(test, target_os = "linux"))]
-pub(super) struct NativeEventBarrier {
-    _directory: tempfile::TempDir,
-    path: PathBuf,
-    sequence: AtomicU64,
-    pending: std::sync::Mutex<Option<(PathBuf, mpsc::Sender<()>)>>,
-}
-
-#[cfg(all(test, target_os = "linux"))]
-impl NativeEventBarrier {
-    pub fn new() -> Self {
-        let directory = tempfile::tempdir().unwrap();
-        let path = normalized(&directory.path().canonicalize().unwrap());
-        Self {
-            _directory: directory,
-            path,
-            sequence: AtomicU64::new(0),
-            pending: std::sync::Mutex::new(None),
-        }
-    }
-
-    pub fn wait(&self) {
-        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
-        let marker = self.path.join(sequence.to_string());
-        let (tx, rx) = mpsc::channel();
-        {
-            let mut pending = self.pending.lock().unwrap();
-            assert!(pending.is_none(), "native barrier already pending");
-            *pending = Some((marker.clone(), tx));
-        }
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            // A watch rebuild can cross the first write. Repeat the same
-            // cookie until a live registration and the monitor acknowledge it.
-            fs::write(&marker, "barrier").unwrap();
-            match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(()) => return,
-                Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
-                other => panic!("native event barrier did not finish: {other:?}"),
-            }
-        }
-    }
-
-    fn observe(&self, event: &notify::Event, tx: &mpsc::Sender<MonitorMsg>) -> bool {
-        if event.paths.is_empty() || !event.paths.iter().all(|path| path.starts_with(&self.path)) {
-            return false;
-        }
-        let mut pending = self.pending.lock().unwrap();
-        if pending
-            .as_ref()
-            .is_some_and(|(marker, _)| event.paths.contains(marker))
-        {
-            let (_, ready) = pending.take().unwrap();
-            // Wait for the real debounce deadline and any watch rebuild too.
-            let _ = tx.send(MonitorMsg::Drain(ready));
-        }
-        true
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WatchMode {
     Shallow,
@@ -76,6 +12,8 @@ pub(super) const WATCH_MODE: WatchMode = if cfg!(target_os = "linux") {
 };
 
 pub(super) struct MonitorWatcher {
+    #[cfg(test)]
+    pub test_state: Arc<NativeTestState>,
     #[cfg(not(target_os = "macos"))]
     watcher: RecommendedWatcher,
     #[cfg(target_os = "macos")]
@@ -89,19 +27,11 @@ fn callback(
     enabled: Arc<AtomicBool>,
     policy: PolicyCell,
     #[cfg(test)] native_events: Option<Arc<AtomicU64>>,
-    #[cfg(all(test, target_os = "linux"))] native_barrier: Option<Arc<NativeEventBarrier>>,
+    #[cfg(test)] observations: Option<Arc<NativeObservations>>,
+    #[cfg(test)] test_state: Arc<NativeTestState>,
 ) -> impl FnMut(notify::Result<notify::Event>) + Send + 'static {
     move |result| {
-        #[cfg(all(test, target_os = "linux"))]
-        if let (Some(barrier), Ok(event)) = (&native_barrier, &result)
-            && barrier.observe(event, &tx)
-        {
-            return;
-        }
-        #[cfg(test)]
-        if let Some(count) = &native_events {
-            count.fetch_add(1, Ordering::Relaxed);
-        }
+        #[cfg(not(test))]
         if !enabled.load(Ordering::Relaxed) {
             return;
         }
@@ -112,16 +42,45 @@ fn callback(
                 .for_each(|path| *path = normalized(path));
             event
         });
-        if let Ok(event) = &result {
-            let snapshot = policy
-                .read()
-                .unwrap_or_else(|error| error.into_inner())
-                .clone();
-            if triage(&snapshot, event) == Triage::Drop {
-                return;
+        #[cfg(test)]
+        let mut result = result;
+        #[cfg(test)]
+        let (cookie_only, cookie_replies) = test_state.filter_cookies(&mut result);
+        #[cfg(not(test))]
+        let cookie_only = false;
+        let mut forwarded = false;
+        if !cookie_only {
+            #[cfg(test)]
+            if let Some(count) = &native_events {
+                count.fetch_add(1, Ordering::Relaxed);
+            }
+            let dropped = if let Ok(event) = &result {
+                let snapshot = policy
+                    .read()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone();
+                triage(&snapshot, event) == Triage::Drop
+            } else {
+                false
+            };
+            #[cfg(test)]
+            let paths = result
+                .as_ref()
+                .map(|event| event.paths.clone())
+                .unwrap_or_default();
+            if !dropped && enabled.load(Ordering::Relaxed) {
+                forwarded = send_watcher_event_or_log(repo_id, &tx, result, &enabled);
+            }
+            #[cfg(test)]
+            if let Some(observations) = &observations {
+                observations.record(test_state.generation, paths, forwarded);
             }
         }
-        send_watcher_event_or_log(repo_id, &tx, result, &enabled);
+        let _ = forwarded;
+        #[cfg(test)]
+        for (id, reply) in cookie_replies {
+            let _ = reply.send(Ok(id));
+        }
     }
 }
 
@@ -146,7 +105,7 @@ impl MonitorWatcher {
         policy: &PolicyCell,
         boundaries: &[PathBuf],
         #[cfg(test)] native_events: Option<Arc<AtomicU64>>,
-        #[cfg(all(test, target_os = "linux"))] native_barrier: Option<Arc<NativeEventBarrier>>,
+        #[cfg(test)] observations: Option<Arc<NativeObservations>>,
     ) -> notify::Result<(Self, usize)> {
         let snapshot = policy
             .read()
@@ -155,6 +114,8 @@ impl MonitorWatcher {
         if !snapshot.workdir.is_dir() {
             return Err(notify::Error::path_not_found().add_path(snapshot.workdir.clone()));
         }
+        #[cfg(test)]
+        let test_state = Arc::new(NativeTestState::new()?);
         let handler = callback(
             repo_id,
             tx.clone(),
@@ -162,8 +123,10 @@ impl MonitorWatcher {
             policy.clone(),
             #[cfg(test)]
             native_events,
-            #[cfg(all(test, target_os = "linux"))]
-            native_barrier.clone(),
+            #[cfg(test)]
+            observations,
+            #[cfg(test)]
+            test_state.clone(),
         );
         let roots = minimal_roots(&snapshot);
         #[cfg(not(target_os = "macos"))]
@@ -176,14 +139,16 @@ impl MonitorWatcher {
                     .with_follow_symlinks(false),
             )?;
             let mut result = Self {
+                #[cfg(test)]
+                test_state,
                 watcher,
                 watched: FxHashSet::default(),
             };
             #[cfg(all(test, target_os = "linux"))]
-            if let Some(barrier) = native_barrier {
+            {
                 result
                     .watcher
-                    .watch(&barrier.path, RecursiveMode::NonRecursive)?;
+                    .watch(&result.test_state.cookie_root, RecursiveMode::NonRecursive)?;
             }
             let mut failures = 0;
             if WATCH_MODE == WatchMode::Recursive {
@@ -215,12 +180,55 @@ impl MonitorWatcher {
             let (watcher, failures) = gitcomet_fs_watch::FsEventsWatcher::new(streams, handler);
             Ok((
                 Self {
+                    #[cfg(test)]
+                    test_state,
                     _watcher: watcher,
                     watched: roots.into_iter().collect(),
                 },
                 failures.len(),
             ))
         }
+    }
+
+    #[cfg(test)]
+    pub fn checkpoint(&self) -> Result<NativeCheckpoint, SyncError> {
+        #[cfg(target_os = "linux")]
+        {
+            // This auxiliary watch shares the repository's single inotify queue.
+            self.test_state
+                .cookies(std::slice::from_ref(&self.test_state.cookie_root))
+        }
+        #[cfg(windows)]
+        {
+            let mut roots: Vec<_> = self.watched.iter().cloned().collect();
+            roots.sort();
+            if roots
+                .iter()
+                .any(|root| !gitcomet_fs_watch::is_local_ntfs(root).unwrap_or(false))
+            {
+                return Err(SyncError::Unavailable(
+                    "requires local NTFS without reparse points",
+                ));
+            }
+            self.test_state.cookies(&roots)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let (tx, replies) = mpsc::channel();
+            let registrations = self._watcher.checkpoint_callbacks(move |id| {
+                let _ = tx.send(Ok(id));
+            });
+            if registrations == 0 {
+                return Err(SyncError::Unavailable("no live FSEvents streams"));
+            }
+            Ok(NativeCheckpoint {
+                generation: self.test_state.generation,
+                registrations,
+                replies,
+            })
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+        Err(SyncError::Unavailable("backend has no native checkpoint"))
     }
 
     pub fn add(&mut self, path: &Path) -> notify::Result<()> {
@@ -260,5 +268,12 @@ impl MonitorWatcher {
                 path == &policy.workdir || policy.git_roots.contains(path)
             }
         })
+    }
+}
+
+#[cfg(test)]
+impl Drop for MonitorWatcher {
+    fn drop(&mut self) {
+        self.test_state.cancel(SyncError::GenerationChanged);
     }
 }

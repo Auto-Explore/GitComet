@@ -218,6 +218,19 @@ pub struct FsEventsWatcher {
     _streams: Vec<Stream>,
 }
 impl FsEventsWatcher {
+    /// Checkpoint callbacks already queued on each live stream. This does NOT
+    /// flush the kernel or fseventsd, nor order future callbacks across streams.
+    /// The caller must not wait on a stream's callback queue.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn checkpoint_callbacks(&self, callback: impl Fn(usize) + Send + Sync + 'static) -> usize {
+        let callback = Arc::new(callback);
+        for (id, stream) in self._streams.iter().enumerate() {
+            let callback = callback.clone();
+            stream.queue.exec_async(move || callback(id));
+        }
+        self._streams.len()
+    }
+
     pub fn new(
         streams: Vec<(PathBuf, Vec<PathBuf>)>,
         handler: impl EventHandler,
@@ -238,6 +251,83 @@ impl FsEventsWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_sync_checkpoints_wait_for_each_live_callback_queue() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let (watcher, errors) = FsEventsWatcher::new(
+            vec![(root.clone(), Vec::new()), (root, Vec::new())],
+            |_event: notify::Result<Event>| {},
+        );
+        assert!(errors.is_empty());
+        let mut releases = Vec::new();
+        let (started_tx, started_rx) = mpsc::channel();
+        for (id, stream) in watcher._streams.iter().enumerate() {
+            let (release, wait) = mpsc::channel();
+            releases.push(release);
+            let started = started_tx.clone();
+            stream.queue.exec_async(move || {
+                started.send(id).unwrap();
+                wait.recv_timeout(Duration::from_secs(10)).unwrap();
+            });
+        }
+        for _ in 0..2 {
+            started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        }
+        let (tx, rx) = mpsc::channel();
+        assert_eq!(
+            watcher.checkpoint_callbacks(move |id| {
+                tx.send(id).unwrap();
+            }),
+            2
+        );
+        assert!(rx.try_recv().is_err());
+        releases[0].send(()).unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), 0);
+        assert!(
+            rx.try_recv().is_err(),
+            "one stream completed the other stream's checkpoint"
+        );
+        releases[1].send(()).unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), 1);
+    }
+
+    #[test]
+    fn native_sync_checkpoints_exclude_failed_streams_and_survive_drop() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let (watcher, errors) = FsEventsWatcher::new(
+            vec![
+                (
+                    root.clone(),
+                    (0..9).map(|id| root.join(id.to_string())).collect(),
+                ),
+                (root, Vec::new()),
+            ],
+            |_event: notify::Result<Event>| {},
+        );
+        assert_eq!(errors.len(), 1);
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert_eq!(
+            watcher.checkpoint_callbacks(move |id| {
+                tx.send(id).unwrap();
+            }),
+            1
+        );
+        drop(watcher); // Must finish queued callbacks without holding their locks.
+        assert_eq!(rx.try_recv().unwrap(), 0);
+        assert!(rx.try_recv().is_err());
+        let (watcher, errors) =
+            FsEventsWatcher::new(Vec::new(), |_event: notify::Result<Event>| {});
+        assert!(errors.is_empty());
+        assert_eq!(
+            watcher.checkpoint_callbacks(|_| panic!("no live streams")),
+            0
+        );
+    }
 
     #[test]
     fn native_flags_preserve_structural_and_content_changes() {
@@ -269,8 +359,8 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
         let (_watcher, errors) = FsEventsWatcher::new(vec![(root, vec![cache.clone()])], tx);
         assert!(errors.is_empty());
-        // A new stream can still report the fixture's cache creation. Events
-        // arrive in ID order, so an edit made after registration drains it.
+        // A new stream can still report fixture creation. Establish a positive
+        // readiness observation; it is not a fence for delayed native events.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             assert!(std::time::Instant::now() < deadline, "no readiness event");

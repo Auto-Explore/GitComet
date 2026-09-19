@@ -26,18 +26,20 @@ mod monitor;
 mod native_watcher;
 mod plan;
 mod policy;
+#[cfg(test)]
+mod test_sync;
 use ignore_rules::IgnoreRules;
 #[cfg(test)]
 use monitor::{EventEffect, MAX_WORKTREE_WATCH_DIRS, MonitorState, summarize};
 use monitor::{MonitorConfig, WatchSetupOutcome, repo_monitor_thread};
 use native_watcher::MonitorWatcher;
-#[cfg(all(test, target_os = "linux"))]
-use native_watcher::NativeEventBarrier;
 use plan::WatchPlan;
 use policy::{
     PathClass, PolicyCell, PolicySnapshot, Triage, WatchInputs, normalized, structural_event,
     triage,
 };
+#[cfg(test)]
+use test_sync::{DrainRequest, NativeCheckpoint, NativeObservations, NativeTestState, SyncError};
 
 enum MonitorMsg {
     Event(notify::Result<notify::Event>),
@@ -45,8 +47,11 @@ enum MonitorMsg {
     Stop,
     #[cfg(test)]
     Barrier(mpsc::Sender<()>),
-    #[cfg(all(test, target_os = "linux"))]
-    Drain(mpsc::Sender<()>),
+    /// Finish delivered work, not notifications still pending inside the OS.
+    #[cfg(test)]
+    Drain(DrainRequest),
+    #[cfg(test)]
+    NativeCheckpoint(mpsc::Sender<Result<NativeCheckpoint, SyncError>>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
