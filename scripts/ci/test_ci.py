@@ -28,15 +28,20 @@ spec.loader.exec_module(runner)
 class CacheTests(unittest.TestCase):
     def test_dependency_changes_reuse_only_compatible_compiled_bundles(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
-                patch.object(cache.subprocess, "check_output", return_value=b"rustc test host"), \
+                patch.object(cache, "subprocess") as subprocess_mock, \
                 patch.object(cache.platform, "platform", return_value="test-platform"), \
+                patch.object(cache.platform, "system", return_value="Windows"), \
                 patch.dict(os.environ, {}, clear=True):
+            # Keep the Rust probe mock separate from subprocess calls in platform.
+            subprocess_mock.check_output.return_value = b"rustc test host"
             root = Path(directory)
             manifest = root / "Cargo.toml"
             manifest.write_text('[package]\nname = "fixture"\nversion = "0.1.0"\n[profile.ci-test]\nopt-level = 1\n')
             lock = root / "Cargo.lock"
             lock.write_text("dependencies v1")
             before = cache.cache_keys("windows-arm64-workspace-ci-test")
+            self.assertEqual(before["source-restore-key"], f"{cache.PREFIX}sources-windows-")
+            self.assertTrue(before["source-key"].startswith(before["source-restore-key"]))
             lock.write_text("dependencies v2")
             after = cache.cache_keys("windows-arm64-workspace-ci-test")
             self.assertNotEqual(before["key"], after["key"])

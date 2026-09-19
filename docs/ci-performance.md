@@ -196,6 +196,11 @@ python3 scripts/ci/report.py fixtures target/ci-reports/fixture-timings
 
 ## Running and inspecting validation
 
+Use Python 3.14.7 to match CI. The helper suite requires Python 3.12 or newer
+for its standard-library TOML parsing and safe archive extraction. Hosted jobs
+using `setup-python` pin 3.14.7; the Fedora container uses its distribution Python.
+Check `python3 --version` before running the commands below.
+
 Install the pinned nextest executable into a local tool directory and put that
 directory on PATH. The installer verifies the recorded release SHA-256 and picks
 the native host, including Windows ARM:

@@ -49,6 +49,10 @@ jobs:
         run: rustup show active-toolchain
       - name: Check formatting
         run: cargo fmt --all --check
+      - name: Install Python for CI helpers
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14.7"
       - name: Check CI helpers
         run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
       - name: Lint workflows
