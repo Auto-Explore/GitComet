@@ -12,6 +12,19 @@ path = "junit.xml"
 store-success-output = true
 report-skipped = "ignored"
 
+# Opt-in repetitions must not overwrite the inventory-checked CI report.
+[profile.ci-watch-stress]
+fail-fast = false
+retries = 0
+test-threads = "num-cpus"
+slow-timeout = { period = "60s", terminate-after = 3, grace-period = "10s" }
+leak-timeout = { period = "500ms", result = "fail" }
+failure-output = "immediate-final"
+
+[profile.ci-watch-stress.junit]
+path = "junit.xml"
+store-success-output = true
+
 [test-groups]
 windows-git-shell = { max-threads = 2 }
 windows-submodule = { max-threads = 1 }

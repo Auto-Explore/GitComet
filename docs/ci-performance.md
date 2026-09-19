@@ -75,16 +75,22 @@ three-second settling delay after each positive refresh. Marker events are
 excluded only from test instrumentation, and a regression verifies that actual
 file events still produce refreshes before the fence completes. Three-second
 negative quiet checks, lifecycle iteration counts, production debounce timings,
-and Windows settling windows remain unchanged. On macOS, test-only
-`FSEventStreamFlushSync` calls flush every live stream, followed by dispatch-queue
-and monitor acknowledgements after debounce/rebuild work. A watcher-generation
-change repeats the fence against the replacement streams. The acknowledgement
-has a ten-second deadline. Empty/failed watchers and tests deliberately diverting
-callbacks to simulate native event loss retain the existing settling window.
-The macOS fence uses Apple's documented
-[synchronous event-delivery guarantee](https://developer.apple.com/documentation/coreservices/1445629-fseventstreamflushsync).
+and Windows settling windows remain unchanged.
 The Linux fence relies on the ordering guarantee of a single
 [inotify event queue](https://man7.org/linux/man-pages/man7/inotify.7.html).
+
+All platforms use a test-only `Drain` to finish delivered events, pending debounce,
+index/policy reloads and watcher rebuilds. On macOS, a checkpoint waits for callbacks
+already queued on every live FSEvents stream. It does not flush the kernel or
+fseventsd, or order future callbacks across streams, so settling retains the
+three-second quiet guard. On Windows, controlled local-NTFS tests use one cookie
+per live root after closing and syncing their writers; ordinary settling still
+uses the quiet guard. Checkpoints reject degraded or missing native coverage and
+retry against replacement watcher generations within a ten-second deadline.
+Tests deliberately diverting callbacks also retain guarded settling. Positive
+checks can observe operation-unique paths before draining their delivered work.
+The opt-in `watcher-stress` workflow input repeats synchronization and native
+lifecycle tests ten times and records synchronization wait timings.
 
 UI spinner fixtures hold backend operations until their loading assertions finish.
 Submodule prefetch is held before repository startup, so it cannot finish before
@@ -339,13 +345,14 @@ more than 5%, total runner minutes do not increase, and inventories/exclusions
 remain equivalent. Use the three-cold/five-warm cohorts described above; optional
 fixture diagnostics should be enabled consistently within a pair.
 
-On macOS, run the new multi-stream flush and monitor-fence tests, then repeat the
-monitor suite twenty times. Existing root replacement, ignore-policy rebuild,
-lost-callback, overflow recovery, quiet-window and lifecycle tests must all pass:
+On macOS, run the multi-stream callback-checkpoint and monitor synchronization
+tests, then repeat the monitor suite twenty times. Existing root replacement,
+ignore-policy rebuild, lost-callback, overflow recovery, quiet-window and lifecycle
+tests must all pass:
 
 ```sh
 cargo test --locked --profile ci-test -p gitcomet-fs-watch
-cargo test --locked --profile ci-test -p gitcomet-state native_fsevents_fence
+cargo test --locked --profile ci-test -p gitcomet-state native_sync_
 for iteration in $(seq 1 20); do
   cargo test --locked --profile ci-test -p gitcomet-state store::repo_monitor::tests -- --test-threads 2 || exit 1
 done

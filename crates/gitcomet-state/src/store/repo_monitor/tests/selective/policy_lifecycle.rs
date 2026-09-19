@@ -24,6 +24,8 @@ fn lost_boundary_events_are_reconciled(error: bool) {
         Ok(notify::Event::new(EventKind::Any).set_flag(notify::event::Flag::Rescan))
     };
     monitor.tx.send(MonitorMsg::Event(notification)).unwrap();
+    // Keep native settling before reusing the same path below: Drain alone
+    // cannot distinguish delayed pre-rebuild events from the next real edit.
     monitor.refresh();
     while callback_rx.try_recv().is_ok() {}
     // A refresh alone cannot pass: the callback must admit the next real edit
@@ -40,7 +42,7 @@ fn lost_boundary_events_are_reconciled(error: bool) {
             Err(error) => panic!("replacement edit is still excluded after event loss: {error}"),
         }
     }
-    monitor.refresh();
+    monitor.refresh_delivered();
 }
 
 #[test]

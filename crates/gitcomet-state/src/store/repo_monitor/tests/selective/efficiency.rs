@@ -17,8 +17,12 @@ fn counted_monitor(root: &Path) -> (RunningMonitor, Arc<AtomicU64>, Arc<AtomicU6
             ..Default::default()
         },
     );
-    monitor.settle();
-    monitor.quiet();
+    // Guarded settling already ended with a complete three-second quiet
+    // observation. Only the native-fence fast path still needs that check.
+    // There is no intervening mutation here; retain the reload/build counters.
+    if monitor.settle() == Settled::NativeFence {
+        monitor.quiet();
+    }
     (monitor, reloads, builds)
 }
 

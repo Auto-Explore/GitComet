@@ -68,6 +68,7 @@ runs:
           target/ci-reports/
           target/cargo-timings/
           target/nextest/ci/
+          target/nextest/ci-watch-stress/
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 7

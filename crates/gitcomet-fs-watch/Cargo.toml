@@ -7,13 +7,16 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[features]
-test-support = []
-
 # Native FSEvents ownership is isolated here, like gitcomet-tree-sitter-alloc.
 # Application crates continue to inherit the workspace unsafe_code = forbid.
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+
+[features]
+test-support = ["dep:windows-sys"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", optional = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { workspace = true }

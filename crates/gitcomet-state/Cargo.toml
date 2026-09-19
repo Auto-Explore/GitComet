@@ -32,5 +32,5 @@ gitcomet-git-gix = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 gitcomet-fs-watch = { path = "../gitcomet-fs-watch" }
 
-[target.'cfg(target_os = "macos")'.dev-dependencies]
+[target.'cfg(any(target_os = "macos", windows))'.dev-dependencies]
 gitcomet-fs-watch = { path = "../gitcomet-fs-watch", features = ["test-support"] }
