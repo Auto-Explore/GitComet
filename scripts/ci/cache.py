@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -11,9 +12,10 @@ import re
 import subprocess
 import tarfile
 import time
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
-PREFIX = "gitcomet-ci-v1-"
+PREFIX = "gitcomet-ci-v2-"
 
 
 def output(key, value):
@@ -23,21 +25,36 @@ def output(key, value):
             stream.write(f"{key}={value}\n")
 
 
-def cache_key(context):
-    digest = hashlib.sha256()
-    for pattern in ("Cargo.lock", "**/Cargo.toml", ".cargo/*.toml", "rust-toolchain.toml",
-                    "scripts/ci/cache.py", "scripts/windows/msvc-linker.cmd"):
-        for path in sorted(ROOT.glob(pattern)):
-            if "target" in path.relative_to(ROOT).parts or ".git" in path.parts:
-                continue
-            digest.update(str(path.relative_to(ROOT)).encode())
-            digest.update(path.read_bytes())
-    digest.update(subprocess.check_output(["rustc", "-vV"]))
-    digest.update(platform.platform().encode())
+def cache_keys(context):
+    dependencies = hashlib.sha256((ROOT / "Cargo.lock").read_bytes())
+    compatibility = hashlib.sha256(context.encode())
+    for directory, dirs, files in os.walk(ROOT):
+        dirs[:] = sorted(name for name in dirs if name not in ("target", ".git"))
+        if "Cargo.toml" not in files:
+            continue
+        path = Path(directory) / "Cargo.toml"
+        manifest = tomllib.loads(path.read_text(encoding="utf-8"))
+        declarations = {key: value for key, value in manifest.items()
+                        if key in ("dependencies", "dev-dependencies", "build-dependencies",
+                                   "target", "features", "workspace", "patch", "replace")}
+        dependencies.update(str(path.relative_to(ROOT)).encode())
+        dependencies.update(json.dumps(declarations, sort_keys=True).encode())
+        compatibility.update(json.dumps(manifest.get("profile", {}), sort_keys=True).encode())
+    for path in [*sorted((ROOT / ".cargo").glob("*.toml")), ROOT / "rust-toolchain.toml",
+                 ROOT / "scripts/windows/msvc-linker.cmd", ROOT / "scripts/ci/cache.py",
+                 ROOT / "scripts/ci/run.py"]:
+        if path.exists():
+            compatibility.update(path.read_bytes())
+    compatibility.update(subprocess.check_output(["rustc", "-vV"]))
+    compatibility.update(platform.platform().encode())
     for name, value in sorted(os.environ.items()):
         if name in ("ImageOS", "ImageVersion") or name.startswith(("CARGO_PROFILE_", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CC", "CXX", "CFLAGS", "CMAKE")):
-            digest.update(f"{name}={value}".encode())
-    return f"{PREFIX}{context}-{digest.hexdigest()[:24]}"
+            compatibility.update(f"{name}={value}".encode())
+    restore_key = f"{PREFIX}deps-{context}-{compatibility.hexdigest()[:16]}-"
+    source_prefix = f"{PREFIX}sources-{platform.system().lower()}-"
+    dependency_hash = dependencies.hexdigest()[:16]
+    return {"key": restore_key + dependency_hash, "restore-key": restore_key,
+            "source-key": source_prefix + dependency_hash, "source-restore-key": source_prefix}
 
 
 def dependency_entries(target, metadata):
@@ -68,7 +85,7 @@ def source_entries(cargo_home):
             yield path, "cargo/" + name
 
 
-def write_bundle(destination, entries):
+def write_bundle(destination, entries, *, mode=None):
     def allowed(member):
         # Git checkouts can contain build artifacts; no need to archive those.
         if "target" in Path(member.name).parts[1:-1] and member.name.startswith("cargo/"):
@@ -77,33 +94,40 @@ def write_bundle(destination, entries):
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(destination, "w:gz", compresslevel=6) as archive:
+        if mode:
+            data = json.dumps({"version": 2, "mode": mode}).encode()
+            member = tarfile.TarInfo("cache-manifest.json")
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
         for source, name in entries:
             archive.add(source, arcname=name, filter=allowed)
 
 
-def pack(destination, cargo_home, target, budget, compiled):
+def pack(destination, cargo_home, target, budget, compiled, report_name="cache"):
     start = time.monotonic()
     sources = list(source_entries(cargo_home))
     entries = list(sources)
     mode = "sources"
     if compiled:
         metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--format-version", "1"], cwd=ROOT))
-        entries += list(dependency_entries(target, metadata))
-        mode = "dependencies"
-    write_bundle(destination, entries)
+        artifacts = list(dependency_entries(target, metadata))
+        entries += artifacts
+        if artifacts:
+            mode = "dependencies"
+    write_bundle(destination, entries, mode=mode)
     attempts = {mode: destination.stat().st_size}
     if destination.stat().st_size > budget and compiled:
         # Never publish an oversized cache which evicts other platforms.
         mode = "sources"
         entries = sources
-        write_bundle(destination, entries)
+        write_bundle(destination, entries, mode=mode)
         attempts[mode] = destination.stat().st_size
     if destination.stat().st_size > budget:
         # Compressed crate downloads give useful reuse even on very small budgets.
         mode = "downloads"
         downloads = cargo_home / "registry/cache"
         entries = [(downloads, "cargo/registry/cache")] if downloads.is_dir() else []
-        write_bundle(destination, entries)
+        write_bundle(destination, entries, mode=mode)
         attempts[mode] = destination.stat().st_size
     size = destination.stat().st_size
     save = size <= budget and bool(entries)
@@ -114,21 +138,33 @@ def pack(destination, cargo_home, target, budget, compiled):
                   seconds=round(time.monotonic() - start, 3))
     report_dir = ROOT / "target/ci-reports"
     report_dir.mkdir(parents=True, exist_ok=True)
-    (report_dir / "cache.json").write_text(json.dumps(report, indent=2) + "\n")
+    (report_dir / f"{report_name}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    if compiled and mode != "dependencies":
+        print(f"::warning::Compiled dependency cache fell back to {mode}; compilation reuse is unavailable")
     if not save:
         destination.unlink()
         print("Cache is empty or exceeds its budget; leaving this cache unsaved")
 
 
 def restore(bundle, cargo_home, target):
+    start = time.monotonic()
     if not bundle.exists():
-        return
+        return {"mode": "miss", "seconds": 0, "bytes": 0}
     # A cache archive can only populate these two designated build/cache roots.
     # Extract each member with Python's data filter, including symlink checks.
     if not hasattr(tarfile, "data_filter"):
         raise RuntimeError("Cache extraction requires a Python release with tarfile.data_filter")
+    mode = "unknown"
     with tarfile.open(bundle, "r:gz") as archive:
         for member in archive:
+            if member.name == "cache-manifest.json":
+                if not member.isfile() or member.size > 4096:
+                    raise ValueError("Invalid cache manifest")
+                manifest = json.load(archive.extractfile(member))
+                if manifest.get("version") != 2 or manifest.get("mode") not in ("dependencies", "sources", "downloads"):
+                    raise ValueError("Unsupported cache manifest")
+                mode = manifest["mode"]
+                continue
             prefix, separator, relative = member.name.partition("/")
             if prefix not in ("cargo", "target"):
                 raise ValueError(f"Invalid cache member: {member.name}")
@@ -141,24 +177,48 @@ def restore(bundle, cargo_home, target):
                 if link_prefix != prefix:
                     raise ValueError("Cross-root hard link in cache")
             archive.extract(member, destination, filter="data")
+    return {"mode": mode, "seconds": round(time.monotonic() - start, 3), "bytes": bundle.stat().st_size}
+
+
+def report_restore():
+    directory = ROOT / "target/ci-reports"
+    directory.mkdir(parents=True, exist_ok=True)
+    unpack = directory / "cache-unpack.json"
+    matched = os.environ.get("CI_CACHE_MATCHED_KEY") or os.environ.get("CI_SOURCE_MATCHED_KEY")
+    if os.environ.get("CI_COLD_CACHE") == "true":
+        details = {"mode": "bypassed"}
+    else:
+        details = json.loads(unpack.read_text(encoding="utf-8")) if matched and unpack.exists() else {"mode": "miss"}
+    details.update({name: os.environ.get(name, "") for name in (
+        "CI_CACHE_HIT", "CI_CACHE_RESTORED", "CI_COLD_CACHE", "CI_CACHE_CONTEXT",
+        "CI_CACHE_KEY", "CI_CACHE_MATCHED_KEY", "CI_SOURCE_KEY", "CI_SOURCE_MATCHED_KEY")})
+    (directory / "cache-restore.json").write_text(json.dumps(details, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(details, indent=2))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["key", "pack", "restore"])
+    parser.add_argument("operation", choices=["key", "pack", "restore", "state"])
     parser.add_argument("--context", default="local")
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--cargo-home", type=Path, default=Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")))
     parser.add_argument("--target", type=Path, default=ROOT / "target")
     parser.add_argument("--budget-mib", type=int, default=700)
     parser.add_argument("--compiled", action="store_true")
+    parser.add_argument("--report-name", default="cache")
     args = parser.parse_args()
     if args.operation == "key":
-        output("key", cache_key(args.context))
+        for key, value in cache_keys(args.context).items():
+            output(key, value)
+    elif args.operation == "state":
+        report_restore()
     elif args.operation == "pack":
-        pack(args.bundle, args.cargo_home, args.target, args.budget_mib * 1024**2, args.compiled)
+        pack(args.bundle, args.cargo_home, args.target, args.budget_mib * 1024**2, args.compiled, args.report_name)
     else:
-        restore(args.bundle, args.cargo_home, args.target)
+        report = restore(args.bundle, args.cargo_home, args.target)
+        directory = ROOT / "target/ci-reports"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "cache-unpack.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

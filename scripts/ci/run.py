@@ -2,6 +2,8 @@
 """Build once, inventory every test, then run nextest + the GPUI libtest harness."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 from contextlib import ExitStack
 from datetime import datetime, timezone
 import json
@@ -12,11 +14,14 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORTS = ROOT / "target" / "ci-reports"
+REPORT_LOCK = threading.RLock()
+CONSOLE_LOCK = threading.RLock()
 UI = "gitcomet-ui-gpui"
 CONTEXTS = {
     "workspace": ["--workspace", "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
@@ -54,12 +59,13 @@ def record(name, duration, returncode, **details):
     REPORTS.mkdir(parents=True, exist_ok=True)
     entry = dict(name=name, seconds=round(duration, 3), returncode=returncode,
                  recorded_at=datetime.now(timezone.utc).isoformat(), **details)
-    with (REPORTS / "timings.jsonl").open("a", encoding="utf-8") as report:
-        report.write(json.dumps(entry) + "\n")
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as out:
-            out.write(f"- `{name}`: {duration:.1f}s, exit {returncode}\n")
+    with REPORT_LOCK:
+        with (REPORTS / "timings.jsonl").open("a", encoding="utf-8") as report:
+            report.write(json.dumps(entry) + "\n")
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as out:
+                out.write(f"- `{name}`: {duration:.1f}s, exit {returncode}\n")
 
 
 def stop_process_tree(process):
@@ -86,11 +92,15 @@ def reject_prerequisite_skips(name, text):
         raise RuntimeError(f"{name}: required Git test did not run: {match.group()}")
 
 
-def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=None):
+def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=None, live=True, cancel=None):
     """Keep complete logs, surface runtime skips, and never mask subprocess failures."""
     REPORTS.mkdir(parents=True, exist_ok=True)
-    print(f"::group::{name}", flush=True)
-    print("$ " + subprocess.list2cmdline([str(arg) for arg in command]), flush=True)
+    if cancel is not None and cancel.is_set():
+        raise RuntimeError("test scheduling cancelled")
+    command_text = "$ " + subprocess.list2cmdline([str(arg) for arg in command])
+    if live:
+        print(f"::group::{name}", flush=True)
+        print(command_text, flush=True)
     start = time.monotonic()
     log_name = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
     log_path = REPORTS / f"{log_name}.log"
@@ -105,25 +115,44 @@ def run(name, command, *, output=None, cwd=ROOT, env=None, check=True, timeout=N
                                    stderr=log, start_new_session=os.name != "nt")
         try:
             while process.poll() is None:
-                print(reader.read(), end="", flush=True)
+                if live:
+                    print(reader.read(), end="", flush=True)
+                if cancel is not None and cancel.is_set():
+                    raise RuntimeError("test scheduling cancelled")
                 if timeout is not None and time.monotonic() - start >= timeout:
                     timed_out = True
                     stop_process_tree(process)
                     break
                 time.sleep(0.05)
             code = 124 if timed_out else process.wait()
-            print(reader.read(), end="", flush=True)
+            if live:
+                print(reader.read(), end="", flush=True)
         except BaseException:
             stop_process_tree(process)
+            record(name, time.monotonic() - start, 130, cancelled=True, timed_out=False,
+                   command=[str(arg) for arg in command])
+            with CONSOLE_LOCK:
+                if not live:
+                    print(f"::group::{name}", flush=True)
+                    print(command_text, flush=True)
+                    print(log_path.read_text(encoding="utf-8", errors="replace"), end="", flush=True)
+                print("::endgroup::", flush=True)
             raise
     if timed_out:
         print(f"::error::{name}: exceeded {timeout}s; terminated process tree", flush=True)
-    with (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
-        for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            if re.search(r"\bskipping\b", line, re.IGNORECASE):
-                excluded.write(f"{name}: {line}\n")
-    record(name, time.monotonic() - start, code, timed_out=timed_out)
-    print("::endgroup::", flush=True)
+    with REPORT_LOCK:
+        with (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
+            for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if re.search(r"\bskipping\b", line, re.IGNORECASE):
+                    excluded.write(f"{name}: {line}\n")
+    record(name, time.monotonic() - start, code, timed_out=timed_out,
+           command=[str(arg) for arg in command])
+    with CONSOLE_LOCK:
+        if not live:
+            print(f"::group::{name}", flush=True)
+            print(command_text, flush=True)
+            print(log_path.read_text(encoding="utf-8", errors="replace"), end="", flush=True)
+        print("::endgroup::", flush=True)
     if check and code:
         raise subprocess.CalledProcessError(code, command)
     return code
@@ -203,14 +232,16 @@ def suite_env(context, suite):
     return env
 
 
-def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_overrides=None):
+def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_overrides=None, threads=None, live=True, cancel=None):
     expected = [name for name, test in suite["testcases"].items()
                 if not test["ignored"] and (test_filter is None or
                     (name == test_filter if exact else test_filter in name))]
     if test_filter and not expected:
         raise RuntimeError(f"Smoke selector {test_filter!r} matches no tests in {binary_id}")
     command = [suite["binary-path"], "--nocapture"]
-    if sys.platform == "win32" and suite["binary-name"] in WINDOWS_LIBTEST_BINARIES:
+    if threads is not None:
+        command += ["--test-threads", str(threads)]
+    elif sys.platform == "win32" and suite["binary-name"] in WINDOWS_LIBTEST_BINARIES:
         command += ["--test-threads", "2"]
     if test_filter:
         command += [test_filter]
@@ -222,7 +253,7 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
     if env_overrides:
         name += "-" + env_overrides["XDG_SESSION_TYPE"] + "-" + env_overrides["XDG_CURRENT_DESKTOP"]
     code = run(name, command, cwd=suite["cwd"], env=env, check=False,
-               timeout=180 if test_filter else 600)
+               timeout=180 if test_filter else 600, live=live, cancel=cancel)
     log_name = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
     log = (REPORTS / f"{log_name}.log").read_text(encoding="utf-8", errors="replace")
     reject_prerequisite_skips(name, log)
@@ -245,7 +276,7 @@ def check_nextest_results(context, suites, packages, junit):
               if case.find("skipped") is None}
     if expected != actual:
         raise RuntimeError(f"{context}: nextest coverage mismatch: {len(expected - actual)} missing, {len(actual - expected)} unexpected")
-    with (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
+    with REPORT_LOCK, (REPORTS / "runtime-exclusions.log").open("a", encoding="utf-8") as excluded:
         for case in xml.iter("testcase"):
             for stream in (case.findtext("system-out", ""), case.findtext("system-err", "")):
                 for line in stream.splitlines():
@@ -253,30 +284,94 @@ def check_nextest_results(context, suites, packages, junit):
                         excluded.write(f"{context}:{case.attrib['name']}: {line}\n")
 
 
-def execute(context):
+def run_parallel(tasks):
+    """Bound concurrency and join/clean every child on orchestration failure."""
+    cancel = threading.Event()
+    executor = ThreadPoolExecutor(max_workers=2)
+    futures = []
+    try:
+        futures = [executor.submit(task, cancel=cancel, live=False) for task in tasks]
+        return [future.result() for future in as_completed(futures)]
+    except BaseException:
+        cancel.set()
+        for future in futures:
+            future.cancel()
+        raise
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+def execute(context, schedule="serial"):
     packages = package_names(context)
     suites = inventory(context)["rust-suites"]
+    cpus = os.cpu_count() or 1
+    balanced = schedule == "balanced" and cpus > 1
+    start = time.monotonic()
     codes = []
-    if any(not uses_libtest(packages[suite["package-id"]], suite) for suite in suites.values()):
+
+    def nextest(*, cancel=None, live=True, threads=None):
+        if not any(not uses_libtest(packages[suite["package-id"]], suite) for suite in suites.values()):
+            return 0
         build = json.loads((paths(context) / "binaries.json").read_text(encoding="utf-8"))
         junit = Path(build["rust-build-meta"]["target-directory"]) / "nextest/ci/junit.xml"
-        junit.unlink(missing_ok=True)  # Never accept an old run's successful report.
+        junit.unlink(missing_ok=True)
         excluded = [f"package(={UI})"]
         if sys.platform == "win32":
             excluded += [f"binary(={name})" for name in sorted(WINDOWS_LIBTEST_BINARIES)]
-        codes.append(run(f"{context}-nextest", ["cargo", "nextest", "run",
-            *reuse_args(context), "--profile", "ci", "--ignore-default-filter",
-            "-E", "not (" + " | ".join(excluded) + ")", "--no-fail-fast"], check=False))
+        command = ["cargo", "nextest", "run", *reuse_args(context), "--profile", "ci",
+                   "--ignore-default-filter", "-E", "not (" + " | ".join(excluded) + ")", "--no-fail-fast"]
+        if threads is not None:
+            command += ["--test-threads", str(threads)]
+        code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel)
         if junit.exists():
             shutil.copyfile(junit, paths(context) / "junit.xml")
             check_nextest_results(context, suites, packages, junit)
-        elif not codes[-1]:
+        elif not code:
             raise RuntimeError(f"{context}: nextest produced no results")
-    for binary_id, suite in suites.items():
-        if uses_libtest(packages[suite["package-id"]], suite):
-            codes.append(run_suite(context, binary_id, suite))
-    if any(codes):
-        raise RuntimeError(f"{context}: test execution failed")
+        return code
+
+    libtest = [(binary_id, suite) for binary_id, suite in suites.items()
+               if uses_libtest(packages[suite["package-id"]], suite)]
+    if not libtest or (sys.platform != "win32" and len(libtest) == len(suites)):
+        # Package-only contexts have nothing to overlap. Keep their full budget.
+        balanced = False
+    ui_threads = max(1, cpus // 2)
+
+    def ui(*, cancel=None, live=True):
+        results = [run_suite(context, binary_id, suite, threads=ui_threads, live=live, cancel=cancel)
+                   for binary_id, suite in libtest]
+        return int(any(results))
+
+    succeeded = False
+    try:
+        if balanced and sys.platform != "win32":
+            codes.extend(run_parallel([partial(nextest, threads=cpus - ui_threads), ui]))
+        else:
+            codes.append(nextest())
+            if balanced:
+                order = ["mergetool_git_integration", "standalone_tool_mode_integration",
+                         "status_integration", "remote_management_integration", "difftool_git_integration",
+                         "log_integration", "refs_integration", "upstream_integration", "upstream_divergence_integration"]
+                concurrent = [(binary_id, suite) for binary_id, suite in libtest
+                              if suite["binary-name"] in WINDOWS_LIBTEST_BINARIES
+                              and suite["binary-name"] != "submodules_integration"]
+                concurrent.sort(key=lambda item: (order.index(item[1]["binary-name"])
+                                if item[1]["binary-name"] in order else len(order), item[0]))
+                codes.extend(run_parallel([partial(run_suite, context, binary_id, suite, threads=1)
+                                           for binary_id, suite in concurrent]))
+                assigned = {binary_id for binary_id, _ in concurrent}
+                libtest = [(binary_id, suite) for binary_id, suite in libtest if binary_id not in assigned]
+            for binary_id, suite in libtest:
+                threads = 1 if balanced and suite["binary-name"] == "submodules_integration" else None
+                codes.append(run_suite(context, binary_id, suite, threads=threads))
+        if any(codes):
+            raise RuntimeError(f"{context}: test execution failed")
+        succeeded = True
+    finally:
+        (paths(context) / "execution.json").write_text(json.dumps({
+            "schedule": schedule, "effective_schedule": "balanced" if balanced else "serial",
+            "cpus": cpus, "seconds": round(time.monotonic() - start, 3), "success": succeeded,
+        }, indent=2) + "\n", encoding="utf-8")
 
 
 def smoke(context, target, selector, *, exact=False, env=None):
@@ -295,12 +390,13 @@ def main():
     parser.add_argument("--context", choices=CONTEXTS, default="workspace")
     parser.add_argument("--cargo-profile", default="ci-test")
     parser.add_argument("--name", default="command")
+    parser.add_argument("--schedule", choices=["serial", "balanced"], default="serial")
     args, extra = parser.parse_known_args()
     os.chdir(ROOT)
     if args.phase == "compile":
         compile_tests(args.context, args.cargo_profile)
     elif args.phase == "test":
-        execute(args.context)
+        execute(args.context, args.schedule)
     elif args.phase == "doc":
         # The app contains only binaries, so it has no doctest targets.
         if args.context != "app":
@@ -325,6 +421,11 @@ def main():
 
 
 if __name__ == "__main__":
+    # Windows CI redirects these streams through pipes, which can default to
+    # cp1252 even though Cargo/nextest logs contain UTF-8. Match the log files
+    # and GitHub Actions output so forwarding Unicode cannot abort the suite.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     try:
         main()
     except (RuntimeError, subprocess.CalledProcessError) as error:

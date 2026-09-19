@@ -6,6 +6,9 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::{CancellationToken, CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::services::{ConflictSide, InteractiveRebaseAction, InteractiveRebaseEntry};
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, RepositorySeed, append_config, init_repository,
+};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::io::Write;
@@ -132,19 +135,25 @@ fn run_git(repo: &Path, args: &[&str]) {
     run_git_output(repo, args);
 
     if args.first() == Some(&"init") {
-        // Keep text-file assertions deterministic across platforms, regardless
-        // of host/user git defaults.
-        run_git(repo, &["config", "core.autocrlf", "false"]);
-        run_git(repo, &["config", "core.eol", "lf"]);
-        // Avoid host credential manager prompts/retries in backend commands.
-        run_git(repo, &["config", "credential.helper", ""]);
-        run_git(repo, &["config", "credential.interactive", "never"]);
-        // Ensure local file:// remotes are always usable in this test repo.
-        run_git(repo, &["config", "protocol.file.allow", "always"]);
+        gitcomet_core::test_support::git_fixture::append_config_file(
+            &repo.join(if args.contains(&"--bare") {
+                "config"
+            } else {
+                ".git/config"
+            }),
+            &[
+                ("core.autocrlf", "false"),
+                ("core.eol", "lf"),
+                ("credential.helper", ""),
+                ("credential.interactive", "never"),
+                ("protocol.file.allow", "always"),
+            ],
+        );
     }
 }
 
 fn run_git_expect_failure(repo: &Path, args: &[&str]) {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = git_command()
         .arg("-C")
         .arg(repo)
@@ -161,6 +170,7 @@ fn run_git_expect_failure(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_output(repo: &Path, args: &[&str]) -> String {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = git_command()
         .arg("-C")
         .arg(repo)
@@ -276,13 +286,25 @@ fn set_unmerged_stages(
     );
 }
 
+fn init_conflict_fixture(repo: &Path) {
+    static SEED: OnceLock<RepositorySeed> = OnceLock::new();
+    init_repository(repo, &SEED, |repo| {
+        run_git(repo, &["init"]);
+        append_config(
+            repo,
+            &[
+                ("user.email", "you@example.com"),
+                ("user.name", "You"),
+                ("commit.gpgsign", "false"),
+                ("mergetool.guiDefault", "false"),
+                ("merge.guitool", ""),
+            ],
+        );
+    });
+}
+
 fn setup_both_modified_text_conflict(repo: &Path, path: &str, ours: &str, theirs: &str) {
-    run_git(repo, &["init"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    run_git(repo, &["config", "mergetool.guiDefault", "false"]);
-    run_git(repo, &["config", "merge.guitool", ""]);
+    init_conflict_fixture(repo);
 
     write(repo, path, "base\n");
     run_git(repo, &["add", path]);
@@ -312,12 +334,7 @@ fn setup_both_modified_text_conflict(repo: &Path, path: &str, ours: &str, theirs
 
 #[cfg(unix)]
 fn setup_both_modified_symlink_conflict(repo: &Path, path: &str, ours: &str, theirs: &str) {
-    run_git(repo, &["init"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    run_git(repo, &["config", "mergetool.guiDefault", "false"]);
-    run_git(repo, &["config", "merge.guitool", ""]);
+    init_conflict_fixture(repo);
 
     let link = repo.join(path);
     let relink = |target: &str| {
@@ -353,12 +370,7 @@ fn setup_both_modified_symlink_conflict(repo: &Path, path: &str, ours: &str, the
 }
 
 fn setup_both_added_text_conflict(repo: &Path, path: &str, ours: &str, theirs: &str) {
-    run_git(repo, &["init"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    run_git(repo, &["config", "mergetool.guiDefault", "false"]);
-    run_git(repo, &["config", "merge.guitool", ""]);
+    init_conflict_fixture(repo);
 
     write(repo, "seed.txt", "seed\n");
     run_git(repo, &["add", "seed.txt"]);
@@ -391,143 +403,99 @@ fn make_executable(path: &Path) {
     fs::set_permissions(path, Permissions::from_mode(0o755)).unwrap();
 }
 
-#[cfg(windows)]
 fn set_fixed_mtime(path: &Path) {
-    let status = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "(Get-Item -LiteralPath $env:GITCOMET_TARGET).LastWriteTimeUtc=[DateTimeOffset]::FromUnixTimeSeconds(1700000000).UtcDateTime",
-        ])
-        .env("GITCOMET_TARGET", path)
-        .status()
-        .expect("powershell to run");
-    assert!(status.success());
+    fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+        .unwrap();
 }
 
-#[cfg(not(windows))]
-fn set_fixed_mtime(path: &Path) {
-    // `touch -d` is GNU-specific; `-t [[CC]YY]MMDDhhmm[.ss]` is supported on
-    // both GNU/Linux and BSD/macOS.
-    let status = Command::new("touch")
-        .arg("-t")
-        .arg("202311142213.20")
-        .arg(path)
-        .status()
-        .expect("touch to run");
-    assert!(status.success());
-}
-
-#[cfg(windows)]
-fn cmd_same_size_content_change_and_exit_failure() -> &'static str {
-    r#"powershell -NoProfile -Command "$path=$env:MERGED; $len=(Get-Item -LiteralPath $path).Length; $bytes=New-Object byte[] $len; for ($i=0; $i -lt $len; $i++) { $bytes[$i]=[byte][char]'R' }; [System.IO.File]::WriteAllBytes($path, $bytes); (Get-Item -LiteralPath $path).LastWriteTimeUtc=[DateTimeOffset]::FromUnixTimeSeconds(1700000000).UtcDateTime" & exit /b 1"#
-}
-
-#[cfg(not(windows))]
-fn cmd_same_size_content_change_and_exit_failure() -> &'static str {
-    "len=$(wc -c < \"$MERGED\"); head -c \"$len\" /dev/zero | tr '\\0' 'R' > \"$MERGED\"; touch -t 202311142213.20 \"$MERGED\"; exit 1"
+fn fixture_command(action: &str) -> &'static str {
+    static COMMANDS: OnceLock<std::collections::HashMap<&str, String>> = OnceLock::new();
+    COMMANDS.get_or_init(|| {
+        let exe = env!("CARGO_BIN_EXE_gitcomet-test-mergetool");
+        #[cfg(windows)]
+        let quoted = format!("\"{}\"", exe.replace('%', "%%"));
+        #[cfg(not(windows))]
+        let quoted = format!("'{}'", exe.replace('\'', "'\"'\"'"));
+        [
+            "rewrite-fail",
+            "delete-fail",
+            "markers",
+            "copy",
+            "cli",
+            "gui",
+            "cmd",
+            "paths-copy",
+            "paths-fail",
+            "base-size-copy",
+        ]
+        .into_iter()
+        .map(|action| (action, format!("{quoted} {action}")))
+        .collect()
+    })[action]
+        .as_str()
 }
 
 #[cfg(windows)]
 fn cmd_exit_success() -> &'static str {
     "exit /b 0"
 }
-
 #[cfg(not(windows))]
 fn cmd_exit_success() -> &'static str {
     "exit 0"
 }
 
-#[cfg(windows)]
-fn cmd_delete_merged_and_exit_failure() -> &'static str {
-    r#"powershell -NoProfile -Command "Remove-Item -LiteralPath $env:MERGED -Force -ErrorAction SilentlyContinue" & exit /b 1"#
-}
-
-#[cfg(not(windows))]
-fn cmd_delete_merged_and_exit_failure() -> &'static str {
-    "rm -f \"$MERGED\"; exit 1"
-}
-
-#[cfg(windows)]
-fn cmd_write_unresolved_markers_and_exit_success() -> &'static str {
-    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, ('<<<<<<< ours' + [Environment]::NewLine + 'left' + [Environment]::NewLine + '=======' + [Environment]::NewLine + 'right' + [Environment]::NewLine + '>>>>>>> theirs' + [Environment]::NewLine))" & exit /b 0"#
-}
-
-#[cfg(not(windows))]
-fn cmd_write_unresolved_markers_and_exit_success() -> &'static str {
-    "printf '<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n' > \"$MERGED\"; exit 0"
-}
-
-#[cfg(windows)]
-fn cmd_copy_remote_to_merged_and_exit_success() -> &'static str {
-    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllBytes($env:MERGED, [System.IO.File]::ReadAllBytes($env:REMOTE))""#
-}
-
-#[cfg(not(windows))]
-fn cmd_copy_remote_to_merged_and_exit_success() -> &'static str {
-    "cat \"$REMOTE\" > \"$MERGED\"; exit 0"
-}
-
-#[cfg(windows)]
-fn cmd_write_cli_to_merged() -> &'static str {
-    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'cli' + [char]10)""#
-}
-
-#[cfg(not(windows))]
-fn cmd_write_cli_to_merged() -> &'static str {
-    "printf 'cli\\n' > \"$MERGED\""
-}
-
-#[cfg(windows)]
-fn cmd_write_gui_to_merged() -> &'static str {
-    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'gui' + [char]10)""#
-}
-
-#[cfg(not(windows))]
-fn cmd_write_gui_to_merged() -> &'static str {
-    "printf 'gui\\n' > \"$MERGED\""
+#[allow(dead_code)]
+fn cmd_same_size_content_change_and_exit_failure() -> &'static str {
+    fixture_command("rewrite-fail")
 }
 
 #[allow(dead_code)]
-#[cfg(windows)]
-fn cmd_write_cmd_to_merged() -> &'static str {
-    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'cmd' + [char]10)""#
+fn cmd_delete_merged_and_exit_failure() -> &'static str {
+    fixture_command("delete-fail")
 }
 
 #[allow(dead_code)]
-#[cfg(not(windows))]
+fn cmd_write_unresolved_markers_and_exit_success() -> &'static str {
+    fixture_command("markers")
+}
+
+#[allow(dead_code)]
+fn cmd_copy_remote_to_merged_and_exit_success() -> &'static str {
+    fixture_command("copy")
+}
+
+#[allow(dead_code)]
+fn cmd_write_cli_to_merged() -> &'static str {
+    fixture_command("cli")
+}
+
+#[allow(dead_code)]
+fn cmd_write_gui_to_merged() -> &'static str {
+    fixture_command("gui")
+}
+
+#[allow(dead_code)]
 fn cmd_write_cmd_to_merged() -> &'static str {
-    "printf 'cmd\\n' > \"$MERGED\"; exit 0"
+    fixture_command("cmd")
 }
 
-#[cfg(windows)]
+#[allow(dead_code)]
 fn cmd_dump_stage_paths_and_copy_remote() -> &'static str {
-    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllLines($env:MERGED + '.env', @($env:BASE, $env:LOCAL, $env:REMOTE)); [System.IO.File]::WriteAllBytes($env:MERGED, [System.IO.File]::ReadAllBytes($env:REMOTE))""#
+    fixture_command("paths-copy")
 }
 
-#[cfg(not(windows))]
-fn cmd_dump_stage_paths_and_copy_remote() -> &'static str {
-    "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\""
-}
-
-#[cfg(windows)]
+#[allow(dead_code)]
 fn cmd_dump_stage_paths_and_exit_failure() -> &'static str {
-    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllLines($env:MERGED + '.env', @($env:BASE, $env:LOCAL, $env:REMOTE))" & exit /b 1"#
+    fixture_command("paths-fail")
 }
 
-#[cfg(not(windows))]
-fn cmd_dump_stage_paths_and_exit_failure() -> &'static str {
-    "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; exit 1"
-}
-
-#[cfg(windows)]
+#[allow(dead_code)]
 fn cmd_dump_base_size_and_copy_remote() -> &'static str {
-    r#"powershell -NoProfile -Command "$size=(Get-Item -LiteralPath $env:BASE).Length; [System.IO.File]::WriteAllText($env:MERGED + '.base-size', [string]$size); [System.IO.File]::WriteAllBytes($env:MERGED, [System.IO.File]::ReadAllBytes($env:REMOTE))""#
-}
-
-#[cfg(not(windows))]
-fn cmd_dump_base_size_and_copy_remote() -> &'static str {
-    "printf '%s' \"$(wc -c < \"$BASE\" | tr -d '[:space:]')\" > \"$MERGED.base-size\"; cat \"$REMOTE\" > \"$MERGED\""
+    fixture_command("base-size-copy")
 }
 
 fn read_stage_env_vars(path: &Path) -> Vec<String> {

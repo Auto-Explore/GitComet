@@ -876,6 +876,39 @@ fn native_barrier_waits_for_debounced_refresh_without_counting_its_cookie() {
     ));
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn native_sync_checkpoint_waits_for_refresh_and_policy_rebuild() {
+    let (_temp, root) = repository();
+    let monitor = RunningMonitor::start(&root);
+    let mut generation = monitor
+        .checkpoint_native(Instant::now() + SYNC_TIMEOUT)
+        .unwrap();
+    for (file, contents) in [
+        ("queued.txt", "edit before fence"),
+        (".gitignore", "ignored/\n"),
+    ] {
+        // Callback checkpoints cannot flush events still pending inside the OS.
+        // Observe this unique path before draining and checkpointing its generation.
+        let path = root.join(file);
+        let change = monitor.expect_change(&path, || fs::write(&path, contents).unwrap());
+        assert!(change.worktree, "observed change did not refresh {file}");
+        let current = monitor
+            .checkpoint_native(Instant::now() + SYNC_TIMEOUT)
+            .unwrap();
+        if file == ".gitignore" {
+            assert_ne!(current, generation, "ignore edit did not rebuild watches");
+        }
+        generation = current;
+        monitor.settle();
+    }
+    assert!(monitor.native_events.load(Ordering::Relaxed) > 0);
+    // The rebuilt watcher must still observe subsequent edits.
+    fs::write(root.join("after-rebuild.txt"), "real edit").unwrap();
+    monitor.refresh();
+    monitor.quiet();
+}
+
 #[test]
 fn native_monitor_rebuilds_after_ignore_edits_moves_and_atomic_saves() {
     let (_temp, root) = repository();

@@ -1987,6 +1987,18 @@ fn delete_branch_force_missing_branch_is_structured_git_failure() {
     );
 }
 
+fn assert_worktree_error_path(message: &str, expected: &Path) {
+    let reported = message
+        .split_once("used by worktree at '")
+        .and_then(|(_, suffix)| suffix.strip_suffix("'"))
+        .unwrap_or_else(|| panic!("missing worktree path: {message}"));
+    assert_eq!(
+        fs::canonicalize(reported).unwrap(),
+        fs::canonicalize(expected).unwrap(),
+        "unexpected worktree path: {message}"
+    );
+}
+
 #[test]
 fn delete_branch_force_rejects_unborn_current_branch_before_missing_ref_check() {
     let _ = ensure_isolated_git_test_env();
@@ -2002,10 +2014,7 @@ fn delete_branch_force_rejects_unborn_current_branch_before_missing_ref_check() 
         .expect_err("unborn checked-out branch must still be treated as in-use");
     assert_git_failure(&err, "git branch -D", GitFailureId::CommandFailed);
     let msg = err.to_string();
-    assert!(
-        msg.contains("used by worktree") && msg.contains(&git_path_arg(repo)),
-        "unexpected delete-branch-force error: {msg}"
-    );
+    assert_worktree_error_path(&msg, repo);
 }
 
 #[test]
@@ -2038,10 +2047,7 @@ fn delete_branch_force_rejects_branch_checked_out_in_linked_worktree() {
         .expect_err("branch checked out in linked worktree must not be deleted");
     assert_git_failure(&err, "git branch -D", GitFailureId::CommandFailed);
     let msg = err.to_string();
-    assert!(
-        msg.contains("used by worktree") && msg.contains(&linked_worktree_arg),
-        "unexpected delete-branch-force error: {msg}"
-    );
+    assert_worktree_error_path(&msg, &linked_worktree);
 
     let still_exists = git_command()
         .arg("-C")
@@ -2085,10 +2091,7 @@ fn delete_branch_force_rejects_branch_checked_out_in_main_worktree_when_opened_f
         .expect_err("main-worktree branch use must block deletion from linked worktree");
     assert_git_failure(&err, "git branch -D", GitFailureId::CommandFailed);
     let msg = err.to_string();
-    assert!(
-        msg.contains("used by worktree") && msg.contains(&git_path_arg(repo)),
-        "unexpected delete-branch-force error: {msg}"
-    );
+    assert_worktree_error_path(&msg, repo);
 
     let still_exists = git_command()
         .arg("-C")

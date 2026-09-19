@@ -11,6 +11,20 @@ on:
         description: Bypass dependency caches to measure cold compilation
         type: boolean
         default: false
+      test-schedule:
+        description: Test scheduling candidate (keep serial until measured)
+        type: choice
+        options: [serial, balanced]
+        default: serial
+      fixture-timings:
+        description: Collect per-test fixture and subprocess timings
+        type: boolean
+        default: false
+      benchmark-profile:
+        description: Compile/link profile (candidate disables UI optimization)
+        type: choice
+        options: [ci-bench, ci-bench-candidate]
+        default: ci-bench
 
 permissions:
   contents: read
@@ -24,14 +38,19 @@ jobs:
     uses: ./.github/workflows/rust.yml
     with:
       cold-cache: ${{ inputs.cold-cache || false }}
+      test-schedule: ${{ inputs.test-schedule || 'serial' }}
+      fixture-timings: ${{ inputs.fixture-timings || false }}
   platforms:
     uses: ./.github/workflows/cross-platform-tests.yml
     with:
       cold-cache: ${{ inputs.cold-cache || false }}
+      test-schedule: ${{ inputs.test-schedule || 'serial' }}
+      fixture-timings: ${{ inputs.fixture-timings || false }}
   benchmarks:
     uses: ./.github/workflows/benchmark-targets.yml
     with:
       cold-cache: ${{ inputs.cold-cache || false }}
+      benchmark-profile: ${{ inputs.benchmark-profile || 'ci-bench' }}
   complete:
     name: CI complete
     runs-on: ubuntu-22.04
@@ -49,7 +68,7 @@ jobs:
         run: |
           python3 -c 'import json, os; results = json.loads(os.environ["CI_RESULTS"]); assert set(results) == {"rust", "platforms", "benchmarks"}; failed = {k:v["result"] for k,v in results.items() if v["result"] != "success"}; assert not failed, failed'
       - name: Retire obsolete validation caches
-        if: always() && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: always() && inputs.cold-cache != true && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci/report.py caches --prune

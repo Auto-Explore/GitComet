@@ -2,6 +2,9 @@ use gitcomet_core::domain::{
     CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind, SubmoduleStatus,
 };
 use gitcomet_core::services::{GitBackend, SubmoduleTrustDecision};
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, RepositorySeed, append_config, init_repository,
+};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -17,6 +20,7 @@ fn git_command() -> Command {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = git_command()
         .arg("-C")
         .arg(repo)
@@ -32,6 +36,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Output {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     git_command()
         .arg("-C")
         .arg(repo)
@@ -84,6 +89,7 @@ fn add_submodule_raw(parent_repo: &Path, sub_repo: &Path, path: &Path, name: Opt
 }
 
 fn run_git_with_path(repo: &Path, args: &[&str], path: &Path) {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = git_command()
         .arg("-C")
         .arg(repo)
@@ -132,12 +138,20 @@ fn create_stale_submodule_git_dir(
 }
 
 fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
-    run_git(repo, &["init"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    run_git(repo, &["config", "core.autocrlf", "false"]);
-    run_git(repo, &["config", "core.eol", "lf"]);
+    static SEED: OnceLock<RepositorySeed> = OnceLock::new();
+    init_repository(repo, &SEED, |repo| {
+        run_git(repo, &["init"]);
+        append_config(
+            repo,
+            &[
+                ("user.email", "you@example.com"),
+                ("user.name", "You"),
+                ("commit.gpgsign", "false"),
+                ("core.autocrlf", "false"),
+                ("core.eol", "lf"),
+            ],
+        );
+    });
 
     {
         let mut f = std::fs::File::create(repo.join(file)).expect("create seed file");
