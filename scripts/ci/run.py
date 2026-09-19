@@ -325,6 +325,11 @@ def main():
 
 
 if __name__ == "__main__":
+    # Windows CI redirects these streams through pipes, which can default to
+    # cp1252 even though Cargo/nextest logs contain UTF-8. Match the log files
+    # and GitHub Actions output so forwarding Unicode cannot abort the suite.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     try:
         main()
     except (RuntimeError, subprocess.CalledProcessError) as error:

@@ -135,6 +135,41 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(timing["returncode"], 7)
             self.assertIn("failure output", (Path(directory) / "failure.log").read_text())
 
+    def test_cli_preserves_unicode_output_with_legacy_stdio_encoding(self):
+        stdout = "──────── nextest ────────\nPASS 日本語 🦀\n"
+        stderr = "diagnostic: 中文 → 🦀\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "scripts/ci/run.py"
+            script.parent.mkdir(parents=True)
+            script.write_bytes(Path(runner.__file__).read_bytes())
+            env = dict(os.environ, PYTHONIOENCODING="cp1252:strict", PYTHONUTF8="0", GITHUB_STEP_SUMMARY="")
+            for code in (0, 7):
+                with self.subTest(child_exit=code):
+                    name = f"unicode-{code}"
+                    child = (f"import sys; sys.stdout.buffer.write({stdout.encode('utf-8')!r}); "
+                             f"sys.stdout.buffer.flush(); sys.stderr.buffer.write({stderr.encode('utf-8')!r}); "
+                             f"sys.stderr.buffer.flush(); sys.exit({code})")
+                    # Success exercises log forwarding; failure also exercises
+                    # a Unicode command argument in the CLI's error on stderr.
+                    extra = ["日本語/🦀.txt"] if code else []
+                    result = subprocess.run(
+                        [sys.executable, str(script), "command", "--name", name, "--",
+                         sys.executable, "-c", child, *extra], env=env,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+                    self.assertEqual(result.returncode, 1 if code else 0,
+                                     result.stderr.decode("utf-8", errors="replace"))
+                    console = result.stdout.decode("utf-8").replace("\r\n", "\n")
+                    self.assertIn(stdout, console)
+                    self.assertIn(stderr, console)
+                    reports = root / "target/ci-reports"
+                    self.assertEqual((reports / f"{name}.log").read_text(encoding="utf-8"), stdout + stderr)
+                    timing = json.loads((reports / "timings.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+                    self.assertEqual(timing["returncode"], code)
+                    self.assertFalse(timing["timed_out"])
+                    if code:
+                        self.assertIn(extra[0], result.stderr.decode("utf-8"))
+
     def test_missing_smoke_selector_fails_before_execution(self):
         suite = {"testcases": {"real_test": {"ignored": False}}}
         with self.assertRaisesRegex(RuntimeError, "matches no tests"):
