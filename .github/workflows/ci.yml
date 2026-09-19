@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      cold-cache:
+        description: Bypass dependency caches to measure cold compilation
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    uses: ./.github/workflows/rust.yml
+    with:
+      cold-cache: ${{ inputs.cold-cache || false }}
+  platforms:
+    uses: ./.github/workflows/cross-platform-tests.yml
+    with:
+      cold-cache: ${{ inputs.cold-cache || false }}
+  benchmarks:
+    uses: ./.github/workflows/benchmark-targets.yml
+    with:
+      cold-cache: ${{ inputs.cold-cache || false }}
+  complete:
+    name: CI complete
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    if: always()
+    needs: [rust, platforms, benchmarks]
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify every validation lane completed
+        env:
+          CI_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 -c 'import json, os; results = json.loads(os.environ["CI_RESULTS"]); assert set(results) == {"rust", "platforms", "benchmarks"}; failed = {k:v["result"] for k,v in results.items() if v["result"] != "success"}; assert not failed, failed'
+      - name: Retire obsolete validation caches
+        if: always() && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/report.py caches --prune

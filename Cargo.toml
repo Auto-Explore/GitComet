@@ -271,6 +271,30 @@ opt-level = 0
 opt-level = 1
 split-debuginfo = "packed"
 
+# CI checks correctness with the same optimization as the normal test profile,
+# without generating and packaging full debugger symbols on ephemeral runners.
+[profile.ci-test]
+inherits = "dev"
+opt-level = 1
+debug = 0
+split-debuginfo = "off"
+lto = "off"
+codegen-units = 256
+incremental = false
+debug-assertions = true
+overflow-checks = true
+
+# Compile/link coverage only. Actual performance measurements still use bench,
+# which inherits the production release settings below.
+[profile.ci-bench]
+inherits = "release"
+opt-level = 1
+debug = 0
+split-debuginfo = "off"
+lto = "off"
+codegen-units = 256
+incremental = false
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
