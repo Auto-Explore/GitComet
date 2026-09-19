@@ -5,11 +5,11 @@ use crate::view::components::{
     on_nested_control_click, panel_tab, panel_tab_close,
 };
 use gpui::{
-    Context, FocusHandle, IntoElement, Modifiers, MouseButton, Render, TestAppContext,
-    VisualTestContext, Window, div,
+    Context, FocusHandle, IntoElement, Modifiers, MouseButton, MouseDownEvent, Pixels, Point,
+    Render, TestAppContext, VisualTestContext, Window, div,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum FixtureKind {
     Button(ButtonStyle),
     BoundedButton,
@@ -19,6 +19,7 @@ enum FixtureKind {
     PaintedRow,
     Menu,
     AppMenu,
+    Canvas(MouseButton),
 }
 
 struct Fixture {
@@ -80,6 +81,36 @@ impl Render for Fixture {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let subject = match self.kind {
+            FixtureKind::Canvas(button) => {
+                let view = cx.entity();
+                div()
+                    .id("subject")
+                    .debug_selector(|| "subject".into())
+                    .w(px(100.0))
+                    .h(px(28.0))
+                    .child(
+                        gpui::canvas(
+                            |bounds, window, _| {
+                                window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal)
+                            },
+                            move |_, hitbox, window, _| {
+                                let view = view.clone();
+                                crate::kit::click::on_canvas_click(
+                                    window,
+                                    "subject".into(),
+                                    &hitbox,
+                                    button,
+                                    true,
+                                    move |_, _, app| {
+                                        view.update(app, |this, _| this.clicks += 1);
+                                    },
+                                );
+                            },
+                        )
+                        .size_full(),
+                    )
+                    .into_any_element()
+            }
             FixtureKind::PaintedRow => {
                 let paint = crate::kit::interaction_paint::InteractionPaint::new(
                     InteractionStyle::new(theme).on_surface(theme.colors.surface.chrome),
@@ -262,6 +293,137 @@ fn leave(cx: &mut VisualTestContext) {
     redraw(cx);
 }
 
+fn mouse_down(
+    cx: &mut VisualTestContext,
+    position: Point<Pixels>,
+    button: MouseButton,
+    first_mouse: bool,
+) {
+    // GPUI's simulate_mouse_down and simulate_click always set first_mouse to false.
+    cx.simulate_event(MouseDownEvent {
+        position,
+        button,
+        click_count: 1,
+        first_mouse,
+        ..Default::default()
+    });
+}
+
+#[gpui::test]
+fn focusing_click_activates_controls_and_canvas_once(cx: &mut TestAppContext) {
+    let _guard = crate::test_support::lock_visual_test();
+    for (kind, button) in [
+        (FixtureKind::Button(ButtonStyle::Subtle), MouseButton::Left),
+        (FixtureKind::BoundedButton, MouseButton::Left),
+        (FixtureKind::Row, MouseButton::Left),
+        (FixtureKind::Split, MouseButton::Left),
+        (FixtureKind::Menu, MouseButton::Left),
+        (FixtureKind::Menu, MouseButton::Right),
+        (FixtureKind::AppMenu, MouseButton::Left),
+        (FixtureKind::AppMenu, MouseButton::Right),
+        (FixtureKind::Canvas(MouseButton::Left), MouseButton::Left),
+        (FixtureKind::Canvas(MouseButton::Right), MouseButton::Right),
+    ] {
+        let (view, cx) = cx.add_window_view(|_, cx| Fixture::new(themes()[0], kind, false, cx));
+        redraw(cx);
+        let target = cx.debug_bounds("subject").unwrap().center();
+        let outside = point(px(280.0), px(200.0));
+        let other_button = if button == MouseButton::Left {
+            MouseButton::Right
+        } else {
+            MouseButton::Left
+        };
+
+        for (from, to, release_button) in [
+            (target, outside, button),
+            (outside, target, button),
+            (target, target, other_button),
+        ] {
+            cx.simulate_mouse_move(from, None, Modifiers::default());
+            mouse_down(cx, from, button, true);
+            redraw(cx);
+            cx.simulate_mouse_move(to, Some(button), Modifiers::default());
+            cx.simulate_mouse_up(to, release_button, Modifiers::default());
+            cx.simulate_mouse_up(target, button, Modifiers::default());
+            cx.update(|_, app| assert_eq!(view.read(app).clicks, 0, "{kind:?}: cancelled click"));
+        }
+
+        // Wayland and macOS mark the focusing press; the next press is ordinary.
+        for (count, first_mouse) in [true, false].into_iter().enumerate() {
+            cx.simulate_mouse_move(target, None, Modifiers::default());
+            mouse_down(cx, target, button, first_mouse);
+            redraw(cx);
+            cx.update(|_, app| assert_eq!(view.read(app).clicks, count, "{kind:?}: press"));
+            cx.simulate_mouse_up(target, button, Modifiers::default());
+            cx.update(|_, app| {
+                assert_eq!(
+                    view.read(app).clicks,
+                    count + 1,
+                    "{kind:?}: completed click"
+                );
+            });
+            cx.simulate_mouse_up(target, button, Modifiers::default());
+            cx.update(|_, app| {
+                assert_eq!(
+                    view.read(app).clicks,
+                    count + 1,
+                    "{kind:?}: duplicate release"
+                );
+            });
+        }
+    }
+}
+
+#[test]
+fn focusing_click_activates_text_subtarget_once() {
+    let mut click = crate::kit::click::SubtargetClick::default();
+    let up = gpui::MouseUpEvent {
+        button: MouseButton::Left,
+        click_count: 1,
+        ..Default::default()
+    };
+    for first_mouse in [true, false] {
+        let down = MouseDownEvent {
+            button: MouseButton::Left,
+            click_count: 1,
+            first_mouse,
+            ..Default::default()
+        };
+        click.press(Some("link"), &down);
+        let Some(gpui::ClickEvent::Mouse(event)) = click.release(Some(&"link"), &up) else {
+            panic!("a completed text-link click must activate, including the focusing click");
+        };
+        assert_eq!(event.down.first_mouse, first_mouse);
+        assert!(click.release(Some(&"link"), &up).is_none());
+
+        click.press(Some("link"), &down);
+        assert!(click.release(Some(&"another link"), &up).is_none());
+        assert!(click.release(Some(&"link"), &up).is_none());
+
+        click.press(Some("link"), &down);
+        assert!(
+            click
+                .release(
+                    Some(&"link"),
+                    &gpui::MouseUpEvent {
+                        button: MouseButton::Right,
+                        ..up.clone()
+                    },
+                )
+                .is_none()
+        );
+        assert!(click.release(Some(&"link"), &up).is_none());
+
+        click.press(Some("link"), &down);
+        click.moved(&gpui::MouseMoveEvent {
+            position: point(px(10.0), px(0.0)),
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Modifiers::default(),
+        });
+        assert!(click.release(Some(&"link"), &up).is_none());
+    }
+}
+
 #[gpui::test]
 fn mouse_focus_does_not_latch_control_backgrounds(cx: &mut TestAppContext) {
     let _guard = crate::test_support::lock_visual_test();
@@ -340,6 +502,8 @@ fn disabled_buttons_share_activation_and_tab_policy(cx: &mut TestAppContext) {
             let resting = paint(cx, "subject");
             let bounds = cx.debug_bounds("subject").unwrap();
             cx.simulate_click(bounds.center(), Modifiers::default());
+            mouse_down(cx, bounds.center(), MouseButton::Left, true);
+            cx.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
             leave(cx);
             assert_eq!(paint(cx, "subject"), resting);
             cx.update(|window, app| {
