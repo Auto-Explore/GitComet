@@ -48,7 +48,8 @@ def cache_keys(context):
     compatibility.update(subprocess.check_output(["rustc", "-vV"]))
     compatibility.update(platform.platform().encode())
     for name, value in sorted(os.environ.items()):
-        if name in ("ImageOS", "ImageVersion") or name.startswith(("CARGO_PROFILE_", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CC", "CXX", "CFLAGS", "CMAKE")):
+        # Windows exposes environment-variable names in uppercase.
+        if name.upper() in ("IMAGEOS", "IMAGEVERSION") or name.startswith(("CARGO_PROFILE_", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CC", "CXX", "CFLAGS", "CMAKE")):
             compatibility.update(f"{name}={value}".encode())
     restore_key = f"{PREFIX}deps-{context}-{compatibility.hexdigest()[:16]}-"
     source_prefix = f"{PREFIX}sources-{platform.system().lower()}-"

@@ -53,8 +53,15 @@ class CacheTests(unittest.TestCase):
             other = cache.cache_keys("windows-x64-workspace-ci-test")
             self.assertNotEqual(profile["restore-key"], other["restore-key"])
             self.assertEqual(profile["source-key"], other["source-key"])
-            with patch.dict(os.environ, {"ImageVersion": "new runner image"}):
-                self.assertNotEqual(other["restore-key"], cache.cache_keys("windows-x64-workspace-ci-test")["restore-key"])
+            # Windows uppercases these names; exercise that spelling on every host.
+            for name in ("ImageOS", "ImageVersion", "IMAGEOS", "IMAGEVERSION"):
+                with self.subTest(image_variable=name), patch.dict(os.environ, {name: "runner image v1"}):
+                    image_before = cache.cache_keys("windows-x64-workspace-ci-test")
+                    self.assertNotEqual(other["restore-key"], image_before["restore-key"])
+                    os.environ[name] = "runner image v2"
+                    image_after = cache.cache_keys("windows-x64-workspace-ci-test")
+                    self.assertNotEqual(image_before["restore-key"], image_after["restore-key"])
+                    self.assertEqual(other["source-key"], image_after["source-key"])
 
     def test_compatible_prefix_restore_reports_actual_bundle_mode(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(cache, "ROOT", Path(directory)), \
