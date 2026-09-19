@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Compare coverage, collect Actions timings, and maintain the CI cache budget."""
+
+import argparse
+from datetime import datetime
+import json
+import math
+import os
+from pathlib import Path
+import re
+import statistics
+import subprocess
+
+LEGACY_LANES = {
+    "Linux Headless Suite (x86_64-linux / ubuntu-22.04)": "native/ubuntu22-x64",
+    "Linux Headless Suite (aarch64-linux / ubuntu-22.04-arm)": "native/ubuntu22-arm64",
+    "Linux Headless Suite (Fedora container)": "native/fedora41-x64",
+    "macOS Tests (macbook-m1 / macos-15)": "native/macos15-arm64",
+    "macOS Tests (latest-macos / macos-26)": "native/macos26-arm64",
+    "macOS Tests (intel (macos-15-intel))": "native/macos15-x64",
+    "Windows Tests (x86_64-windows)": "native/windows-x64",
+    "Windows Tests (aarch64-windows)": "native/windows-arm64",
+    "Benchmark Target Compile (linux / ubuntu-22.04)": "benchmark/ubuntu22-x64",
+    "Benchmark Target Compile (macos / apple-silicon)": "benchmark/macos-latest-arm64",
+    "Benchmark Target Compile (windows / x86_64)": "benchmark/windows-x64",
+    "Benchmark Target Compile (windows / arm64)": "benchmark/windows-arm64",
+}
+
+
+def lane_statistics(records):
+    lanes = {}
+    for run in records:
+        for job in run.get("jobs", []):
+            lane = next((lane for name, lane in LEGACY_LANES.items() if job["name"].endswith(name)), None)
+            match = re.search(r"(Native Tests|Benchmark Target Compile) \(([^()]+)\)$", job["name"])
+            if lane is None and match:
+                lane = ("native/" if match[1] == "Native Tests" else "benchmark/") + match[2]
+            if lane:
+                lanes.setdefault(lane, []).append(job)
+    result = {}
+    for lane, jobs in sorted(lanes.items()):
+        durations = [job["seconds"] for job in jobs if job["conclusion"] == "success"]
+        result[lane] = {"median_seconds": statistics.median(durations) if durations else None,
+                        "successful_samples": len(durations),
+                        "incomplete_samples": [{"seconds": job["seconds"], "conclusion": job["conclusion"]}
+                                               for job in jobs if job["conclusion"] != "success"]}
+    return result
+
+
+def api(endpoint, method="GET"):
+    return json.loads(subprocess.check_output(["gh", "api", "--method", method, endpoint], text=True) or "null")
+
+
+def pages(endpoint, field):
+    result = []
+    for page in range(1, 100):
+        batch = api(f"{endpoint}{'&' if '?' in endpoint else '?'}per_page=100&page={page}")[field]
+        result.extend(batch)
+        if len(batch) < 100:
+            return result
+    raise RuntimeError("API pagination exceeded 99 pages")
+
+
+def elapsed(start, end):
+    return (datetime.fromisoformat(end.replace("Z", "+00:00")) -
+            datetime.fromisoformat(start.replace("Z", "+00:00"))).total_seconds()
+
+
+def collect_runs(repository, ids):
+    records = []
+    for run_id in ids:
+        run = api(f"repos/{repository}/actions/runs/{run_id}")
+        jobs = pages(f"repos/{repository}/actions/runs/{run_id}/jobs", "jobs")
+        completed = [job for job in jobs if job.get("started_at") and job.get("completed_at")]
+        end = max((job["completed_at"] for job in completed), default=run["updated_at"])
+        records.append({
+            "id": run_id, "sha": run["head_sha"], "branch": run["head_branch"],
+            "event": run["event"], "name": run["name"], "conclusion": run["conclusion"],
+            "created_at": run["created_at"], "completed_at": end,
+            "wall_seconds": elapsed(run["created_at"], end),
+            "runner_seconds": sum(elapsed(j["started_at"], j["completed_at"]) for j in completed),
+            "jobs": [{"name": job["name"], "conclusion": job["conclusion"],
+                      "seconds": elapsed(job["started_at"], job["completed_at"]),
+                      # This includes dependency waits when created_at is unavailable.
+                      "start_delay_seconds": elapsed(run["created_at"], job["started_at"]),
+                      "steps": [{"name": step["name"], "conclusion": step["conclusion"],
+                                 "seconds": elapsed(step["started_at"], step["completed_at"])}
+                                for step in job["steps"] if step.get("started_at") and step.get("completed_at")]}
+                     for job in completed],
+        })
+    return records
+
+
+def coverage_difference(baseline, candidate):
+    def identities(document):
+        return {(test["package"], test["binary"], test["test"]): test["ignored"] for test in document["tests"]}
+    if baseline["context"] != candidate["context"] or baseline["selection"] != candidate["selection"]:
+        raise ValueError("Compare the same platform/feature context; inventories from different contexts are not equivalent")
+    before, after = identities(baseline), identities(candidate)
+    missing = sorted(before.keys() - after.keys())
+    newly_ignored = sorted(key for key in before.keys() & after.keys() if not before[key] and after[key])
+    return {"missing": missing, "newly_ignored": newly_ignored,
+            "added": sorted(after.keys() - before.keys())}
+
+
+def summarize(records):
+    # Caller supplies one complete validation cycle (all old workflows, or the
+    # new orchestrator) per SHA/branch/event. Never count a timeout as success.
+    groups = {}
+    excluded = []
+    for run in records:
+        key = (run["sha"], run["branch"], run["event"])
+        groups.setdefault(key, []).append(run)
+    wall, compute = [], []
+    for key, group in groups.items():
+        if any(run["conclusion"] != "success" for run in group):
+            excluded.append({"revision": key, "outcomes": [run["conclusion"] for run in group]})
+            continue
+        wall.append(elapsed(min(run["created_at"] for run in group), max(run["completed_at"] for run in group)))
+        compute.append(sum(run["runner_seconds"] for run in group))
+    return {"successful_samples": len(wall), "excluded_samples": excluded,
+            "median_wall_seconds": statistics.median(wall) if wall else None,
+            "p95_wall_seconds": sorted(wall)[max(0, math.ceil(len(wall) * .95) - 1)] if wall else None,
+            "median_runner_seconds": statistics.median(compute) if compute else None,
+            "lanes": lane_statistics(records)}
+
+
+def cache_context(key):
+    if key.startswith("gitcomet-ci-v1-"):
+        return key.rsplit("-", 1)[0]
+    if key.startswith("gitcomet-ci-audit-"):
+        return "gitcomet-ci-audit"
+    return None
+
+
+def obsolete_caches(caches):
+    seen, obsolete = set(), []
+    for cache in sorted(caches, key=lambda item: item["created_at"], reverse=True):
+        context = cache_context(cache["key"])
+        if context is None:
+            continue
+        if context in seen:
+            obsolete.append(cache)
+        seen.add(context)
+    return obsolete
+
+
+def manage_caches(repository, prune):
+    caches = pages(f"repos/{repository}/actions/caches", "actions_caches")
+    obsolete = obsolete_caches(caches)
+    if prune:
+        for cache in obsolete:
+            print(f"Retiring superseded CI cache {cache['key']}")
+            api(f"repos/{repository}/actions/caches/{cache['id']}", "DELETE")
+    removed = {cache["id"] for cache in obsolete} if prune else set()
+    owned = [cache for cache in caches if cache_context(cache["key"]) and cache["id"] not in removed]
+    total = sum(cache["size_in_bytes"] for cache in owned)
+    report = {"validation_cache_bytes": total, "budget_bytes": 8_000_000_000,
+              "cache_count": len(owned), "obsolete_count": len(obsolete), "pruned": prune}
+    print(json.dumps(report, indent=2))
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+            stream.write(f"\nValidation caches: {total / 1e9:.2f} GB / 8 GB in {len(owned)} entries.\n")
+    if total > report["budget_bytes"]:
+        raise RuntimeError("Validation cache budget exceeded; reduce cache quotas before adding contexts")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", "Auto-Explore/GitComet"))
+    sub = parser.add_subparsers(dest="command", required=True)
+    caches = sub.add_parser("caches")
+    caches.add_argument("--prune", action="store_true")
+    runs = sub.add_parser("runs")
+    runs.add_argument("ids", nargs="+", type=int)
+    runs.add_argument("--output", type=Path, required=True)
+    comparison = sub.add_parser("compare")
+    comparison.add_argument("baseline", type=Path)
+    comparison.add_argument("candidate", type=Path)
+    coverage = sub.add_parser("coverage")
+    coverage.add_argument("baseline", type=Path)
+    coverage.add_argument("candidate", type=Path)
+    args = parser.parse_args()
+    if args.command == "caches":
+        manage_caches(args.repository, args.prune)
+    elif args.command == "runs":
+        records = collect_runs(args.repository, args.ids)
+        args.output.write_text(json.dumps(records, indent=2) + "\n")
+        print(json.dumps(summarize(records), indent=2))
+    elif args.command == "coverage":
+        differences = coverage_difference(json.loads(args.baseline.read_text()), json.loads(args.candidate.read_text()))
+        print(json.dumps(differences, indent=2))
+        if differences["missing"] or differences["newly_ignored"]:
+            raise SystemExit(1)
+    else:
+        baseline = summarize(json.loads(args.baseline.read_text()))
+        candidate = summarize(json.loads(args.candidate.read_text()))
+        result = {"baseline": baseline, "candidate": candidate}
+        if baseline["median_wall_seconds"] and candidate["median_wall_seconds"]:
+            result["wall_reduction_percent"] = 100 * (1 - candidate["median_wall_seconds"] / baseline["median_wall_seconds"])
+            result["runner_reduction_percent"] = 100 * (1 - candidate["median_runner_seconds"] / baseline["median_runner_seconds"])
+        result["long_lane_targets"] = {}
+        for name, before in baseline["lanes"].items():
+            if before["median_seconds"] is None or before["median_seconds"] < 1200:
+                continue
+            after = candidate["lanes"].get(name, {}).get("median_seconds")
+            limit = before["median_seconds"] * .5
+            result["long_lane_targets"][name] = {"limit_seconds": limit, "candidate_seconds": after,
+                                                 "met": after is not None and after <= limit}
+        intel = candidate["lanes"].get("native/macos15-x64", {}).get("median_seconds")
+        result["intel_macos_30_minute_target"] = {"candidate_seconds": intel, "met": intel is not None and intel <= 1800}
+        print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()

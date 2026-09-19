@@ -21,6 +21,8 @@ pub(super) struct MonitorConfig {
     pub before_registration: Option<Box<dyn FnMut() + Send>>,
     #[cfg(test)]
     pub native_events: Option<Arc<AtomicU64>>,
+    #[cfg(all(test, target_os = "linux"))]
+    pub native_barrier: Option<Arc<NativeEventBarrier>>,
 }
 impl Default for MonitorConfig {
     fn default() -> Self {
@@ -34,6 +36,8 @@ impl Default for MonitorConfig {
             before_registration: None,
             #[cfg(test)]
             native_events: None,
+            #[cfg(all(test, target_os = "linux"))]
+            native_barrier: None,
         }
     }
 }
@@ -131,6 +135,8 @@ impl MonitorState {
                 &[],
                 #[cfg(test)]
                 config.native_events.clone(),
+                #[cfg(all(test, target_os = "linux"))]
+                config.native_barrier.clone(),
             ) {
                 Ok(result) => result,
                 Err(error) => {
@@ -458,6 +464,8 @@ pub(super) fn repo_monitor_thread(
     note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
     let mut last_recovery = degraded.then(Instant::now);
     let mut debouncer = DebouncedChange::new(config.debounce, config.max_delay);
+    #[cfg(all(test, target_os = "linux"))]
+    let mut drains = Vec::new();
     let mut policy_dirty = false;
     let mut index_dirty = false;
     let mut rebuild = None;
@@ -486,6 +494,8 @@ pub(super) fn repo_monitor_thread(
             Ok(MonitorMsg::Barrier(tx)) => {
                 let _ = tx.send(());
             }
+            #[cfg(all(test, target_os = "linux"))]
+            Ok(MonitorMsg::Drain(tx)) => drains.push(tx),
             Ok(MonitorMsg::Revalidate) => revalidate = true,
             Ok(MonitorMsg::Event(result)) => {
                 if !monitor_enabled.load(Ordering::Relaxed) {
@@ -650,6 +660,12 @@ pub(super) fn repo_monitor_thread(
             index_dirty = false;
             if let Some(change) = due_change {
                 flush(change);
+            }
+        }
+        #[cfg(all(test, target_os = "linux"))]
+        if !debouncer.is_pending() {
+            for tx in drains.drain(..) {
+                let _ = tx.send(());
             }
         }
     }

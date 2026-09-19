@@ -271,6 +271,33 @@ opt-level = 0
 opt-level = 1
 split-debuginfo = "packed"
 
+# CI avoids generating and packaging debugger symbols on ephemeral runners.
+# Keep algorithm/dependency optimization; the large UI crate favors fast builds.
+[profile.ci-test]
+inherits = "dev"
+opt-level = 1
+debug = 0
+split-debuginfo = "off"
+lto = "off"
+codegen-units = 256
+incremental = false
+debug-assertions = true
+overflow-checks = true
+
+[profile.ci-test.package.gitcomet-ui-gpui]
+opt-level = 0
+
+# Compile/link coverage only. Actual performance measurements still use bench,
+# which inherits the production release settings below.
+[profile.ci-bench]
+inherits = "release"
+opt-level = 1
+debug = 0
+split-debuginfo = "off"
+lto = "off"
+codegen-units = 256
+incremental = false
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

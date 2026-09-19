@@ -1,0 +1,53 @@
+name: CI reports and cache
+description: Publish timing/coverage artifacts and save bounded dependencies from successful default-branch pushes
+inputs:
+  name:
+    description: Unique artifact name
+    required: true
+  cache-key:
+    description: Key from ci-setup
+    required: true
+  cache-hit:
+    description: Hit output from ci-setup
+    default: "false"
+  cold-cache:
+    description: Bypass cache writes for cold measurements
+    default: "false"
+  compiled:
+    description: Cache compiled external dependencies as well as downloads
+    default: "true"
+  budget-mib:
+    description: Maximum compressed size for this context
+    default: "700"
+runs:
+  using: composite
+  steps:
+    - name: Pack bounded dependency cache
+      id: pack
+      if: success() && inputs.cold-cache != 'true' && inputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      shell: bash
+      env:
+        CI_CACHE_COMPILED: ${{ inputs.compiled }}
+        CI_CACHE_BUDGET: ${{ inputs.budget-mib }}
+      run: |
+        args=()
+        if [[ "$CI_CACHE_COMPILED" == true ]]; then args+=(--compiled); fi
+        python3 scripts/ci/cache.py pack --bundle "$RUNNER_TEMP/gitcomet-ci-cache.tar.gz" --budget-mib "$CI_CACHE_BUDGET" "${args[@]}"
+    - name: Save dependency cache
+      if: steps.pack.outputs.save == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/gitcomet-ci-cache.tar.gz
+        key: ${{ inputs.cache-key }}
+    - name: Publish CI diagnostics
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ci-${{ inputs.name }}
+        path: |
+          target/ci-reports/
+          target/cargo-timings/
+          target/nextest/ci/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7

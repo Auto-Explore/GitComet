@@ -1,0 +1,34 @@
+[profile.ci]
+fail-fast = false
+retries = 0
+test-threads = "num-cpus"
+slow-timeout = { period = "60s", terminate-after = 3, grace-period = "10s" }
+leak-timeout = { period = "500ms", result = "fail" }
+success-output = "never"
+failure-output = "immediate-final"
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = true
+report-skipped = "ignored"
+
+[test-groups]
+windows-git-shell = { max-threads = 2 }
+windows-submodule = { max-threads = 1 }
+
+# Git for Windows can fail to create its signal pipe under excessive shell
+# concurrency. These limits span binaries/processes, unlike a static Mutex.
+[[profile.ci.overrides]]
+platform = "cfg(windows)"
+filter = 'binary(submodules_integration)'
+test-group = "windows-submodule"
+threads-required = 2
+
+[[profile.ci.overrides]]
+platform = "cfg(windows)"
+filter = 'package(gitcomet) | package(gitcomet-git-gix) | (package(gitcomet-core) & test(/^merge_extraction::tests::/)) | (package(gitcomet-state) & test(clone_repo_effect))'
+test-group = "windows-git-shell"
+
+[[profile.ci.overrides]]
+filter = 'binary(git_cli_scoreboard)'
+success-output = "immediate"

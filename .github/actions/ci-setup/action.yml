@@ -1,0 +1,65 @@
+name: CI setup
+description: Install the repository toolchain and restore a bounded, compatible dependency cache
+inputs:
+  context:
+    description: Explicit OS image, architecture, and feature/profile context
+    required: true
+  cold-cache:
+    description: Bypass cache restore and save for baseline measurements
+    default: "false"
+  nextest:
+    description: Install the pinned native test runner
+    default: "true"
+  python:
+    description: Install Python 3.12 (Fedora supplies a recent system Python)
+    default: "true"
+outputs:
+  cache-key:
+    value: ${{ steps.key.outputs.key }}
+    description: Exact dependency cache key
+  cache-hit:
+    value: ${{ steps.cache.outputs.cache-hit }}
+    description: Whether the dependency cache was restored
+runs:
+  using: composite
+  steps:
+    - name: Install Python for CI helpers
+      if: inputs.python == 'true'
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.12"
+    - name: Install repository Rust toolchain
+      shell: bash
+      run: |
+        rustup show active-toolchain
+        rustc -vV
+    - name: Compute dependency cache key
+      id: key
+      shell: bash
+      env:
+        CI_CACHE_CONTEXT: ${{ inputs.context }}
+      run: python3 scripts/ci/cache.py key --context "$CI_CACHE_CONTEXT"
+    - name: Restore dependency cache
+      if: inputs.cold-cache != 'true'
+      id: cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/gitcomet-ci-cache.tar.gz
+        key: ${{ steps.key.outputs.key }}
+    - name: Unpack dependency cache
+      if: steps.cache.outputs.cache-hit == 'true'
+      shell: bash
+      run: python3 scripts/ci/cache.py restore --bundle "$RUNNER_TEMP/gitcomet-ci-cache.tar.gz"
+    - name: Report cache state
+      shell: bash
+      env:
+        CI_CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        CI_COLD_CACHE: ${{ inputs.cold-cache }}
+        CI_CACHE_CONTEXT: ${{ inputs.context }}
+      run: |
+        mkdir -p target/ci-reports
+        python3 -c 'import json, os, pathlib; pathlib.Path("target/ci-reports/cache-restore.json").write_text(json.dumps({k:os.environ[k] for k in ("CI_CACHE_HIT", "CI_COLD_CACHE", "CI_CACHE_CONTEXT")}, indent=2))'
+    - name: Install pinned nextest
+      if: inputs.nextest == 'true'
+      shell: bash
+      run: python3 scripts/ci/install-nextest.py --bin-dir "$RUNNER_TEMP/gitcomet-ci-bin"
