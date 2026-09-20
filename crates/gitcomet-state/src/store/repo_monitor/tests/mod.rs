@@ -42,6 +42,10 @@ fn isolated_git_config_env() -> &'static IsolatedGitConfigEnv {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
+    let _timer = gitcomet_core::test_support::git_fixture::FixtureTimer::new(
+        "subprocess",
+        args.first().copied().unwrap_or("git"),
+    );
     let env = isolated_git_config_env();
     let output = Command::new("git")
         .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -66,6 +70,8 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn init_repo_for_ignore_tests(workdir: &Path) {
+    let _timer =
+        gitcomet_core::test_support::git_fixture::FixtureTimer::new("setup", "watcher-repository");
     let _ = fs::create_dir_all(workdir);
     run_git(workdir, &["init"]);
     // Keep tests deterministic and independent from host global excludes.
@@ -73,11 +79,18 @@ fn init_repo_for_ignore_tests(workdir: &Path) {
         .excludes_file
         .to_string_lossy()
         .into_owned();
-    run_git(workdir, &["config", "core.excludesFile", &excludes_file]);
+    gitcomet_core::test_support::git_fixture::append_config(
+        workdir,
+        &[
+            ("core.excludesFile", &excludes_file),
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
+    // Init already writes core.fileMode. Replace it through Git rather than
+    // appending a duplicate that would break later reinitialization tests.
     run_git(workdir, &["config", "core.fileMode", "false"]);
-    run_git(workdir, &["config", "user.email", "you@example.com"]);
-    run_git(workdir, &["config", "user.name", "You"]);
-    run_git(workdir, &["config", "commit.gpgsign", "false"]);
     // Most fixtures need a HEAD and an index. The unborn-repository
     // regression uses plain `git init` to exercise the missing-index case.
     run_git(workdir, &["commit", "--allow-empty", "-m", "init"]);

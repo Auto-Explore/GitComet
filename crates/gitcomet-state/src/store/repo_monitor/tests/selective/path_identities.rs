@@ -91,10 +91,16 @@ fn moving_directory_symlink_into_worktree_refreshes_status() {
     #[cfg(windows)]
     std::os::windows::fs::symlink_dir(&target, &incoming).unwrap();
     fs::write(root.join(".gitignore"), "build/\n").unwrap();
-    let monitor = RunningMonitor::start(&root);
+    let monitor = RunningMonitor::start_for_unique_path(&root);
     // Only the destination is watched, so an event for a visible source path
     // cannot mask a dropped rename notification for the symlink itself.
-    fs::rename(&incoming, root.join("build")).unwrap();
+    let destination = root.join("build");
+    assert!(
+        monitor
+            .expect_change(&destination, || fs::rename(&incoming, &destination)
+                .unwrap())
+            .worktree
+    );
     let status = Command::new("git")
         .arg("--no-optional-locks")
         .arg("-C")
@@ -104,7 +110,6 @@ fn moving_directory_symlink_into_worktree_refreshes_status() {
         .unwrap();
     assert!(status.status.success());
     assert_eq!(String::from_utf8_lossy(&status.stdout).trim(), "?? build");
-    monitor.refresh();
 }
 
 #[test]
@@ -288,8 +293,13 @@ fn lfs_parent_after_symlink_keeps_source_coverage(absolute: bool) {
     assert_eq!(normalized(Path::new(lfs_tmp)), root.join("Storage/tmp"));
     let monitor = RunningMonitor::start(&root);
     monitor.quiet();
-    fs::write(&source, "an edit in an unrelated source directory").unwrap();
-    monitor.refresh();
+    assert!(
+        monitor
+            .expect_change(&source, || {
+                fs::write(&source, "an edit in an unrelated source directory").unwrap();
+            })
+            .worktree
+    );
     let info = gitcomet_git_gix::GixBackend
         .repository_watch_info(&root)
         .unwrap()

@@ -9,6 +9,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
+use gitcomet_core::test_support::git_fixture::FixtureTimer;
 use gitcomet_state::model::{AppState, AuthPromptState, AuthRetryOperation, RepoId, RepoState};
 use gitcomet_state::store::AppStore;
 use std::path::Path;
@@ -85,6 +86,7 @@ impl GitBackend for RecordingFailingBackend {
 }
 
 fn pump_for(cx: &mut gpui::VisualTestContext, duration: Duration) {
+    let _timer = FixtureTimer::new("ui-wait", "timed-pump");
     let deadline = Instant::now() + duration;
     while Instant::now() < deadline {
         cx.update(|window, app| {
@@ -102,10 +104,15 @@ fn pump_for(cx: &mut gpui::VisualTestContext, duration: Duration) {
 /// — rather than something the store's own worker thread advances: those tasks
 /// only run when the test driver pumps them, so a sleeping wait would spin out
 /// its whole deadline without ever letting the task complete.
-fn pump_until(cx: &mut gpui::VisualTestContext, description: &str, ready: impl Fn() -> bool) {
+fn pump_until(
+    cx: &mut gpui::VisualTestContext,
+    description: &str,
+    mut ready: impl FnMut(&mut gpui::VisualTestContext) -> bool,
+) {
+    let _timer = FixtureTimer::new("ui-wait", description);
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        if ready() {
+        if ready(cx) {
             return;
         }
         if Instant::now() >= deadline {
@@ -120,6 +127,7 @@ fn pump_until(cx: &mut gpui::VisualTestContext, description: &str, ready: impl F
 }
 
 fn wait_until(description: &str, ready: impl Fn() -> bool) {
+    let _timer = FixtureTimer::new("ui-wait", description);
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         if ready() {
@@ -692,7 +700,7 @@ fn dropping_one_folder_on_repository_bar_dispatches_external_repo_open(
     // resolved path: on macOS the temp dir arrives as `/var/...` and comes back
     // as `/private/var/...`.
     let dropped = canonicalize_or_original(folder.path().to_path_buf());
-    pump_until(cx, "folder drop to dispatch a repository open", || {
+    pump_until(cx, "folder drop to dispatch a repository open", |_| {
         store_for_state
             .snapshot()
             .repos
@@ -3744,7 +3752,9 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(cx, "repository tab to render", |cx| {
+        cx.debug_bounds("repo_tab_1").is_some()
+    });
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -3777,7 +3787,14 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(
+        cx,
+        "splash screen to render after closing the last tab",
+        |cx| {
+            cx.debug_bounds("repository_entry_screen").is_some()
+                && cx.debug_bounds("repo_tab_1").is_none()
+        },
+    );
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -3992,7 +4009,9 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(cx, "repository tab to render", |cx| {
+        cx.debug_bounds("repo_tab_1").is_some()
+    });
 
     let repo_tab_center = cx
         .debug_bounds("repo_tab_1")
@@ -4030,7 +4049,9 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(cx, "removed tab and tooltip to disappear", |cx| {
+        cx.debug_bounds("repo_tab_1").is_none() && test_support::tooltip_text(cx, &view).is_none()
+    });
 
     assert_eq!(
         test_support::tooltip_text(cx, &view),
@@ -4069,7 +4090,9 @@ fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappear
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(cx, "repository tab to render", |cx| {
+        cx.debug_bounds("repo_tab_1").is_some()
+    });
 
     let repo_tab_center = cx
         .debug_bounds("repo_tab_1")
@@ -4105,7 +4128,9 @@ fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappear
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
-    pump_for(cx, Duration::from_millis(120));
+    pump_until(cx, "removed tab and close tooltip to disappear", |cx| {
+        cx.debug_bounds("repo_tab_1").is_none() && test_support::tooltip_text(cx, &view).is_none()
+    });
 
     assert_eq!(
         test_support::tooltip_text(cx, &view),
@@ -5380,7 +5405,7 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
 
     // A clean tree: clicking a file opens the read-only content view.
     click_debug_selector(cx, "file_browser_row_0");
-    pump_until(cx, "file content selection", || {
+    pump_until(cx, "file content selection", |_| {
         store.snapshot().repos[0].diff_state.content_preview
     });
     test_support::redraw(cx);
@@ -5418,7 +5443,7 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
 
     // Rows 0 and 1 are now the pinned section, so `b.rs` sits at tree row 3.
     click_debug_selector(cx, "file_browser_row_3");
-    pump_until(cx, "unsaved file editor selection", || {
+    pump_until(cx, "unsaved file editor selection", |_| {
         store.snapshot().repos[0].diff_state.edit_mode
     });
     test_support::redraw(cx);
@@ -5442,7 +5467,7 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
     });
     sync_view_snapshot(cx, &view);
     click_debug_selector(cx, "file_browser_unsaved_1");
-    pump_until(cx, "pinned file editor selection", || {
+    pump_until(cx, "pinned file editor selection", |_| {
         store.snapshot().repos[0].diff_state.edit_mode
     });
     test_support::redraw(cx);

@@ -19,6 +19,8 @@ use crate::error::{Error, ErrorKind};
 use crate::services::{GitRepository, PullMode, Result};
 use std::path::{Path, PathBuf};
 
+pub mod git_fixture;
+
 fn unsupported<T>() -> Result<T> {
     Err(Error::new(ErrorKind::Unsupported(
         "test repository: this operation is not configured",

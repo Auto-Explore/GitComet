@@ -5,6 +5,7 @@ use gitcomet_core::process::{
 };
 use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{GitBackend, PullMode, RemoteUrlKind};
+use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -27,6 +28,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = git_command()
         .arg("-C")
         .arg(repo)
@@ -44,6 +46,7 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> String {
 }
 
 fn run_git_status(repo: &Path, args: &[&str]) -> std::process::ExitStatus {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     git_command()
         .arg("-C")
         .arg(repo)
@@ -96,136 +99,8 @@ impl Drop for GitExecutablePreferenceGuard {
     }
 }
 
-#[cfg(windows)]
-fn is_git_shell_startup_failure(text: &str) -> bool {
-    text.contains("sh.exe: *** fatal error -")
-        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
-}
-
-#[cfg(windows)]
-fn git_local_push_available_for_remote_management_tests() -> bool {
-    static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let dir = match tempfile::tempdir() {
-            Ok(dir) => dir,
-            Err(_) => return true,
-        };
-        let remote_repo = dir.path().join("probe-remote.git");
-        let work_repo = dir.path().join("probe-work");
-        if fs::create_dir_all(&remote_repo).is_err() || fs::create_dir_all(&work_repo).is_err() {
-            return true;
-        }
-
-        let init_remote = match git_command()
-            .arg("-C")
-            .arg(&remote_repo)
-            .args(["init", "--bare"])
-            .status()
-        {
-            Ok(status) => status.success(),
-            Err(_) => true,
-        };
-        if !init_remote {
-            return true;
-        }
-
-        let init_work = match git_command()
-            .arg("-C")
-            .arg(&work_repo)
-            .args(["init"])
-            .status()
-        {
-            Ok(status) => status.success(),
-            Err(_) => true,
-        };
-        if !init_work {
-            return true;
-        }
-
-        for args in [
-            ["config", "user.email", "you@example.com"].as_slice(),
-            ["config", "user.name", "You"].as_slice(),
-            ["config", "commit.gpgsign", "false"].as_slice(),
-            ["config", "core.autocrlf", "false"].as_slice(),
-            ["config", "core.eol", "lf"].as_slice(),
-        ] {
-            let status = match git_command().arg("-C").arg(&work_repo).args(args).status() {
-                Ok(status) => status,
-                Err(_) => return true,
-            };
-            if !status.success() {
-                return true;
-            }
-        }
-
-        if fs::write(work_repo.join("probe.txt"), "probe\n").is_err() {
-            return true;
-        }
-
-        for args in [
-            ["add", "probe.txt"].as_slice(),
-            ["-c", "commit.gpgsign=false", "commit", "-m", "probe"].as_slice(),
-        ] {
-            let status = match git_command().arg("-C").arg(&work_repo).args(args).status() {
-                Ok(status) => status,
-                Err(_) => return true,
-            };
-            if !status.success() {
-                return true;
-            }
-        }
-
-        let remote_url = git_remote_url(&remote_repo);
-        let add_remote = match git_command()
-            .arg("-C")
-            .arg(&work_repo)
-            .args(["remote", "add", "origin", remote_url.as_str()])
-            .status()
-        {
-            Ok(status) => status.success(),
-            Err(_) => true,
-        };
-        if !add_remote {
-            return true;
-        }
-
-        let push_output = match git_command()
-            .arg("-C")
-            .arg(&work_repo)
-            .args(["push", "-u", "origin", "HEAD"])
-            .output()
-        {
-            Ok(output) => output,
-            Err(_) => return true,
-        };
-
-        if push_output.status.success() {
-            return true;
-        }
-
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&push_output.stdout),
-            String::from_utf8_lossy(&push_output.stderr)
-        );
-        !is_git_shell_startup_failure(&text)
-    })
-}
-
-fn require_git_local_push_for_remote_management_tests() -> bool {
-    #[cfg(windows)]
-    {
-        if !git_local_push_available_for_remote_management_tests() {
-            eprintln!(
-                "skipping remote-management integration test: Git-for-Windows local push shell startup failed in this environment"
-            );
-            return false;
-        }
-    }
-    true
-}
-
 fn configure_repo_with_user(repo: &Path) {
+    // Clones may already contain these keys. Keep Git's replacement semantics.
     run_git(repo, &["config", "user.email", "you@example.com"]);
     run_git(repo, &["config", "user.name", "You"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
@@ -234,8 +109,19 @@ fn configure_repo_with_user(repo: &Path) {
 }
 
 fn init_repo_with_user(repo: &Path) {
-    run_git(repo, &["init"]);
-    configure_repo_with_user(repo);
+    init_repository(repo, |repo| {
+        run_git(repo, &["init"]);
+        append_config(
+            repo,
+            &[
+                ("user.email", "you@example.com"),
+                ("user.name", "You"),
+                ("commit.gpgsign", "false"),
+                ("core.autocrlf", "false"),
+                ("core.eol", "lf"),
+            ],
+        );
+    });
 }
 
 #[test]
@@ -362,9 +248,6 @@ fn remote_management_honors_the_selected_protocol_policy() {
 #[test]
 fn push_with_output_sets_upstream_when_missing() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -422,9 +305,6 @@ fn push_with_output_sets_upstream_when_missing() {
 #[test]
 fn push_with_output_uses_tracked_upstream_when_branch_names_differ() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -480,9 +360,6 @@ fn push_with_output_uses_tracked_upstream_when_branch_names_differ() {
 #[test]
 fn delete_remote_branch_with_output_deletes_remote_and_tracking_ref() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -575,9 +452,6 @@ fn delete_remote_branch_with_output_deletes_remote_and_tracking_ref() {
 #[test]
 fn delete_remote_branches_with_output_deletes_every_branch_in_one_push() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -697,9 +571,6 @@ fn delete_remote_branches_with_output_deletes_every_branch_in_one_push() {
 #[test]
 fn delete_remote_branches_keeps_tracking_refs_when_the_batch_deletes_nothing() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -769,9 +640,6 @@ fn delete_remote_branches_keeps_tracking_refs_when_the_batch_deletes_nothing() {
 #[test]
 fn prune_merged_branches_with_output_reports_noop_when_nothing_to_prune() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -811,9 +679,6 @@ fn prune_merged_branches_with_output_reports_noop_when_nothing_to_prune() {
 #[test]
 fn prune_merged_branches_unlinks_but_keeps_an_unmerged_local_branch() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -891,9 +756,6 @@ fn prune_merged_branches_unlinks_but_keeps_an_unmerged_local_branch() {
 #[test]
 fn fetch_all_variants_prune_deleted_remote_tracking_branches() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1064,9 +926,6 @@ fn fetch_all_variants_prune_deleted_remote_tracking_branches() {
 #[test]
 fn pruning_fetch_preserves_upstreams_outside_a_narrow_fetch_refspec() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1140,9 +999,6 @@ fn pruning_fetch_preserves_upstreams_outside_a_narrow_fetch_refspec() {
 #[test]
 fn push_force_without_output_updates_remote_head_after_rewrite() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1204,9 +1060,6 @@ fn push_force_without_output_updates_remote_head_after_rewrite() {
 #[test]
 fn push_force_with_output_uses_tracked_upstream_when_branch_names_differ() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1274,9 +1127,6 @@ fn push_force_with_output_uses_tracked_upstream_when_branch_names_differ() {
 #[test]
 fn pull_non_output_supports_all_modes_when_upstream_exists() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1357,9 +1207,6 @@ fn pull_non_output_supports_all_modes_when_upstream_exists() {
 #[test]
 fn failed_pruning_pull_unlinks_an_upstream_removed_by_its_fetch_phase() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1422,9 +1269,6 @@ fn failed_pruning_pull_unlinks_an_upstream_removed_by_its_fetch_phase() {
 #[test]
 fn failed_pruning_pull_preserves_an_upstream_whose_tracking_ref_was_already_missing() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let (remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
 
@@ -1474,9 +1318,6 @@ fn failed_pruning_pull_preserves_an_upstream_whose_tracking_ref_was_already_miss
 #[test]
 fn push_without_origin_uses_first_remote_name_for_upstream() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1595,9 +1436,6 @@ fn pull_local_branch_with_pruning_does_not_treat_dot_as_a_named_remote() {
 #[test]
 fn pull_branch_with_output_merges_named_remote_branch() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1693,9 +1531,6 @@ fn pull_branch_with_output_merges_named_remote_branch() {
 #[test]
 fn pruning_pull_preserves_tags_from_explicit_fetch_refspecs() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1769,9 +1604,6 @@ fn pruning_pull_preserves_tags_from_explicit_fetch_refspecs() {
 #[test]
 fn pruning_pull_branch_fetches_a_requested_branch_excluded_by_remote_refspecs() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1879,9 +1711,6 @@ fn pruning_pull_branch_recognizes_a_localized_missing_remote_ref() {
     }
 
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
     let (remote_repo, work_repo) = init_work_repo_with_remote(root, "origin");
@@ -1969,9 +1798,6 @@ exec git "$@"
 #[test]
 fn pruning_pull_branch_merges_the_fetched_oid_when_a_short_ref_is_ambiguous() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -2048,9 +1874,6 @@ fn pruning_pull_branch_merges_the_fetched_oid_when_a_short_ref_is_ambiguous() {
 #[test]
 fn failed_fetch_all_cleans_up_refs_pruned_before_a_later_remote_fails() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -2110,9 +1933,6 @@ fn failed_fetch_all_cleans_up_refs_pruned_before_a_later_remote_fails() {
 #[test]
 fn remote_deletion_preserves_fetch_tracking_when_pushurl_is_different() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -2277,9 +2097,6 @@ fn assert_fetch_all_preserves_upstream_for_skipped_remote(
 #[test]
 fn pruning_fetch_all_preserves_tags_from_explicit_fetch_refspecs() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let (_remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
 
@@ -2319,9 +2136,6 @@ fn pruning_fetch_all_preserves_tags_from_explicit_fetch_refspecs() {
 #[test]
 fn pruning_fetch_all_keeps_upstreams_of_remotes_it_does_not_fetch() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let (_remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
 
@@ -2362,9 +2176,6 @@ fn pruning_fetch_all_keeps_upstreams_of_remotes_it_does_not_fetch() {
 #[test]
 fn pruning_fetch_all_keeps_upstreams_skipped_by_skip_default_update() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     assert_fetch_all_preserves_upstream_for_skipped_remote(
         dir.path(),
@@ -2376,9 +2187,6 @@ fn pruning_fetch_all_keeps_upstreams_skipped_by_skip_default_update() {
 #[test]
 fn pruning_fetch_all_keeps_upstreams_of_unsafe_remote_names_skipped_by_fetch_all() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     assert_fetch_all_preserves_upstream_for_skipped_remote(dir.path(), "a=b", "skipFetchAll");
 }
@@ -2386,9 +2194,6 @@ fn pruning_fetch_all_keeps_upstreams_of_unsafe_remote_names_skipped_by_fetch_all
 #[test]
 fn pruning_pull_refuses_to_retarget_a_deleted_upstream_at_another_branch() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let (remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
 
@@ -2440,9 +2245,6 @@ fn pruning_pull_refuses_to_retarget_a_deleted_upstream_at_another_branch() {
 #[test]
 fn pruning_pull_prunes_inside_the_pull_when_the_remote_only_maps_tracking_refs() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let (_remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
     run_git(
@@ -2469,9 +2271,6 @@ fn pruning_pull_prunes_inside_the_pull_when_the_remote_only_maps_tracking_refs()
 #[test]
 fn pruning_pull_branch_merges_the_pruned_tracking_ref_without_a_second_fetch() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let (remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
 
@@ -2508,9 +2307,6 @@ fn pruning_pull_branch_merges_the_pruned_tracking_ref_without_a_second_fetch() {
 #[test]
 fn pruning_pull_keeps_tags_when_the_remote_name_cannot_be_a_config_key() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let (_remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "a=b");
 
@@ -2542,9 +2338,6 @@ fn pruning_pull_keeps_tags_when_the_remote_name_cannot_be_a_config_key() {
 #[test]
 fn delete_remote_branch_succeeds_when_the_upstream_cleanup_cannot_write_config() {
     let _guard = remote_management_test_lock();
-    if !require_git_local_push_for_remote_management_tests() {
-        return;
-    }
     let dir = tempfile::tempdir().expect("create tempdir");
     let (_remote_repo, work_repo) = init_work_repo_with_remote(dir.path(), "origin");
     run_git(&work_repo, &["checkout", "-q", "-b", "feature"]);

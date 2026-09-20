@@ -2,9 +2,7 @@ use super::*;
 
 #[test]
 fn stage_and_unstage_paths_update_status() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -55,9 +53,7 @@ fn stage_and_unstage_paths_update_status() {
 
 #[test]
 fn unstage_empty_paths_with_head_unstages_all_index_changes() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -102,9 +98,7 @@ fn unstage_empty_paths_with_head_unstages_all_index_changes() {
 
 #[test]
 fn unstage_empty_paths_without_head_unstages_all_added_paths() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -138,9 +132,7 @@ fn unstage_empty_paths_without_head_unstages_all_added_paths() {
 
 #[test]
 fn unstage_paths_without_head_only_unstages_selected_entries() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -168,9 +160,7 @@ fn unstage_paths_without_head_only_unstages_selected_entries() {
 
 #[test]
 fn commit_creates_new_commit_and_cleans_status() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -210,9 +200,7 @@ fn commit_creates_new_commit_and_cleans_status() {
 
 #[test]
 fn reset_soft_moves_head_and_leaves_changes_staged() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -263,9 +251,7 @@ fn reset_soft_moves_head_and_leaves_changes_staged() {
 
 #[test]
 fn reset_mixed_moves_head_and_leaves_changes_unstaged() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -316,9 +302,7 @@ fn reset_mixed_moves_head_and_leaves_changes_unstaged() {
 
 #[test]
 fn reset_hard_moves_head_and_discards_changes() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -369,9 +353,7 @@ fn reset_hard_moves_head_and_discards_changes() {
 
 #[test]
 fn revert_commit_creates_new_commit_and_reverts_content() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -426,9 +408,7 @@ fn revert_commit_creates_new_commit_and_reverts_content() {
 
 #[test]
 fn amend_rewrites_head_commit_message_and_content() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -506,9 +486,7 @@ fn amend_rewrites_head_commit_message_and_content() {
 
 #[test]
 fn merge_creates_merge_commit_when_branches_diverged() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -567,9 +545,7 @@ fn merge_creates_merge_commit_when_branches_diverged() {
 
 #[test]
 fn merge_fast_forwards_when_possible_even_if_merge_ff_is_disabled() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -627,9 +603,7 @@ fn merge_fast_forwards_when_possible_even_if_merge_ff_is_disabled() {
 
 #[test]
 fn squash_ref_stages_changes_without_creating_merge_commit() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -697,9 +671,7 @@ fn squash_ref_stages_changes_without_creating_merge_commit() {
 
 #[test]
 fn merge_commit_message_is_available_during_conflict() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -755,9 +727,7 @@ fn merge_commit_message_is_available_during_conflict() {
 
 #[test]
 fn commit_finishes_merge_when_resolved_tree_matches_head() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -823,9 +793,7 @@ fn commit_finishes_merge_when_resolved_tree_matches_head() {
 
 #[test]
 fn rebase_replays_commits_onto_target_branch() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -896,9 +864,7 @@ fn rebase_replays_commits_onto_target_branch() {
 
 #[test]
 fn rebase_replays_commits_onto_target_sha() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -938,9 +904,7 @@ fn rebase_replays_commits_onto_target_sha() {
 
 #[test]
 fn rebase_in_progress_and_abort_round_trip() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -987,9 +951,7 @@ fn rebase_in_progress_and_abort_round_trip() {
 
 #[test]
 fn rebase_continue_without_in_progress_rebase_returns_error() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1013,9 +975,7 @@ fn rebase_continue_without_in_progress_rebase_returns_error() {
 
 #[test]
 fn rebase_continue_paused_at_next_conflict_is_ok() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1070,9 +1030,7 @@ fn rebase_continue_paused_at_next_conflict_is_ok() {
 
 #[test]
 fn rebase_abort_falls_back_to_git_am_abort() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1143,9 +1101,7 @@ fn rebase_abort_falls_back_to_git_am_abort() {
 
 #[test]
 fn merge_abort_with_output_clears_conflict_state() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1193,9 +1149,7 @@ fn merge_abort_with_output_clears_conflict_state() {
 
 #[test]
 fn create_rename_and_delete_local_branch() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1272,9 +1226,7 @@ fn create_rename_and_delete_local_branch() {
 
 #[test]
 fn create_branch_existing_branch_returns_structured_git_error() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1310,9 +1262,7 @@ fn create_branch_existing_branch_returns_structured_git_error() {
 
 #[test]
 fn create_branch_on_unborn_head_returns_structured_git_error() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1344,9 +1294,7 @@ fn create_branch_on_unborn_head_returns_structured_git_error() {
 
 #[test]
 fn create_branch_error_hints_at_a_refresh_only_for_remote_branch_targets() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1401,9 +1349,7 @@ fn create_branch_error_hints_at_a_refresh_only_for_remote_branch_targets() {
 
 #[test]
 fn create_branch_from_detached_head_using_head_revision() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1445,9 +1391,7 @@ fn create_branch_from_detached_head_using_head_revision() {
 
 #[test]
 fn create_branch_from_annotated_tag_peels_to_commit() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1480,9 +1424,7 @@ fn create_branch_from_annotated_tag_peels_to_commit() {
 
 #[test]
 fn create_branch_from_blob_target_returns_structured_git_error() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1525,9 +1467,7 @@ fn create_branch_from_blob_target_returns_structured_git_error() {
 
 #[test]
 fn create_branch_head_target_reflects_move_after_backend_open() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1564,9 +1504,7 @@ fn create_branch_head_target_reflects_move_after_backend_open() {
 
 #[test]
 fn create_branch_target_branch_created_after_backend_open() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1598,9 +1536,7 @@ fn create_branch_target_branch_created_after_backend_open() {
 
 #[test]
 fn create_branch_succeeds_without_persisted_user_identity() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1639,9 +1575,7 @@ fn create_branch_succeeds_without_persisted_user_identity() {
 
 #[test]
 fn checkout_branch_switches_head_to_target_branch() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1668,9 +1602,7 @@ fn checkout_branch_switches_head_to_target_branch() {
 
 #[test]
 fn create_branch_force_and_checkout_resets_existing_branch_and_checks_it_out() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1756,9 +1688,7 @@ fn repo_with_feature_tracking_another_remote(dir: &Path) -> PathBuf {
 
 #[test]
 fn create_branch_force_and_checkout_clears_existing_upstream_for_any_target() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = repo_with_feature_tracking_another_remote(dir.path());
     let head = run_git_output(&repo, &["rev-parse", "HEAD"]);
@@ -1796,9 +1726,7 @@ fn create_branch_force_and_checkout_clears_existing_upstream_for_any_target() {
 
 #[test]
 fn create_branch_force_and_checkout_never_sets_tracking_for_a_remote_target() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = repo_with_feature_tracking_another_remote(dir.path());
     run_git(&repo, &["branch", "--unset-upstream", "feature"]);
@@ -1822,9 +1750,7 @@ fn create_branch_force_and_checkout_never_sets_tracking_for_a_remote_target() {
 
 #[test]
 fn checkout_remote_branch_overwrite_retargets_upstream_to_the_selected_remote() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = repo_with_feature_tracking_another_remote(dir.path());
 
@@ -1855,9 +1781,7 @@ fn checkout_remote_branch_overwrite_retargets_upstream_to_the_selected_remote() 
 
 #[test]
 fn create_branch_force_and_checkout_creates_missing_branch_and_checks_it_out() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1890,9 +1814,7 @@ fn create_branch_force_and_checkout_creates_missing_branch_and_checks_it_out() {
 
 #[test]
 fn delete_branch_force_removes_unmerged_branch() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1948,9 +1870,7 @@ fn delete_branch_force_removes_unmerged_branch() {
 
 #[test]
 fn delete_branch_force_removes_branch_config_section() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1993,9 +1913,7 @@ fn delete_branch_force_removes_branch_config_section() {
 
 #[test]
 fn delete_branch_force_keeps_branch_config_when_local_config_is_locked() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2050,9 +1968,7 @@ fn delete_branch_force_keeps_branch_config_when_local_config_is_locked() {
 
 #[test]
 fn delete_branch_force_missing_branch_is_structured_git_failure() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2071,11 +1987,21 @@ fn delete_branch_force_missing_branch_is_structured_git_failure() {
     );
 }
 
+fn assert_worktree_error_path(message: &str, expected: &Path) {
+    let reported = message
+        .split_once("used by worktree at '")
+        .and_then(|(_, suffix)| suffix.strip_suffix("'"))
+        .unwrap_or_else(|| panic!("missing worktree path: {message}"));
+    assert_eq!(
+        fs::canonicalize(reported).unwrap(),
+        fs::canonicalize(expected).unwrap(),
+        "unexpected worktree path: {message}"
+    );
+}
+
 #[test]
 fn delete_branch_force_rejects_unborn_current_branch_before_missing_ref_check() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2088,17 +2014,12 @@ fn delete_branch_force_rejects_unborn_current_branch_before_missing_ref_check() 
         .expect_err("unborn checked-out branch must still be treated as in-use");
     assert_git_failure(&err, "git branch -D", GitFailureId::CommandFailed);
     let msg = err.to_string();
-    assert!(
-        msg.contains("used by worktree") && msg.contains(&git_path_arg(repo)),
-        "unexpected delete-branch-force error: {msg}"
-    );
+    assert_worktree_error_path(&msg, repo);
 }
 
 #[test]
 fn delete_branch_force_rejects_branch_checked_out_in_linked_worktree() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     let linked_worktree = dir.path().join("feature-worktree");
@@ -2126,10 +2047,7 @@ fn delete_branch_force_rejects_branch_checked_out_in_linked_worktree() {
         .expect_err("branch checked out in linked worktree must not be deleted");
     assert_git_failure(&err, "git branch -D", GitFailureId::CommandFailed);
     let msg = err.to_string();
-    assert!(
-        msg.contains("used by worktree") && msg.contains(&linked_worktree_arg),
-        "unexpected delete-branch-force error: {msg}"
-    );
+    assert_worktree_error_path(&msg, &linked_worktree);
 
     let still_exists = git_command()
         .arg("-C")
@@ -2145,9 +2063,7 @@ fn delete_branch_force_rejects_branch_checked_out_in_linked_worktree() {
 
 #[test]
 fn delete_branch_force_rejects_branch_checked_out_in_main_worktree_when_opened_from_linked() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     let linked_worktree = dir.path().join("feature-worktree");
@@ -2175,10 +2091,7 @@ fn delete_branch_force_rejects_branch_checked_out_in_main_worktree_when_opened_f
         .expect_err("main-worktree branch use must block deletion from linked worktree");
     assert_git_failure(&err, "git branch -D", GitFailureId::CommandFailed);
     let msg = err.to_string();
-    assert!(
-        msg.contains("used by worktree") && msg.contains(&git_path_arg(repo)),
-        "unexpected delete-branch-force error: {msg}"
-    );
+    assert_worktree_error_path(&msg, repo);
 
     let still_exists = git_command()
         .arg("-C")
@@ -2194,9 +2107,7 @@ fn delete_branch_force_rejects_branch_checked_out_in_main_worktree_when_opened_f
 
 #[test]
 fn cherry_pick_applies_commit_onto_current_branch() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2242,9 +2153,7 @@ fn cherry_pick_applies_commit_onto_current_branch() {
 
 #[test]
 fn interactive_cherry_pick_applies_multiple_commits_in_order() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2306,9 +2215,7 @@ fn interactive_cherry_pick_applies_multiple_commits_in_order() {
 
 #[test]
 fn create_and_delete_local_tag() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2365,9 +2272,7 @@ fn create_and_delete_local_tag() {
 
 #[test]
 fn create_annotated_tag_includes_message() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2427,9 +2332,7 @@ fn create_annotated_tag_includes_message() {
 
 #[test]
 fn create_tag_respects_tag_gpgsign_config() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2488,9 +2391,7 @@ fn create_tag_respects_tag_gpgsign_config() {
 
 #[test]
 fn list_tags_returns_sorted_names_with_commit_targets() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2521,9 +2422,7 @@ fn list_tags_returns_sorted_names_with_commit_targets() {
 
 #[test]
 fn list_remote_tags_collects_sorted_results_and_skips_unavailable_remote() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -2592,9 +2491,7 @@ fn list_remote_tags_collects_sorted_results_and_skips_unavailable_remote() {
 
 #[test]
 fn push_and_delete_remote_tag() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -2646,9 +2543,7 @@ fn push_and_delete_remote_tag() {
 
 #[test]
 fn prune_merged_branches_deletes_local_branches_missing_on_remote() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -2722,9 +2617,7 @@ fn prune_merged_branches_deletes_local_branches_missing_on_remote() {
 
 #[test]
 fn prune_local_tags_deletes_tags_missing_from_remotes() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -2780,9 +2673,7 @@ fn prune_local_tags_deletes_tags_missing_from_remotes() {
 
 #[test]
 fn prune_local_tags_with_output_no_remotes_is_noop() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -2819,9 +2710,7 @@ fn prune_local_tags_with_output_no_remotes_is_noop() {
 
 #[test]
 fn prune_local_tags_with_output_reports_noop_when_all_tags_exist_remotely() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -2866,9 +2755,7 @@ fn prune_local_tags_with_output_reports_noop_when_all_tags_exist_remotely() {
 
 #[test]
 fn list_remote_branches_includes_fetched_remote_tracking_refs() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -2923,9 +2810,7 @@ fn list_remote_branches_includes_fetched_remote_tracking_refs() {
 
 #[test]
 fn checkout_remote_branch_creates_tracking_branch_when_missing_locally() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let seed = dir.path().join("seed");
@@ -2997,9 +2882,7 @@ fn checkout_remote_branch_creates_tracking_branch_when_missing_locally() {
 
 #[test]
 fn checkout_remote_branch_overwrite_resets_existing_branch_and_preserves_compatible_edits() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let seed = dir.path().join("seed");
@@ -3109,9 +2992,7 @@ fn checkout_remote_branch_overwrite_resets_existing_branch_and_preserves_compati
 
 #[test]
 fn checkout_remote_branch_create_refuses_branch_created_after_backend_open() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let seed = dir.path().join("seed");
@@ -3213,9 +3094,7 @@ fn checkout_remote_branch_create_refuses_branch_created_after_backend_open() {
 
 #[test]
 fn checkout_remote_branch_returns_structured_git_error_for_missing_remote_branch() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let repo = dir.path().join("repo");
@@ -3272,9 +3151,7 @@ fn checkout_remote_branch_returns_structured_git_error_for_missing_remote_branch
 
 #[test]
 fn checkout_remote_branch_with_existing_local_branch_and_missing_remote_keeps_head_unchanged() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let seed = dir.path().join("seed");
@@ -3350,9 +3227,7 @@ fn checkout_remote_branch_with_existing_local_branch_and_missing_remote_keeps_he
 
 #[test]
 fn checkout_remote_branch_overwrite_dirty_worktree_failure_keeps_existing_branch() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let seed = dir.path().join("seed");
@@ -3439,9 +3314,7 @@ fn checkout_remote_branch_overwrite_dirty_worktree_failure_keeps_existing_branch
 
 #[test]
 fn push_with_output_updates_remote_head() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -3505,9 +3378,7 @@ fn push_with_output_updates_remote_head() {
 
 #[test]
 fn force_push_with_output_updates_remote_head_after_rewrite() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -3588,9 +3459,7 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
 
 #[test]
 fn pull_with_output_fast_forwards_from_remote() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let repo_a = dir.path().join("repo-a");
@@ -3664,9 +3533,7 @@ fn pull_with_output_fast_forwards_from_remote() {
 
 #[test]
 fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let repo_a = dir.path().join("repo-a");
@@ -3825,9 +3692,7 @@ fn branch_exists(repo: &Path, branch: &str) -> bool {
 
 #[test]
 fn branch_checked_out_in_other_worktree_reports_linked_and_main_worktrees() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let fixture = init_repo_with_linked_worktree(dir.path());
     run_git(&fixture.repo, &["branch", "idle"]);
@@ -3871,9 +3736,7 @@ fn branch_checked_out_in_other_worktree_reports_linked_and_main_worktrees() {
 
 #[test]
 fn branch_checked_out_in_other_worktree_rejects_worktree_from_another_repository() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let fixture = init_repo_with_linked_worktree(dir.path());
 
@@ -3907,9 +3770,7 @@ fn branch_checked_out_in_other_worktree_rejects_worktree_from_another_repository
 
 #[test]
 fn rename_branch_existing_target_returns_structured_git_error() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let fixture = init_repo_with_linked_worktree(dir.path());
     run_git(&fixture.repo, &["branch", "idle"]);
@@ -3929,9 +3790,7 @@ fn rename_branch_existing_target_returns_structured_git_error() {
 
 #[test]
 fn rename_branch_force_replaces_existing_branch_and_follows_head() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     run_git(repo, &["init", "-b", "main"]);
@@ -3967,9 +3826,7 @@ fn rename_branch_force_replaces_existing_branch_and_follows_head() {
 
 #[test]
 fn rename_branch_force_over_current_branch_resets_head_and_deletes_old() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let fixture = init_repo_with_linked_worktree(dir.path());
     run_git(&fixture.repo, &["branch", "old", &fixture.first_commit]);
@@ -3995,9 +3852,7 @@ fn rename_branch_force_over_current_branch_resets_head_and_deletes_old() {
 
 #[test]
 fn rename_branch_force_over_branch_held_by_linked_worktree_from_that_handle_detaches_main() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let fixture = init_repo_with_linked_worktree(dir.path());
 
@@ -4029,9 +3884,7 @@ fn rename_branch_force_over_branch_held_by_linked_worktree_from_that_handle_deta
 
 #[test]
 fn rename_branch_force_over_branch_held_by_other_worktree_from_main_handle_fails_like_git() {
-    if !require_git_shell_for_status_integration_tests() {
-        return;
-    }
+    let _ = ensure_isolated_git_test_env();
     let dir = tempfile::tempdir().unwrap();
     let fixture = init_repo_with_linked_worktree(dir.path());
     run_git(&fixture.repo, &["branch", "idle"]);

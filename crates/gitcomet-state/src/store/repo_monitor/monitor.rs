@@ -21,6 +21,8 @@ pub(super) struct MonitorConfig {
     pub before_registration: Option<Box<dyn FnMut() + Send>>,
     #[cfg(test)]
     pub native_events: Option<Arc<AtomicU64>>,
+    #[cfg(test)]
+    pub native_observations: Option<Arc<NativeObservations>>,
 }
 impl Default for MonitorConfig {
     fn default() -> Self {
@@ -34,6 +36,8 @@ impl Default for MonitorConfig {
             before_registration: None,
             #[cfg(test)]
             native_events: None,
+            #[cfg(test)]
+            native_observations: None,
         }
     }
 }
@@ -109,6 +113,8 @@ impl MonitorState {
         config: &mut MonitorConfig,
         mut reload: bool,
     ) -> Option<(MonitorWatcher, WatchSetupOutcome)> {
+        #[cfg(test)]
+        let _timing = test_sync::WaitTiming::new("registration");
         for attempt in 0..config.setup_passes.max(1) {
             if reload {
                 self.reload(workdir, backend, false);
@@ -131,6 +137,8 @@ impl MonitorState {
                 &[],
                 #[cfg(test)]
                 config.native_events.clone(),
+                #[cfg(test)]
+                config.native_observations.clone(),
             ) {
                 Ok(result) => result,
                 Err(error) => {
@@ -180,6 +188,8 @@ impl MonitorState {
                 &self.plan.boundaries,
                 #[cfg(test)]
                 config.native_events.clone(),
+                #[cfg(test)]
+                config.native_observations.clone(),
             ) {
                 Ok((watcher, failures)) => {
                     self.plan.failures += failures;
@@ -458,6 +468,8 @@ pub(super) fn repo_monitor_thread(
     note_watch_outcome(&msg_tx, repo_id, &mut degraded, outcome);
     let mut last_recovery = degraded.then(Instant::now);
     let mut debouncer = DebouncedChange::new(config.debounce, config.max_delay);
+    #[cfg(test)]
+    let mut drains = Vec::new();
     let mut policy_dirty = false;
     let mut index_dirty = false;
     let mut rebuild = None;
@@ -485,6 +497,19 @@ pub(super) fn repo_monitor_thread(
             #[cfg(test)]
             Ok(MonitorMsg::Barrier(tx)) => {
                 let _ = tx.send(());
+            }
+            #[cfg(test)]
+            Ok(MonitorMsg::Drain(tx)) => drains.push(tx),
+            #[cfg(test)]
+            Ok(MonitorMsg::NativeCheckpoint(reply)) => {
+                let result = if degraded {
+                    Err(SyncError::Unavailable("native coverage is degraded"))
+                } else if let Some(watcher) = &watcher {
+                    watcher.checkpoint()
+                } else {
+                    Err(SyncError::Unavailable("no native watcher"))
+                };
+                let _ = reply.send(result);
             }
             Ok(MonitorMsg::Revalidate) => revalidate = true,
             Ok(MonitorMsg::Event(result)) => {
@@ -575,14 +600,25 @@ pub(super) fn repo_monitor_thread(
         if idle {
             idle_at = now + config.idle_tick;
         }
-        if due_change.is_some() || revalidate || idle {
+        // A test drain can finish already-known work without waiting 30 seconds
+        // for an idle tick. It does not manufacture work or advance debounce.
+        #[cfg(test)]
+        let drain_work = !drains.is_empty()
+            && !debouncer.is_pending()
+            && (policy_dirty || index_dirty || rebuild.is_some());
+        #[cfg(not(test))]
+        let drain_work = false;
+        if due_change.is_some() || revalidate || idle || drain_work {
             if state.inputs.stamps.changed() {
                 policy_dirty = true;
             }
             if state.inputs.indexes.changed() {
                 index_dirty = true;
             }
-            if degraded && recovery_recheck_due(last_recovery, now, config.recovery_interval) {
+            if !drain_work
+                && degraded
+                && recovery_recheck_due(last_recovery, now, config.recovery_interval)
+            {
                 rebuild = Some("recovery");
             }
             let mut loaded = false;
@@ -652,6 +688,21 @@ pub(super) fn repo_monitor_thread(
                 flush(change);
             }
         }
+        #[cfg(test)]
+        if !debouncer.is_pending() && !policy_dirty && !index_dirty && rebuild.is_none() {
+            for request in drains.drain(..) {
+                request.finish(
+                    watcher
+                        .as_ref()
+                        .map(|watcher| watcher.test_state.generation),
+                    !degraded && watcher.is_some(),
+                );
+            }
+        }
     }
     monitor_enabled.store(false, Ordering::Relaxed);
+    #[cfg(test)]
+    for request in drains {
+        let _ = request.reply.send(Err(SyncError::Stopped));
+    }
 }
