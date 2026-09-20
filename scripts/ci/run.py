@@ -83,6 +83,7 @@ def stop_process_tree(process):
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
+            # The process group may have already exited; this race is safe to ignore.
             pass
     process.wait(timeout=10)
 

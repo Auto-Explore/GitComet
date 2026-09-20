@@ -247,7 +247,9 @@ fn native_sync_ntfs_cookies_cover_all_roots_without_git_or_callback_noise() {
     use std::io::Write;
     let (_temp, root) = repository();
     let linked_temp = unique_temp_dir("gitcomet-ntfs-linked");
-    let linked = linked_temp.path().join("checkout");
+    // TEMP can contain an 8.3 alias such as RUNNER~1. Match the monitor's
+    // canonical paths when asserting that a specific write was observed.
+    let linked = normalized(&linked_temp.path().canonicalize().unwrap()).join("checkout");
     run_git(
         &root,
         &[
@@ -280,12 +282,12 @@ fn native_sync_ntfs_cookies_cover_all_roots_without_git_or_callback_noise() {
         // an earlier round or a worktree-only refresh cannot satisfy this test.
         assert!(
             monitor.observations.has_path_since(after, &source),
-            "worktree event missed checkpoint: {:?}",
+            "worktree event for {source:?} missed checkpoint: {:?}",
             monitor.observations
         );
         assert!(
             monitor.observations.has_path_since(after, &metadata),
-            "Git-directory event missed checkpoint: {:?}",
+            "Git-directory event for {metadata:?} missed checkpoint: {:?}",
             monitor.observations
         );
         assert!(matches!(
