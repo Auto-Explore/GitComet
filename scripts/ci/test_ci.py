@@ -5,6 +5,7 @@ from contextlib import redirect_stdout
 from functools import partial
 import importlib.util
 import io
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -172,16 +173,36 @@ class CacheTests(unittest.TestCase):
 
 
 class RunnerTests(unittest.TestCase):
-    def test_unix_balanced_schedule_splits_cpus_and_falls_back_on_one_cpu(self):
-        packages = {"core": "gitcomet-core", "ui": runner.UI}
-        suites = {"core": {"package-id": "core", "binary-name": "gitcomet_core", "testcases": {"required": {"ignored": False}}},
-                  "ui": {"package-id": "ui", "binary-name": "gitcomet_ui_gpui"}}
-        for cpus, include_ui in ((1, True), (3, True), (4, True), (4, False)):
-            with self.subTest(cpus=cpus, include_ui=include_ui), tempfile.TemporaryDirectory() as directory, \
-                    patch.object(runner, "REPORTS", Path(directory)), patch.object(runner.sys, "platform", "linux"), \
+    @staticmethod
+    def git_integration_suites():
+        targets = {
+            "gitcomet": ("difftool_git_integration", "mergetool_git_integration", "standalone_tool_mode_integration"),
+            "gitcomet-git-gix": ("submodules_integration", "remote_management_integration", "status_integration",
+                                 "refs_integration", "upstream_integration", "upstream_divergence_integration", "log_integration"),
+        }
+        return {name: {"package-id": package, "binary-name": name, "testcases": {"required": {"ignored": False}}}
+                for package, names in targets.items() for name in names}
+
+    @staticmethod
+    def write_junit(path, suites):
+        path.write_text('<testsuites>' + ''.join(
+            f'<testsuite name="{name}"><testcase name="required"/></testsuite>' for name in suites
+        ) + '</testsuites>')
+
+    def test_schedules_share_routing_and_cpu_budgets_on_every_platform(self):
+        packages = {name: name for name in ("gitcomet", "gitcomet-git-gix", "gitcomet-core", runner.UI)}
+        nextest_suites = self.git_integration_suites()
+        nextest_suites["core"] = {"package-id": "gitcomet-core", "binary-name": "gitcomet_core", "testcases": {"required": {"ignored": False}}}
+        ui_suites = {"ui": {"package-id": runner.UI, "binary-name": "gitcomet_ui_gpui"}}
+        for platform_name, schedule, (cpus, group) in product(
+                ("linux", "darwin", "win32"), ("serial", "balanced"),
+                ((1, "both"), (3, "both"), (4, "both"), (4, "nextest"), (4, "libtest"))):
+            with self.subTest(platform=platform_name, schedule=schedule, cpus=cpus, group=group), \
+                    tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                    patch.object(runner.sys, "platform", platform_name), \
                     patch.object(runner.os, "cpu_count", return_value=cpus):
-                selected = suites if include_ui else {"core": suites["core"]}
-                parallel = cpus > 1 and include_ui
+                selected = (nextest_suites | ui_suites) if group == "both" else nextest_suites if group == "nextest" else ui_suites
+                parallel = schedule == "balanced" and cpus > 1 and group == "both"
                 target = Path(directory)
                 (target / "workspace").mkdir()
                 (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
@@ -189,31 +210,34 @@ class RunnerTests(unittest.TestCase):
                 barrier, completed = threading.Barrier(2), []
 
                 def run_nextest(name, command, **kwargs):
+                    self.assertNotEqual(group, "libtest")
+                    self.assertEqual(command[command.index("-E") + 1], f"not package(={runner.UI})")
                     if parallel:
                         self.assertEqual(command[-2:], ["--test-threads", str(cpus - max(1, cpus // 2))])
                         barrier.wait(timeout=5)
                     else:
                         self.assertNotIn("--test-threads", command)
-                    (target / "nextest/ci/junit.xml").write_text('<testsuites><testsuite name="core"><testcase name="required"/></testsuite></testsuites>')
+                    self.write_junit(target / "nextest/ci/junit.xml", nextest_suites)
                     completed.append("nextest")
                     return 0
 
                 def run_ui(context, binary, suite, **kwargs):
+                    self.assertEqual(binary, "ui", "Git integration suites must run through nextest")
                     if parallel:
                         self.assertEqual(kwargs["threads"], max(1, cpus // 2))
                         barrier.wait(timeout=5)
                     else:
-                        self.assertEqual(completed, ["nextest"])
-                        self.assertIsNone(kwargs["threads"])
+                        self.assertEqual(completed, [] if group == "libtest" else ["nextest"])
+                        self.assertIsNone(kwargs.get("threads"))
                     completed.append("ui")
                     return 0
 
-                select = partial(runner.uses_libtest, platform_name="linux")
-                with patch.object(runner, "uses_libtest", select), patch.object(runner, "package_names", return_value=packages), \
+                with patch.object(runner, "package_names", return_value=packages), \
                         patch.object(runner, "inventory", return_value={"rust-suites": selected}), \
                         patch.object(runner, "run", side_effect=run_nextest), patch.object(runner, "run_suite", side_effect=run_ui):
-                    runner.execute("workspace", "balanced")
-                self.assertCountEqual(completed, ["nextest", "ui"] if include_ui else ["nextest"])
+                    runner.execute("workspace", schedule)
+                expected = ["nextest", "ui"] if group == "both" else ["nextest"] if group == "nextest" else ["ui"]
+                self.assertCountEqual(completed, expected)
                 execution = json.loads((target / "workspace/execution.json").read_text())
                 self.assertTrue(execution["success"])
                 self.assertEqual(execution["effective_schedule"], "balanced" if parallel else "serial")
@@ -246,51 +270,51 @@ class RunnerTests(unittest.TestCase):
             self.assertTrue(timing["cancelled"])
             self.assertEqual(timing["returncode"], 130)
 
-    def test_balanced_windows_schedule_bounds_threads_and_keeps_exclusive_suites(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
-                patch.object(runner.sys, "platform", "win32"), patch.object(runner.os, "cpu_count", return_value=4):
-            packages = {"git": "gitcomet-git-gix", "ui": runner.UI}
-            names = ["status_integration", "mergetool_git_integration", "submodules_integration", "gitcomet_ui_gpui"]
-            suites = {name: {"binary-name": name, "package-id": "ui" if name == names[-1] else "git"} for name in names}
-            lock, barrier = threading.Lock(), threading.Barrier(2)
-            active, completed, peak = set(), [], []
+    def test_failed_runner_does_not_skip_other_tests_on_any_platform(self):
+        packages = {"core": "gitcomet-core", "ui": runner.UI}
+        suites = {"core": {"package-id": "core", "binary-name": "gitcomet_core", "testcases": {"required": {"ignored": False}}},
+                  "ui": {"package-id": "ui", "binary-name": "gitcomet_ui_gpui"}}
+        for platform_name, schedule, failed in product(("linux", "darwin", "win32"), ("serial", "balanced"), ("nextest", "ui")):
+            with self.subTest(platform=platform_name, schedule=schedule, failed=failed), \
+                    tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
+                    patch.object(runner.sys, "platform", platform_name), patch.object(runner.os, "cpu_count", return_value=4):
+                target = Path(directory)
+                (target / "workspace").mkdir()
+                (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
+                (target / "nextest/ci").mkdir(parents=True)
+                completed = []
 
-            def run_suite(context, binary, suite, **kwargs):
-                concurrent = binary in names[:2]
-                with lock:
-                    if not concurrent:
-                        self.assertFalse(active, "exclusive suite overlapped another suite")
-                        self.assertTrue(all(name in completed for name in names[:2]))
-                    active.add(binary)
-                    peak.append(len(active))
-                if concurrent:
-                    self.assertEqual(kwargs["threads"], 1)
-                    barrier.wait(timeout=5)
-                elif binary == "submodules_integration":
-                    self.assertEqual(kwargs["threads"], 1)
-                else:
-                    self.assertIsNone(kwargs["threads"])
-                with lock:
-                    active.remove(binary)
-                    completed.append(binary)
-                return 1 if binary == "status_integration" else 0
+                def run_nextest(*args, **kwargs):
+                    self.write_junit(target / "nextest/ci/junit.xml", ["core"])
+                    completed.append("nextest")
+                    return 100 if failed == "nextest" else 0
 
-            select = partial(runner.uses_libtest, platform_name="win32")
-            with patch.object(runner, "uses_libtest", select), patch.object(runner, "package_names", return_value=packages), \
-                    patch.object(runner, "inventory", return_value={"rust-suites": suites}), patch.object(runner, "run_suite", side_effect=run_suite):
-                with self.assertRaisesRegex(RuntimeError, "test execution failed"):
-                    runner.execute("workspace", "balanced")
-            self.assertEqual(max(peak), 2)
-            self.assertCountEqual(completed, names, "one failed suite must not skip the rest")
-            self.assertFalse(json.loads((Path(directory) / "workspace/execution.json").read_text())["success"])
+                def run_ui(*args, **kwargs):
+                    completed.append("ui")
+                    return 1 if failed == "ui" else 0
 
-    def test_windows_git_suites_preserve_shared_setup_and_mutexes(self):
-        for name in ("mergetool_git_integration", "status_integration", "refs_integration",
-                     "upstream_integration", "upstream_divergence_integration", "log_integration"):
-            suite = {"binary-name": name}
-            self.assertTrue(runner.uses_libtest("gitcomet-git-gix", suite, "win32"))
-            self.assertFalse(runner.uses_libtest("gitcomet-git-gix", suite, "linux"))
-        self.assertFalse(runner.uses_libtest("gitcomet-core", {"binary-name": "gitcomet_core"}, "win32"))
+                with patch.object(runner, "package_names", return_value=packages), \
+                        patch.object(runner, "inventory", return_value={"rust-suites": suites}), \
+                        patch.object(runner, "run", side_effect=run_nextest), patch.object(runner, "run_suite", side_effect=run_ui):
+                    with self.assertRaisesRegex(RuntimeError, "test execution failed"):
+                        runner.execute("workspace", schedule)
+                self.assertCountEqual(completed, ["nextest", "ui"], "one failed runner must not skip the rest")
+                self.assertFalse(json.loads((target / "workspace/execution.json").read_text())["success"])
+
+    def test_all_git_integration_suites_require_nextest_results_on_every_platform(self):
+        suites = self.git_integration_suites()
+        packages = {name: name for name in ("gitcomet", "gitcomet-git-gix")}
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)):
+            junit = Path(directory) / "junit.xml"
+            for platform_name in ("linux", "darwin", "win32"):
+                with self.subTest(platform=platform_name), patch.object(runner.sys, "platform", platform_name):
+                    self.write_junit(junit, suites)
+                    runner.check_nextest_results("workspace", suites, packages, junit)
+                    for missing in suites:
+                        with self.subTest(missing=missing):
+                            self.write_junit(junit, [name for name in suites if name != missing])
+                            with self.assertRaisesRegex(RuntimeError, "1 missing, 0 unexpected"):
+                                runner.check_nextest_results("workspace", suites, packages, junit)
 
     def test_silent_timeout_kills_descendants_and_records_failure(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
@@ -365,6 +389,20 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "matches no tests"):
             runner.run_suite("app", "app::smoke", suite, test_filter="misspelled", exact=True)
 
+    def test_libtest_uses_default_or_requested_threads_on_every_platform(self):
+        suite = {"binary-path": "unused", "cwd": runner.ROOT, "testcases": {"required": {"ignored": False}}}
+        for platform_name, threads in product(("linux", "darwin", "win32"), (None, 3)):
+            with self.subTest(platform=platform_name, threads=threads), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(runner, "REPORTS", Path(directory)), patch.object(runner.sys, "platform", platform_name), \
+                    patch.object(runner, "suite_env", return_value={}), patch.object(runner, "run", return_value=0) as run:
+                (Path(directory) / "workspace-ui-all.log").write_text("test result: ok. 1 passed; 0 failed;\n")
+                self.assertEqual(runner.run_suite("workspace", "ui", suite, threads=threads), 0)
+                command = run.call_args.args[1]
+                if threads is None:
+                    self.assertNotIn("--test-threads", command)
+                else:
+                    self.assertEqual(command[-2:], ["--test-threads", str(threads)])
+
     def test_ignored_or_unreported_test_is_not_counted_as_executed(self):
         suites = {"core": {"package-id": "core", "binary-name": "gitcomet_core",
                            "testcases": {"required": {"ignored": False}}}}
@@ -372,8 +410,7 @@ class RunnerTests(unittest.TestCase):
             junit = Path(directory) / "junit.xml"
             junit.write_text('<testsuites><testsuite name="core"><testcase name="required"><skipped/></testcase></testsuite></testsuites>')
             for platform_name in ("linux", "darwin", "win32"):
-                select_runner = partial(runner.uses_libtest, platform_name=platform_name)
-                with self.subTest(platform=platform_name), patch.object(runner, "uses_libtest", select_runner):
+                with self.subTest(platform=platform_name), patch.object(runner.sys, "platform", platform_name):
                     with self.assertRaisesRegex(RuntimeError, "coverage mismatch"):
                         runner.check_nextest_results("core", suites, {"core": "gitcomet-core"}, junit)
 
@@ -388,8 +425,7 @@ class RunnerTests(unittest.TestCase):
             junit = Path(directory) / "junit.xml"
             junit.write_text('<testsuites><testsuite name="core"><testcase name="required"/></testsuite></testsuites>')
             for platform_name in ("linux", "darwin", "win32"):
-                select_runner = partial(runner.uses_libtest, platform_name=platform_name)
-                with self.subTest(platform=platform_name), patch.object(runner, "uses_libtest", select_runner):
+                with self.subTest(platform=platform_name), patch.object(runner.sys, "platform", platform_name):
                     runner.check_nextest_results("workspace", suites, {"core": "gitcomet-core", "ui": runner.UI}, junit)
 
     def test_successful_nextest_exit_cannot_hide_git_prerequisite_skip(self):
@@ -401,8 +437,7 @@ class RunnerTests(unittest.TestCase):
                              '<system-err>skipping status integration test: Git-for-Windows shell startup failed</system-err>'
                              '</testcase></testsuite></testsuites>')
             for platform_name in ("linux", "darwin", "win32"):
-                select_runner = partial(runner.uses_libtest, platform_name=platform_name)
-                with self.subTest(platform=platform_name), patch.object(runner, "uses_libtest", select_runner):
+                with self.subTest(platform=platform_name), patch.object(runner.sys, "platform", platform_name):
                     with self.assertRaisesRegex(RuntimeError, "required Git test did not run"):
                         runner.check_nextest_results("core", suites, {"core": "gitcomet-core"}, junit)
 

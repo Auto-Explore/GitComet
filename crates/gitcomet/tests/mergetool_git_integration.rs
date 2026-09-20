@@ -1,8 +1,5 @@
 use gitcomet_core::process::background_command as no_window_command;
-use gitcomet_core::test_support::git_fixture::{
-    FixtureTimer, RepositorySeed, append_config, init_repository,
-};
-use std::sync::OnceLock;
+use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
 #[path = "support/test_git_env.rs"]
@@ -144,8 +141,7 @@ fn write_file(repo: &Path, rel: &str, contents: &str) {
 }
 
 fn init_repo(repo: &Path) {
-    static SEED: OnceLock<RepositorySeed> = OnceLock::new();
-    init_repository(repo, &SEED, |repo| {
+    init_repository(repo, |repo| {
         run_git(repo, &["init", "-b", "main"]);
         append_config(
             repo,

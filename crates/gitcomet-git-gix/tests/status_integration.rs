@@ -6,9 +6,7 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::{CancellationToken, CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::services::{ConflictSide, InteractiveRebaseAction, InteractiveRebaseEntry};
-use gitcomet_core::test_support::git_fixture::{
-    FixtureTimer, RepositorySeed, append_config, init_repository,
-};
+use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::io::Write;
@@ -287,8 +285,7 @@ fn set_unmerged_stages(
 }
 
 fn init_conflict_fixture(repo: &Path) {
-    static SEED: OnceLock<RepositorySeed> = OnceLock::new();
-    init_repository(repo, &SEED, |repo| {
+    init_repository(repo, |repo| {
         run_git(repo, &["init"]);
         append_config(
             repo,

@@ -2,9 +2,7 @@ use gitcomet_core::domain::{
     CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind, SubmoduleStatus,
 };
 use gitcomet_core::services::{GitBackend, SubmoduleTrustDecision};
-use gitcomet_core::test_support::git_fixture::{
-    FixtureTimer, RepositorySeed, append_config, init_repository,
-};
+use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -138,8 +136,7 @@ fn create_stale_submodule_git_dir(
 }
 
 fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
-    static SEED: OnceLock<RepositorySeed> = OnceLock::new();
-    init_repository(repo, &SEED, |repo| {
+    init_repository(repo, |repo| {
         run_git(repo, &["init"]);
         append_config(
             repo,

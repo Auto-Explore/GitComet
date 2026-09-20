@@ -25,23 +25,6 @@ failure-output = "immediate-final"
 path = "junit.xml"
 store-success-output = true
 
-[test-groups]
-windows-git-shell = { max-threads = 2 }
-windows-submodule = { max-threads = 1 }
-
-# Git for Windows can fail to create its signal pipe under excessive shell
-# concurrency. These limits span binaries/processes, unlike a static Mutex.
-[[profile.ci.overrides]]
-platform = "cfg(windows)"
-filter = 'binary(submodules_integration)'
-test-group = "windows-submodule"
-threads-required = 2
-
-[[profile.ci.overrides]]
-platform = "cfg(windows)"
-filter = 'package(gitcomet) | package(gitcomet-git-gix) | (package(gitcomet-core) & test(/^merge_extraction::tests::/)) | (package(gitcomet-state) & test(clone_repo_effect))'
-test-group = "windows-git-shell"
-
 [[profile.ci.overrides]]
 filter = 'binary(git_cli_scoreboard)'
 success-output = "immediate"

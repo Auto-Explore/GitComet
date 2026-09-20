@@ -1,8 +1,5 @@
 use gitcomet_core::process::background_command as no_window_command;
-use gitcomet_core::test_support::git_fixture::{
-    FixtureTimer, RepositorySeed, append_config, init_repository,
-};
-use std::sync::OnceLock;
+use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
 #[path = "support/gitcomet_bin.rs"]
 mod gitcomet_test_bin;
 use gitcomet_test_bin::gitcomet_bin;
@@ -2386,8 +2383,7 @@ fn setup_e2e_git_capture(repo: &Path, args: &[&str]) -> Output {
 
 /// Initialize a git repo with user config for tests.
 fn setup_e2e_init(repo: &Path) {
-    static SEED: OnceLock<RepositorySeed> = OnceLock::new();
-    init_repository(repo, &SEED, |repo| {
+    init_repository(repo, |repo| {
         setup_e2e_git(repo, &["init", "-b", "main"]);
         append_config(
             repo,

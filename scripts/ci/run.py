@@ -36,23 +36,15 @@ DISPLAY_PROFILES = {
     "wayland-gnome": ("", "wayland-1", "wayland", "GNOME"),
     "wayland-kde": ("", "wayland-1", "wayland", "KDE"),
 }
-WINDOWS_LIBTEST_BINARIES = {
-    "mergetool_git_integration", "difftool_git_integration",
-    "standalone_tool_mode_integration", "submodules_integration",
-    "remote_management_integration",
-    "status_integration", "refs_integration", "upstream_integration",
-    "upstream_divergence_integration", "log_integration",
-}
 GIT_PREREQUISITE_SKIP = re.compile(
     r"\bskipping\b[^\n]*(?:Git-for-Windows|(?:git|posix|sh).*shell|shell.*(?:unavailable|startup))",
     re.IGNORECASE,
 )
 
 
-def uses_libtest(package, suite, platform_name=sys.platform):
-    # Share isolated Git environments and preserve process-local suite mutexes.
-    # Run shell-heavy binaries sequentially, with bounded test concurrency.
-    return package == UI or (platform_name == "win32" and suite["binary-name"] in WINDOWS_LIBTEST_BINARIES)
+def uses_libtest(package):
+    # Run the GPUI harness in one process on every platform.
+    return package == UI
 
 
 def record(name, duration, returncode, **details):
@@ -203,7 +195,7 @@ def compile_tests(context, profile):
         for name, test in suite["testcases"].items():
             entries.append(dict(package=package, binary=binary_id, test=name,
                                 ignored=test["ignored"],
-                                runner="libtest" if uses_libtest(package, suite) else "nextest"))
+                                runner="libtest" if uses_libtest(package) else "nextest"))
     if not entries:
         raise RuntimeError(f"No tests discovered for {context}")
     (directory / "coverage.json").write_text(json.dumps({
@@ -242,8 +234,6 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
     command = [suite["binary-path"], "--nocapture"]
     if threads is not None:
         command += ["--test-threads", str(threads)]
-    elif sys.platform == "win32" and suite["binary-name"] in WINDOWS_LIBTEST_BINARIES:
-        command += ["--test-threads", "2"]
     if test_filter:
         command += [test_filter]
     if exact:
@@ -266,7 +256,7 @@ def run_suite(context, binary_id, suite, *, test_filter=None, exact=False, env_o
 
 def check_nextest_results(context, suites, packages, junit):
     expected = {(binary_id, name) for binary_id, suite in suites.items()
-                if not uses_libtest(packages[suite["package-id"]], suite)
+                if not uses_libtest(packages[suite["package-id"]])
                 for name, test in suite["testcases"].items() if not test["ignored"]}
     xml = ET.parse(junit)
     for case in xml.iter("testcase"):
@@ -311,16 +301,13 @@ def execute(context, schedule="serial"):
     codes = []
 
     def nextest(*, cancel=None, live=True, threads=None):
-        if not any(not uses_libtest(packages[suite["package-id"]], suite) for suite in suites.values()):
+        if not any(not uses_libtest(packages[suite["package-id"]]) for suite in suites.values()):
             return 0
         build = json.loads((paths(context) / "binaries.json").read_text(encoding="utf-8"))
         junit = Path(build["rust-build-meta"]["target-directory"]) / "nextest/ci/junit.xml"
         junit.unlink(missing_ok=True)
-        excluded = [f"package(={UI})"]
-        if sys.platform == "win32":
-            excluded += [f"binary(={name})" for name in sorted(WINDOWS_LIBTEST_BINARIES)]
         command = ["cargo", "nextest", "run", *reuse_args(context), "--profile", "ci",
-                   "--ignore-default-filter", "-E", "not (" + " | ".join(excluded) + ")", "--no-fail-fast"]
+                   "--ignore-default-filter", "-E", f"not package(={UI})", "--no-fail-fast"]
         if threads is not None:
             command += ["--test-threads", str(threads)]
         code = run(f"{context}-nextest", command, check=False, live=live, cancel=cancel)
@@ -332,8 +319,8 @@ def execute(context, schedule="serial"):
         return code
 
     libtest = [(binary_id, suite) for binary_id, suite in suites.items()
-               if uses_libtest(packages[suite["package-id"]], suite)]
-    if not libtest or (sys.platform != "win32" and len(libtest) == len(suites)):
+               if uses_libtest(packages[suite["package-id"]])]
+    if not libtest or len(libtest) == len(suites):
         # Package-only contexts have nothing to overlap. Keep their full budget.
         balanced = False
     ui_threads = max(1, cpus // 2)
@@ -345,26 +332,12 @@ def execute(context, schedule="serial"):
 
     succeeded = False
     try:
-        if balanced and sys.platform != "win32":
+        if balanced:
             codes.extend(run_parallel([partial(nextest, threads=cpus - ui_threads), ui]))
         else:
             codes.append(nextest())
-            if balanced:
-                order = ["mergetool_git_integration", "standalone_tool_mode_integration",
-                         "status_integration", "remote_management_integration", "difftool_git_integration",
-                         "log_integration", "refs_integration", "upstream_integration", "upstream_divergence_integration"]
-                concurrent = [(binary_id, suite) for binary_id, suite in libtest
-                              if suite["binary-name"] in WINDOWS_LIBTEST_BINARIES
-                              and suite["binary-name"] != "submodules_integration"]
-                concurrent.sort(key=lambda item: (order.index(item[1]["binary-name"])
-                                if item[1]["binary-name"] in order else len(order), item[0]))
-                codes.extend(run_parallel([partial(run_suite, context, binary_id, suite, threads=1)
-                                           for binary_id, suite in concurrent]))
-                assigned = {binary_id for binary_id, _ in concurrent}
-                libtest = [(binary_id, suite) for binary_id, suite in libtest if binary_id not in assigned]
             for binary_id, suite in libtest:
-                threads = 1 if balanced and suite["binary-name"] == "submodules_integration" else None
-                codes.append(run_suite(context, binary_id, suite, threads=threads))
+                codes.append(run_suite(context, binary_id, suite))
         if any(codes):
             raise RuntimeError(f"{context}: test execution failed")
         succeeded = True
