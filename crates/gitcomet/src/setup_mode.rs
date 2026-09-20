@@ -989,7 +989,6 @@ pub fn run_uninstall(dry_run: bool, local: bool) -> Result<UninstallResult, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(windows))]
     use std::fs;
 
     fn count_occurrences(haystack: &str, needle: &str) -> usize {
