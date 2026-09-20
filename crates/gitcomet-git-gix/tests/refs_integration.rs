@@ -1,5 +1,8 @@
 use gitcomet_core::domain::{Upstream, UpstreamDivergence};
 use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend};
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, LinearCommit, append_config, import_linear_history,
+};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
@@ -13,6 +16,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -32,15 +36,28 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> String {
 fn initialize_repo_with_commit(repo: &Path) {
     fs::create_dir_all(repo).unwrap();
     run_git(repo, &["init", "-b", "main"]);
-    run_git(repo, &["config", "user.email", "you@example.com"]);
-    run_git(repo, &["config", "user.name", "You"]);
-    run_git(repo, &["config", "commit.gpgsign", "false"]);
-    fs::write(repo.join("file.txt"), "base\n").unwrap();
-    run_git(repo, &["add", "file.txt"]);
-    run_git(
+    append_config(
         repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
     );
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo);
+    import_linear_history(
+        &mut cmd,
+        "main",
+        [LinearCommit {
+            author: "You <you@example.com>",
+            timestamp: 1_600_000_000,
+            message: "base",
+            path: "file.txt",
+            contents: "base\n",
+        }],
+    );
+    run_git(repo, &["reset", "--hard", "main"]);
 }
 
 fn upstream(remote: &str, branch: &str) -> Upstream {
@@ -240,9 +257,14 @@ fn list_branches_reports_upstream_and_divergence() {
     run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
 
     run_git(&work_repo, &["init", "-b", "main"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     let origin_url = git_remote_url(&remote_repo);
     run_git(
         &work_repo,
@@ -349,9 +371,14 @@ fn list_branches_gone_upstream_is_exposed_as_untracked() {
     run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
 
     run_git(&work_repo, &["init", "-b", "main"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     let origin_url = git_remote_url(&remote_repo);
     run_git(
         &work_repo,
@@ -403,9 +430,14 @@ fn list_branches_reflects_new_upstream_without_reopen() {
     run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
 
     run_git(&work_repo, &["init", "-b", "main"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     let origin_url = git_remote_url(&remote_repo);
     run_git(
         &work_repo,
@@ -466,9 +498,14 @@ fn list_branches_reflects_tracking_upstream_set_without_push() {
     run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
 
     run_git(&work_repo, &["init", "-b", "main"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     let origin_url = git_remote_url(&remote_repo);
     run_git(
         &work_repo,
@@ -542,9 +579,14 @@ fn set_upstream_can_configure_a_remote_branch_before_its_first_push() {
 
     run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
     run_git(&work_repo, &["init", "-b", "main"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     let origin_url = git_remote_url(&remote_repo);
     run_git(
         &work_repo,
@@ -657,9 +699,14 @@ fn fetching_a_pending_upstream_that_now_exists_clears_the_pending_marker() {
 
     run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
     run_git(&work_repo, &["init", "-b", "main"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     let origin_url = git_remote_url(&remote_repo);
     run_git(
         &work_repo,
@@ -736,9 +783,14 @@ fn list_branches_reflects_repeated_tracking_toggles_on_same_repo_instance() {
     run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
 
     run_git(&work_repo, &["init", "-b", "main"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     let origin_url = git_remote_url(&remote_repo);
     run_git(
         &work_repo,
@@ -819,9 +871,14 @@ fn list_branches_preserves_nested_upstream_branch_names() {
     run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
 
     run_git(&work_repo, &["init", "-b", "main"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     let origin_url = git_remote_url(&remote_repo);
     run_git(
         &work_repo,
@@ -889,9 +946,14 @@ fn list_branches_reflects_removed_upstream_without_reopen() {
     run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
 
     run_git(&work_repo, &["init", "-b", "main"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     let origin_url = git_remote_url(&remote_repo);
     run_git(
         &work_repo,

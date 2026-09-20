@@ -2,6 +2,7 @@ use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{
     GitBackend, PullMode, SafePushAfterCommitContext, SafePushAfterCommitDecision,
 };
+use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -54,6 +55,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = git_command_for_repo(repo)
         .args(args)
         .output()
@@ -85,9 +87,14 @@ fn push_without_upstream_sets_upstream() {
     run_git(&remote_repo, &["init", "--bare"]);
 
     run_git(&work_repo, &["init"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     run_git(
         &work_repo,
         &[
@@ -137,9 +144,14 @@ fn pull_without_upstream_sets_upstream() {
     run_git(&remote_repo, &["init", "--bare"]);
 
     run_git(&work_repo, &["init"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     run_git(
         &work_repo,
         &[
@@ -210,9 +222,14 @@ fn safe_push_after_published_amend_blocks_and_offers_lease() {
 
     run_git(&remote_repo, &["init", "--bare"]);
     run_git(&work_repo, &["init"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     let branch = run_git_capture(&work_repo, &["branch", "--show-current"])
         .trim()
         .to_string();
@@ -329,9 +346,14 @@ fn safe_push_after_commit_without_upstream_sets_upstream_for_new_branch() {
 
     run_git(&remote_repo, &["init", "--bare"]);
     run_git(&work_repo, &["init"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     run_git(
         &work_repo,
         &[
@@ -393,9 +415,14 @@ fn push_after_commit_checked_push_rejects_stale_branch_and_head() {
 
     run_git(&remote_repo, &["init", "--bare"]);
     run_git(&work_repo, &["init"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     run_git(
         &work_repo,
         &[
@@ -471,9 +498,14 @@ fn safe_push_after_commit_rejects_branch_change_before_decision() {
 
     run_git(&remote_repo, &["init", "--bare"]);
     run_git(&work_repo, &["init"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     run_git(
         &work_repo,
         &[
@@ -539,9 +571,14 @@ fn safe_push_after_amend_blocks_when_remote_advanced_without_conflicting_worktre
 
     run_git(&remote_repo, &["init", "--bare"]);
     run_git(&work_repo, &["init"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     run_git(
         &work_repo,
         &[
@@ -640,9 +677,14 @@ fn safe_push_after_commit_remote_advance_does_not_refresh_force_lease_tracking_r
 
     run_git(&remote_repo, &["init", "--bare"]);
     run_git(&work_repo, &["init"]);
-    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
-    run_git(&work_repo, &["config", "user.name", "You"]);
-    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    append_config(
+        &work_repo,
+        &[
+            ("user.email", "you@example.com"),
+            ("user.name", "You"),
+            ("commit.gpgsign", "false"),
+        ],
+    );
     run_git(
         &work_repo,
         &[

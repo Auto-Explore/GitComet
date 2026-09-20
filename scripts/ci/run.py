@@ -23,6 +23,7 @@ REPORTS = ROOT / "target" / "ci-reports"
 REPORT_LOCK = threading.RLock()
 CONSOLE_LOCK = threading.RLock()
 UI = "gitcomet-ui-gpui"
+NEXTEST_PROFILES = ("ci", "ci-git-limited")
 CONTEXTS = {
     "workspace": ["--workspace", "--no-default-features", "--features", "gix,gitcomet-ui-gpui/default"],
     "core": ["-p", "gitcomet-core"],
@@ -292,7 +293,11 @@ def run_parallel(tasks):
         executor.shutdown(wait=True, cancel_futures=True)
 
 
-def execute(context, schedule="serial"):
+def execute(context, schedule="serial", nextest_threads=None, nextest_profile="ci"):
+    if nextest_threads is not None and (nextest_threads < 1 or schedule != "serial"):
+        raise ValueError("--nextest-threads must be positive and requires --schedule serial")
+    if nextest_profile not in NEXTEST_PROFILES:
+        raise ValueError(f"Unsupported nextest profile: {nextest_profile}")
     packages = package_names(context)
     suites = inventory(context)["rust-suites"]
     cpus = os.cpu_count() or 1
@@ -304,9 +309,9 @@ def execute(context, schedule="serial"):
         if not any(not uses_libtest(packages[suite["package-id"]]) for suite in suites.values()):
             return 0
         build = json.loads((paths(context) / "binaries.json").read_text(encoding="utf-8"))
-        junit = Path(build["rust-build-meta"]["target-directory"]) / "nextest/ci/junit.xml"
+        junit = Path(build["rust-build-meta"]["target-directory"]) / "nextest" / nextest_profile / "junit.xml"
         junit.unlink(missing_ok=True)
-        command = ["cargo", "nextest", "run", *reuse_args(context), "--profile", "ci",
+        command = ["cargo", "nextest", "run", *reuse_args(context), "--profile", nextest_profile,
                    "--ignore-default-filter", "-E", f"not package(={UI})", "--no-fail-fast"]
         if threads is not None:
             command += ["--test-threads", str(threads)]
@@ -335,7 +340,7 @@ def execute(context, schedule="serial"):
         if balanced:
             codes.extend(run_parallel([partial(nextest, threads=cpus - ui_threads), ui]))
         else:
-            codes.append(nextest())
+            codes.append(nextest(threads=nextest_threads))
             for binary_id, suite in libtest:
                 codes.append(run_suite(context, binary_id, suite))
         if any(codes):
@@ -344,7 +349,8 @@ def execute(context, schedule="serial"):
     finally:
         (paths(context) / "execution.json").write_text(json.dumps({
             "schedule": schedule, "effective_schedule": "balanced" if balanced else "serial",
-            "cpus": cpus, "seconds": round(time.monotonic() - start, 3), "success": succeeded,
+            "nextest_profile": nextest_profile,
+            "nextest_threads": nextest_threads, "cpus": cpus, "seconds": round(time.monotonic() - start, 3), "success": succeeded,
         }, indent=2) + "\n", encoding="utf-8")
 
 
@@ -365,12 +371,16 @@ def main():
     parser.add_argument("--cargo-profile", default="ci-test")
     parser.add_argument("--name", default="command")
     parser.add_argument("--schedule", choices=["serial", "balanced"], default="serial")
+    parser.add_argument("--nextest-threads", type=int, help="Opt-in concurrency experiment (serial schedule only)")
+    parser.add_argument("--nextest-profile", choices=NEXTEST_PROFILES, default="ci")
     args, extra = parser.parse_known_args()
+    if args.nextest_threads is not None and (args.phase != "test" or args.nextest_threads < 1 or args.schedule != "serial"):
+        parser.error("--nextest-threads must be positive and requires test --schedule serial")
     os.chdir(ROOT)
     if args.phase == "compile":
         compile_tests(args.context, args.cargo_profile)
     elif args.phase == "test":
-        execute(args.context, args.schedule)
+        execute(args.context, args.schedule, args.nextest_threads, args.nextest_profile)
     elif args.phase == "doc":
         # The app contains only binaries, so it has no doctest targets.
         if args.context != "app":

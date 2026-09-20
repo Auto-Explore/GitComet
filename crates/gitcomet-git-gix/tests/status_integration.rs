@@ -6,7 +6,9 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::{CancellationToken, CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::services::{ConflictSide, InteractiveRebaseAction, InteractiveRebaseEntry};
-use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, LinearCommit, append_config, import_linear_history, init_repository,
+};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::io::Write;
@@ -301,24 +303,26 @@ fn init_conflict_fixture(repo: &Path) {
 }
 
 fn setup_both_modified_text_conflict(repo: &Path, path: &str, ours: &str, theirs: &str) {
+    let _timer = FixtureTimer::new("setup", "text-conflict");
     init_conflict_fixture(repo);
 
-    write(repo, path, "base\n");
-    run_git(repo, &["add", path]);
-    run_git(
-        repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    // The first two commits are ordinary history. Build the index/worktree
+    // with checkout, then create the conflict with a real commit and merge.
+    import_linear_history(
+        git_command().arg("-C").arg(repo),
+        "feature",
+        [("base", "base\n"), ("theirs", theirs)]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (message, contents))| LinearCommit {
+                author: "You <you@example.com>",
+                timestamp: 1_600_000_000 + index as i64,
+                message,
+                path,
+                contents,
+            }),
     );
-
-    run_git(repo, &["checkout", "-b", "feature"]);
-    write(repo, path, theirs);
-    run_git(repo, &["add", path]);
-    run_git(
-        repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
-    );
-
-    run_git(repo, &["checkout", "-"]);
+    run_git(repo, &["checkout", "-B", "master", "feature^"]);
     write(repo, path, ours);
     run_git(repo, &["add", path]);
     run_git(

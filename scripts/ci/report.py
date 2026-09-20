@@ -151,6 +151,63 @@ def fixture_timings(directory):
                   key=lambda row: (-row["seconds"], row["test"], row["phase"], row["operation"]))
 
 
+def runtime_statistics(directory):
+    """Keep execution policies, revisions, and measurement environments separate."""
+    groups, seen = {}, {}
+    environment_fields = ("platform", "machine", "cpus", "sha", "os_version", "runner_image",
+                          "git", "rust", "profile", "selection")
+    for path in sorted(directory.rglob("runtime.json")):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if identity := record.get("measurement_id"):
+            if identity in seen:
+                if seen[identity] != record:
+                    raise ValueError(f"Conflicting copies of measurement {identity}")
+                continue
+            seen[identity] = record
+        environment = {field: record.get(field) for field in environment_fields}
+        environment["dirty"] = record.get("dirty", False)
+        for sample in record["samples"]:
+            descriptor = dict(environment, schedule=sample.get("schedule"),
+                              nextest_profile=sample.get("nextest_profile", "ci"),
+                              nextest_threads=sample.get("nextest_threads"))
+            key = json.dumps(descriptor, sort_keys=True)
+            group = groups.setdefault(key, {"descriptor": descriptor, "seconds": [], "failed": 0, "jobs": set()})
+            group["jobs"].add(record["job"])
+            if sample["success"]:
+                group["seconds"].append(sample["seconds"])
+            else:
+                group["failed"] += 1
+    result = []
+    for group in groups.values():
+        values = sorted(group["seconds"])
+        # Local repetitions do not establish independent hosted-job evidence.
+        jobs = [job for job in group["jobs"] if not job.startswith("local/")]
+        descriptor = group["descriptor"]
+        environment_recorded = all(descriptor.get(field) is not None
+                                   for field in environment_fields)
+        result.append(dict(descriptor, samples=len(values), failed=group["failed"],
+                           median_seconds=statistics.median(values) if values else None,
+                           min_seconds=min(values) if values else None,
+                           max_seconds=max(values) if values else None,
+                           jobs=sorted(jobs), environment_recorded=environment_recorded,
+                           enough_samples=len(values) >= 5 and len(jobs) >= 2 and not group["failed"]
+                                          and environment_recorded and not descriptor["dirty"]))
+    return result
+
+
+def git_trace2(path):
+    """Count nested Git processes; their lifetimes overlap and are not additive."""
+    processes = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        event = json.loads(line)
+        if event.get("event") == "start":
+            processes.setdefault(event["sid"], {})["argv"] = event["argv"]
+        elif event.get("event") == "exit":
+            processes.setdefault(event["sid"], {}).update(seconds=event["t_abs"], code=event["code"])
+    return {"processes": len(processes), "incomplete": sum("seconds" not in p for p in processes.values()),
+            "records": list(processes.values())}
+
+
 def obsolete_caches(caches):
     seen, obsolete = set(), []
     # Prefer a published v2 replacement over v1 regardless of creation order.
@@ -203,6 +260,10 @@ def main():
     caches.add_argument("--prune", action="store_true")
     fixtures = sub.add_parser("fixtures")
     fixtures.add_argument("directory", type=Path)
+    runtime = sub.add_parser("runtime")
+    runtime.add_argument("directory", type=Path)
+    trace = sub.add_parser("trace2")
+    trace.add_argument("path", type=Path)
     runs = sub.add_parser("runs")
     runs.add_argument("ids", nargs="+", type=int)
     runs.add_argument("--output", type=Path, required=True)
@@ -217,6 +278,10 @@ def main():
         manage_caches(args.repository, args.prune)
     elif args.command == "fixtures":
         print(json.dumps(fixture_timings(args.directory), indent=2))
+    elif args.command == "runtime":
+        print(json.dumps(runtime_statistics(args.directory), indent=2))
+    elif args.command == "trace2":
+        print(json.dumps(git_trace2(args.path), indent=2))
     elif args.command == "runs":
         records = collect_runs(args.repository, args.ids)
         args.output.write_text(json.dumps(records, indent=2) + "\n")

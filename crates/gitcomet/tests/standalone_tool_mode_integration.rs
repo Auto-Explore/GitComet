@@ -2976,3 +2976,62 @@ fn help_subcommand_exits_zero() {
     let out = run_gitcomet(["help"]);
     assert_eq!(out.status.code(), Some(0), "help subcommand should exit 0");
 }
+
+#[test]
+fn setup_uninstall_reads_configuration_once_per_command() {
+    for local in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        let env = IsolatedGlobalGitEnv::new(root.path());
+        setup_e2e_init_with_env(&repo, &env);
+        for (round, (operation, limit)) in [
+            ("setup", 29),
+            ("setup", 1),
+            ("uninstall", 29),
+            ("uninstall", 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let trace = root.path().join(format!("trace-{round}.jsonl"));
+            let mut cmd = no_window_command(gitcomet_bin());
+            env.apply_to_command(&mut cmd);
+            cmd.arg(operation);
+            if local {
+                cmd.arg("--local");
+            }
+            let output = cmd
+                .current_dir(&repo)
+                .env("GIT_TRACE2_EVENT", &trace)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", output_text(&output));
+            let events: Vec<serde_json::Value> = fs::read_to_string(trace)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let starts: Vec<_> = events
+                .iter()
+                .filter(|event| event["event"] == "start")
+                .collect();
+            assert_eq!(
+                starts.len(),
+                limit,
+                "unexpected Git process count for {operation}: {starts:?}"
+            );
+            let reads = starts
+                .iter()
+                .filter(|event| {
+                    event["argv"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|arg| arg == "--get-regexp")
+                })
+                .count();
+            assert_eq!(reads, 1, "each operation must read one scoped snapshot");
+        }
+    }
+}

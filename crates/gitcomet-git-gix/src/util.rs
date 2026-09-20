@@ -234,8 +234,15 @@ impl Trace2Monitor {
     }
 
     fn finish(mut self) {
+        self.stop();
+    }
+
+    fn stop(&mut self) {
         self.done.store(true, Ordering::Release);
         if let Some(handle) = self.handle.take() {
+            // The token also covers completion between the worker's done check
+            // and park, so a short command never waits for the next trace poll.
+            handle.thread().unpark();
             let _ = handle.join();
         }
     }
@@ -243,10 +250,7 @@ impl Trace2Monitor {
 
 impl Drop for Trace2Monitor {
     fn drop(&mut self) {
-        self.done.store(true, Ordering::Release);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
+        self.stop();
     }
 }
 
@@ -272,7 +276,7 @@ fn trace2_tail_loop(path: &Path, context: &GitOperationContext, done: &AtomicBoo
             break;
         }
         if pending.len() == before {
-            thread::sleep(GIT_TRACE2_POLL);
+            thread::park_timeout(GIT_TRACE2_POLL);
         }
     }
 }
@@ -1767,6 +1771,75 @@ mod tests {
             .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(path, permissions).expect("make test hook executable");
+    }
+
+    #[test]
+    fn trace2_monitor_finish_and_drop_wake_a_parked_worker() {
+        for finish in [false, true] {
+            let done = Arc::new(AtomicBool::new(false));
+            let worker_done = Arc::clone(&done);
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let handle = thread::spawn(move || {
+                while !worker_done.load(Ordering::Acquire) {
+                    ready_tx.send(()).unwrap();
+                    // A long poll makes the regression independent of tight
+                    // elapsed-time assertions on a loaded CI machine.
+                    thread::park_timeout(Duration::from_secs(30));
+                }
+            });
+            let worker = handle.thread().clone();
+            let monitor = Trace2Monitor {
+                _path: tempfile::NamedTempFile::new().unwrap().into_temp_path(),
+                done,
+                handle: Some(handle),
+            };
+            ready_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let (stopped_tx, stopped_rx) = mpsc::channel();
+            let shutdown = thread::spawn(move || {
+                if finish {
+                    monitor.finish();
+                } else {
+                    drop(monitor);
+                }
+                stopped_tx.send(()).unwrap();
+            });
+            let result = stopped_rx.recv_timeout(Duration::from_secs(3));
+            // Clean up promptly even if shutdown failed to wake the worker.
+            worker.unpark();
+            shutdown.join().unwrap();
+            result.expect("trace monitor shutdown must wake its worker");
+        }
+    }
+
+    #[test]
+    fn trace2_monitor_finish_and_drop_drain_the_final_unterminated_event() {
+        for finish in [false, true] {
+            let (sender, receiver) = mpsc::channel();
+            let context = GitOperationContext::new("trace drain", move |_, event| {
+                sender.send(event).unwrap();
+            });
+            let mut cmd = Command::new("git");
+            let monitor = Trace2Monitor::start(&mut cmd, Some(&context)).unwrap();
+            std::fs::write(
+                &monitor._path,
+                concat!(
+                    "{\"event\":\"child_start\",\"sid\":\"test\",\"child_id\":1,",
+                    "\"child_class\":\"hook\",\"hook_name\":\"pre-commit\"}\n",
+                    "{\"event\":\"child_exit\",\"sid\":\"test\",\"child_id\":1,\"code\":7}"
+                ),
+            )
+            .unwrap();
+            if finish {
+                monitor.finish();
+            } else {
+                drop(monitor);
+            }
+            let events: Vec<_> = receiver.try_iter().collect();
+            assert!(matches!(events.as_slice(), [
+                GitOperationEvent::HookStarted { name, id },
+                GitOperationEvent::HookFinished { name: finished_name, id: finished_id, exit_code: Some(7), .. },
+            ] if name == "pre-commit" && finished_name == name && finished_id == id));
+        }
     }
 
     #[cfg(unix)]

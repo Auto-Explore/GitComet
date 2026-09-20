@@ -13,6 +13,18 @@ on:
         description: Test scheduling candidate (keep serial until measured)
         type: string
         default: serial
+      execution-samples:
+        description: Uninstrumented repetitions for runtime measurement (1 is normal CI)
+        type: number
+        default: 1
+      nextest-threads:
+        description: Optional positive nextest concurrency (serial schedule only)
+        type: string
+        default: ''
+      nextest-profile:
+        description: Optional limit for concurrent Git-heavy tests
+        type: string
+        default: ci
       fixture-timings:
         description: Collect per-test fixture and subprocess timings
         type: boolean
@@ -32,6 +44,19 @@ on:
         type: choice
         options: [serial, balanced]
         default: serial
+      execution-samples:
+        description: Uninstrumented repetitions for runtime measurement (1 is normal CI)
+        type: number
+        default: 1
+      nextest-threads:
+        description: Optional positive nextest concurrency (serial schedule only)
+        type: string
+        default: ''
+      nextest-profile:
+        description: Optional limit for concurrent Git-heavy tests
+        type: choice
+        options: [ci, ci-git-limited]
+        default: ci
       fixture-timings:
         description: Collect per-test fixture and subprocess timings
         type: boolean
@@ -42,6 +67,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CI_EXECUTION_SAMPLES: ${{ inputs.execution-samples || 1 }}
+  CI_NEXTEST_THREADS: ${{ inputs.nextest-threads || '' }}
+  CI_NEXTEST_PROFILE: ${{ inputs.nextest-profile || 'ci' }}
   CI_TEST_SCHEDULE: ${{ inputs.test-schedule || 'serial' }}
   GITCOMET_CI_FIXTURE_TIMINGS: ${{ inputs.fixture-timings && format('{0}/target/ci-reports/fixture-timings', github.workspace) || '' }}
 
@@ -49,7 +77,7 @@ jobs:
   native:
     name: Native Tests (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -114,19 +142,28 @@ jobs:
       - name: Execute workspace tests
         id: tests
         shell: bash
-        run: python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE"
+        run: |
+          args=(--nextest-profile "$CI_NEXTEST_PROFILE")
+          if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
+            python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
+          else
+            python3 scripts/ci/runtime.py target/ci-reports/runtime --samples "$CI_EXECUTION_SAMPLES" --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
+          fi
       - name: Stress native watcher synchronization
         if: success() && inputs.watcher-stress
         shell: bash
         env:
           GITCOMET_TEST_SYNC_TRACE: "1"
-        run: >-
-          python3 scripts/ci/run.py command --name watcher-stress --
-          cargo nextest run
-          --binaries-metadata target/ci-reports/workspace/binaries.json
-          --cargo-metadata target/ci-reports/workspace/cargo.json
-          --profile ci-watch-stress --stress-count 10 --no-tests=fail
-          -E 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | test(::selective::native_lifecycle::)))'
+        run: |
+          args=()
+          if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--test-threads "$CI_NEXTEST_THREADS"); fi
+          python3 scripts/ci/run.py command --name watcher-stress -- \
+            cargo nextest run \
+            --binaries-metadata target/ci-reports/workspace/binaries.json \
+            --cargo-metadata target/ci-reports/workspace/cargo.json \
+            --profile ci-watch-stress --stress-count 10 --no-tests=fail "${args[@]}" \
+            -E 'package(=gitcomet-fs-watch) | (package(=gitcomet-state) & (test(native_sync_) | test(native_barrier_) | test(::selective::synchronization::) | test(::selective::native_lifecycle::) | test(::selective::path_identities::)))'
       - name: Workspace doctests
         if: success() || (failure() && steps.tests.outcome == 'failure')
         shell: bash
@@ -192,7 +229,7 @@ jobs:
   fedora:
     name: Linux Headless Suite (Fedora container)
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
     container:
       image: fedora:41
     steps:
@@ -219,7 +256,14 @@ jobs:
       - name: Execute workspace tests
         id: tests
         shell: bash
-        run: python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE"
+        run: |
+          args=(--nextest-profile "$CI_NEXTEST_PROFILE")
+          if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
+            python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
+          else
+            python3 scripts/ci/runtime.py target/ci-reports/runtime --samples "$CI_EXECUTION_SAMPLES" --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
+          fi
       - name: Workspace doctests
         if: success() || (failure() && steps.tests.outcome == 'failure')
         run: python3 scripts/ci/run.py doc --context workspace

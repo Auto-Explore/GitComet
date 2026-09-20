@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 import cache
 import report
+import runtime
 
 spec = importlib.util.spec_from_file_location("ci_runner", Path(__file__).with_name("run.py"))
 runner = importlib.util.module_from_spec(spec)
@@ -194,10 +195,10 @@ class RunnerTests(unittest.TestCase):
         nextest_suites = self.git_integration_suites()
         nextest_suites["core"] = {"package-id": "gitcomet-core", "binary-name": "gitcomet_core", "testcases": {"required": {"ignored": False}}}
         ui_suites = {"ui": {"package-id": runner.UI, "binary-name": "gitcomet_ui_gpui"}}
-        for platform_name, schedule, (cpus, group) in product(
-                ("linux", "darwin", "win32"), ("serial", "balanced"),
-                ((1, "both"), (3, "both"), (4, "both"), (4, "nextest"), (4, "libtest"))):
-            with self.subTest(platform=platform_name, schedule=schedule, cpus=cpus, group=group), \
+        for platform_name, (schedule, threads), (cpus, group), profile in product(
+                ("linux", "darwin", "win32"), (("serial", None), ("serial", 8), ("balanced", None)),
+                ((1, "both"), (3, "both"), (4, "both"), (4, "nextest"), (4, "libtest")), runner.NEXTEST_PROFILES):
+            with self.subTest(platform=platform_name, schedule=schedule, cpus=cpus, group=group, profile=profile), \
                     tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
                     patch.object(runner.sys, "platform", platform_name), \
                     patch.object(runner.os, "cpu_count", return_value=cpus):
@@ -206,18 +207,21 @@ class RunnerTests(unittest.TestCase):
                 target = Path(directory)
                 (target / "workspace").mkdir()
                 (target / "workspace/binaries.json").write_text(json.dumps({"rust-build-meta": {"target-directory": directory}}))
-                (target / "nextest/ci").mkdir(parents=True)
+                (target / "nextest" / profile).mkdir(parents=True)
                 barrier, completed = threading.Barrier(2), []
 
                 def run_nextest(name, command, **kwargs):
                     self.assertNotEqual(group, "libtest")
                     self.assertEqual(command[command.index("-E") + 1], f"not package(={runner.UI})")
+                    self.assertEqual(command[command.index("--profile") + 1], profile)
                     if parallel:
                         self.assertEqual(command[-2:], ["--test-threads", str(cpus - max(1, cpus // 2))])
                         barrier.wait(timeout=5)
+                    elif threads is not None:
+                        self.assertEqual(command[-2:], ["--test-threads", str(threads)])
                     else:
                         self.assertNotIn("--test-threads", command)
-                    self.write_junit(target / "nextest/ci/junit.xml", nextest_suites)
+                    self.write_junit(target / "nextest" / profile / "junit.xml", nextest_suites)
                     completed.append("nextest")
                     return 0
 
@@ -235,12 +239,20 @@ class RunnerTests(unittest.TestCase):
                 with patch.object(runner, "package_names", return_value=packages), \
                         patch.object(runner, "inventory", return_value={"rust-suites": selected}), \
                         patch.object(runner, "run", side_effect=run_nextest), patch.object(runner, "run_suite", side_effect=run_ui):
-                    runner.execute("workspace", schedule)
+                    runner.execute("workspace", schedule, threads, profile)
                 expected = ["nextest", "ui"] if group == "both" else ["nextest"] if group == "nextest" else ["ui"]
                 self.assertCountEqual(completed, expected)
                 execution = json.loads((target / "workspace/execution.json").read_text())
                 self.assertTrue(execution["success"])
+                self.assertEqual(execution["nextest_profile"], profile)
                 self.assertEqual(execution["effective_schedule"], "balanced" if parallel else "serial")
+
+    def test_invalid_concurrency_is_rejected_before_running(self):
+        for schedule, threads in [("serial", 0), ("serial", -1), ("balanced", 8)]:
+            with self.subTest(schedule=schedule, threads=threads), self.assertRaises(ValueError):
+                runner.execute("workspace", schedule, threads)
+        with self.assertRaises(ValueError):
+            runner.execute("workspace", nextest_profile="unknown")
 
     def test_parallel_failure_cancels_a_running_process_tree_and_records_it(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
@@ -463,7 +475,126 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(calls[2].kwargs["env"]["XDG_CURRENT_DESKTOP"], values[3])
 
 
+class RuntimeTests(unittest.TestCase):
+    def test_repetitions_keep_distinct_raw_logs_and_restore_report_directory(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            root = Path(directory)
+            reports = root / "reports"
+            source = reports / "workspace"
+            source.mkdir(parents=True)
+            (source / "coverage.json").write_text('{"profile": "ci-test", "selection": ["--workspace"]}')
+            (source / "binaries.json").write_text('"compiled-once"')
+            (source / "execution.json").write_text('{"success": true, "seconds": 99}')
+            (source / "junit.xml").write_text("stale")
+            calls = []
+
+            def execute(context, schedule, threads, profile):
+                self.assertEqual(profile, "ci-git-limited")
+                calls.append(len(calls) + 1)
+                sample = runtime.runner.paths(context)
+                self.assertEqual((sample / "binaries.json").read_text(), '"compiled-once"')
+                self.assertFalse((sample / "execution.json").exists())
+                self.assertFalse((sample / "junit.xml").exists())
+                for name in ("workspace-nextest.log", "workspace-ui-all.log", "timings.jsonl"):
+                    (runtime.runner.REPORTS / name).write_text(str(len(calls)))
+                (sample / "execution.json").write_text(json.dumps(dict(success=True, seconds=len(calls))))
+
+            with patch.object(runtime.runner, "REPORTS", reports), \
+                    patch.object(runtime.runner, "execute", side_effect=execute), \
+                    patch.object(runtime.subprocess, "check_output", return_value="test"):
+                runtime.measure(root / "output", 2, "serial", None, "ci-git-limited")
+                self.assertEqual(runtime.runner.REPORTS, reports)
+            for index in (1, 2):
+                for name in ("workspace-nextest.log", "workspace-ui-all.log", "timings.jsonl"):
+                    self.assertEqual((root / f"output/sample-{index}" / name).read_text(), str(index))
+            self.assertEqual(json.loads((source / "execution.json").read_text())["seconds"], 99)
+
+    def test_instrumented_acceptance_run_is_rejected(self):
+        for name, value in [("GIT_TRACE2_EVENT", "trace.json"), ("GIT_TRACE2", "1"),
+                            ("GIT_TRACE2_PERF", "trace.perf"), ("GITCOMET_TEST_SYNC_TRACE", "")]:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, {name: value}, clear=True):
+                with self.assertRaisesRegex(ValueError, "Disable instrumentation"):
+                    runtime.measure(Path(directory) / "result", 5, "serial", None)
+                self.assertFalse((Path(directory) / "result").exists())
+
+    def test_failed_sample_retains_report_and_cannot_reuse_previous_success(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            root = Path(directory)
+            reports = root / "reports"
+            reports.mkdir()
+            (reports / "execution.json").write_text('{"success": true, "seconds": 1}')
+            with patch.object(runtime.runner, "paths", return_value=reports), \
+                    patch.object(runtime.runner, "execute", side_effect=RuntimeError("failed")), \
+                    patch.object(runtime.subprocess, "check_output", return_value="test"), \
+                    self.assertRaisesRegex(RuntimeError, "failed"):
+                runtime.measure(root / "output", 5, "serial", None)
+            record = json.loads((root / "output/runtime.json").read_text())
+            self.assertEqual(record["samples"], [{"success": False, "seconds": None, "schedule": "serial", "nextest_threads": None, "nextest_profile": "ci"}])
+            self.assertTrue((root / "output/sample-1").is_dir())
+
+
 class ReportTests(unittest.TestCase):
+    def test_trace2_keeps_nested_processes_and_incomplete_exits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trace.jsonl"
+            events = [dict(event="start", sid="parent", argv=["git", "status"]),
+                      dict(event="start", sid="parent/child", argv=["git", "config"]),
+                      dict(event="exit", sid="parent/child", t_abs=0.25, code=0)]
+            path.write_text("\n".join(json.dumps(event) for event in events))
+            result = report.git_trace2(path)
+            self.assertEqual(result["processes"], 2)
+            self.assertEqual(result["incomplete"], 1)
+            self.assertEqual(result["records"][1]["seconds"], 0.25)
+
+    def test_runtime_report_separates_hardware_and_counts_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, (job, machine, samples) in enumerate([
+                ("101/1/native/runner", "AMD64", [500, 510, 490]),
+                ("102/1/native/runner", "AMD64", [505, 495]),
+                ("103/1/native/runner", "ARM64", [600]),
+            ]):
+                target = root / str(index)
+                target.mkdir()
+                (target / "runtime.json").write_text(json.dumps(dict(
+                    platform="win32", machine=machine, cpus=4, job=job, sha="abc",
+                    os_version="windows", runner_image="2026.09", git="git 2", rust="rust 1",
+                    profile="ci-test", selection=["--workspace"],
+                    samples=[dict(success=True, seconds=s, schedule="serial", nextest_threads=None) for s in samples])))
+            rows = report.runtime_statistics(root)
+            x64 = next(row for row in rows if row["machine"] == "AMD64")
+            self.assertEqual(x64["median_seconds"], 500)
+
+            self.assertTrue(x64["enough_samples"])
+            path = root / "0/runtime.json"
+            record = json.loads(path.read_text())
+            record["samples"].append(dict(success=False, seconds=900, schedule="serial", nextest_threads=None))
+            path.write_text(json.dumps(record))
+            x64 = next(row for row in report.runtime_statistics(root) if row["machine"] == "AMD64")
+            self.assertFalse(x64["enough_samples"])
+            self.assertEqual(x64["median_seconds"], 500)
+
+    def test_runtime_report_does_not_mix_environments_or_count_copied_artifacts(self):
+        record = dict(platform="win32", machine="AMD64", cpus=4, sha="abc", job="101/1/native/runner",
+                      measurement_id="first", os_version="windows", runner_image="2026.09",
+                      git="git 2", rust="rust 1", profile="ci-test", selection=["--workspace"],
+                      samples=[dict(success=True, seconds=500, schedule="serial", nextest_threads=None)] * 3)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("first", "copy"):
+                (root / name).mkdir()
+                (root / name / "runtime.json").write_text(json.dumps(record))
+            self.assertEqual(report.runtime_statistics(root)[0]["samples"], 3)
+            for field in ("os_version", "runner_image", "git", "rust", "profile", "selection"):
+                changed = dict(record, measurement_id=field, job="102/1/native/runner")
+                changed[field] = ["-p", "core"] if field == "selection" else "different"
+                (root / field).mkdir()
+                (root / field / "runtime.json").write_text(json.dumps(changed))
+            rows = report.runtime_statistics(root)
+            self.assertEqual(len(rows), 7)
+            self.assertTrue(all(row["samples"] == 3 and not row["enough_samples"] for row in rows))
+
     def test_fixture_metrics_keep_nested_setup_and_subprocess_costs_separate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -474,6 +605,18 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(subprocess_row["calls"], 2)
             self.assertEqual(subprocess_row["seconds"], 1)
             self.assertEqual(len(rows), 3)
+
+    def test_runtime_report_keeps_concurrency_profiles_separate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = dict(platform="win32", machine="AMD64", cpus=4, sha="abc", job="local/test",
+                          samples=[dict(success=True, seconds=100, schedule="serial", nextest_threads=8),
+                                   dict(success=True, seconds=300, schedule="serial", nextest_threads=8,
+                                        nextest_profile="ci-git-limited")])
+            (root / "runtime.json").write_text(json.dumps(record))
+            rows = report.runtime_statistics(root)
+            self.assertEqual({row["nextest_profile"]: row["median_seconds"] for row in rows},
+                             {"ci": 100, "ci-git-limited": 300})
 
     def test_renamed_platform_lanes_match_without_treating_timeouts_as_success(self):
         records = [{"jobs": [

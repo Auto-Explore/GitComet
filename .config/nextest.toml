@@ -28,3 +28,15 @@ store-success-output = true
 [[profile.ci.overrides]]
 filter = 'binary(git_cli_scoreboard)'
 success-output = "immediate"
+
+# Optional experiment: leave watcher waits room to run while limiting the
+# CLI/backend suites to four concurrent tests. Inherit every CI safety check.
+[test-groups.git-heavy]
+max-threads = 4
+
+[profile.ci-git-limited]
+inherits = "ci"
+
+[[profile.ci-git-limited.overrides]]
+filter = 'package(=gitcomet-git-gix) | binary(=difftool_git_integration) | binary(=mergetool_git_integration) | binary(=standalone_tool_mode_integration)'
+test-group = 'git-heavy'

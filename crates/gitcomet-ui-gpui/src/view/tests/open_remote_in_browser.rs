@@ -483,7 +483,7 @@ fn a_failed_launch_is_reported_in_the_error_banner(cx: &mut gpui::TestAppContext
         });
     });
 
-    pump_until(cx, "the launch failure to reach the banner", || {
+    pump_until(cx, "the launch failure to reach the banner", |_| {
         store
             .snapshot()
             .banner_error

@@ -235,13 +235,30 @@ fn git_metadata_noise_is_filtered_before_debouncing() {
         "native probe did not deliver any traffic"
     );
     let index = root.join(".git/index");
-    fs::write(&index, fs::read(&index).unwrap()).unwrap();
-    monitor.refresh();
+    // Each path is touched only once after startup has settled. Require its
+    // actual native observation and delivered refresh, without a quiet window
+    // between unrelated positive assertions.
+    assert!(
+        monitor
+            .expect_change(&index, || {
+                fs::write(&index, fs::read(&index).unwrap()).unwrap();
+            })
+            .index
+    );
     let head = root.join(".git/HEAD");
-    fs::write(&head, fs::read(&head).unwrap()).unwrap();
-    monitor.refresh();
-    fs::write(root.join("source/file.txt"), "source edit").unwrap();
-    monitor.refresh();
+    assert!(
+        monitor
+            .expect_change(&head, || {
+                fs::write(&head, fs::read(&head).unwrap()).unwrap();
+            })
+            .git_state
+    );
+    let source = root.join("source/file.txt");
+    assert!(
+        monitor
+            .expect_change(&source, || fs::write(&source, "source edit").unwrap())
+            .worktree
+    );
 }
 
 #[test]

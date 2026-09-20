@@ -57,6 +57,67 @@ fn quote(value: &str) -> String {
         .replace('\u{8}', "\\b")
 }
 
+/// One ordinary single-file commit. Use real porcelain for hooks, signing,
+/// filters, index behavior, merges, or tests of the commit operation itself.
+pub struct LinearCommit<'a> {
+    pub author: &'a str,
+    pub timestamp: i64,
+    pub message: &'a str,
+    pub path: &'a str,
+    pub contents: &'a str,
+}
+
+/// Import a linear history into a fresh branch. The caller supplies a command
+/// with its isolated environment and repository already selected, then checks
+/// out the branch separately if the test needs an index/worktree.
+pub fn import_linear_history<'a>(
+    command: &mut std::process::Command,
+    branch: &str,
+    commits: impl IntoIterator<Item = LinearCommit<'a>>,
+) {
+    let _timer = FixtureTimer::new("subprocess", "fast-import");
+    assert!(!branch.contains(['\n', '\r', '\0']));
+    let mut stream = String::new();
+    for (index, commit) in commits.into_iter().enumerate() {
+        assert!(!commit.author.contains(['\n', '\r', '\0']));
+        // fast-import accepts Git's C-style quoted paths, including spaces,
+        // UTF-8, quotes and newlines. Its paths always use forward slashes.
+        assert!(
+            commit
+                .path
+                .split('/')
+                .all(|component| !matches!(component, "" | "." | ".."))
+        );
+        stream.push_str(&format!(
+            "commit refs/heads/{branch}\nmark :{}\nauthor {} {} +0000\ncommitter You <you@example.com> {} +0000\ndata {}\n{}\n",
+            index + 1, commit.author, commit.timestamp, commit.timestamp,
+            commit.message.len(), commit.message,
+        ));
+        if index > 0 {
+            stream.push_str(&format!("from :{index}\n"));
+        }
+        stream.push_str(&format!(
+            "M 100644 inline \"{}\"\ndata {}\n{}\n",
+            quote(commit.path),
+            commit.contents.len(),
+            commit.contents
+        ));
+    }
+    stream.push_str("done\n");
+    let mut child = command
+        .args(["fast-import", "--quiet", "--done"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("start git fast-import");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stream.as_bytes())
+        .expect("write import stream");
+    assert!(child.wait().unwrap().success(), "git fast-import failed");
+}
+
 /// Initialize each fixture in its own repository and record setup time.
 pub fn init_repository(repo: &Path, initialize: impl FnOnce(&Path)) {
     let _timer = FixtureTimer::new("setup", "init-repository");
@@ -116,6 +177,122 @@ impl Drop for FixtureTimer {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[test]
+    fn imported_history_preserves_parent_authors_messages_and_file_bytes() {
+        let repo = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8(output.stdout).unwrap()
+        };
+        git(&["init", "-b", "main"]);
+        let mut command = Command::new("git");
+        command
+            .arg("-C")
+            .arg(repo.path())
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "");
+        import_linear_history(
+            &mut command,
+            "main",
+            [
+                LinearCommit {
+                    author: "First <first@example.com>",
+                    timestamp: 1_600_000_000,
+                    message: "日本語\nbody",
+                    path: "file.txt",
+                    contents: "first\n",
+                },
+                LinearCommit {
+                    author: "Second <second@example.com>",
+                    timestamp: 1_600_000_001,
+                    message: "second",
+                    path: "file.txt",
+                    contents: "last without newline",
+                },
+            ],
+        );
+        assert_eq!(git(&["rev-list", "--count", "main"]), "2\n");
+        assert_eq!(git(&["show", "main^:file.txt"]), "first\n");
+        assert_eq!(git(&["show", "main:file.txt"]), "last without newline");
+        assert_eq!(
+            git(&["log", "-1", "--format=%an|%at|%s", "main"]),
+            "Second|1600000001|second\n"
+        );
+        assert_eq!(
+            git(&["log", "-1", "--format=%B", "main^"]),
+            "日本語\nbody\n"
+        );
+        git(&["-c", "core.autocrlf=false", "reset", "--hard", "main"]);
+        assert_eq!(
+            fs::read_to_string(repo.path().join("file.txt")).unwrap(),
+            "last without newline"
+        );
+        assert!(git(&["status", "--porcelain"]).is_empty());
+    }
+
+    #[test]
+    fn imported_paths_preserve_spaces_quotes_controls_and_utf8() {
+        let repo = tempfile::tempdir().unwrap();
+        let command = || {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
+                .arg(repo.path())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "");
+            cmd
+        };
+        assert!(
+            command()
+                .args(["init", "-b", "main"])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        let paths = [
+            "docs/spaced 日本語 file.txt",
+            // Windows cannot check out these characters in filenames.
+            if cfg!(windows) {
+                "docs/other.txt"
+            } else {
+                "docs/\"quote\\tab\tline\n.txt"
+            },
+        ];
+        import_linear_history(
+            &mut command(),
+            "main",
+            paths.iter().map(|path| LinearCommit {
+                author: "You <you@example.com>",
+                timestamp: 1_600_000_000,
+                message: "path fixture",
+                path,
+                contents: "bytes\n",
+            }),
+        );
+        assert!(
+            command()
+                .args(["-c", "core.autocrlf=false", "reset", "--hard", "main"])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        for path in paths {
+            assert_eq!(fs::read(repo.path().join(path)).unwrap(), b"bytes\n");
+        }
+        let status = command().args(["status", "--porcelain"]).output().unwrap();
+        assert!(status.status.success());
+        assert!(status.stdout.is_empty());
+    }
 
     #[test]
     fn config_roundtrips_shell_commands_and_subsections_through_git() {

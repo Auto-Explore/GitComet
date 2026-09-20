@@ -5,6 +5,7 @@ use gitcomet_core::process::{
 };
 use gitcomet_core::remote_url::{RemoteProtocol, RemoteUrlPolicy};
 use gitcomet_core::services::{GitBackend, PullMode, RemoteUrlKind};
+use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -27,6 +28,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     let output = git_command()
         .arg("-C")
         .arg(repo)
@@ -44,6 +46,7 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> String {
 }
 
 fn run_git_status(repo: &Path, args: &[&str]) -> std::process::ExitStatus {
+    let _timer = FixtureTimer::new("subprocess", args.first().copied().unwrap_or("git"));
     git_command()
         .arg("-C")
         .arg(repo)
@@ -97,6 +100,7 @@ impl Drop for GitExecutablePreferenceGuard {
 }
 
 fn configure_repo_with_user(repo: &Path) {
+    // Clones may already contain these keys. Keep Git's replacement semantics.
     run_git(repo, &["config", "user.email", "you@example.com"]);
     run_git(repo, &["config", "user.name", "You"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
@@ -105,8 +109,19 @@ fn configure_repo_with_user(repo: &Path) {
 }
 
 fn init_repo_with_user(repo: &Path) {
-    run_git(repo, &["init"]);
-    configure_repo_with_user(repo);
+    init_repository(repo, |repo| {
+        run_git(repo, &["init"]);
+        append_config(
+            repo,
+            &[
+                ("user.email", "you@example.com"),
+                ("user.name", "You"),
+                ("commit.gpgsign", "false"),
+                ("core.autocrlf", "false"),
+                ("core.eol", "lf"),
+            ],
+        );
+    });
 }
 
 #[test]

@@ -595,16 +595,21 @@ impl RunningMonitor {
         self.tx.send(MonitorMsg::Revalidate).unwrap();
     }
     fn start(root: &Path) -> Self {
-        let monitor = Self::start_custom(
-            root,
-            Arc::new(gitcomet_git_gix::GixBackend),
-            MonitorConfig::default(),
-        );
+        let monitor = Self::start_for_unique_path(root);
         // Recursive Windows coverage can receive deferred parent-directory
         // metadata from fixture creation. Settle that bounded startup residue
         // before asserting on edits made after the monitor is ready.
         monitor.settle();
         monitor
+    }
+    /// Registration readiness only. Pair with expect_change on a path that
+    /// never existed during fixture setup; startup residue cannot satisfy it.
+    fn start_for_unique_path(root: &Path) -> Self {
+        Self::start_custom(
+            root,
+            Arc::new(gitcomet_git_gix::GixBackend),
+            MonitorConfig::default(),
+        )
     }
     fn start_custom(root: &Path, backend: Arc<dyn GitBackend>, config: MonitorConfig) -> Self {
         Self::start_with_callback(root, backend, config, None)
@@ -814,6 +819,7 @@ impl RunningMonitor {
     /// Positive assertion for an operation-unique path. This is not a general
     /// quiet check and must not be used for successive writes to the same path.
     fn expect_change(&self, unique_path: &Path, operation: impl FnOnce()) -> RepoExternalChange {
+        let _timing = super::super::test_sync::WaitTiming::new("positive-event");
         assert!(!self.callbacks_redirected);
         let after = self.observations.sequence();
         let deadline = Instant::now() + SYNC_TIMEOUT;
@@ -844,6 +850,8 @@ impl RunningMonitor {
 }
 impl Drop for RunningMonitor {
     fn drop(&mut self) {
+        let _timer =
+            gitcomet_core::test_support::git_fixture::FixtureTimer::new("cleanup", "monitor-stop");
         let _ = self.tx.send(MonitorMsg::Stop);
         if let Some(thread) = self.thread.take() {
             thread.join().unwrap();

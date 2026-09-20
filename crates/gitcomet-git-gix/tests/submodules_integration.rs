@@ -2,7 +2,9 @@ use gitcomet_core::domain::{
     CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind, SubmoduleStatus,
 };
 use gitcomet_core::services::{GitBackend, SubmoduleTrustDecision};
-use gitcomet_core::test_support::git_fixture::{FixtureTimer, append_config, init_repository};
+use gitcomet_core::test_support::git_fixture::{
+    FixtureTimer, LinearCommit, append_config, import_linear_history, init_repository,
+};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -137,7 +139,7 @@ fn create_stale_submodule_git_dir(
 
 fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
     init_repository(repo, |repo| {
-        run_git(repo, &["init"]);
+        run_git(repo, &["init", "-b", "master"]);
         append_config(
             repo,
             &[
@@ -148,18 +150,19 @@ fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
                 ("core.eol", "lf"),
             ],
         );
+        import_linear_history(
+            git_command().arg("-C").arg(repo),
+            "master",
+            [LinearCommit {
+                author: "You <you@example.com>",
+                timestamp: 1_600_000_000,
+                message,
+                path: file,
+                contents,
+            }],
+        );
+        run_git(repo, &["reset", "--hard", "HEAD"]);
     });
-
-    {
-        let mut f = std::fs::File::create(repo.join(file)).expect("create seed file");
-        std::io::Write::write_all(&mut f, contents.as_bytes()).expect("write seed file");
-        f.sync_all().ok();
-    }
-    run_git(repo, &["add", file]);
-    run_git(
-        repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", message],
-    );
 }
 
 fn submodule_integration_test_lock() -> MutexGuard<'static, ()> {

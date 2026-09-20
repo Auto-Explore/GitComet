@@ -9,12 +9,17 @@ pub(super) const QUIET_WINDOW: Duration = Duration::from_secs(3);
 
 pub(super) struct WaitTiming {
     phase: &'static str,
+    _fixture_timer: gitcomet_core::test_support::git_fixture::FixtureTimer,
     started: Option<Instant>,
 }
 impl WaitTiming {
     pub fn new(phase: &'static str) -> Self {
         Self {
             phase,
+            _fixture_timer: gitcomet_core::test_support::git_fixture::FixtureTimer::new(
+                "watcher-wait",
+                phase,
+            ),
             started: std::env::var_os("GITCOMET_TEST_SYNC_TRACE").map(|_| Instant::now()),
         }
     }

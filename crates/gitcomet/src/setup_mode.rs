@@ -415,6 +415,105 @@ fn collect_uninstall_snapshot_keys(entries: &[UninstallEntry]) -> Vec<&'static s
     keys
 }
 
+/// A command-local view of configuration. Git still owns all writes and locks.
+struct ConfigSnapshot {
+    values: FxHashMap<String, Vec<String>>,
+}
+
+fn canonical_config_key(key: &str) -> String {
+    let Some((section, rest)) = key.split_once('.') else {
+        return key.to_ascii_lowercase();
+    };
+    match rest.rsplit_once('.') {
+        Some((subsection, name)) => format!(
+            "{}.{}.{}",
+            section.to_ascii_lowercase(),
+            subsection,
+            name.to_ascii_lowercase()
+        ),
+        None => key.to_ascii_lowercase(),
+    }
+}
+
+impl ConfigSnapshot {
+    fn read(scope: &str, keys: &[&str]) -> Result<Self, String> {
+        // The keys are application constants, not user-supplied regexes.
+        let pattern = format!(
+            "^({})$",
+            keys.iter()
+                .map(|key| { canonical_config_key(key).replace('.', "\\.") })
+                .collect::<Vec<_>>()
+                .join("|")
+        );
+        let output = git_command()
+            .args(["config", scope, "--null", "--get-regexp", &pattern])
+            .output()
+            .map_err(|error| format!("Failed to read git config snapshot: {error}"))?;
+        if output.status.code() == Some(1) {
+            return Ok(Self {
+                values: FxHashMap::default(),
+            });
+        }
+        if !output.status.success() {
+            return Err(format!(
+                "git config {scope} snapshot failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Self::parse(&output.stdout)
+    }
+
+    fn parse(bytes: &[u8]) -> Result<Self, String> {
+        let mut values: FxHashMap<String, Vec<String>> = FxHashMap::default();
+        for record in bytes
+            .split(|byte| *byte == 0)
+            .filter(|record| !record.is_empty())
+        {
+            let record = std::str::from_utf8(record)
+                .map_err(|_| "git config returned non-UTF-8 output".to_string())?;
+            // Only the first newline separates the key. Values can contain newlines.
+            let (key, value) = record.split_once('\n').unwrap_or((record, ""));
+            values
+                .entry(canonical_config_key(key))
+                .or_default()
+                .push(value.to_owned());
+        }
+        Ok(Self { values })
+    }
+
+    fn get(&self, key: &str) -> Vec<String> {
+        self.values
+            .get(&canonical_config_key(key))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn unset(&mut self, scope: &str, key: &str) -> Result<(), String> {
+        if !self.get(key).is_empty() {
+            unset_existing_config_values(scope, key)?;
+            self.values.remove(&canonical_config_key(key));
+        }
+        Ok(())
+    }
+
+    fn write(&mut self, scope: &str, key: &str, values: &[String]) -> Result<(), String> {
+        self.unset(scope, key)?;
+        for (index, value) in values.iter().enumerate() {
+            if index == 0 {
+                set_single_config_value(scope, key, value)?;
+            } else {
+                add_config_value(scope, key, value)?;
+            }
+            self.values
+                .entry(canonical_config_key(key))
+                .or_default()
+                .push(value.clone());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 fn parse_git_config_values(output: &[u8]) -> Result<Vec<String>, String> {
     if output.is_empty() {
         return Ok(Vec::new());
@@ -432,6 +531,7 @@ fn parse_git_config_values(output: &[u8]) -> Result<Vec<String>, String> {
         .collect()
 }
 
+#[cfg(test)]
 fn read_git_config_values(scope: &str, key: &str) -> Result<Vec<String>, String> {
     let output = git_command()
         .args(["config", scope, "--null", "--get-all", key])
@@ -455,11 +555,16 @@ fn read_git_config_values(scope: &str, key: &str) -> Result<Vec<String>, String>
     ))
 }
 
+#[cfg(test)]
 fn unset_all_config_values(scope: &str, key: &str) -> Result<(), String> {
     if read_git_config_values(scope, key)?.is_empty() {
         return Ok(());
     }
 
+    unset_existing_config_values(scope, key)
+}
+
+fn unset_existing_config_values(scope: &str, key: &str) -> Result<(), String> {
     let output = git_command()
         .args(["config", scope, "--unset-all", key])
         .output()
@@ -513,41 +618,33 @@ fn add_config_value(scope: &str, key: &str, value: &str) -> Result<(), String> {
     ))
 }
 
-fn write_config_values(scope: &str, key: &str, values: &[String]) -> Result<(), String> {
-    unset_all_config_values(scope, key)?;
-    if values.is_empty() {
+fn maybe_capture_backup_for_entry(
+    scope: &str,
+    entry: &BackupEntry,
+    snapshot: &mut ConfigSnapshot,
+) -> Result<(), String> {
+    if !snapshot.get(entry.backup_key).is_empty() {
         return Ok(());
     }
-    set_single_config_value(scope, key, &values[0])?;
-    for value in &values[1..] {
-        add_config_value(scope, key, value)?;
-    }
-    Ok(())
-}
-
-fn maybe_capture_backup_for_entry(scope: &str, entry: &BackupEntry) -> Result<(), String> {
-    let existing_backup = read_git_config_values(scope, entry.backup_key)?;
-    if !existing_backup.is_empty() {
-        return Ok(());
-    }
-
-    let current_values = read_git_config_values(scope, entry.key)?;
-
+    let current_values = snapshot.get(entry.key);
     if all_values_match_expected(&current_values, entry.expected_setup_value) {
         return Ok(());
     }
-
     let backup_values = if current_values.is_empty() {
         vec![BACKUP_ABSENT_SENTINEL.to_string()]
     } else {
         current_values
     };
-    write_config_values(scope, entry.backup_key, &backup_values)
+    snapshot.write(scope, entry.backup_key, &backup_values)
 }
 
-fn capture_backups_before_setup(scope: &str, entries: &[BackupEntry]) -> Result<(), String> {
+fn capture_backups_before_setup(
+    scope: &str,
+    entries: &[BackupEntry],
+    snapshot: &mut ConfigSnapshot,
+) -> Result<(), String> {
     for entry in entries {
-        maybe_capture_backup_for_entry(scope, entry)?;
+        maybe_capture_backup_for_entry(scope, entry, snapshot)?;
     }
     Ok(())
 }
@@ -555,48 +652,32 @@ fn capture_backups_before_setup(scope: &str, entries: &[BackupEntry]) -> Result<
 fn restore_backups_for_uninstall(
     scope: &str,
     entries: &[BackupEntry],
+    snapshot: &mut ConfigSnapshot,
 ) -> Result<BackupRestoreSummary, String> {
-    let mut restored_count = 0usize;
-    let mut preserved_user_edits_count = 0usize;
+    let mut restored_count = 0;
+    let mut preserved_user_edits_count = 0;
     for entry in entries {
-        let backup_values = read_git_config_values(scope, entry.backup_key)?;
+        let backup_values = snapshot.get(entry.backup_key);
         if backup_values.is_empty() {
             continue;
         }
-
-        let current_values = read_git_config_values(scope, entry.key)?;
-        // Preserve user edits made after setup: only restore when the key still
-        // has the setup-managed value.
-        if !all_values_match_expected(&current_values, entry.expected_setup_value) {
-            unset_all_config_values(scope, entry.backup_key)?;
+        if !all_values_match_expected(&snapshot.get(entry.key), entry.expected_setup_value) {
+            snapshot.unset(scope, entry.backup_key)?;
             preserved_user_edits_count += 1;
             continue;
         }
-
         if backup_values.len() == 1 && backup_values[0] == BACKUP_ABSENT_SENTINEL {
-            unset_all_config_values(scope, entry.key)?;
+            snapshot.unset(scope, entry.key)?;
         } else {
-            write_config_values(scope, entry.key, &backup_values)?;
+            snapshot.write(scope, entry.key, &backup_values)?;
         }
-
-        unset_all_config_values(scope, entry.backup_key)?;
+        snapshot.unset(scope, entry.backup_key)?;
         restored_count += 1;
     }
     Ok(BackupRestoreSummary {
         restored_count,
         preserved_user_edits_count,
     })
-}
-
-fn read_uninstall_snapshot(
-    scope: &str,
-    entries: &[UninstallEntry],
-) -> Result<FxHashMap<&'static str, Vec<String>>, String> {
-    let mut snapshot = FxHashMap::default();
-    for key in collect_uninstall_snapshot_keys(entries) {
-        snapshot.insert(key, read_git_config_values(scope, key)?);
-    }
-    Ok(snapshot)
 }
 
 fn all_values_match_expected(values: &[String], expected: &str) -> bool {
@@ -762,9 +843,16 @@ fn format_commands(entries: &[ConfigEntry], scope: &str) -> String {
     out
 }
 
-/// Run `git config` for each entry.
-fn apply_config(entries: &[ConfigEntry], scope: &str) -> Result<(), String> {
+/// Let Git write changed entries, retaining its errors for multiple values.
+fn apply_config(
+    entries: &[ConfigEntry],
+    scope: &str,
+    snapshot: &mut ConfigSnapshot,
+) -> Result<(), String> {
     for entry in entries {
+        if snapshot.get(entry.key) == [entry.value.as_str()] {
+            continue;
+        }
         let output = git_command()
             .args(["config", scope, entry.key, &entry.value])
             .output()
@@ -780,6 +868,9 @@ fn apply_config(entries: &[ConfigEntry], scope: &str) -> Result<(), String> {
                 stderr.trim()
             ));
         }
+        snapshot
+            .values
+            .insert(canonical_config_key(entry.key), vec![entry.value.clone()]);
     }
     Ok(())
 }
@@ -819,8 +910,14 @@ pub fn run_setup(dry_run: bool, local: bool) -> Result<SetupResult, String> {
         });
     }
 
-    capture_backups_before_setup(scope, &backup_entries)?;
-    apply_config(&entries, scope)?;
+    let keys: Vec<_> = backup_entries
+        .iter()
+        .flat_map(|entry| [entry.key, entry.backup_key])
+        .chain(entries.iter().map(|entry| entry.key))
+        .collect();
+    let mut snapshot = ConfigSnapshot::read(scope, &keys)?;
+    capture_backups_before_setup(scope, &backup_entries, &mut snapshot)?;
+    apply_config(&entries, scope, &mut snapshot)?;
 
     let stdout = format!(
         "Configured gitcomet as {scope_label} diff/merge tool.\n\
@@ -853,8 +950,18 @@ pub fn run_uninstall(dry_run: bool, local: bool) -> Result<UninstallResult, Stri
         });
     }
 
-    let restore_summary = restore_backups_for_uninstall(scope, &backup_entries)?;
-    let snapshot = read_uninstall_snapshot(scope, &entries)?;
+    let mut keys = collect_uninstall_snapshot_keys(&entries);
+    keys.extend(
+        backup_entries
+            .iter()
+            .flat_map(|entry| [entry.key, entry.backup_key]),
+    );
+    let mut config = ConfigSnapshot::read(scope, &keys)?;
+    let restore_summary = restore_backups_for_uninstall(scope, &backup_entries, &mut config)?;
+    let snapshot = collect_uninstall_snapshot_keys(&entries)
+        .into_iter()
+        .map(|key| (key, config.get(key)))
+        .collect();
     let plan = plan_uninstall(&entries, &snapshot);
     let removed_count = apply_uninstall_plan(&plan, scope)?;
     let skipped_count = plan
@@ -1335,7 +1442,8 @@ mod tests {
     #[test]
     fn write_config_values_supports_empty_and_multi_value_sequences() {
         let (_dir, scope, _) = temp_file_scope();
-        write_config_values(&scope, "foo.multi", &[]).unwrap();
+        let mut snapshot = ConfigSnapshot::read(&scope, &["foo.multi"]).unwrap();
+        snapshot.write(&scope, "foo.multi", &[]).unwrap();
         assert!(
             read_git_config_values(&scope, "foo.multi")
                 .unwrap()
@@ -1343,7 +1451,7 @@ mod tests {
         );
 
         let values = vec!["one".to_string(), "two\nthree".to_string(), "".to_string()];
-        write_config_values(&scope, "foo.multi", &values).unwrap();
+        snapshot.write(&scope, "foo.multi", &values).unwrap();
         assert_eq!(read_git_config_values(&scope, "foo.multi").unwrap(), values);
     }
 
@@ -1356,7 +1464,8 @@ mod tests {
             expected_setup_value: "gitcomet",
             backup_key: "gitcomet.backup.merge-tool",
         };
-        maybe_capture_backup_for_entry(&scope, &entry).unwrap();
+        let mut snapshot = ConfigSnapshot::read(&scope, &[entry.key, entry.backup_key]).unwrap();
+        maybe_capture_backup_for_entry(&scope, &entry, &mut snapshot).unwrap();
         assert!(
             read_git_config_values(&scope, entry.backup_key)
                 .unwrap()
@@ -1406,9 +1515,118 @@ mod tests {
                 value: "value".to_string(),
             }],
             "--not-a-valid-scope",
+            &mut ConfigSnapshot {
+                values: FxHashMap::default(),
+            },
         )
         .expect_err("invalid scope should fail");
         assert!(apply_err.contains("git config foo.readonly value failed"));
+    }
+
+    #[test]
+    fn apply_config_skips_unchanged_values_but_repairs_changed_and_missing_entries() {
+        let (_dir, scope, config_path) = temp_file_scope();
+        let entries = [
+            ConfigEntry {
+                key: "diff.tool",
+                value: "gitcomet".into(),
+            },
+            ConfigEntry {
+                key: "difftool.gitcomet.cmd",
+                value: "command".into(),
+            },
+        ];
+        set_single_config_value(&scope, entries[0].key, &entries[0].value).unwrap();
+        set_single_config_value(&scope, entries[1].key, &entries[1].value).unwrap();
+        let keys = entries.iter().map(|entry| entry.key).collect::<Vec<_>>();
+        let mut snapshot = ConfigSnapshot::read(&scope, &keys).unwrap();
+        let before = fs::read(&config_path).unwrap();
+        let lock_path = config_path.with_extension("lock");
+        fs::write(&lock_path, b"locked").unwrap();
+        apply_config(&entries, &scope, &mut snapshot).expect("no-op setup needs no write lock");
+        assert_eq!(fs::read(&config_path).unwrap(), before);
+        fs::remove_file(lock_path).unwrap();
+
+        set_single_config_value(&scope, entries[0].key, "different").unwrap();
+        unset_existing_config_values(&scope, entries[1].key).unwrap();
+        let mut snapshot = ConfigSnapshot::read(&scope, &keys).unwrap();
+        apply_config(&entries, &scope, &mut snapshot).unwrap();
+        for entry in &entries {
+            assert_eq!(snapshot.get(entry.key), [entry.value.as_str()]);
+            assert_eq!(
+                read_git_config_values(&scope, entry.key).unwrap(),
+                [entry.value.as_str()]
+            );
+        }
+    }
+
+    #[test]
+    fn apply_config_preserves_git_errors_for_duplicate_matching_values() {
+        let (_dir, scope, _config_path) = temp_file_scope();
+        for _ in 0..2 {
+            add_config_value(&scope, "diff.tool", "gitcomet").unwrap();
+        }
+        let mut snapshot = ConfigSnapshot::read(&scope, &["diff.tool"]).unwrap();
+        let error = apply_config(
+            &[ConfigEntry {
+                key: "diff.tool",
+                value: "gitcomet".into(),
+            }],
+            &scope,
+            &mut snapshot,
+        )
+        .expect_err("multiple equal values must still produce Git's setter error");
+        assert!(error.contains("git config diff.tool gitcomet failed"));
+        assert_eq!(snapshot.get("diff.tool"), ["gitcomet", "gitcomet"]);
+        assert_eq!(
+            read_git_config_values(&scope, "diff.tool").unwrap(),
+            ["gitcomet", "gitcomet"]
+        );
+    }
+
+    #[test]
+    fn snapshot_matches_git_multivalues_and_scope_and_preserves_subsection_case() {
+        let (_dir, scope, config_path) = temp_file_scope();
+        std::fs::write(&config_path, "[Merge]\n Tool = first\n tool = \"line1\\nline2\"\n[custom \"MiXeD\"]\n Boolean\n empty =\n").unwrap();
+        let snapshot = ConfigSnapshot::read(
+            &scope,
+            &["merge.tool", "custom.MiXeD.boolean", "custom.MiXeD.empty"],
+        )
+        .unwrap();
+        for key in ["merge.tool", "custom.MiXeD.boolean", "custom.MiXeD.empty"] {
+            assert_eq!(
+                snapshot.get(key),
+                read_git_config_values(&scope, key).unwrap()
+            );
+        }
+        assert_eq!(snapshot.get("MERGE.TOOL"), vec!["first", "line1\nline2"]);
+        assert!(snapshot.get("custom.mixed.boolean").is_empty());
+        assert!(ConfigSnapshot::parse(b"merge.tool\n\xff\0").is_err());
+    }
+
+    #[test]
+    fn snapshot_handles_missing_file_and_failed_mutations() {
+        let (_dir, scope, config_path) = temp_file_scope();
+        assert!(!config_path.exists());
+        let mut snapshot = ConfigSnapshot::read(&scope, &["merge.tool"]).unwrap();
+        assert!(snapshot.get("merge.tool").is_empty());
+        snapshot
+            .write(&scope, "merge.tool", &["previous".into()])
+            .unwrap();
+        let lock_path = config_path.with_extension("lock");
+        std::fs::write(&lock_path, b"locked").unwrap();
+        assert!(snapshot.unset(&scope, "merge.tool").is_err());
+        assert_eq!(snapshot.get("merge.tool"), vec!["previous"]);
+        assert!(
+            snapshot
+                .write(&scope, "merge.tool", &["next".into()])
+                .is_err()
+        );
+        assert_eq!(
+            read_git_config_values(&scope, "merge.tool").unwrap(),
+            vec!["previous"]
+        );
+        assert!(ConfigSnapshot::read("--not-a-valid-scope", &["merge.tool"]).is_err());
     }
 
     #[test]
