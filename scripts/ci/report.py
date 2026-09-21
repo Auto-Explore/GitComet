@@ -169,7 +169,10 @@ def runtime_statistics(directory):
         for sample in record["samples"]:
             descriptor = dict(environment, schedule=sample.get("schedule"),
                               nextest_profile=sample.get("nextest_profile", "ci"),
-                              nextest_threads=sample.get("nextest_threads"))
+                              nextest_threads=sample.get("nextest_threads"),
+                              ui_threads=sample.get("ui_threads"),
+                              effective_nextest_threads=sample.get("effective_nextest_threads"),
+                              effective_ui_threads=sample.get("effective_ui_threads"))
             key = json.dumps(descriptor, sort_keys=True)
             group = groups.setdefault(key, {"descriptor": descriptor, "seconds": [], "failed": 0, "jobs": set()})
             group["jobs"].add(record["job"])
@@ -187,6 +190,9 @@ def runtime_statistics(directory):
                                    for field in environment_fields)
         result.append(dict(descriptor, samples=len(values), failed=group["failed"],
                            median_seconds=statistics.median(values) if values else None,
+                           # Nearest-rank p95; with fewer than 20 samples this
+                           # conservatively reports the slowest observation.
+                           p95_seconds=values[-(len(values) // 20 + 1)] if values else None,
                            min_seconds=min(values) if values else None,
                            max_seconds=max(values) if values else None,
                            jobs=sorted(jobs), environment_recorded=environment_recorded,

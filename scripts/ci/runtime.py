@@ -14,11 +14,14 @@ import uuid
 import run as runner
 
 
-def measure(output, samples, schedule, threads, nextest_profile="ci"):
-    if samples < 1 or (threads is not None and (threads < 1 or schedule != "serial")):
+def measure(output, samples, schedule, threads, nextest_profile="ci", ui_threads=None):
+    if samples < 1 or any(value is not None and (value < 1 or schedule != "serial")
+                          for value in (threads, ui_threads)):
         raise ValueError("positive samples/threads required; threads requires serial")
     if nextest_profile not in runner.NEXTEST_PROFILES:
         raise ValueError(f"Unsupported nextest profile: {nextest_profile}")
+    if any(os.environ.get(name) for name in ("RUST_TEST_THREADS", "NEXTEST_TEST_THREADS")):
+        raise ValueError("Use --ui-threads/--nextest-threads instead of thread environment overrides for measurements")
     instrumentation = [name for name in ("GITCOMET_CI_FIXTURE_TIMINGS", "GITCOMET_TEST_SYNC_TRACE",
                                          "GIT_TRACE2", "GIT_TRACE2_EVENT", "GIT_TRACE2_PERF",
                                          "GIT_TRACE", "GIT_TRACE_PERFORMANCE")
@@ -59,7 +62,7 @@ def measure(output, samples, schedule, threads, nextest_profile="ci"):
                 shutil.copytree(source, sample / "workspace",
                                 ignore=shutil.ignore_patterns("execution.json", "junit.xml"))
                 runner.REPORTS = sample
-                runner.execute("workspace", schedule, threads, nextest_profile)
+                runner.execute("workspace", schedule, threads, nextest_profile, ui_threads)
             finally:
                 runner.REPORTS = original_reports
                 if summary.exists():
@@ -67,7 +70,8 @@ def measure(output, samples, schedule, threads, nextest_profile="ci"):
                 else:
                     metadata["samples"].append({"success": False, "seconds": None,
                                                 "nextest_profile": nextest_profile,
-                                                "schedule": schedule, "nextest_threads": threads})
+                                                "schedule": schedule, "nextest_threads": threads,
+                                                "ui_threads": ui_threads})
     finally:
         runner.REPORTS = original_reports
         (output / "runtime.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
@@ -79,9 +83,10 @@ def main():
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--schedule", choices=("serial", "balanced"), default="serial")
     parser.add_argument("--nextest-threads", type=int)
+    parser.add_argument("--ui-threads", type=int)
     parser.add_argument("--nextest-profile", choices=runner.NEXTEST_PROFILES, default="ci")
     args = parser.parse_args()
-    measure(args.output, args.samples, args.schedule, args.nextest_threads, args.nextest_profile)
+    measure(args.output, args.samples, args.schedule, args.nextest_threads, args.nextest_profile, args.ui_threads)
 
 
 if __name__ == "__main__":

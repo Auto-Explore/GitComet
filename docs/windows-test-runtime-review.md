@@ -1,6 +1,110 @@
 # Windows runtime implementation review
 
-## Verdict
+## Follow-up verification (2026-09-21)
+
+The next round of fixture, positive-wait and measurement changes is implemented
+on merged dev revision `5aa600da905f9d18971254a694ea4e84c045353d`. It preserves
+normal PR scheduling and the platform/feature matrix. The conditional Windows
+process-wait replacement is deferred until native attribution meets its gate;
+the new application probe provides the measurements for that decision.
+
+- The full Linux workspace passed 2,860 nextest tests, 4,048 UI tests and 111 UI
+  budget tests: 7,019 active cases. Comparison against the Ubuntu x64 coverage
+  artifact from [merged dev CI](https://github.com/Auto-Explore/GitComet/actions/runs/35517925640)
+  found no missing tests or new ignores and one added command-timing regression.
+  The 15 nextest skips and nine UI ignores are unchanged.
+- Execution used eight nextest slots, `ci-git-limited` and eight UI threads. Its
+  124.446 seconds verifies the optional controls, inventory checks and complete
+  execution on this 32-CPU Linux host; it is not a hosted Windows speedup estimate.
+- All 171 difftool, mergetool and standalone CLI integration cases also passed
+  independently, including real tool discovery, Unicode paths and setup scopes.
+- Both affected watcher cases available on Linux passed ten repetitions. The
+  macOS-only native checkpoint case still requires native CI. Three UI cases
+  covering folder drops, tab/splash transitions and unsaved editor selection
+  passed ten repetitions each. Optional visual lock wait/hold records were
+  emitted and summarized successfully.
+- All 38 Python helper tests pass, including UI policy propagation, report
+  grouping, failure records, stale-result rejection and measurement environment
+  guards. Rust formatting and actionlint pass.
+
+Application latency and diagnostic probes are separate artifacts. They compare
+plain, LFS and submodule fixtures in `ci-test` and release, with equivalent dirty
+paths verified before timing. Their wrapper counts exclude gix filter children
+and nested Git processes. Native confirmation is needed before changing the
+Windows LFS worker policy, submodule status implementation or process waiting.
+
+### Controlled local before/after measurement
+
+Three alternating runs of merged dev `5aa600da` and the current changes on this
+32-CPU Linux machine found **no overall execution speedup**. Both used the same
+runner, `ci-test` build profile, resolved features, serial schedule, eight nextest
+threads with `ci-git-limited`, and eight UI threads. Compilation, dependency
+downloads and cache operations were excluded; diagnostic timing was disabled.
+
+| Measurement | Before median | After median | Change |
+| --- | ---: | ---: | ---: |
+| Full workspace execution | 121.231 s | 121.840 s | 0.5% slower |
+| Nextest phase | 57.723 s | 57.325 s | 0.7% faster |
+| UI phase, including budget binaries | 62.697 s | 64.508 s | 2.9% slower |
+| Three changed CLI suites, summed test durations | 26.950 s | 24.965 s | 7.4% less test time |
+
+Full-run samples were 121.751, 121.231 and 120.472 seconds before, and 121.821,
+123.796 and 121.840 seconds after. Phase medians are calculated independently and
+do not necessarily add to the median total. CLI durations overlap during parallel
+execution, so their reduction is not equivalent to a wall-clock reduction.
+Individually, difftool, mergetool and standalone CLI aggregate durations improved
+by 9.9%, 7.1% and 7.9%. The two changed watcher cases available on Linux changed
+by at most three milliseconds in median duration.
+
+Every complete run passed: 7,018 active tests before and 7,019 after, with one
+added command-timing regression, no missing tests and 24 unchanged ignores.
+The measurements establish a modest fixture benefit, not a whole-suite or
+application speedup. The UI slowdown needs attribution before claiming a net
+gain. Three repetitions do not establish its cause, and these Linux results do
+not measure Windows execution, normal CI's default thread policy or hosted-job
+build/cache time.
+
+Raw samples, JUnit results, exact source snapshot, metadata, comparison harness
+and summary are retained in `target/local-runtime-ab-20260921T065041Z/`. An initial
+incomplete baseline attempt passed nextest but stopped before UI because this
+local harness expected JUnit in the separate build directory. Its reports are
+retained under `excluded/`; fixing the baseline result-directory mapping allowed
+all six complete runs above. The incomplete attempt is not a timing sample.
+
+### Local application attribution
+
+The final isolated probe passed all 12 fixture/profile/diagnostic combinations,
+with 35 retained samples per operation and mode after five warmups. This was a
+single 32-CPU Linux x64 host with Rust 1.98.1, Git 2.55.0 and Git LFS 3.8.0, using
+the working-tree changes on the dev revision above. Release status results were:
+
+| Fixture | Raw Git median / p95 | Backend median / p95 | With operation context median / p95 |
+| --- | ---: | ---: | ---: |
+| Plain | 1.534 / 1.911 ms | 0.408 / 0.564 ms | 0.418 / 0.504 ms |
+| 60 small LFS assets, one dirty | 27.832 / 29.368 ms | 49.652 / 53.329 ms | 49.605 / 52.401 ms |
+| One dirty submodule | 3.557 / 3.852 ms | 4.972 / 5.438 ms | 5.280 / 6.311 ms |
+
+This narrows the next investigation to particular repository features. Plain
+status is faster through GitComet here, while LFS status takes about 1.8 times
+raw Git's time. The `ci-test` LFS backend median was 49.269 ms, so release
+optimization did not remove this cost on this fixture. Diagnostic captures
+recorded one backend status entry in each call; the LFS filter children are
+outside the wrapper counter and need separate native profiling. Windows already
+selects one status worker for this small LFS-heavy shape, unlike Linux's default
+policy, so these Linux timings do not justify changing its worker limit.
+
+Submodule status records one additional wrapped `git status --porcelain=v2`
+supplement after the primary gix status work. Its local overhead is an application
+investigation target, but correctness for gitlinks and nested changes must be
+retained. Neither result establishes a Windows bottleneck or a whole-app speedup.
+
+Raw samples, separate diagnostic stages, environment metadata and logs are in
+`target/ci-reports/application-probe/`. An additional smoke check confirmed that
+an inherited invalid global config and repository/config overrides cannot leak
+into the isolated probe. No production status or process-wait policy changed in
+this follow-up.
+
+## Previous implementation verification (2026-09-20)
 
 The configuration snapshot, tracing wakeup, ordinary-fixture changes, packed
 missing-ancestor fixture and limited watcher/UI wait conversions pass Linux
@@ -104,7 +208,7 @@ for the Windows/Linux test gap or that Windows has the same numbers.
 Reproduce on native Windows and Linux:
 
 ```sh
-cargo run -p gitcomet-git-gix --profile ci-test --example operation-context-probe
+cargo run -p gitcomet-git-gix --features benchmarks --profile ci-test --example operation-context-probe
 ```
 
 The worker now uses `park_timeout` and both explicit completion and `Drop` signal

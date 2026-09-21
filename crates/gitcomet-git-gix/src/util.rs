@@ -794,6 +794,7 @@ fn run_command_with_timeout_auth(
     cancellation: Option<&CancellationToken>,
     allow_auth: bool,
 ) -> Result<Output> {
+    let mut timing = crate::command_trace::CommandTimer::new(label);
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
     configure_non_interactive_git(&mut cmd);
@@ -817,7 +818,9 @@ fn run_command_with_timeout_auth(
     };
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
+    timing.stage("prepare");
     let mut child = cmd.spawn().map_err(io_err)?;
+    timing.stage("spawn");
 
     let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
     let stdout_handle = spawn_read_pipe(
@@ -834,6 +837,7 @@ fn run_command_with_timeout_auth(
     );
     drop(activity_sender);
 
+    timing.stage("workers-start");
     let ChildWaitOutcome {
         status,
         mut cancelled,
@@ -846,6 +850,7 @@ fn run_command_with_timeout_auth(
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
 
+    timing.stage("child-wait");
     let drain = wait_for_output_workers(
         &mut child,
         || stdout_handle.is_finished() && stderr_handle.is_finished(),
@@ -854,15 +859,19 @@ fn run_command_with_timeout_auth(
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
+    timing.stage("output-drain");
     cancelled |= drain.cancelled;
     timed_out |= drain.timed_out;
 
     let stdout = stdout_handle.join().unwrap_or_default();
     let mut stderr = stderr_handle.join().unwrap_or_default();
+    timing.stage("workers-join");
     join_activity_output_aggregator(activity_handle);
+    timing.stage("activity-finish");
     if let Some(trace2) = trace2 {
         trace2.finish();
     }
+    timing.stage("trace-finish");
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
@@ -915,6 +924,7 @@ pub(crate) fn run_git_with_stdin_capture(
 ) -> Result<Vec<u8>> {
     use std::io::Write as _;
 
+    let mut timing = crate::command_trace::CommandTimer::new(label);
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
     let operation = git_operation::current();
@@ -928,7 +938,9 @@ pub(crate) fn run_git_with_stdin_capture(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    timing.stage("prepare");
     let mut child = cmd.spawn().map_err(io_err)?;
+    timing.stage("spawn");
 
     let stdin = child.stdin.take();
     let writer = thread::spawn(move || {
@@ -952,6 +964,7 @@ pub(crate) fn run_git_with_stdin_capture(
     );
     drop(activity_sender);
 
+    timing.stage("workers-start");
     let ChildWaitOutcome {
         status,
         mut cancelled,
@@ -964,6 +977,7 @@ pub(crate) fn run_git_with_stdin_capture(
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
 
+    timing.stage("child-wait");
     let drain = wait_for_output_workers(
         &mut child,
         || writer.is_finished() && stdout_handle.is_finished() && stderr_handle.is_finished(),
@@ -972,16 +986,20 @@ pub(crate) fn run_git_with_stdin_capture(
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
+    timing.stage("output-drain");
     cancelled |= drain.cancelled;
     timed_out |= drain.timed_out;
 
     let _ = writer.join();
     let stdout = stdout_handle.join().unwrap_or_default();
     let stderr = stderr_handle.join().unwrap_or_default();
+    timing.stage("workers-join");
     join_activity_output_aggregator(activity_handle);
+    timing.stage("activity-finish");
     if let Some(trace2) = trace2 {
         trace2.finish();
     }
+    timing.stage("trace-finish");
 
     if cancelled {
         return Err(Error::new(ErrorKind::Cancelled));
@@ -1054,6 +1072,7 @@ where
     T: Send + 'static,
     F: FnOnce(ChildStdout) -> Result<T> + Send + 'static,
 {
+    let mut timing = crate::command_trace::CommandTimer::new(label);
     configure_background_command(&mut cmd);
     configure_git_process_tree(&mut cmd);
     configure_non_interactive_git(&mut cmd);
@@ -1073,7 +1092,9 @@ where
     };
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
+    timing.stage("prepare");
     let mut child = cmd.spawn().map_err(io_err)?;
+    timing.stage("spawn");
     let stdout = child.stdout.take().ok_or_else(|| {
         Error::new(ErrorKind::Backend(format!(
             "{label} did not provide piped stdout"
@@ -1090,6 +1111,7 @@ where
     let stdout_handle = thread::spawn(move || parse_stdout(stdout));
 
     let timeout = git_command_timeout();
+    timing.stage("workers-start");
     let ChildWaitOutcome {
         status,
         mut cancelled,
@@ -1102,6 +1124,7 @@ where
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
 
+    timing.stage("child-wait");
     let drain = wait_for_output_workers(
         &mut child,
         || stdout_handle.is_finished() && stderr_handle.is_finished(),
@@ -1110,6 +1133,7 @@ where
         cancellation,
         operation.as_ref().map(GitOperationContext::cancellation),
     )?;
+    timing.stage("output-drain");
     cancelled |= drain.cancelled;
     timed_out |= drain.timed_out;
 
@@ -1117,10 +1141,13 @@ where
         .join()
         .unwrap_or_else(|_| Err(Error::new(ErrorKind::Io(io::ErrorKind::Other))));
     let mut stderr = stderr_handle.join().unwrap_or_default();
+    timing.stage("workers-join");
     join_activity_output_aggregator(activity_handle);
+    timing.stage("activity-finish");
     if let Some(trace2) = trace2 {
         trace2.finish();
     }
+    timing.stage("trace-finish");
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);

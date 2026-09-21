@@ -1,5 +1,99 @@
 # Windows test execution
 
+## Follow-up after merge to dev (2026-09-21)
+
+The successful [dev run at 5aa600da](https://github.com/Auto-Explore/GitComet/actions/runs/35517925640)
+measured the following workspace execution times. These are single observations,
+not comparable before/after medians or end-to-end workflow speedups:
+
+| Platform | nextest | Main UI libtest | Workspace execution |
+| --- | ---: | ---: | ---: |
+| Windows x64 | 480.200 s | 170.012 s | 650.497 s |
+| Windows ARM64 | 695.558 s | 142.872 s | 838.626 s |
+| Ubuntu 22 x64 | 151.845 s | 148.688 s | 300.706 s |
+| macOS 15 Intel | 369.328 s | 206.556 s | 576.279 s |
+
+Windows x64 nextest cases sum to 1,915.499 test-seconds: almost four times its
+elapsed duration. Slots are occupied by sleeps and I/O as well as CPU work.
+Watcher tests account for 717.244 of those overlapping seconds, and the six real
+Git tool-help cases account for 139.710. Test ordering alone has little headroom
+at four slots. The ARM64 UI suite is slightly faster than Linux x64 in this run;
+there is no evidence here of a uniform application CPU slowdown on Windows.
+
+The follow-up implementation:
+
+- Removes five Git config launches from fresh GitComet/kdiff3 mergetool fixtures
+  and seven from meld fixtures. Fresh difftool configurations save four. Config
+  replacement helpers and operations being asserted still go through Git.
+- Imports base/theirs history in ordinary mergetool conflicts and base/ours in
+  three standalone setup scenarios, saving four launches per applicable fixture.
+  Real checkout, branch commit and merge still construct the conflicted index;
+  Unicode paths, local/global setup, hooks and tool-help checks remain exercised.
+- Uses registration readiness for three more tests whose first positive native
+  event has a unique path. Settling before independent external-policy checks,
+  repeated-path edits and negative quiet windows remain intact.
+- Checks UI readiness immediately after pumping the executor. Optional
+  `ui-lock-wait` and `ui-lock-held` records identify serialized visual/clipboard
+  work without removing the locks or splitting the UI harness into processes.
+- Adds `ui-threads` to the workspace workflow and `--ui-threads` to the runner
+  and repetition harness. The top-level CI dispatch exposes workspace repetition,
+  nextest profile/thread and UI thread controls. Requested and effective thread
+  counts remain separate report dimensions, with nearest-rank p95 alongside the
+  median. Measurements reject thread environment overrides; use explicit flags.
+
+Normal PR concurrency, profiles, coverage, runner hardware and cache policy are
+unchanged. Screen nextest 6, 8 and 8 with `ci-git-limited` independently on Windows
+x64/ARM64 and Intel macOS. Confirm the fastest passing candidate and the default
+with three repetitions in each of two independent hosted jobs. Compare UI 4/8
+separately at a fixed nextest policy. Promote per platform only for at least 10%
+median improvement, at most 5% p95 regression, unchanged coverage, and passing
+watcher/UI stress. Final Windows x64 acceptance requires both at least 30% lower
+median than the fresh merged baseline and less than 480 seconds. No native
+Windows speedup is certified by local Linux verification.
+
+### Application attribution
+
+`application-probe: true` in CI or Cross-Platform Tests opts into disposable
+plain, LFS and submodule probes after the normal checks. It compares raw Git,
+backend calls and attached operation contexts for identical remote mutations and
+full status reads. It builds `ci-test` and release separately, then runs 35
+retained samples per mode after five warmups with rotated/reversed mode order.
+Raw Git status disables optional index writes so it cannot refresh the fixture's
+index stat cache on behalf of subsequent backend measurements. Both implementations
+must report the expected dirty paths before timing, including the LFS asset or
+submodule. The probe process itself also starts with empty global configuration
+so in-process gix and Git subprocesses are isolated consistently. External
+tracing and worker overrides are rejected; keep
+`fixture-timings: false` for this probe.
+
+```sh
+python3 scripts/ci/application-probe.py
+# Short local smoke verification; not performance acceptance:
+python3 scripts/ci/application-probe.py --profiles ci-test --samples 5
+```
+
+Each invocation requires a new `target/ci-reports/application-probe` directory;
+archive or move the prior directory before repeating it. Its artifacts include
+the environment/revision, raw samples, median/p95, and separate latency and
+diagnostic reports. Logs and a failed environment record remain if a probe fails.
+The workflow publishes these with its other CI diagnostics.
+
+Diagnostic captures partition wrapper time into preparation, spawn, worker
+startup, child waiting, output drain, worker joins, activity completion, Trace2
+completion and final processing. Capture is explicit and thread-local; attach
+inside the worker when measuring asynchronous application work. Command counts
+cover GitComet's wrappers, not nested Git or gix's Git LFS filter processes.
+Diagnostic capture is compiled out of normal application builds, and its
+instrumented latencies must not be used for acceptance.
+
+The merged Trace2 wakeup and full-refresh status batching already exist; neither
+is counted as a new improvement. Keep the remaining Windows process-wait change
+gated on native evidence: at least 1 ms of avoidable completion overhead, then
+at least 10% lower representative operation median and no more than 5% p95
+regression with cancellation, deadlines, inherited pipes and output intact.
+This follow-up adds attribution without introducing an unmeasured production
+wait implementation or a persistent status cache.
+
 ## Baseline and attribution
 
 The supplied Windows x64 and Ubuntu 22 x64 logs run the same revision. These

@@ -293,9 +293,10 @@ def run_parallel(tasks):
         executor.shutdown(wait=True, cancel_futures=True)
 
 
-def execute(context, schedule="serial", nextest_threads=None, nextest_profile="ci"):
-    if nextest_threads is not None and (nextest_threads < 1 or schedule != "serial"):
-        raise ValueError("--nextest-threads must be positive and requires --schedule serial")
+def execute(context, schedule="serial", nextest_threads=None, nextest_profile="ci", ui_threads=None):
+    for option, threads in (("nextest", nextest_threads), ("ui", ui_threads)):
+        if threads is not None and (threads < 1 or schedule != "serial"):
+            raise ValueError(f"--{option}-threads must be positive and requires --schedule serial")
     if nextest_profile not in NEXTEST_PROFILES:
         raise ValueError(f"Unsupported nextest profile: {nextest_profile}")
     packages = package_names(context)
@@ -328,21 +329,25 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
     if not libtest or len(libtest) == len(suites):
         # Package-only contexts have nothing to overlap. Keep their full budget.
         balanced = False
-    ui_threads = max(1, cpus // 2)
+    effective_ui_threads = max(1, cpus // 2) if balanced else ui_threads
+    default_ui_threads = os.environ.get("RUST_TEST_THREADS", str(cpus))
+    # Invalid environment overrides will fail libtest, but must not prevent the
+    # finally block from recording that failure.
+    default_ui_threads = int(default_ui_threads) if default_ui_threads.isdecimal() else None
 
     def ui(*, cancel=None, live=True):
-        results = [run_suite(context, binary_id, suite, threads=ui_threads, live=live, cancel=cancel)
+        results = [run_suite(context, binary_id, suite, threads=effective_ui_threads, live=live, cancel=cancel)
                    for binary_id, suite in libtest]
         return int(any(results))
 
     succeeded = False
     try:
         if balanced:
-            codes.extend(run_parallel([partial(nextest, threads=cpus - ui_threads), ui]))
+            codes.extend(run_parallel([partial(nextest, threads=cpus - effective_ui_threads), ui]))
         else:
             codes.append(nextest(threads=nextest_threads))
             for binary_id, suite in libtest:
-                codes.append(run_suite(context, binary_id, suite))
+                codes.append(run_suite(context, binary_id, suite, threads=ui_threads))
         if any(codes):
             raise RuntimeError(f"{context}: test execution failed")
         succeeded = True
@@ -350,6 +355,10 @@ def execute(context, schedule="serial", nextest_threads=None, nextest_profile="c
         (paths(context) / "execution.json").write_text(json.dumps({
             "schedule": schedule, "effective_schedule": "balanced" if balanced else "serial",
             "nextest_profile": nextest_profile,
+            "ui_threads": ui_threads,
+            "effective_ui_threads": effective_ui_threads if effective_ui_threads is not None else
+                                    default_ui_threads,
+            "effective_nextest_threads": cpus - effective_ui_threads if balanced else nextest_threads or cpus,
             "nextest_threads": nextest_threads, "cpus": cpus, "seconds": round(time.monotonic() - start, 3), "success": succeeded,
         }, indent=2) + "\n", encoding="utf-8")
 
@@ -372,15 +381,18 @@ def main():
     parser.add_argument("--name", default="command")
     parser.add_argument("--schedule", choices=["serial", "balanced"], default="serial")
     parser.add_argument("--nextest-threads", type=int, help="Opt-in concurrency experiment (serial schedule only)")
+    parser.add_argument("--ui-threads", type=int, help="Opt-in libtest concurrency experiment (serial schedule only)")
     parser.add_argument("--nextest-profile", choices=NEXTEST_PROFILES, default="ci")
     args, extra = parser.parse_known_args()
-    if args.nextest_threads is not None and (args.phase != "test" or args.nextest_threads < 1 or args.schedule != "serial"):
-        parser.error("--nextest-threads must be positive and requires test --schedule serial")
+    for option in ("nextest", "ui"):
+        threads = getattr(args, option + "_threads")
+        if threads is not None and (args.phase != "test" or threads < 1 or args.schedule != "serial"):
+            parser.error(f"--{option}-threads must be positive and requires test --schedule serial")
     os.chdir(ROOT)
     if args.phase == "compile":
         compile_tests(args.context, args.cargo_profile)
     elif args.phase == "test":
-        execute(args.context, args.schedule, args.nextest_threads, args.nextest_profile)
+        execute(args.context, args.schedule, args.nextest_threads, args.nextest_profile, args.ui_threads)
     elif args.phase == "doc":
         # The app contains only binaries, so it has no doctest targets.
         if args.context != "app":

@@ -20,6 +20,27 @@ on:
         description: Collect per-test fixture and subprocess timings
         type: boolean
         default: false
+      execution-samples:
+        description: Uninstrumented workspace repetitions (1 is normal CI)
+        type: number
+        default: 1
+      nextest-threads:
+        description: Workspace nextest concurrency (serial schedule only)
+        type: string
+        default: ''
+      nextest-profile:
+        description: Workspace nextest concurrency policy
+        type: choice
+        options: [ci, ci-git-limited]
+        default: ci
+      ui-threads:
+        description: Workspace UI libtest concurrency (serial schedule only)
+        type: string
+        default: ''
+      application-probe:
+        description: Compare raw Git and GitComet latency in ci-test and release
+        type: boolean
+        default: false
       benchmark-profile:
         description: Compile/link profile (candidate disables UI optimization)
         type: choice
@@ -46,6 +67,11 @@ jobs:
       cold-cache: ${{ inputs.cold-cache || false }}
       test-schedule: ${{ inputs.test-schedule || 'serial' }}
       fixture-timings: ${{ inputs.fixture-timings || false }}
+      execution-samples: ${{ inputs.execution-samples || 1 }}
+      nextest-threads: ${{ inputs.nextest-threads || '' }}
+      nextest-profile: ${{ inputs.nextest-profile || 'ci' }}
+      ui-threads: ${{ inputs.ui-threads || '' }}
+      application-probe: ${{ inputs.application-probe || false }}
   benchmarks:
     uses: ./.github/workflows/benchmark-targets.yml
     with:

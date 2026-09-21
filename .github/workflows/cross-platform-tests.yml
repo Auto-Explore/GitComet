@@ -25,8 +25,16 @@ on:
         description: Optional limit for concurrent Git-heavy tests
         type: string
         default: ci
+      ui-threads:
+        description: Optional positive UI libtest concurrency (serial schedule only)
+        type: string
+        default: ''
       fixture-timings:
         description: Collect per-test fixture and subprocess timings
+        type: boolean
+        default: false
+      application-probe:
+        description: Compare raw Git and GitComet latency in ci-test and release
         type: boolean
         default: false
   workflow_dispatch:
@@ -57,8 +65,16 @@ on:
         type: choice
         options: [ci, ci-git-limited]
         default: ci
+      ui-threads:
+        description: Optional positive UI libtest concurrency (serial schedule only)
+        type: string
+        default: ''
       fixture-timings:
         description: Collect per-test fixture and subprocess timings
+        type: boolean
+        default: false
+      application-probe:
+        description: Compare raw Git and GitComet latency in ci-test and release
         type: boolean
         default: false
 
@@ -70,6 +86,7 @@ env:
   CI_EXECUTION_SAMPLES: ${{ inputs.execution-samples || 1 }}
   CI_NEXTEST_THREADS: ${{ inputs.nextest-threads || '' }}
   CI_NEXTEST_PROFILE: ${{ inputs.nextest-profile || 'ci' }}
+  CI_UI_THREADS: ${{ inputs.ui-threads || '' }}
   CI_TEST_SCHEDULE: ${{ inputs.test-schedule || 'serial' }}
   GITCOMET_CI_FIXTURE_TIMINGS: ${{ inputs.fixture-timings && format('{0}/target/ci-reports/fixture-timings', github.workspace) || '' }}
 
@@ -77,7 +94,7 @@ jobs:
   native:
     name: Native Tests (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
+    timeout-minutes: ${{ (inputs.execution-samples > 1 || inputs.application-probe) && 180 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -145,6 +162,7 @@ jobs:
         run: |
           args=(--nextest-profile "$CI_NEXTEST_PROFILE")
           if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ -n "$CI_UI_THREADS" ]]; then args+=(--ui-threads "$CI_UI_THREADS"); fi
           if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
             python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
           else
@@ -212,6 +230,9 @@ jobs:
           python3 scripts/ci/run.py command --name macos-release-signing-build -- cargo build "${args[@]}" -p gitcomet --no-default-features --features gix --release --locked
           codesign --verify --verbose target/release/gitcomet || true
           spctl --assess --type execute --verbose target/release/gitcomet || true
+      - name: Measure GitComet application overhead
+        if: inputs.application-probe
+        run: python3 scripts/ci/application-probe.py
       - uses: ./.github/actions/ci-finish
         if: always()
         with:
@@ -229,7 +250,7 @@ jobs:
   fedora:
     name: Linux Headless Suite (Fedora container)
     runs-on: ubuntu-22.04
-    timeout-minutes: ${{ inputs.execution-samples > 1 && 180 || 60 }}
+    timeout-minutes: ${{ (inputs.execution-samples > 1 || inputs.application-probe) && 180 || 60 }}
     container:
       image: fedora:41
     steps:
@@ -259,6 +280,7 @@ jobs:
         run: |
           args=(--nextest-profile "$CI_NEXTEST_PROFILE")
           if [[ -n "$CI_NEXTEST_THREADS" ]]; then args+=(--nextest-threads "$CI_NEXTEST_THREADS"); fi
+          if [[ -n "$CI_UI_THREADS" ]]; then args+=(--ui-threads "$CI_UI_THREADS"); fi
           if [[ "$CI_EXECUTION_SAMPLES" == 1 ]]; then
             python3 scripts/ci/run.py test --context workspace --schedule "$CI_TEST_SCHEDULE" "${args[@]}"
           else
@@ -267,6 +289,9 @@ jobs:
       - name: Workspace doctests
         if: success() || (failure() && steps.tests.outcome == 'failure')
         run: python3 scripts/ci/run.py doc --context workspace
+      - name: Measure GitComet application overhead
+        if: inputs.application-probe
+        run: python3 scripts/ci/application-probe.py
       - uses: ./.github/actions/ci-finish
         if: always()
         with:

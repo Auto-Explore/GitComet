@@ -1,7 +1,7 @@
 """Regression coverage for failure propagation, inventory accounting, and cache isolation."""
 
 import copy
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from functools import partial
 import importlib.util
 import io
@@ -25,6 +25,10 @@ import runtime
 spec = importlib.util.spec_from_file_location("ci_runner", Path(__file__).with_name("run.py"))
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
+
+probe_spec = importlib.util.spec_from_file_location("application_probe", Path(__file__).with_name("application-probe.py"))
+application_probe = importlib.util.module_from_spec(probe_spec)
+probe_spec.loader.exec_module(application_probe)
 
 
 class CacheTests(unittest.TestCase):
@@ -195,8 +199,9 @@ class RunnerTests(unittest.TestCase):
         nextest_suites = self.git_integration_suites()
         nextest_suites["core"] = {"package-id": "gitcomet-core", "binary-name": "gitcomet_core", "testcases": {"required": {"ignored": False}}}
         ui_suites = {"ui": {"package-id": runner.UI, "binary-name": "gitcomet_ui_gpui"}}
-        for platform_name, (schedule, threads), (cpus, group), profile in product(
-                ("linux", "darwin", "win32"), (("serial", None), ("serial", 8), ("balanced", None)),
+        for platform_name, (schedule, threads, ui_threads), (cpus, group), profile in product(
+                ("linux", "darwin", "win32"), (("serial", None, None), ("serial", 8, None),
+                                               ("serial", None, 8), ("serial", 6, 8), ("balanced", None, None)),
                 ((1, "both"), (3, "both"), (4, "both"), (4, "nextest"), (4, "libtest")), runner.NEXTEST_PROFILES):
             with self.subTest(platform=platform_name, schedule=schedule, cpus=cpus, group=group, profile=profile), \
                     tempfile.TemporaryDirectory() as directory, patch.object(runner, "REPORTS", Path(directory)), \
@@ -232,25 +237,30 @@ class RunnerTests(unittest.TestCase):
                         barrier.wait(timeout=5)
                     else:
                         self.assertEqual(completed, [] if group == "libtest" else ["nextest"])
-                        self.assertIsNone(kwargs.get("threads"))
+                        self.assertEqual(kwargs.get("threads"), ui_threads)
                     completed.append("ui")
                     return 0
 
                 with patch.object(runner, "package_names", return_value=packages), \
                         patch.object(runner, "inventory", return_value={"rust-suites": selected}), \
                         patch.object(runner, "run", side_effect=run_nextest), patch.object(runner, "run_suite", side_effect=run_ui):
-                    runner.execute("workspace", schedule, threads, profile)
+                    runner.execute("workspace", schedule, threads, profile, ui_threads)
                 expected = ["nextest", "ui"] if group == "both" else ["nextest"] if group == "nextest" else ["ui"]
                 self.assertCountEqual(completed, expected)
                 execution = json.loads((target / "workspace/execution.json").read_text())
                 self.assertTrue(execution["success"])
                 self.assertEqual(execution["nextest_profile"], profile)
                 self.assertEqual(execution["effective_schedule"], "balanced" if parallel else "serial")
+                self.assertEqual(execution["ui_threads"], ui_threads)
+                self.assertEqual(execution["effective_ui_threads"], max(1, cpus // 2) if parallel else ui_threads or cpus)
+                self.assertEqual(execution["effective_nextest_threads"], cpus - max(1, cpus // 2) if parallel else threads or cpus)
 
     def test_invalid_concurrency_is_rejected_before_running(self):
         for schedule, threads in [("serial", 0), ("serial", -1), ("balanced", 8)]:
             with self.subTest(schedule=schedule, threads=threads), self.assertRaises(ValueError):
                 runner.execute("workspace", schedule, threads)
+            with self.subTest(schedule=schedule, ui_threads=threads), self.assertRaises(ValueError):
+                runner.execute("workspace", schedule, ui_threads=threads)
         with self.assertRaises(ValueError):
             runner.execute("workspace", nextest_profile="unknown")
 
@@ -476,6 +486,14 @@ class RunnerTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_unrecorded_thread_environment_cannot_change_acceptance_policy(self):
+        for name in ("RUST_TEST_THREADS", "NEXTEST_TEST_THREADS"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, {name: "8"}, clear=True):
+                with self.assertRaisesRegex(ValueError, "thread environment overrides"):
+                    runtime.measure(Path(directory) / "result", 3, "serial", None)
+                self.assertFalse((Path(directory) / "result").exists())
+
     def test_repetitions_keep_distinct_raw_logs_and_restore_report_directory(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
             root = Path(directory)
@@ -488,8 +506,9 @@ class RuntimeTests(unittest.TestCase):
             (source / "junit.xml").write_text("stale")
             calls = []
 
-            def execute(context, schedule, threads, profile):
+            def execute(context, schedule, threads, profile, ui_threads):
                 self.assertEqual(profile, "ci-git-limited")
+                self.assertEqual(ui_threads, 8)
                 calls.append(len(calls) + 1)
                 sample = runtime.runner.paths(context)
                 self.assertEqual((sample / "binaries.json").read_text(), '"compiled-once"')
@@ -502,7 +521,7 @@ class RuntimeTests(unittest.TestCase):
             with patch.object(runtime.runner, "REPORTS", reports), \
                     patch.object(runtime.runner, "execute", side_effect=execute), \
                     patch.object(runtime.subprocess, "check_output", return_value="test"):
-                runtime.measure(root / "output", 2, "serial", None, "ci-git-limited")
+                runtime.measure(root / "output", 2, "serial", None, "ci-git-limited", 8)
                 self.assertEqual(runtime.runner.REPORTS, reports)
             for index in (1, 2):
                 for name in ("workspace-nextest.log", "workspace-ui-all.log", "timings.jsonl"):
@@ -530,8 +549,41 @@ class RuntimeTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, "failed"):
                 runtime.measure(root / "output", 5, "serial", None)
             record = json.loads((root / "output/runtime.json").read_text())
-            self.assertEqual(record["samples"], [{"success": False, "seconds": None, "schedule": "serial", "nextest_threads": None, "nextest_profile": "ci"}])
+            self.assertEqual(record["samples"], [{"success": False, "seconds": None, "schedule": "serial", "nextest_threads": None, "nextest_profile": "ci", "ui_threads": None}])
             self.assertTrue((root / "output/sample-1").is_dir())
+
+
+class ApplicationProbeTests(unittest.TestCase):
+    def test_failed_probe_retains_failure_record_and_rejects_stale_results(self):
+        for failure in ("metadata", "build"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, {}, clear=True), \
+                    patch.object(sys, "argv", ["application-probe.py", "--profiles", "ci-test"]), \
+                    patch.object(application_probe.runner, "REPORTS", Path(directory)), \
+                    patch.object(application_probe.subprocess, "check_output", return_value="fixture",
+                                 side_effect=RuntimeError("metadata failed") if failure == "metadata" else None), \
+                    patch.object(application_probe.runner, "run", side_effect=RuntimeError("build failed")):
+                with self.assertRaisesRegex(RuntimeError, f"{failure} failed"):
+                    application_probe.main()
+                record = Path(directory) / "application-probe/environment.json"
+                contents = record.read_text()
+                self.assertFalse(json.loads(contents)["success"])
+                with self.assertRaises(FileExistsError):
+                    application_probe.main()
+                self.assertEqual(record.read_text(), contents)
+
+    def test_external_tracing_or_worker_overrides_cannot_contaminate_latency(self):
+        for name, value in (("GIT_TRACE2_EVENT", "trace.json"), ("GITCOMET_TEST_SYNC_TRACE", ""),
+                            ("GITCOMET_BENCH_STATUS_WORKERS", "1")):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, {name: value}, clear=True), \
+                    patch.object(sys, "argv", ["application-probe.py"]), \
+                    patch.object(application_probe.runner, "REPORTS", Path(directory)), \
+                    redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    application_probe.main()
+                self.assertEqual(error.exception.code, 2)
+                self.assertFalse((Path(directory) / "application-probe").exists())
 
 
 class ReportTests(unittest.TestCase):
@@ -565,6 +617,7 @@ class ReportTests(unittest.TestCase):
             rows = report.runtime_statistics(root)
             x64 = next(row for row in rows if row["machine"] == "AMD64")
             self.assertEqual(x64["median_seconds"], 500)
+            self.assertEqual(x64["p95_seconds"], 510)
 
             self.assertTrue(x64["enough_samples"])
             path = root / "0/runtime.json"
@@ -617,6 +670,17 @@ class ReportTests(unittest.TestCase):
             rows = report.runtime_statistics(root)
             self.assertEqual({row["nextest_profile"]: row["median_seconds"] for row in rows},
                              {"ci": 100, "ci-git-limited": 300})
+
+    def test_runtime_report_separates_requested_and_effective_ui_threads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            samples = [dict(success=True, seconds=seconds, schedule="serial", nextest_threads=8,
+                            ui_threads=requested, effective_ui_threads=effective)
+                       for seconds, requested, effective in ((100, None, 4), (200, None, 8), (300, 8, 8))]
+            (root / "runtime.json").write_text(json.dumps(dict(job="local/test", samples=samples)))
+            rows = report.runtime_statistics(root)
+            self.assertEqual(len(rows), 3)
+            self.assertEqual({row["p95_seconds"] for row in rows}, {100, 200, 300})
 
     def test_renamed_platform_lanes_match_without_treating_timeouts_as_success(self):
         records = [{"jobs": [
